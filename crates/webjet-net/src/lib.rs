@@ -5,3 +5,4 @@ pub mod gate;
 pub mod tls;
 pub mod fec;
 pub mod kcp;
+pub mod hop;
