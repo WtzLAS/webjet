@@ -64,6 +64,7 @@ struct Inner {
     primary: Option<u32>,
     hyst: webjet_core::routing::Hysteresis,
     hs_times: VecDeque<Instant>,
+    last_unknown_hs: Option<Instant>,
 }
 
 pub struct Session {
@@ -537,10 +538,23 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
         }
         return;
     }
-    let Some(s) = n.e2e.get(&c.peer) else { return };
+    let Some(s) = n.e2e.get(&c.peer).or_else(|| n.e2e.get_or_create(n, &c.peer)) else { return };
     let plain = {
         let mut i = s.inner.lock();
-        let Some(k) = i.recv.get_mut(&h.key_id) else { return };
+        let Some(k) = i.recv.get_mut(&h.key_id) else {
+            // A frame under a key we don't have: we restarted, or the peer
+            // holds stale keys. Start a fresh handshake so it re-keys (rate
+            // limited; the peer answers as responder).
+            let due = i.last_unknown_hs.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
+            if due && i.hs.is_none() {
+                i.last_unknown_hs = Some(Instant::now());
+                drop(i);
+                if let Err(e) = start_handshake(n, &s, c) {
+                    tracing::debug!("re-key on unknown key id: {e}");
+                }
+            }
+            return;
+        };
         if k.created.elapsed() > REJECT_AFTER || k.retire_at.map(|t| Instant::now() > t).unwrap_or(false) {
             return;
         }

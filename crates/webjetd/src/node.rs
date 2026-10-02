@@ -103,6 +103,23 @@ impl Hop {
     }
 }
 
+/// The trust store behind a lock whose read side is recursive: many helpers
+/// read the store while a caller already holds a read guard, and a plain
+/// fair RwLock would deadlock as soon as a writer queues between the two.
+pub struct StoreLock(RwLock<Store>);
+
+impl StoreLock {
+    pub fn new(s: Store) -> Self {
+        StoreLock(RwLock::new(s))
+    }
+    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, Store> {
+        self.0.read_recursive()
+    }
+    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Store> {
+        self.0.write()
+    }
+}
+
 /// Signed soft state from nodes (§6.2, §6.7, §6.8).
 #[derive(Default)]
 pub struct Records {
@@ -125,7 +142,7 @@ pub struct Node {
     pub paths: Paths,
     pub kp: KeyPair,
     pub me: Bytes32,
-    pub store: RwLock<Store>,
+    pub store: StoreLock,
     pub epochs: SharedEpochs,
     pub hops: Mutex<HashMap<u64, Arc<Hop>>>,
     pub records: Mutex<Records>,
@@ -173,7 +190,7 @@ impl Node {
             paths,
             kp,
             me,
-            store: RwLock::new(store),
+            store: StoreLock::new(store),
             epochs,
             hops: Mutex::new(HashMap::new()),
             records: Mutex::new(Records::default()),
@@ -293,7 +310,7 @@ impl Node {
             let s = self.store.read();
             let v = s.view();
             let id = *v.by_key.get(&est.peer_key).ok_or_else(|| anyhow!("hop peer has no node record"))?;
-            if !v.nodes.get(&id).map(|n| n.valid).unwrap_or(false) {
+            if !v.nodes.get(&id).map(|n| n.valid && n.key == est.peer_key).unwrap_or(false) {
                 bail!("hop peer is not valid");
             }
             id
@@ -364,6 +381,31 @@ impl Node {
         }
     }
 
+    /// Tear down everything with peers that are no longer trusted (§10.5):
+    /// hop sessions, end-to-end sessions and circuits. Restricted (resync)
+    /// hops to relays and controllers are kept.
+    pub fn enforce_revocations(self: &Arc<Self>) {
+        let dead: Vec<Arc<Hop>> = {
+            let s = self.store.read();
+            let v = s.view();
+            self.hops
+                .lock()
+                .values()
+                .filter(|h| {
+                    let info = v.nodes.get(&h.peer);
+                    let key_ok = info.map(|x| x.key == h.peer_key && x.valid).unwrap_or(false);
+                    !key_ok || (!s.node_trusted(&h.peer) && !info.map(|x| x.relay || x.control).unwrap_or(false))
+                })
+                .cloned()
+                .collect()
+        };
+        for h in dead {
+            tracing::info!(peer = %crypto::short(&h.peer), "closing hop to a revoked or re-keyed node");
+            self.hop_down(&h);
+        }
+        crate::circuit::sweep(self);
+    }
+
     pub fn name_of(&self, id: &Bytes32) -> String {
         self.store.read().view().nodes.get(id).map(|n| n.name.clone()).unwrap_or_else(|| crypto::short(id))
     }
@@ -426,8 +468,8 @@ impl Node {
 
     /// Candidate addresses of a node, best transport first.
     pub fn endpoint_addrs(&self, peer: &Bytes32) -> Vec<(SocketAddr, Transport)> {
-        let recs = self.records.lock();
-        let Some((r, _)) = recs.endpoints.get(peer) else { return Vec::new() };
+        // Clone first: priority() takes the records lock itself.
+        let Some(r) = self.records.lock().endpoints.get(peer).map(|(r, _)| r.clone()) else { return Vec::new() };
         let mut v: Vec<(u8, SocketAddr, Transport)> = r
             .addrs
             .clone()

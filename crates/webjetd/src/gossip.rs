@@ -52,11 +52,34 @@ fn head_msg(n: &Node) -> Option<HopMsg> {
     Some(HopMsg::HeadAnnounce(Box::new(wp::HeadAnnounce { head: Some(h.raw.clone()), offline_hash: Some(crypto::k32(&s.offline_hash())) })))
 }
 
-fn is_core(n: &Node, id: &Bytes32) -> bool {
+/// The core: relays and controllers, which keep full state and a mesh of
+/// hops (§10.6). Without any relay every node is core.
+pub fn is_core(n: &Node, id: &Bytes32) -> bool {
     let s = n.store.read();
     let v = s.view();
     let any_relay = v.nodes.values().any(|x| x.relay && x.valid);
-    !any_relay || v.nodes.get(id).map(|x| x.relay).unwrap_or(false)
+    !any_relay || v.nodes.get(id).map(|x| x.relay || x.control).unwrap_or(false) || (*id == n.me && n.is_controller())
+}
+
+/// Re-share infrastructure endpoint records with every neighbor, e.g. after
+/// a node gained RELAY or CONTROL, so edges learn where to reach it.
+pub fn share_infra(n: &Arc<Node>) {
+    if !is_core(n, &n.me) {
+        return;
+    }
+    let items: Vec<Vec<u8>> = {
+        let s = n.store.read();
+        let v = s.view();
+        let recs = n.records.lock();
+        recs.endpoints.iter().filter(|(id, _)| v.nodes.get(*id).map(|x| x.valid && (x.relay || x.control)).unwrap_or(false)).map(|(_, (_, raw))| raw.clone()).collect()
+    };
+    if items.is_empty() {
+        return;
+    }
+    let hops: Vec<Arc<Hop>> = n.hops.lock().values().filter(|h| h.alive() && !h.restricted).cloned().collect();
+    for h in hops {
+        send_records(&h, items.clone());
+    }
 }
 
 pub fn on_hop_up(n: &Arc<Node>, hop: &Arc<Hop>) {
@@ -739,8 +762,29 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
 pub async fn run(n: Arc<Node>) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut i: u64 = 0;
+    let mut ev = n.events.subscribe();
+    let mut last_infra: Vec<Bytes32> = Vec::new();
     loop {
-        tick.tick().await;
+        tokio::select! {
+            _ = tick.tick() => {}
+            e = ev.recv() => {
+                if let Ok(Event::HeadChanged) = e {
+                    // Roles may have changed: republish and re-share.
+                    let infra: Vec<Bytes32> = {
+                        let s = n.store.read();
+                        let mut v: Vec<Bytes32> = s.view().nodes.values().filter(|x| x.valid && (x.relay || x.control)).map(|x| x.id).collect();
+                        v.sort();
+                        v
+                    };
+                    if infra != last_infra {
+                        last_infra = infra;
+                        publish_endpoint(&n, true);
+                        share_infra(&n);
+                    }
+                }
+                continue;
+            }
+        }
         i += 1;
         // Digest exchange within the core (§10.3.1).
         if is_core(&n, &n.me) {

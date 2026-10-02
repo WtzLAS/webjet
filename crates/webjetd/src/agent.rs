@@ -348,7 +348,11 @@ async fn connections(n: Arc<Node>) {
         tokio::select! {
             _ = tick.tick() => {}
             e = ev.recv() => {
-                if !matches!(e, Ok(Event::HopDown(_)) | Ok(Event::HeadChanged)) { continue; }
+                match e {
+                    Ok(Event::HeadChanged) => n.enforce_revocations(),
+                    Ok(Event::HopDown(_)) => {}
+                    _ => continue,
+                }
             }
         }
         let (me_relay, me_ctl, relays, controllers) = {

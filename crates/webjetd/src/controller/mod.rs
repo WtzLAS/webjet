@@ -39,6 +39,8 @@ pub struct Controller {
     signer: Box<dyn Signer>,
     pub signing_key_id: Bytes32,
     applied: AtomicU64,
+    /// Serializes applying committed entries (several tasks trigger it).
+    apply_lock: Mutex<()>,
     waiters: Mutex<HashMap<u64, Waiter>>,
     propose_lock: tokio::sync::Mutex<()>,
     last_signed: Mutex<(u64, u64)>,
@@ -92,6 +94,7 @@ impl Controller {
         let c = Arc::new(Controller {
             node: Arc::downgrade(n),
             applied: AtomicU64::new(machine.last_index),
+            apply_lock: Mutex::new(()),
             machine: Mutex::new(machine),
             raft: Mutex::new(r),
             signing_key_id: crypto::signing_key_id(&pk),
@@ -161,6 +164,7 @@ impl Controller {
     // ------------------------------------------------------------ applying
 
     fn apply_committed(&self, n: &Arc<Node>) {
+        let _g = self.apply_lock.lock();
         loop {
             let next = self.applied.load(Ordering::SeqCst) + 1;
             let bytes = {
@@ -531,6 +535,7 @@ impl Controller {
             RaftBody::RaftSnapshot(s) => {
                 let data = s.data.clone().unwrap_or_default();
                 let res = Machine::restore_bytes(&data);
+                let _g = self.apply_lock.lock();
                 let mut r = self.raft.lock();
                 if s.term < r.term {
                     return;
