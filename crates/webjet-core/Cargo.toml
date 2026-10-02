@@ -1,0 +1,27 @@
+[package]
+name = "webjet-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+webjet-proto = { path = "../webjet-proto" }
+anyhow.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+base64.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+ipnet.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+chacha20poly1305.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.80"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+blake3 = "1.8"
+ed25519-dalek = { version = "2.1", features = ["rand_core", "zeroize"] }
+rand = "0.8"
+rand_core = { version = "0.6", features = ["getrandom"] }
+chacha20poly1305 = "0.10"
+aes-gcm = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+subtle = "2.5"
+base64 = "0.22"
+hex = "0.4"
+planus = "1.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+futures = "0.3"
+rustls = { version = "0.23.45", default-features = false, features = ["aws_lc_rs", "std", "logging", "prefer-post-quantum"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+parking_lot = "0.12"
+ipnet = "2"
+clap = { version = "4", features = ["derive"] }
+kcp = "0.6"
+reed-solomon-erasure = "6"
+tun-rs = { version = "2.8", features = ["async_tokio"] }
+hickory-proto = "0.24"
+proptest = "1"

@@ -1,0 +1,254 @@
+// Webjet protocol messages: hop sessions, end-to-end RPC, Raft and enrollment.
+include "webjet.fbs";
+
+namespace webjet;
+
+// ---------------------------------------------------------------- hop session control (§9-§11)
+
+// Keepalives measure RTT and loss (§11.2), carry the sender's wall clock for
+// the clock-offset check (§18.6) and, from edge nodes, the gossip digest
+// (§10.6.3).
+table Keepalive {
+    seq: uint64;
+    echo_us: uint64;          // sender's monotonic microseconds, echoed back
+    wall_ms: uint64;
+    digest: Key32;            // optional
+}
+
+table KeepaliveAck {
+    seq: uint64;
+    echo_us: uint64;
+    wall_ms: uint64;
+    observed_addr: SockAddr;  // where the responder saw the sender's packets (§11.7)
+}
+
+table Digest { digest: Key32; }
+
+// A tree head plus a hash of the offline-signed sets (§10.3.1).
+table HeadAnnounce {
+    head: [ubyte];            // Signed(SignedTreeHead)
+    offline_hash: Key32;
+}
+
+table GetOffline { have_hash: Key32; }
+table OfflineItems { items: [Blob]; }    // Signed envelopes (§10.3)
+
+// Merkle walk (§10.3): 256 subtree hashes at depth 8, then the leaf index of
+// differing buckets, then the differing leaves themselves.
+table GetBuckets { root: Key32; }
+table Buckets { root: Key32; hashes: [Key32]; }
+table GetBucketIndex { root: Key32; buckets: [ubyte]; }
+table LeafIndex { path: Key32; hash: Key32; }
+table BucketIndex { root: Key32; entries: [LeafIndex]; }
+table GetLeaves { root: Key32; paths: [Key32]; }
+table LeafData { kind: ubyte; key: Key32; bytes: [ubyte]; }
+table Leaves { root: Key32; leaves: [LeafData]; }
+table NotAvailable { root: Key32; }
+
+// Self-signed soft state: EndpointRecords, LinkStateAdverts and
+// AttachmentRecords, each a Signed envelope (§10.6.1).
+table Records { items: [Blob]; }
+
+table Lookup { node_ids: [Key32]; subscribe_ttl_s: uint32; }
+
+// Circuits (§11.5). Labels are allocated by the receiving side of a hop:
+// `label` in CircuitOpen is the opener's label for frames coming back to it.
+table CircuitOpen { setup: [ubyte]; label: uint32; }
+table CircuitAccept { label: uint32; peer_label: uint32; }
+table CircuitRefuse { label: uint32; reason: string; }
+// `label` is the label the receiver allocated (the one used in frames sent to it).
+table CircuitClose { label: uint32; }
+
+union HopMsg {
+    Keepalive,
+    KeepaliveAck,
+    Digest,
+    HeadAnnounce,
+    GetOffline,
+    OfflineItems,
+    GetBuckets,
+    Buckets,
+    GetBucketIndex,
+    BucketIndex,
+    GetLeaves,
+    Leaves,
+    NotAvailable,
+    Records,
+    Lookup,
+    CircuitOpen,
+    CircuitAccept,
+    CircuitRefuse,
+    CircuitClose,
+}
+
+table HopControl { msg: HopMsg; }
+
+// ---------------------------------------------------------------- end-to-end payloads (§9.4.3, §11.7)
+
+table Probe { route_id: Key32; probe_seq: uint64; sent_at_us: uint64; }
+
+table PunchOffer {
+    candidates: [SockAddr];
+    nonce: Id16;
+}
+
+table PunchGo { nonce: Id16; }
+
+// ---------------------------------------------------------------- RPC to controllers over end-to-end sessions
+
+table PskEpoch { epoch_id: uint16; psk: Key32; }
+table GetPsk { all: bool; }
+table PskInfo { current: uint16; epochs: [PskEpoch]; }
+table GetCamouflage {}
+table CamouflageSecret { private_key: [ubyte]; site: [ubyte]; }
+table SubmitOp { signed: [ubyte]; }
+table SubmitResult { ok: bool; index: uint64; error: string; }
+table MetricUpload { report: [ubyte]; }
+table RpcAck { ok: bool; error: string; }
+table RaftRpc { message: [ubyte]; }          // RaftMessage
+table GetControllerStatus {}
+table ControllerStatus {
+    node_id: Key32;
+    is_leader: bool;
+    leader: Key32;
+    term: uint64;
+    commit_index: uint64;
+    applied_index: uint64;
+    voters: [Key32];
+    learners: [Key32];
+    signed_version: uint64;
+}
+
+union RpcBody {
+    GetPsk,
+    PskInfo,
+    GetCamouflage,
+    CamouflageSecret,
+    SubmitOp,
+    SubmitResult,
+    MetricUpload,
+    RpcAck,
+    RaftRpc,
+    GetControllerStatus,
+    ControllerStatus,
+}
+
+table Rpc { body: RpcBody; }
+
+// ---------------------------------------------------------------- Raft (§7.1)
+
+table RaftVote {
+    term: uint64;
+    last_log_index: uint64;
+    last_log_term: uint64;
+    pre_vote: bool;
+}
+
+table RaftVoteResponse { term: uint64; granted: bool; pre_vote: bool; }
+
+table RaftAppend {
+    term: uint64;
+    prev_log_index: uint64;
+    prev_log_term: uint64;
+    entries: [Blob];          // LogEntry bytes
+    leader_commit: uint64;
+}
+
+table RaftAppendResponse {
+    term: uint64;
+    success: bool;
+    match_index: uint64;
+    hint_index: uint64;
+}
+
+table RaftSnapshot {
+    term: uint64;
+    last_index: uint64;
+    last_term: uint64;
+    data: [ubyte];
+}
+
+table RaftSnapshotResponse { term: uint64; last_index: uint64; }
+
+// A proposal forwarded from a learner or follower to the leader (§7.1).
+table RaftForward { request_id: uint64; signed: [ubyte]; }
+table RaftForwardResult { request_id: uint64; ok: bool; index: uint64; error: string; }
+table RaftTimeoutNow { term: uint64; }
+
+union RaftBody {
+    RaftVote,
+    RaftVoteResponse,
+    RaftAppend,
+    RaftAppendResponse,
+    RaftSnapshot,
+    RaftSnapshotResponse,
+    RaftForward,
+    RaftForwardResult,
+    RaftTimeoutNow,
+}
+
+table RaftMessage { from: Key32; to: Key32; body: RaftBody; }
+
+// Controller snapshot (§7.1 log compaction).
+table PendingEnrollment {
+    token_hash: Key32;
+    expires_at: uint64;
+    is_rekey: bool;
+    node_id: Key32;
+    create: CreateEnrollment;
+}
+
+table OpSeq { account_id: Key32; seq: uint64; }
+
+table ControllerSnapshot {
+    last_index: uint64;
+    last_term: uint64;
+    leaves: [LeafData];
+    pending: [PendingEnrollment];
+    op_seqs: [OpSeq];
+    psk_epochs: [PskEpoch];
+    psk_current: uint16;
+    camouflage: CamouflageSecret;
+    voters: [Key32];
+    learners: [Key32];
+    used_keys: [Key32];
+    state_version: [ubyte];
+    retired_names: [string];
+    genesis: [ubyte];
+}
+
+// ---------------------------------------------------------------- enrollment (§8)
+
+table EnrollRequest {
+    lookup_id: Key32;         // BLAKE3.derive_key("webjet enroll-id v1", token_hash)
+    identity_key: Key32;
+    nonce: Key32;
+    proof: Key32;             // BLAKE3-keyed(token_hash, identity_key || nonce)
+}
+
+table MerkleProof { bitmap: [ubyte]; siblings: [Key32]; }
+
+table EnrollResponse {
+    ok: bool;
+    error: string;
+    node_id: Key32;
+    record: [ubyte];          // the node's leaf bytes
+    proof: MerkleProof;
+    genesis: [ubyte];
+    certs: [Blob];
+    key_tombstones: [Blob];
+    head: [ubyte];
+    leaves: [LeafData];
+    offline: [Blob];
+    psk_current: uint16;
+    psk_epochs: [PskEpoch];
+}
+
+// Bundled by the admin tool and pasted onto the new node (§8).
+table EnrollmentTicket {
+    token: [ubyte];
+    root_key: Key32;
+    controllers: [SeedAddr];
+    camouflage_domain: string;
+    camouflage_pin: Key32;
+}

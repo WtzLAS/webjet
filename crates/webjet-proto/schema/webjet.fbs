@@ -1,0 +1,520 @@
+// Webjet wire and storage schema (architecture §6, §15).
+//
+// Conventions (§15.2):
+//  * keys, hashes and ids are fixed-size structs (Key32, Sig64, Id16);
+//    planus has no struct arrays, so they are written as little-endian u64
+//    words, which gives exactly the byte layout of `[ubyte:N]`;
+//  * timestamps are uint64 milliseconds since the Unix epoch (UTC);
+//  * sets are vectors, sorted and without duplicates;
+//  * enum values are explicit and never renumbered;
+//  * every schema change bumps the type's schema version (see src/lib.rs).
+
+namespace webjet;
+
+// ---------------------------------------------------------------- primitives
+
+struct Key32 { b0: uint64; b1: uint64; b2: uint64; b3: uint64; }
+struct Sig64 { b0: uint64; b1: uint64; b2: uint64; b3: uint64; b4: uint64; b5: uint64; b6: uint64; b7: uint64; }
+struct Id16 { b0: uint64; b1: uint64; }
+// family: 4 or 6. addr holds the address in network byte order in its first
+// 4 / 16 bytes; unused bytes zero. prefix: prefix length, host bits zero.
+struct Cidr { family: ubyte; prefix: ubyte; a0: uint64; a1: uint64; }
+struct IpAddress { family: ubyte; a0: uint64; a1: uint64; }
+struct SockAddr { family: ubyte; port: uint16; a0: uint64; a1: uint64; }
+struct RouteGrant { lan: Cidr; published: Cidr; }
+
+enum Transport : ubyte { TcpTls = 1, KcpFecTls = 2, AnyTls = 3 }
+enum AddrKind : ubyte { Public = 1, Host = 2, Reflexive = 3 }
+enum NatType : ubyte { Unknown = 0, NoNat = 1, Consistent = 2, Symmetric = 3 }
+enum Role : ubyte { Data = 1, Relay = 2 }
+enum Action : ubyte { Allow = 1, Deny = 2 }
+
+table Blob { data: [ubyte]; }
+
+// ---------------------------------------------------------------- envelope (§15.3)
+
+table Signed {
+    type: uint16;
+    schema: uint16;
+    body: [ubyte];
+    signer: Key32;
+    alg: ubyte = 1;
+    sig: Sig64;
+}
+
+// Controller-built, unsigned tree leaf (§15.3).
+table Leaf {
+    type: uint16;
+    schema: uint16;
+    body: [ubyte];
+}
+
+// ---------------------------------------------------------------- tree records (§6)
+
+table NodeRecord {
+    node_id: Key32;
+    identity_key: Key32;
+    overlay_ips: [Cidr];
+    roles: [Role];
+    name: string;
+    owner: Key32;
+    tags: [string];
+    routes: [RouteGrant];
+    version: uint64;
+}
+
+table Tombstone {
+    node_id: Key32;
+    version: uint64;
+    reason: string;
+}
+
+table AccountRecord {
+    account_id: Key32;
+    account_key: Key32;
+    name: string;
+    admin: bool;
+    issuer_root: bool;
+    issuer: Key32;            // account_id of the signing admin when !issuer_root
+    version: uint64;
+}
+
+table AccountTombstone {
+    account_id: Key32;
+    version: uint64;
+    revoke_issued: bool;
+    reason: string;
+}
+
+table Rule {
+    id: string;
+    action: Action = Allow;
+    src: [string];
+    dst: [string];
+    ports: [string];
+}
+
+table PolicyTest {
+    src: string;
+    dst: string;
+    port: string;
+    expect: Action = Allow;
+}
+
+table Policy {
+    version: uint64;
+    default_action: Action = Deny;
+    rules: [Rule];
+    tests: [PolicyTest];
+}
+
+enum DnsType : ubyte { A = 1, AAAA = 2, CNAME = 3, TXT = 4, SRV = 5 }
+
+table DnsRecord {
+    name: string;
+    rtype: DnsType = A;
+    value: string;
+    ttl: uint32;
+}
+
+table ForwardZone {
+    zone: string;
+    servers: [IpAddress];
+    rewrite: [RouteGrant];
+}
+
+table DnsConfig {
+    version: uint64;
+    suffix: string;
+    resolver_ip: [IpAddress];
+    records: [DnsRecord];
+    forward: [ForwardZone];
+}
+
+table SeedAddr {
+    host: string;
+    port: uint16;
+    transport: Transport = TcpTls;
+}
+
+table SeedEntry {
+    node: string;            // node:<name> or node:<base64 key> form, or a bare name
+    addrs: [SeedAddr];
+}
+
+table Seeds {
+    version: uint64;
+    entries: [SeedEntry];
+}
+
+table LimitValue {
+    name: string;
+    value: uint64;
+}
+
+table LimitOverride {
+    select: [string];
+    values: [LimitValue];
+}
+
+table Limits {
+    version: uint64;
+    defaults: [LimitValue];
+    overrides: [LimitOverride];
+}
+
+table Validity {
+    valid_until: uint64;
+}
+
+table TransportPriority {
+    transport: Transport = TcpTls;
+    priority: ubyte;
+}
+
+table PriorityOverride {
+    select: [string];
+    values: [TransportPriority];
+}
+
+enum CamouflageMode : ubyte { Website = 1, Refuse = 2 }
+
+table Camouflage {
+    mode: CamouflageMode = Refuse;
+    domain: string;
+    certificate: [Blob];      // DER chain, leaf first
+    next_spki: Key32;         // optional: BLAKE3 of the next key's SPKI
+}
+
+table PaddingScheme {
+    stop: uint32;             // number of packets the scheme applies to
+    lines: [string];          // AnyTLS style: "<pkt>=<min>-<max>[,c,...]"
+}
+
+table TransportConfig {
+    version: uint64;
+    defaults: [TransportPriority];
+    overrides: [PriorityOverride];
+    camouflage: Camouflage;
+    padding: PaddingScheme;
+}
+
+// ---------------------------------------------------------------- controller certificates (§6.4-6.6)
+
+table SignedTreeHead {
+    signing_key_id: Key32;
+    version: uint64;
+    root: Key32;
+    state_version: uint32;
+    issued_at: uint64;
+    expires_at: uint64;
+}
+
+table SigningKeyCert {
+    signing_key_id: Key32;
+    signing_key: Key32;
+    controller: Key32;
+    cert_serial: uint64;
+}
+
+table SigningKeyTombstone {
+    signing_key_id: Key32;
+    last_valid_version: uint64;
+    reason: string;
+}
+
+// Root-signed certificate for the emergency revocation key (§5).
+table EmergencyKeyCert {
+    key: Key32;
+}
+
+table TypeSchema { type: uint16; schema: uint16; }
+table TypeSchemas { type: uint16; schemas: [uint16]; }
+
+table StateVersion {
+    version: uint32;
+    state_machine: uint32;
+    emit: [TypeSchema];
+    accept: [TypeSchemas];
+    min_wire_protocol: uint16;
+    min_node_software: string;
+}
+
+// The genesis file of a network (operations guide, runbook 1).
+table Genesis {
+    root_key: Key32;
+    emergency_cert: [ubyte];  // Signed(EmergencyKeyCert)
+    first_admin: [ubyte];     // Signed(AccountRecord)
+    overlay_pool: [Cidr];
+    created_at: uint64;
+}
+
+// ---------------------------------------------------------------- self-signed soft state (§6.2, §6.7, §6.8)
+
+table EndpointAddr {
+    addr: SockAddr;
+    transport: Transport = TcpTls;
+    kind: AddrKind = Public;
+    priority: ubyte;
+}
+
+table EndpointRecord {
+    node_id: Key32;
+    addrs: [EndpointAddr];
+    nat: NatType = Unknown;
+    software: string;
+    features: [string];
+    serving: [Cidr];
+    gateway_load: ubyte = null;
+    seq: uint64;
+    issued_at: uint64;
+    expires_at: uint64;
+    priorities: [TransportPriority];
+}
+
+table LinkEntry {
+    peer: Key32;
+    transport: Transport = TcpTls;
+    rtt_ms: uint16;
+    loss_pct: ubyte;
+    util_pct: ubyte;
+}
+
+table RelayLoad {
+    util_pct: ubyte;
+    cpu_pct: ubyte;
+    circuits_pct: ubyte;
+    capacity_mbps: uint32;
+}
+
+table LinkStateAdvert {
+    origin: Key32;
+    seq: uint64;
+    links: [LinkEntry];
+    load: RelayLoad;
+    issued_at: uint64;
+    expires_at: uint64;
+}
+
+table AttachmentEntry {
+    relay: Key32;
+    transport: Transport = TcpTls;
+    rtt_ms: uint16;
+    loss_pct: ubyte;
+}
+
+table AttachmentRecord {
+    node_id: Key32;
+    seq: uint64;
+    relays: [AttachmentEntry];
+    issued_at: uint64;
+    expires_at: uint64;
+}
+
+table CircuitSetup {
+    route_id: Key32;
+    src: Key32;
+    dst: Key32;
+    hops: [Key32];
+    nonce: Id16;
+    issued_at: uint64;
+}
+
+// RotateNodeKey is signed twice: the inner Signed by new_key, the outer by
+// the current key (§8.2). `body` of the outer envelope is a RotateNodeKey.
+table RotateNodeKey {
+    node_id: Key32;
+    new_key: Key32;
+    issued_at: uint64;
+}
+
+// ---------------------------------------------------------------- metrics (§12.5)
+
+enum RouteRole : ubyte { Source = 1, Relay = 2, Dest = 3 }
+
+table Counter { name: string; value: uint64; }
+
+table RouteDir { frames: uint64; bytes: uint64; }
+
+table RouteE2e {
+    rtt_ms: uint32;
+    loss_pct: ubyte;
+    selected: ubyte;          // 0 idle, 1 primary, 2 backup
+    switches: uint64;
+}
+
+table RouteMetrics {
+    route_id: Key32;
+    src: Key32;
+    dst: Key32;
+    hops: [Key32];
+    role: RouteRole = Source;
+    fwd: RouteDir;
+    rev: RouteDir;
+    dropped: [Counter];
+    ecn_marked: uint64;
+    circuit_setups: uint64;
+    active_since: uint64;
+    e2e: RouteE2e;
+}
+
+table LinkMetrics {
+    peer: Key32;
+    transport: Transport = TcpTls;
+    wire_tx: uint64;
+    wire_rx: uint64;
+    payload_tx: uint64;
+    payload_rx: uint64;
+    fec_parity_tx: uint64 = null;
+    kcp_retrans: uint64 = null;
+    fec_recovered: uint64 = null;
+    fec_ratio_pct: ubyte = null;
+    bw_estimate_mbps: uint32 = null;
+    queue_delay_ms: uint32;
+    rtt_ms: uint32;
+    loss_pct: ubyte;
+}
+
+table RuleHit { rule_id: string; decision: Action = Allow; flows: uint64; }
+
+table Alarm { name: string; severity: string; since: uint64; }
+
+table MetricReport {
+    node_id: Key32;
+    boot_id: Id16;
+    software: string;
+    report_seq: uint64;
+    taken_at: uint64;
+    routes: [RouteMetrics];
+    links: [LinkMetrics];
+    policy_version: uint64;
+    rule_hits: [RuleHit];
+    circuits_refused: [Counter];
+    limit_hits: [Counter];
+    alarms: [Alarm];
+}
+
+// ---------------------------------------------------------------- operations (§7.2, §13.3)
+
+table CreateEnrollment {
+    owner: Key32;
+    name: string;
+    overlay_ips: [Cidr];
+    roles: [Role];
+    tags: [string];
+    routes: [RouteGrant];
+    token_hash: Key32;
+    expires_at: uint64;
+    identity_key: Key32;       // optional: the fingerprint flow (§8, alternative)
+    node_id: Key32;            // optional: only for a Raft member without a record (bootstrap)
+}
+
+table RenameNode { node_id: Key32; name: string; }
+
+table UpdateNode {
+    node_id: Key32;
+    owner: Key32;              // optional
+    set_overlay_ips: bool;
+    overlay_ips: [Cidr];
+    set_roles: bool;
+    roles: [Role];
+    set_tags: bool;
+    tags: [string];
+    set_routes: bool;
+    routes: [RouteGrant];
+}
+
+table TombstoneNode { node_id: Key32; reason: string; }
+
+table RekeyNode {
+    node_id: Key32;
+    token_hash: Key32;
+    expires_at: uint64;
+    revoke_old_now: bool;
+}
+
+table PutAccount { record: [ubyte]; }              // Signed(AccountRecord)
+table TombstoneAccount { tombstone: [ubyte]; }     // Signed(AccountTombstone)
+table SetPolicy { policy: Policy; }
+table SetDns { config: DnsConfig; }
+table SetSeeds { seeds: Seeds; }
+table SetLimits { limits: Limits; }
+table SetTransport { config: TransportConfig; }
+table SetCamouflageSecret { private_key: [ubyte]; site: [ubyte]; }
+
+enum MembershipChange : ubyte { AddLearner = 1, Promote = 2, Demote = 3, Remove = 4 }
+table ChangeMembership { change: MembershipChange = AddLearner; node_id: Key32; }
+
+table RotatePsk { epoch_id: uint16; }
+
+union AccountOp {
+    CreateEnrollment,
+    RenameNode,
+    UpdateNode,
+    TombstoneNode,
+    RekeyNode,
+    PutAccount,
+    TombstoneAccount,
+    SetPolicy,
+    SetDns,
+    SetSeeds,
+    SetLimits,
+    SetTransport,
+    SetCamouflageSecret,
+    ChangeMembership,
+    RotatePsk,
+}
+
+table SignedOp {
+    signer: Key32;            // account_id
+    op_seq: uint64;
+    issued_at: uint64;
+    op: AccountOp;
+}
+
+// ---------------------------------------------------------------- the replicated log (§7.2, §15.5)
+
+table OpEntry { signed_op: [ubyte]; }              // Signed(SignedOp)
+table RootAccountEntry { record: [ubyte]; }        // root-signed PutAccount / TombstoneAccount w/o SignedOp
+table SetStateVersionEntry { state_version: [ubyte]; }  // Signed(StateVersion), root key
+table RedeemEnrollmentEntry { token_hash: Key32; identity_key: Key32; node_id: Key32; }
+table RotateNodeKeyEntry { rotation: [ubyte]; }    // outer Signed(RotateNodeKey)
+table ExtendValidityEntry { valid_until: uint64; }
+table ExpireEnrollmentsEntry { now: uint64; }
+table NoopEntry { term: uint64; }
+table GenesisEntry { genesis: [ubyte]; }
+table MembershipEntry { voters: [Key32]; learners: [Key32]; }
+
+union EntryPayload {
+    OpEntry,
+    RootAccountEntry,
+    SetStateVersionEntry,
+    RedeemEnrollmentEntry,
+    RotateNodeKeyEntry,
+    ExtendValidityEntry,
+    ExpireEnrollmentsEntry,
+    NoopEntry,
+    GenesisEntry,
+    MembershipEntry,
+}
+
+// Random values chosen by the leader before proposing (§15.5).
+table EntryRandom {
+    node_id: Key32;
+    psk: Key32;
+}
+
+table LeafUpdate {
+    kind: ubyte;
+    key: Key32;
+    bytes: [ubyte];           // empty = delete
+}
+
+table LogEntry {
+    term: uint64;
+    index: uint64;
+    timestamp: uint64;
+    payload: EntryPayload;
+    random: EntryRandom;
+    leaves: [LeafUpdate];      // the leader's leaf bytes (§15.5)
+}
