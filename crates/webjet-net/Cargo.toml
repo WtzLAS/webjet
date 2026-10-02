@@ -1,0 +1,30 @@
+[package]
+name = "webjet-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["anytls"]
+anytls = ["dep:boring", "dep:tokio-boring"]
+
+[dependencies]
+webjet-core = { path = "../webjet-core" }
+webjet-proto = { path = "../webjet-proto" }
+anyhow.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+rand.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+kcp.workspace = true
+reed-solomon-erasure.workspace = true
+chacha20poly1305.workspace = true
+subtle.workspace = true
+futures.workspace = true
+boring = { version = "5", optional = true }
+tokio-boring = { version = "5", optional = true }
