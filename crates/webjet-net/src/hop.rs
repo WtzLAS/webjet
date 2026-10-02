@@ -133,7 +133,8 @@ pub enum Accepted {
     Enroll(BoxIo, SocketAddr),
 }
 
-/// Pending enrollment credentials a controller accepts at its gate.
+/// Pending enrollment credentials a controller accepts at its gate: the
+/// token hashes of pending enrollments.
 pub trait EnrollGate: Send + Sync {
     fn enroll_keys(&self) -> Vec<Bytes32>;
 }
@@ -162,7 +163,7 @@ pub async fn accept_tls(mut s: TcpStream, remote: SocketAddr, kp: &KeyPair, trus
         let mut ok = false;
         for k in eg.enroll_keys() {
             let mut e = gate::Epochs::default();
-            e.keys.insert(ENROLL_EPOCH, k);
+            e.keys.insert(ENROLL_EPOCH, gate::anytls_enroll_password(&k));
             e.current = ENROLL_EPOCH;
             if check_tcp_preamble(&pre, &e, replay).is_some() {
                 ok = true;

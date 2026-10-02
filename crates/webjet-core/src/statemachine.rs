@@ -297,6 +297,9 @@ impl Machine {
                 m.voters.insert(me);
                 fx.members = Some(m);
                 fx.genesis = Some(raw);
+                // The first PSK epoch exists from the start, so nodes enrolled
+                // before any rotation can pass the gate (§7.6).
+                fx.psk = Some((0, opt_k32(&random.psk)));
                 fx.used_keys.push(opt_k32(&r.account_key));
                 fx.outcome.description = format!("genesis; first controller {}", crypto::short(&me));
             }
@@ -766,6 +769,13 @@ impl Machine {
         c.roles = Some(sort_dedup(c.roles.clone().unwrap_or_default()));
         c.tags = Some(check_tags(&c.tags.clone().unwrap_or_default())?);
         let fixed_id = c.node_id.map(|k| k.to_bytes()).filter(|k| *k != [0; 32]);
+        if let Some(f) = fixed_id {
+            // Only a controller that is a Raft member but has no record yet
+            // (bootstrap, runbook 1) may be enrolled under a fixed id.
+            if !self.members.contains(&f) {
+                return rej("a fixed node_id is only allowed for a Raft member without a record");
+            }
+        }
         let node_id = fixed_id.unwrap_or_else(|| opt_k32(&random.node_id));
         if self.tree.get(kind::NODE, &node_id).is_some() {
             return rej("node id already enrolled");

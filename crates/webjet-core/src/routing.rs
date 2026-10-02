@@ -397,7 +397,7 @@ mod tests {
     fn mesh() -> Graph {
         let mut g = Graph::default();
         // relays 1..=4 in a ring with a diagonal 1-3
-        let links = [(1, 2, 10.0), (2, 3, 10.0), (3, 4, 10.0), (4, 1, 10.0), (1, 3, 25.0)];
+        let links = [(1, 2, 10.0), (2, 3, 10.0), (3, 4, 15.0), (4, 1, 15.0), (1, 3, 25.0)];
         for (a, b, c) in links {
             g.relays.entry(id(a)).or_default().links.insert(id(b), c);
             g.relays.entry(id(b)).or_default().links.insert(id(a), c);

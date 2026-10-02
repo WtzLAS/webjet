@@ -94,14 +94,15 @@ pub fn parse_header(frame: &[u8]) -> Option<FrameHeader> {
     Some(FrameHeader { ty, key_id: u32::from_be_bytes(frame[1..5].try_into().unwrap()), counter: u64::from_be_bytes(frame[5..13].try_into().unwrap()) })
 }
 
-/// HANDSHAKE frames: `type || initiator flag || session nonce[16] || TLS bytes || padding`.
-/// They are not AEAD-protected; TLS protects them (§6.9). `len` gives the TLS
-/// byte count so the frame can be padded to a size bucket (§9.7.4).
-pub fn handshake_frame(initiator: bool, nonce: &[u8; 16], tls: &[u8]) -> Vec<u8> {
+/// HANDSHAKE frames: `type || initiator flag || session nonce[16] || flight[2]
+/// || tls_len[2] || TLS bytes || padding`. They are not AEAD-protected; TLS
+/// protects them (§6.9). Frames are padded to size buckets (§9.7.4).
+pub fn handshake_frame(initiator: bool, nonce: &[u8; 16], flight: u16, tls: &[u8]) -> Vec<u8> {
     let mut f = Vec::with_capacity(32 + tls.len());
     f.push(ftype::HANDSHAKE);
     f.push(initiator as u8);
     f.extend_from_slice(nonce);
+    f.extend_from_slice(&flight.to_be_bytes());
     f.extend_from_slice(&(tls.len() as u16).to_be_bytes());
     f.extend_from_slice(tls);
     let bucket = [256usize, 512, 1024, 1500, 2048, 4096, 8192, 16384].into_iter().find(|b| *b >= f.len()).unwrap_or(f.len());
@@ -109,15 +110,23 @@ pub fn handshake_frame(initiator: bool, nonce: &[u8; 16], tls: &[u8]) -> Vec<u8>
     f
 }
 
-pub fn parse_handshake(f: &[u8]) -> Option<(bool, [u8; 16], &[u8])> {
-    if f.len() < 20 || f[0] != ftype::HANDSHAKE {
+pub struct Handshake<'a> {
+    pub initiator: bool,
+    pub nonce: [u8; 16],
+    pub flight: u16,
+    pub tls: &'a [u8],
+}
+
+pub fn parse_handshake(f: &[u8]) -> Option<Handshake<'_>> {
+    if f.len() < 22 || f[0] != ftype::HANDSHAKE {
         return None;
     }
-    let init = f[1] == 1;
+    let initiator = f[1] == 1;
     let nonce: [u8; 16] = f[2..18].try_into().ok()?;
-    let len = u16::from_be_bytes([f[18], f[19]]) as usize;
-    let tls = f.get(20..20 + len)?;
-    Some((init, nonce, tls))
+    let flight = u16::from_be_bytes([f[18], f[19]]);
+    let len = u16::from_be_bytes([f[20], f[21]]) as usize;
+    let tls = f.get(22..22 + len)?;
+    Some(Handshake { initiator, nonce, flight, tls })
 }
 
 // ---------------------------------------------------------------- replay window
@@ -266,11 +275,12 @@ mod tests {
 
     #[test]
     fn handshake_padding() {
-        let f = handshake_frame(true, &[1; 16], &[9; 300]);
+        let f = handshake_frame(true, &[1; 16], 3, &[9; 300]);
         assert_eq!(f.len(), 512);
-        let (i, n, t) = parse_handshake(&f).unwrap();
-        assert!(i);
-        assert_eq!(n, [1; 16]);
-        assert_eq!(t.len(), 300);
+        let h = parse_handshake(&f).unwrap();
+        assert!(h.initiator);
+        assert_eq!(h.nonce, [1; 16]);
+        assert_eq!(h.flight, 3);
+        assert_eq!(h.tls.len(), 300);
     }
 }
