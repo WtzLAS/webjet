@@ -49,7 +49,10 @@ pub struct SyncState {
 fn head_msg(n: &Node) -> Option<HopMsg> {
     let s = n.store.read();
     let h = s.head()?;
-    Some(HopMsg::HeadAnnounce(Box::new(wp::HeadAnnounce { head: Some(h.raw.clone()), offline_hash: Some(crypto::k32(&s.offline_hash())) })))
+    Some(HopMsg::HeadAnnounce(Box::new(wp::HeadAnnounce {
+        head: Some(h.raw.clone()),
+        offline_hash: Some(crypto::k32(&s.offline_hash())),
+    })))
 }
 
 /// The core: relays and controllers, which keep full state and a mesh of
@@ -58,7 +61,12 @@ pub fn is_core(n: &Node, id: &Bytes32) -> bool {
     let s = n.store.read();
     let v = s.view();
     let any_relay = v.nodes.values().any(|x| x.relay && x.valid);
-    !any_relay || v.nodes.get(id).map(|x| x.relay || x.control).unwrap_or(false) || (*id == n.me && n.is_controller())
+    !any_relay
+        || v.nodes
+            .get(id)
+            .map(|x| x.relay || x.control)
+            .unwrap_or(false)
+        || (*id == n.me && n.is_controller())
 }
 
 /// Re-share infrastructure endpoint records with every neighbor, e.g. after
@@ -71,12 +79,27 @@ pub fn share_infra(n: &Arc<Node>) {
         let s = n.store.read();
         let v = s.view();
         let recs = n.records.lock();
-        recs.endpoints.iter().filter(|(id, _)| v.nodes.get(*id).map(|x| x.valid && (x.relay || x.control)).unwrap_or(false)).map(|(_, (_, raw))| raw.clone()).collect()
+        recs.endpoints
+            .iter()
+            .filter(|(id, _)| {
+                v.nodes
+                    .get(*id)
+                    .map(|x| x.valid && (x.relay || x.control))
+                    .unwrap_or(false)
+            })
+            .map(|(_, (_, raw))| raw.clone())
+            .collect()
     };
     if items.is_empty() {
         return;
     }
-    let hops: Vec<Arc<Hop>> = n.hops.lock().values().filter(|h| h.alive() && !h.restricted).cloned().collect();
+    let hops: Vec<Arc<Hop>> = n
+        .hops
+        .lock()
+        .values()
+        .filter(|h| h.alive() && !h.restricted)
+        .cloned()
+        .collect();
     for h in hops {
         send_records(&h, items.clone());
     }
@@ -99,7 +122,11 @@ pub fn on_hop_up(n: &Arc<Node>, hop: &Arc<Hop>) {
             }
         }
         for (id, (_, raw)) in &recs.endpoints {
-            let infra = v.nodes.get(id).map(|x| x.relay || x.control).unwrap_or(false);
+            let infra = v
+                .nodes
+                .get(id)
+                .map(|x| x.relay || x.control)
+                .unwrap_or(false);
             if *id != n.me && (peer_core || infra) {
                 items.push(raw.clone());
             }
@@ -132,7 +159,16 @@ fn own_records(n: &Node) -> Vec<Vec<u8>> {
 
 fn send_records(hop: &Hop, items: Vec<Vec<u8>>) {
     for chunk in items.chunks(64) {
-        hop.send_control(HopMsg::Records(Box::new(wp::Records { items: Some(chunk.iter().map(|b| wp::Blob { data: Some(b.clone()) }).collect()) })));
+        hop.send_control(HopMsg::Records(Box::new(wp::Records {
+            items: Some(
+                chunk
+                    .iter()
+                    .map(|b| wp::Blob {
+                        data: Some(b.clone()),
+                    })
+                    .collect(),
+            ),
+        })));
     }
 }
 
@@ -157,7 +193,14 @@ pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
         HopMsg::HeadAnnounce(a) => on_head(n, hop, *a),
         HopMsg::GetOffline(_) => {
             let items = n.store.read().offline_items();
-            hop.send_control(HopMsg::OfflineItems(Box::new(wp::OfflineItems { items: Some(items.into_iter().map(|b| wp::Blob { data: Some(b) }).collect()) })));
+            hop.send_control(HopMsg::OfflineItems(Box::new(wp::OfflineItems {
+                items: Some(
+                    items
+                        .into_iter()
+                        .map(|b| wp::Blob { data: Some(b) })
+                        .collect(),
+                ),
+            })));
             Ok(())
         }
         HopMsg::OfflineItems(o) => {
@@ -181,9 +224,14 @@ pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
             let s = n.store.read();
             let root = s.tree().compute_root();
             if opt_k32(&g.root) != root {
-                hop.send_control(HopMsg::NotAvailable(Box::new(wp::NotAvailable { root: g.root })));
+                hop.send_control(HopMsg::NotAvailable(Box::new(wp::NotAvailable {
+                    root: g.root,
+                })));
             } else {
-                hop.send_control(HopMsg::Buckets(Box::new(wp::Buckets { root: g.root, hashes: Some(s.tree().buckets().iter().map(crypto::k32).collect()) })));
+                hop.send_control(HopMsg::Buckets(Box::new(wp::Buckets {
+                    root: g.root,
+                    hashes: Some(s.tree().buckets().iter().map(crypto::k32).collect()),
+                })));
             }
             Ok(())
         }
@@ -191,13 +239,23 @@ pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
         HopMsg::GetBucketIndex(g) => {
             let s = n.store.read();
             if opt_k32(&g.root) != s.tree().compute_root() {
-                hop.send_control(HopMsg::NotAvailable(Box::new(wp::NotAvailable { root: g.root })));
+                hop.send_control(HopMsg::NotAvailable(Box::new(wp::NotAvailable {
+                    root: g.root,
+                })));
                 return Ok(());
             }
             let entries = s.bucket_index(&g.buckets.unwrap_or_default());
             hop.send_control(HopMsg::BucketIndex(Box::new(wp::BucketIndex {
                 root: g.root,
-                entries: Some(entries.into_iter().map(|(p, h)| wp::LeafIndex { path: Some(crypto::k32(&p)), hash: Some(crypto::k32(&h)) }).collect()),
+                entries: Some(
+                    entries
+                        .into_iter()
+                        .map(|(p, h)| wp::LeafIndex {
+                            path: Some(crypto::k32(&p)),
+                            hash: Some(crypto::k32(&h)),
+                        })
+                        .collect(),
+                ),
             })));
             Ok(())
         }
@@ -205,14 +263,30 @@ pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
         HopMsg::GetLeaves(g) => {
             let s = n.store.read();
             if opt_k32(&g.root) != s.tree().compute_root() {
-                hop.send_control(HopMsg::NotAvailable(Box::new(wp::NotAvailable { root: g.root })));
+                hop.send_control(HopMsg::NotAvailable(Box::new(wp::NotAvailable {
+                    root: g.root,
+                })));
                 return Ok(());
             }
-            let paths: Vec<Bytes32> = g.paths.unwrap_or_default().iter().map(|k| k.to_bytes()).collect();
+            let paths: Vec<Bytes32> = g
+                .paths
+                .unwrap_or_default()
+                .iter()
+                .map(|k| k.to_bytes())
+                .collect();
             let leaves = s.leaves_by_path(&paths);
             hop.send_control(HopMsg::Leaves(Box::new(wp::Leaves {
                 root: g.root,
-                leaves: Some(leaves.into_iter().map(|(k, key, b)| wp::LeafData { kind: k, key: Some(crypto::k32(&key)), bytes: Some(b) }).collect()),
+                leaves: Some(
+                    leaves
+                        .into_iter()
+                        .map(|(k, key, b)| wp::LeafData {
+                            kind: k,
+                            key: Some(crypto::k32(&key)),
+                            bytes: Some(b),
+                        })
+                        .collect(),
+                ),
             })));
             Ok(())
         }
@@ -251,7 +325,9 @@ fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
     }
     if let Some(oh) = a.offline_hash {
         if oh.to_bytes() != n.store.read().offline_hash() {
-            hop.send_control(HopMsg::GetOffline(Box::new(wp::GetOffline { have_hash: Some(crypto::k32(&n.store.read().offline_hash())) })));
+            hop.send_control(HopMsg::GetOffline(Box::new(wp::GetOffline {
+                have_hash: Some(crypto::k32(&n.store.read().offline_hash())),
+            })));
         }
     }
     let Some(raw) = a.head else { return Ok(()) };
@@ -264,7 +340,11 @@ fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
         Ok(HeadOutcome::Known) => {
             // The peer is behind us: give it our head so it pulls from us.
             let ours = n.store.read().head().map(|h| h.head.version).unwrap_or(0);
-            let theirs = webjet_core::crypto::open_envelope(&raw).ok().and_then(|v| v.decode::<wp::SignedTreeHead>().ok()).map(|h| h.version).unwrap_or(0);
+            let theirs = webjet_core::crypto::open_envelope(&raw)
+                .ok()
+                .and_then(|v| v.decode::<wp::SignedTreeHead>().ok())
+                .map(|h| h.version)
+                .unwrap_or(0);
             if theirs < ours {
                 if let Some(m) = head_msg(n) {
                     hop.send_control(m);
@@ -276,7 +356,13 @@ fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
             n.alarm("tree_head_equivocation", "critical", "two valid tree heads with the same version and different roots; tree updates frozen (§21.3)".into());
             let (a, b) = n.store.read().equivocation.clone().unwrap_or_default();
             for h in [a, b] {
-                n.broadcast_control(HopMsg::HeadAnnounce(Box::new(wp::HeadAnnounce { head: Some(h), offline_hash: None })), Some(hop.id));
+                n.broadcast_control(
+                    HopMsg::HeadAnnounce(Box::new(wp::HeadAnnounce {
+                        head: Some(h),
+                        offline_hash: None,
+                    })),
+                    Some(hop.id),
+                );
             }
         }
         Err(e) => tracing::debug!("head from {} rejected: {e}", n.name_of(&hop.peer)),
@@ -294,18 +380,37 @@ fn start_walk(n: &Arc<Node>, hop: &Arc<Hop>, head_raw: Vec<u8>) -> Result<()> {
             if cur.root == root {
                 return Ok(());
             }
-            let cur_v = n.store.read().verify_head(&cur.head_raw).map(|x| x.version).unwrap_or(0);
+            let cur_v = n
+                .store
+                .read()
+                .verify_head(&cur.head_raw)
+                .map(|x| x.version)
+                .unwrap_or(0);
             if cur_v >= h.version {
                 return Ok(());
             }
         }
     }
-    *w = Some(Walk { hop: hop.id, head_raw, root, removals: Vec::new(), fetched: Vec::new(), batches_left: 0, started: Instant::now() });
-    hop.send_control(HopMsg::GetBuckets(Box::new(wp::GetBuckets { root: Some(crypto::k32(&root)) })));
+    *w = Some(Walk {
+        hop: hop.id,
+        head_raw,
+        root,
+        removals: Vec::new(),
+        fetched: Vec::new(),
+        batches_left: 0,
+        started: Instant::now(),
+    });
+    hop.send_control(HopMsg::GetBuckets(Box::new(wp::GetBuckets {
+        root: Some(crypto::k32(&root)),
+    })));
     Ok(())
 }
 
-fn walk_for<'a>(w: &'a mut Option<Walk>, hop: &Hop, root: &Option<wp::Key32>) -> Option<&'a mut Walk> {
+fn walk_for<'a>(
+    w: &'a mut Option<Walk>,
+    hop: &Hop,
+    root: &Option<wp::Key32>,
+) -> Option<&'a mut Walk> {
     match w {
         Some(x) if x.hop == hop.id && Some(crypto::k32(&x.root)) == *root => Some(x),
         _ => None,
@@ -314,8 +419,15 @@ fn walk_for<'a>(w: &'a mut Option<Walk>, hop: &Hop, root: &Option<wp::Key32>) ->
 
 fn on_buckets(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::Buckets) -> Result<()> {
     let mut w = n.sync.walk.lock();
-    let Some(walk) = walk_for(&mut w, hop, &b.root) else { return Ok(()) };
-    let theirs: Vec<Bytes32> = b.hashes.unwrap_or_default().iter().map(|k| k.to_bytes()).collect();
+    let Some(walk) = walk_for(&mut w, hop, &b.root) else {
+        return Ok(());
+    };
+    let theirs: Vec<Bytes32> = b
+        .hashes
+        .unwrap_or_default()
+        .iter()
+        .map(|k| k.to_bytes())
+        .collect();
     if theirs.len() != 256 {
         *w = None;
         bail!("bad bucket list");
@@ -323,28 +435,44 @@ fn on_buckets(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::Buckets) -> Result<()> {
     // Check the buckets recombine to the signed root before trusting them.
     let mut level = theirs.clone();
     while level.len() > 1 {
-        level = level.chunks(2).map(|c| webjet_core::merkle::internal_hash(&c[0], &c[1])).collect();
+        level = level
+            .chunks(2)
+            .map(|c| webjet_core::merkle::internal_hash(&c[0], &c[1]))
+            .collect();
     }
     if level[0] != walk.root {
         *w = None;
         bail!("buckets don't match the signed root");
     }
     let ours = n.store.read().tree().buckets();
-    let diff: Vec<u8> = (0..256).filter(|i| ours[*i] != theirs[*i]).map(|i| i as u8).collect();
+    let diff: Vec<u8> = (0..256)
+        .filter(|i| ours[*i] != theirs[*i])
+        .map(|i| i as u8)
+        .collect();
     if diff.is_empty() {
         let raw = walk.head_raw.clone();
         *w = None;
         drop(w);
         return finish(n, &raw, Vec::new());
     }
-    hop.send_control(HopMsg::GetBucketIndex(Box::new(wp::GetBucketIndex { root: b.root, buckets: Some(diff) })));
+    hop.send_control(HopMsg::GetBucketIndex(Box::new(wp::GetBucketIndex {
+        root: b.root,
+        buckets: Some(diff),
+    })));
     Ok(())
 }
 
 fn on_bucket_index(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::BucketIndex) -> Result<()> {
     let mut w = n.sync.walk.lock();
-    let Some(walk) = walk_for(&mut w, hop, &b.root) else { return Ok(()) };
-    let theirs: HashMap<Bytes32, Bytes32> = b.entries.unwrap_or_default().iter().map(|e| (opt_k32(&e.path), opt_k32(&e.hash))).collect();
+    let Some(walk) = walk_for(&mut w, hop, &b.root) else {
+        return Ok(());
+    };
+    let theirs: HashMap<Bytes32, Bytes32> = b
+        .entries
+        .unwrap_or_default()
+        .iter()
+        .map(|e| (opt_k32(&e.path), opt_k32(&e.hash)))
+        .collect();
     let buckets: HashSet<u8> = theirs.keys().map(|p| p[0]).collect();
     let s = n.store.read();
     let mut want = Vec::new();
@@ -368,27 +496,41 @@ fn on_bucket_index(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::BucketIndex) -> Result<
         let rem = std::mem::take(&mut walk.removals);
         *w = None;
         drop(w);
-        return finish(n, &raw, rem.into_iter().map(|(k, key)| (k, key, None)).collect());
+        return finish(
+            n,
+            &raw,
+            rem.into_iter().map(|(k, key)| (k, key, None)).collect(),
+        );
     }
     walk.batches_left = want.len().div_ceil(512);
     for chunk in want.chunks(512) {
-        hop.send_control(HopMsg::GetLeaves(Box::new(wp::GetLeaves { root: b.root, paths: Some(chunk.iter().map(crypto::k32).collect()) })));
+        hop.send_control(HopMsg::GetLeaves(Box::new(wp::GetLeaves {
+            root: b.root,
+            paths: Some(chunk.iter().map(crypto::k32).collect()),
+        })));
     }
     Ok(())
 }
 
 fn on_leaves(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Leaves) -> Result<()> {
     let mut w = n.sync.walk.lock();
-    let Some(walk) = walk_for(&mut w, hop, &l.root) else { return Ok(()) };
+    let Some(walk) = walk_for(&mut w, hop, &l.root) else {
+        return Ok(());
+    };
     for x in l.leaves.unwrap_or_default() {
-        walk.fetched.push((x.kind, opt_k32(&x.key), x.bytes.unwrap_or_default()));
+        walk.fetched
+            .push((x.kind, opt_k32(&x.key), x.bytes.unwrap_or_default()));
     }
     walk.batches_left = walk.batches_left.saturating_sub(1);
     if walk.batches_left > 0 {
         return Ok(());
     }
     let raw = walk.head_raw.clone();
-    let mut updates: Vec<(u8, Bytes32, Option<Vec<u8>>)> = walk.removals.iter().map(|(k, key)| (*k, *key, None)).collect();
+    let mut updates: Vec<(u8, Bytes32, Option<Vec<u8>>)> = walk
+        .removals
+        .iter()
+        .map(|(k, key)| (*k, *key, None))
+        .collect();
     updates.extend(walk.fetched.drain(..).map(|(k, key, b)| (k, key, Some(b))));
     *w = None;
     drop(w);
@@ -397,7 +539,11 @@ fn on_leaves(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Leaves) -> Result<()> {
     finish(n, &raw, updates)
 }
 
-fn finish(n: &Arc<Node>, head_raw: &[u8], updates: Vec<(u8, Bytes32, Option<Vec<u8>>)>) -> Result<()> {
+fn finish(
+    n: &Arc<Node>,
+    head_raw: &[u8],
+    updates: Vec<(u8, Bytes32, Option<Vec<u8>>)>,
+) -> Result<()> {
     n.store.write().install(head_raw, updates)?;
     after_install(n);
     Ok(())
@@ -406,7 +552,10 @@ fn finish(n: &Arc<Node>, head_raw: &[u8], updates: Vec<(u8, Bytes32, Option<Vec<
 fn after_install(n: &Arc<Node>) {
     let (v, root) = {
         let s = n.store.read();
-        (s.head().map(|h| h.head.version).unwrap_or(0), s.head().map(|h| h.root()).unwrap_or_default())
+        (
+            s.head().map(|h| h.head.version).unwrap_or(0),
+            s.head().map(|h| h.root()).unwrap_or_default(),
+        )
     };
     tracing::info!(version = v, root = %crypto::short(&root), "network state updated");
     n.persist_store();
@@ -442,7 +591,10 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
     {
         let s = n.store.read();
         let vw = s.view();
-        let info = vw.nodes.get(&origin).ok_or_else(|| anyhow::anyhow!("record from an unknown node"))?;
+        let info = vw
+            .nodes
+            .get(&origin)
+            .ok_or_else(|| anyhow::anyhow!("record from an unknown node"))?;
         if !info.valid || info.key != v.signer {
             bail!("record not signed by the node's current key");
         }
@@ -454,7 +606,12 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
         let mut recs = n.records.lock();
         match ty {
             mt::ENDPOINT_RECORD => {
-                if recs.endpoints.get(&origin).map(|(r, _)| r.seq >= seq).unwrap_or(false) {
+                if recs
+                    .endpoints
+                    .get(&origin)
+                    .map(|(r, _)| r.seq >= seq)
+                    .unwrap_or(false)
+                {
                     false
                 } else {
                     recs.endpoints.insert(origin, (v.decode()?, raw.to_vec()));
@@ -462,7 +619,12 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
                 }
             }
             mt::LINK_STATE_ADVERT => {
-                if recs.lsas.get(&origin).map(|(r, _)| r.seq >= seq).unwrap_or(false) {
+                if recs
+                    .lsas
+                    .get(&origin)
+                    .map(|(r, _)| r.seq >= seq)
+                    .unwrap_or(false)
+                {
                     false
                 } else {
                     recs.lsas.insert(origin, (v.decode()?, raw.to_vec()));
@@ -470,7 +632,12 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
                 }
             }
             _ => {
-                if recs.attachments.get(&origin).map(|(r, _)| r.seq >= seq).unwrap_or(false) {
+                if recs
+                    .attachments
+                    .get(&origin)
+                    .map(|(r, _)| r.seq >= seq)
+                    .unwrap_or(false)
+                {
                     false
                 } else {
                     recs.attachments.insert(origin, (v.decode()?, raw.to_vec()));
@@ -492,7 +659,14 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
 /// records. Edge nodes send only to their hops (home relays).
 fn flood(n: &Arc<Node>, except: Option<u64>, origin: Bytes32, ty: u16, raw: &[u8]) {
     let i_am_core = is_core(n, &n.me);
-    let infra = n.store.read().view().nodes.get(&origin).map(|x| x.relay || x.control).unwrap_or(false);
+    let infra = n
+        .store
+        .read()
+        .view()
+        .nodes
+        .get(&origin)
+        .map(|x| x.relay || x.control)
+        .unwrap_or(false);
     let subs: HashSet<u64> = {
         let mut s = n.sync.subs.lock();
         let now = Instant::now();
@@ -503,14 +677,22 @@ fn flood(n: &Arc<Node>, except: Option<u64>, origin: Bytes32, ty: u16, raw: &[u8
             HashSet::new()
         }
     };
-    let hops: Vec<Arc<Hop>> = n.hops.lock().values().filter(|h| h.alive() && !h.restricted && Some(h.id) != except).cloned().collect();
+    let hops: Vec<Arc<Hop>> = n
+        .hops
+        .lock()
+        .values()
+        .filter(|h| h.alive() && !h.restricted && Some(h.id) != except)
+        .cloned()
+        .collect();
     for h in hops {
         let send = if !i_am_core {
             origin == n.me
         } else if is_core(n, &h.peer) {
             true
         } else {
-            ty == mt::LINK_STATE_ADVERT || (ty == mt::ENDPOINT_RECORD && infra) || subs.contains(&h.id)
+            ty == mt::LINK_STATE_ADVERT
+                || (ty == mt::ENDPOINT_RECORD && infra)
+                || subs.contains(&h.id)
         };
         if send {
             send_records(&h, vec![raw.to_vec()]);
@@ -530,7 +712,13 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
             bail!("lookup rate exceeded");
         }
     }
-    let ids: Vec<Bytes32> = l.node_ids.unwrap_or_default().iter().take(64).map(|k| k.to_bytes()).collect();
+    let ids: Vec<Bytes32> = l
+        .node_ids
+        .unwrap_or_default()
+        .iter()
+        .take(64)
+        .map(|k| k.to_bytes())
+        .collect();
     let mut items = Vec::new();
     {
         let recs = n.records.lock();
@@ -563,12 +751,18 @@ pub fn lookup(n: &Arc<Node>, peer: &Bytes32) {
     }
     {
         let mut p = n.sync.lookups_pending.lock();
-        if p.get(peer).map(|t| t.elapsed() < Duration::from_secs(60)).unwrap_or(false) {
+        if p.get(peer)
+            .map(|t| t.elapsed() < Duration::from_secs(60))
+            .unwrap_or(false)
+        {
             return;
         }
         p.insert(*peer, Instant::now());
     }
-    let msg = HopMsg::Lookup(Box::new(wp::Lookup { node_ids: Some(vec![crypto::k32(peer)]), subscribe_ttl_s: 300 }));
+    let msg = HopMsg::Lookup(Box::new(wp::Lookup {
+        node_ids: Some(vec![crypto::k32(peer)]),
+        subscribe_ttl_s: 300,
+    }));
     n.broadcast_control(msg, None);
 }
 
@@ -587,7 +781,14 @@ pub fn publish_endpoint(n: &Arc<Node>, force: bool) {
             }
         }
     }
-    let serving: Vec<wp::Cidr> = n.dataplane.get().map(|d| d.serving_prefixes()).unwrap_or_default().iter().map(webjet_core::types::net_to_cidr).collect();
+    let serving: Vec<wp::Cidr> = n
+        .dataplane
+        .get()
+        .map(|d| d.serving_prefixes())
+        .unwrap_or_default()
+        .iter()
+        .map(webjet_core::types::net_to_cidr)
+        .collect();
     let rec = wp::EndpointRecord {
         node_id: Some(crypto::k32(&n.me)),
         addrs: Some(addrs.clone()),
@@ -614,7 +815,9 @@ fn my_links(n: &Arc<Node>, relays_only: bool) -> Vec<(Bytes32, Transport, u16, u
     let v = s.view();
     let mut out = Vec::new();
     for p in peers {
-        let Some(info) = v.nodes.get(&p) else { continue };
+        let Some(info) = v.nodes.get(&p) else {
+            continue;
+        };
         if relays_only && !info.relay {
             continue;
         }
@@ -646,7 +849,11 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
                 return;
             }
             let changed = prev.len() != summary.len()
-                || prev.iter().zip(summary.iter()).any(|(a, b)| a.0 != b.0 || (a.1 as f64 - b.1 as f64).abs() > a.1 as f64 * 0.2 + 1.0 || a.2.abs_diff(b.2) > 2);
+                || prev.iter().zip(summary.iter()).any(|(a, b)| {
+                    a.0 != b.0
+                        || (a.1 as f64 - b.1 as f64).abs() > a.1 as f64 * 0.2 + 1.0
+                        || a.2.abs_diff(b.2) > 2
+                });
             if !force && !changed && since < LSA_REFRESH {
                 return;
             }
@@ -656,7 +863,18 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
     let lsa = wp::LinkStateAdvert {
         origin: Some(crypto::k32(&n.me)),
         seq: n.next_seq(),
-        links: Some(links.iter().map(|(p, t, rtt, loss)| wp::LinkEntry { peer: Some(crypto::k32(p)), transport: *t, rtt_ms: *rtt, loss_pct: *loss, util_pct: load.util_pct }).collect()),
+        links: Some(
+            links
+                .iter()
+                .map(|(p, t, rtt, loss)| wp::LinkEntry {
+                    peer: Some(crypto::k32(p)),
+                    transport: *t,
+                    rtt_ms: *rtt,
+                    loss_pct: *loss,
+                    util_pct: load.util_pct,
+                })
+                .collect(),
+        ),
         load: Some(Box::new(load)),
         issued_at: now,
         expires_at: now + LSA_LIFETIME,
@@ -692,7 +910,17 @@ pub fn publish_attachment(n: &Arc<Node>) {
     let rec = wp::AttachmentRecord {
         node_id: Some(crypto::k32(&n.me)),
         seq: n.next_seq(),
-        relays: Some(relays.iter().map(|(p, t, rtt, loss)| wp::AttachmentEntry { relay: Some(crypto::k32(p)), transport: *t, rtt_ms: *rtt, loss_pct: *loss }).collect()),
+        relays: Some(
+            relays
+                .iter()
+                .map(|(p, t, rtt, loss)| wp::AttachmentEntry {
+                    relay: Some(crypto::k32(p)),
+                    transport: *t,
+                    rtt_ms: *rtt,
+                    loss_pct: *loss,
+                })
+                .collect(),
+        ),
         issued_at: now,
         expires_at: now + ATTACH_LIFETIME,
     };
@@ -706,10 +934,18 @@ pub fn expire_records(n: &Arc<Node>) {
     let now = now_ms();
     let s = n.store.read();
     let v = s.view();
-    let ok = |id: &Bytes32, exp: u64| exp + SKEW_SHORT_RECORD >= now && v.nodes.get(id).map(|x| x.valid).unwrap_or(false);
+    let ok = |id: &Bytes32, exp: u64| {
+        exp + SKEW_SHORT_RECORD >= now && v.nodes.get(id).map(|x| x.valid).unwrap_or(false)
+    };
     let mut recs = n.records.lock();
     // Relays' endpoint records are kept as reconnection hints even after expiry (§10.4).
-    recs.endpoints.retain(|id, (r, _)| ok(id, r.expires_at) || v.nodes.get(id).map(|x| x.valid && (x.relay || x.control)).unwrap_or(false));
+    recs.endpoints.retain(|id, (r, _)| {
+        ok(id, r.expires_at)
+            || v.nodes
+                .get(id)
+                .map(|x| x.valid && (x.relay || x.control))
+                .unwrap_or(false)
+    });
     recs.lsas.retain(|id, (r, _)| ok(id, r.expires_at));
     recs.attachments.retain(|id, (r, _)| ok(id, r.expires_at));
 }
@@ -723,18 +959,55 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
     let v = s.view();
     let mut g = Graph::default();
     for (id, (l, _)) in &recs.lsas {
-        if l.expires_at + SKEW_SHORT_RECORD < now || !v.nodes.get(id).map(|x| x.valid && x.relay).unwrap_or(false) {
+        if l.expires_at + SKEW_SHORT_RECORD < now
+            || !v.nodes.get(id).map(|x| x.valid && x.relay).unwrap_or(false)
+        {
             continue;
         }
-        let load = l.load.as_ref().map(|x| webjet_core::routing::relay_load(x.util_pct, x.cpu_pct, x.circuits_pct)).unwrap_or(0);
-        let links = l.links.clone().unwrap_or_default().iter().map(|e| (opt_k32(&e.peer), link_cost(e.rtt_ms as f64, e.loss_pct as f64 / 100.0))).collect();
-        g.relays.insert(*id, RelayInfo { links, load, capacity_mbps: l.load.as_ref().map(|x| x.capacity_mbps).unwrap_or(0) });
+        let load = l
+            .load
+            .as_ref()
+            .map(|x| webjet_core::routing::relay_load(x.util_pct, x.cpu_pct, x.circuits_pct))
+            .unwrap_or(0);
+        let links = l
+            .links
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| {
+                (
+                    opt_k32(&e.peer),
+                    link_cost(e.rtt_ms as f64, e.loss_pct as f64 / 100.0),
+                )
+            })
+            .collect();
+        g.relays.insert(
+            *id,
+            RelayInfo {
+                links,
+                load,
+                capacity_mbps: l.load.as_ref().map(|x| x.capacity_mbps).unwrap_or(0),
+            },
+        );
     }
     for (id, (a, _)) in &recs.attachments {
-        if a.expires_at + SKEW_SHORT_RECORD < now || !v.nodes.get(id).map(|x| x.valid).unwrap_or(false) {
+        if a.expires_at + SKEW_SHORT_RECORD < now
+            || !v.nodes.get(id).map(|x| x.valid).unwrap_or(false)
+        {
             continue;
         }
-        let m = a.relays.clone().unwrap_or_default().iter().map(|e| (opt_k32(&e.relay), link_cost(e.rtt_ms as f64, e.loss_pct as f64 / 100.0))).collect();
+        let m = a
+            .relays
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| {
+                (
+                    opt_k32(&e.relay),
+                    link_cost(e.rtt_ms as f64, e.loss_pct as f64 / 100.0),
+                )
+            })
+            .collect();
         g.attachments.insert(*id, m);
     }
     // Our own live links are measured directly and always current.
@@ -789,7 +1062,13 @@ pub async fn run(n: Arc<Node>) {
         // Digest exchange within the core (§10.3.1).
         if is_core(&n, &n.me) {
             let d = crypto::k32(&n.store.read().digest());
-            let hops: Vec<Arc<Hop>> = n.hops.lock().values().filter(|h| h.alive() && is_core(&n, &h.peer)).cloned().collect();
+            let hops: Vec<Arc<Hop>> = n
+                .hops
+                .lock()
+                .values()
+                .filter(|h| h.alive() && is_core(&n, &h.peer))
+                .cloned()
+                .collect();
             let fanout = if hops.len() > 64 { 4 } else { hops.len() };
             use rand::seq::SliceRandom;
             for h in hops.choose_multiple(&mut rand::thread_rng(), fanout) {
@@ -802,7 +1081,10 @@ pub async fn run(n: Arc<Node>) {
         // Stuck walk: give up after 30 s.
         {
             let mut w = n.sync.walk.lock();
-            if w.as_ref().map(|x| x.started.elapsed() > Duration::from_secs(30)).unwrap_or(false) {
+            if w.as_ref()
+                .map(|x| x.started.elapsed() > Duration::from_secs(30))
+                .unwrap_or(false)
+            {
                 *w = None;
             }
         }

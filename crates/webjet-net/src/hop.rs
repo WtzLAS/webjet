@@ -3,7 +3,9 @@
 //!
 //! Hop record framing: `type[1] || len[3] || payload`.
 
-use crate::gate::{self, check_tcp_preamble, tcp_preamble, GateResult, ReplayCache, SharedEpochs, TCP_PREAMBLE};
+use crate::gate::{
+    self, check_tcp_preamble, tcp_preamble, GateResult, ReplayCache, SharedEpochs, TCP_PREAMBLE,
+};
 use crate::kcp::{KcpStats, UdpEndpoint};
 use crate::tls::{self, PeerTrust};
 use anyhow::{anyhow, bail, Context, Result};
@@ -46,7 +48,10 @@ pub async fn read_record<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8
     r.read_exact(&mut h).await?;
     let len = u32::from_be_bytes([0, h[1], h[2], h[3]]) as usize;
     if len > MAX_RECORD {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "record too large"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "record too large",
+        ));
     }
     let mut b = vec![0u8; len];
     r.read_exact(&mut b).await?;
@@ -62,7 +67,11 @@ pub fn encode_record(ty: u8, payload: &[u8]) -> Vec<u8> {
     v
 }
 
-pub async fn write_record<W: AsyncWrite + Unpin>(w: &mut W, ty: u8, payload: &[u8]) -> std::io::Result<()> {
+pub async fn write_record<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    ty: u8,
+    payload: &[u8],
+) -> std::io::Result<()> {
     w.write_all(&encode_record(ty, payload)).await
 }
 
@@ -75,9 +84,21 @@ fn tune_tcp(s: &TcpStream) {
         // Ask for BBR where the kernel offers it (§17.4).
         let algo = b"bbr";
         unsafe {
-            libc_setsockopt(fd, 6 /* IPPROTO_TCP */, 13 /* TCP_CONGESTION */, algo.as_ptr() as *const _, algo.len() as u32);
+            libc_setsockopt(
+                fd,
+                6,  /* IPPROTO_TCP */
+                13, /* TCP_CONGESTION */
+                algo.as_ptr() as *const _,
+                algo.len() as u32,
+            );
             let lowat: i32 = 16384;
-            libc_setsockopt(fd, 6, 25 /* TCP_NOTSENT_LOWAT */, &lowat as *const i32 as *const _, 4);
+            libc_setsockopt(
+                fd,
+                6,
+                25, /* TCP_NOTSENT_LOWAT */
+                &lowat as *const i32 as *const _,
+                4,
+            );
         }
     }
 }
@@ -85,7 +106,13 @@ fn tune_tcp(s: &TcpStream) {
 #[cfg(target_os = "linux")]
 extern "C" {
     #[link_name = "setsockopt"]
-    fn libc_setsockopt(fd: i32, level: i32, name: i32, val: *const std::ffi::c_void, len: u32) -> i32;
+    fn libc_setsockopt(
+        fd: i32,
+        level: i32,
+        name: i32,
+        val: *const std::ffi::c_void,
+        len: u32,
+    ) -> i32;
 }
 
 // ---------------------------------------------------------------- TCP + TLS
@@ -98,32 +125,58 @@ pub fn enroll_preamble(token_hash: &Bytes32) -> [u8; TCP_PREAMBLE] {
     tcp_preamble(ENROLL_EPOCH, &gate::anytls_enroll_password(token_hash))
 }
 
-pub async fn dial_tls(addr: SocketAddr, kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>, epoch: u16, psk: &Bytes32) -> Result<Established> {
+pub async fn dial_tls(
+    addr: SocketAddr,
+    kp: &KeyPair,
+    expected: Vec<Bytes32>,
+    trust: Arc<dyn PeerTrust>,
+    epoch: u16,
+    psk: &Bytes32,
+) -> Result<Established> {
     let fut = async {
         let mut s = TcpStream::connect(addr).await?;
         tune_tcp(&s);
         s.write_all(&tcp_preamble(epoch, psk)).await?;
         let cfg = tls::client_config(kp, expected, trust, tls::ALPN_HOP)?;
-        let tls = tokio_rustls::TlsConnector::from(cfg).connect(tls::server_name(), s).await?;
+        let tls = tokio_rustls::TlsConnector::from(cfg)
+            .connect(tls::server_name(), s)
+            .await?;
         tls::check_pq(tls.get_ref().1)?;
         let peer = tls::peer_key(tls.get_ref().1).ok_or_else(|| anyhow!("no peer key"))?;
-        Ok::<_, anyhow::Error>(Established { io: Box::new(tls), peer_key: peer, transport: Transport::TcpTls, remote: addr, bootstrap: false, kcp_stats: None })
+        Ok::<_, anyhow::Error>(Established {
+            io: Box::new(tls),
+            peer_key: peer,
+            transport: Transport::TcpTls,
+            remote: addr,
+            bootstrap: false,
+            kcp_stats: None,
+        })
     };
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut).await.map_err(|_| anyhow!("TLS hop to {addr} timed out"))?
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
+        .await
+        .map_err(|_| anyhow!("TLS hop to {addr} timed out"))?
 }
 
 /// Dial a controller's enrollment endpoint (no client identity).
-pub async fn dial_enroll(addr: SocketAddr, token_hash: &Bytes32, expected: Option<Bytes32>) -> Result<BoxIo> {
+pub async fn dial_enroll(
+    addr: SocketAddr,
+    token_hash: &Bytes32,
+    expected: Option<Bytes32>,
+) -> Result<BoxIo> {
     let fut = async {
         let mut s = TcpStream::connect(addr).await?;
         tune_tcp(&s);
         s.write_all(&enroll_preamble(token_hash)).await?;
         let cfg = tls::enroll_client_config(expected)?;
-        let tls = tokio_rustls::TlsConnector::from(cfg).connect(tls::server_name(), s).await?;
+        let tls = tokio_rustls::TlsConnector::from(cfg)
+            .connect(tls::server_name(), s)
+            .await?;
         tls::check_pq(tls.get_ref().1)?;
         Ok::<BoxIo, anyhow::Error>(Box::new(tls))
     };
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut).await.map_err(|_| anyhow!("enrollment connection to {addr} timed out"))?
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
+        .await
+        .map_err(|_| anyhow!("enrollment connection to {addr} timed out"))?
 }
 
 /// What an accepted connection turned out to be.
@@ -146,24 +199,42 @@ pub struct TlsListener {
 
 impl TlsListener {
     pub async fn bind(addr: SocketAddr) -> Result<TlsListener> {
-        Ok(TlsListener { listener: TcpListener::bind(addr).await.with_context(|| format!("bind {addr}"))?, replay: Arc::new(ReplayCache::new(100_000)) })
+        Ok(TlsListener {
+            listener: TcpListener::bind(addr)
+                .await
+                .with_context(|| format!("bind {addr}"))?,
+            replay: Arc::new(ReplayCache::new(100_000)),
+        })
     }
 }
 
 /// Handle one accepted TCP connection: PSK gate, then TLS. Failures close
 /// the connection without a reply (§9.1).
-pub async fn accept_tls(mut s: TcpStream, remote: SocketAddr, kp: &KeyPair, trust: Arc<dyn PeerTrust>, epochs: &SharedEpochs, replay: &ReplayCache, enroll: Option<&dyn EnrollGate>) -> Result<Accepted> {
+pub async fn accept_tls(
+    mut s: TcpStream,
+    remote: SocketAddr,
+    kp: &KeyPair,
+    trust: Arc<dyn PeerTrust>,
+    epochs: &SharedEpochs,
+    replay: &ReplayCache,
+    enroll: Option<&dyn EnrollGate>,
+) -> Result<Accepted> {
     tune_tcp(&s);
     let mut pre = [0u8; TCP_PREAMBLE];
-    tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut pre)).await.map_err(|_| anyhow!("preamble timeout"))??;
+    tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut pre))
+        .await
+        .map_err(|_| anyhow!("preamble timeout"))??;
     let epoch = u16::from_be_bytes([pre[0], pre[1]]);
     let mut is_enroll = false;
     let gate_res = if epoch == ENROLL_EPOCH {
-        let Some(eg) = enroll else { bail!("enrollment not offered here") };
+        let Some(eg) = enroll else {
+            bail!("enrollment not offered here")
+        };
         let mut ok = false;
         for k in eg.enroll_keys() {
             let mut e = gate::Epochs::default();
-            e.keys.insert(ENROLL_EPOCH, gate::anytls_enroll_password(&k));
+            e.keys
+                .insert(ENROLL_EPOCH, gate::anytls_enroll_password(&k));
             e.current = ENROLL_EPOCH;
             if check_tcp_preamble(&pre, &e, replay).is_some() {
                 ok = true;
@@ -181,8 +252,17 @@ pub async fn accept_tls(mut s: TcpStream, remote: SocketAddr, kp: &KeyPair, trus
     };
     // The enrollment credential gets a config without client certificates;
     // everything else must present a raw public key.
-    let cfg = if is_enroll { tls::enroll_server_config(kp)? } else { tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)? };
-    let tls = tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_rustls::TlsAcceptor::from(cfg).accept(s)).await.map_err(|_| anyhow!("TLS accept timeout"))??;
+    let cfg = if is_enroll {
+        tls::enroll_server_config(kp)?
+    } else {
+        tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)?
+    };
+    let tls = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        tokio_rustls::TlsAcceptor::from(cfg).accept(s),
+    )
+    .await
+    .map_err(|_| anyhow!("TLS accept timeout"))??;
     let conn = tls.get_ref().1;
     tls::check_pq(conn)?;
     let alpn = conn.alpn_protocol().map(|a| a.to_vec());
@@ -196,29 +276,69 @@ pub async fn accept_tls(mut s: TcpStream, remote: SocketAddr, kp: &KeyPair, trus
         bail!("unexpected ALPN");
     }
     let peer = tls::peer_key(conn).ok_or_else(|| anyhow!("hop client without identity"))?;
-    Ok(Accepted::Hop(Established { io: Box::new(tls), peer_key: peer, transport: Transport::TcpTls, remote, bootstrap: gate_res.bootstrap(), kcp_stats: None }))
+    Ok(Accepted::Hop(Established {
+        io: Box::new(tls),
+        peer_key: peer,
+        transport: Transport::TcpTls,
+        remote,
+        bootstrap: gate_res.bootstrap(),
+        kcp_stats: None,
+    }))
 }
 
 // ---------------------------------------------------------------- UDP + KCP + FEC + TLS
 
-pub async fn dial_kcp(ep: &Arc<UdpEndpoint>, addr: SocketAddr, kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>) -> Result<Established> {
+pub async fn dial_kcp(
+    ep: &Arc<UdpEndpoint>,
+    addr: SocketAddr,
+    kp: &KeyPair,
+    expected: Vec<Bytes32>,
+    trust: Arc<dyn PeerTrust>,
+) -> Result<Established> {
     let fut = async {
         let c = ep.dial(addr);
         let cfg = tls::client_config(kp, expected, trust, tls::ALPN_HOP)?;
-        let tls = tokio_rustls::TlsConnector::from(cfg).connect(tls::server_name(), c.stream).await?;
+        let tls = tokio_rustls::TlsConnector::from(cfg)
+            .connect(tls::server_name(), c.stream)
+            .await?;
         tls::check_pq(tls.get_ref().1)?;
         let peer = tls::peer_key(tls.get_ref().1).ok_or_else(|| anyhow!("no peer key"))?;
-        Ok::<_, anyhow::Error>(Established { io: Box::new(tls), peer_key: peer, transport: Transport::KcpFecTls, remote: addr, bootstrap: false, kcp_stats: Some(c.stats) })
+        Ok::<_, anyhow::Error>(Established {
+            io: Box::new(tls),
+            peer_key: peer,
+            transport: Transport::KcpFecTls,
+            remote: addr,
+            bootstrap: false,
+            kcp_stats: Some(c.stats),
+        })
     };
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut).await.map_err(|_| anyhow!("KCP hop to {addr} timed out"))?
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
+        .await
+        .map_err(|_| anyhow!("KCP hop to {addr} timed out"))?
 }
 
-pub async fn accept_kcp(c: crate::kcp::KcpConn, kp: &KeyPair, trust: Arc<dyn PeerTrust>) -> Result<Established> {
+pub async fn accept_kcp(
+    c: crate::kcp::KcpConn,
+    kp: &KeyPair,
+    trust: Arc<dyn PeerTrust>,
+) -> Result<Established> {
     let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)?;
-    let tls = tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_rustls::TlsAcceptor::from(cfg).accept(c.stream)).await.map_err(|_| anyhow!("KCP TLS accept timeout"))??;
+    let tls = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        tokio_rustls::TlsAcceptor::from(cfg).accept(c.stream),
+    )
+    .await
+    .map_err(|_| anyhow!("KCP TLS accept timeout"))??;
     tls::check_pq(tls.get_ref().1)?;
     let peer = tls::peer_key(tls.get_ref().1).ok_or_else(|| anyhow!("no peer key"))?;
-    Ok(Established { io: Box::new(tls), peer_key: peer, transport: Transport::KcpFecTls, remote: c.peer, bootstrap: c.gate.bootstrap(), kcp_stats: Some(c.stats) })
+    Ok(Established {
+        io: Box::new(tls),
+        peer_key: peer,
+        transport: Transport::KcpFecTls,
+        remote: c.peer,
+        bootstrap: c.gate.bootstrap(),
+        kcp_stats: Some(c.stats),
+    })
 }
 
 // ---------------------------------------------------------------- inner identity for AnyTLS (§9.2)
@@ -226,7 +346,14 @@ pub async fn accept_kcp(c: crate::kcp::KcpConn, kp: &KeyPair, trust: Arc<dyn Pee
 /// Prove identity over an already-encrypted outer channel: each side signs
 /// `label || exporter || role` with its identity key and checks the other's
 /// signature (§9.2, AnyTLS).
-pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(io: &mut S, exporter: &[u8; 32], kp: &KeyPair, initiator: bool, expected: Option<&[Bytes32]>, trust: &dyn PeerTrust) -> Result<Bytes32> {
+pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(
+    io: &mut S,
+    exporter: &[u8; 32],
+    kp: &KeyPair,
+    initiator: bool,
+    expected: Option<&[Bytes32]>,
+    trust: &dyn PeerTrust,
+) -> Result<Bytes32> {
     let my_role = if initiator { b'i' } else { b'r' };
     let mut msg = Vec::with_capacity(64);
     msg.extend_from_slice(webjet_core::crypto::ctx::ANYTLS_BIND.as_bytes());
@@ -239,7 +366,9 @@ pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(io: &mut S, ex
     io.write_all(&out).await?;
     io.flush().await?;
     let mut inb = [0u8; 96];
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, io.read_exact(&mut inb)).await.map_err(|_| anyhow!("identity exchange timeout"))??;
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, io.read_exact(&mut inb))
+        .await
+        .map_err(|_| anyhow!("identity exchange timeout"))??;
     let pk: Bytes32 = inb[..32].try_into().unwrap();
     let psig: [u8; 64] = inb[32..].try_into().unwrap();
     if let Some(last) = msg.last_mut() {
@@ -281,13 +410,18 @@ mod tests {
     async fn tls_hop() {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
-        let l = TlsListener::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let l = TlsListener::bind("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
         let addr = l.listener.local_addr().unwrap();
         let bk = b.clone();
         let ep = epochs();
         let srv = tokio::spawn(async move {
             let (s, r) = l.listener.accept().await.unwrap();
-            match accept_tls(s, r, &bk, Arc::new(TrustAll), &ep, &l.replay, None).await.unwrap() {
+            match accept_tls(s, r, &bk, Arc::new(TrustAll), &ep, &l.replay, None)
+                .await
+                .unwrap()
+            {
                 Accepted::Hop(mut h) => {
                     let (t, p) = read_record(&mut h.io).await.unwrap();
                     write_record(&mut h.io, t, &p).await.unwrap();
@@ -296,8 +430,12 @@ mod tests {
                 _ => panic!(),
             }
         });
-        let mut h = dial_tls(addr, &a, vec![b.public()], Arc::new(TrustAll), 4, &[4; 32]).await.unwrap();
-        write_record(&mut h.io, rec::CONTROL, b"ping").await.unwrap();
+        let mut h = dial_tls(addr, &a, vec![b.public()], Arc::new(TrustAll), 4, &[4; 32])
+            .await
+            .unwrap();
+        write_record(&mut h.io, rec::CONTROL, b"ping")
+            .await
+            .unwrap();
         let (t, p) = read_record(&mut h.io).await.unwrap();
         assert_eq!((t, &p[..]), (rec::CONTROL, &b"ping"[..]));
         assert_eq!(srv.await.unwrap(), a.public());
@@ -307,23 +445,37 @@ mod tests {
     async fn tls_gate_rejects_wrong_psk() {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
-        let l = TlsListener::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let l = TlsListener::bind("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
         let addr = l.listener.local_addr().unwrap();
         let ep = epochs();
         let bk = b.clone();
         tokio::spawn(async move {
             let (s, r) = l.listener.accept().await.unwrap();
-            assert!(accept_tls(s, r, &bk, Arc::new(TrustAll), &ep, &l.replay, None).await.is_err());
+            assert!(
+                accept_tls(s, r, &bk, Arc::new(TrustAll), &ep, &l.replay, None)
+                    .await
+                    .is_err()
+            );
         });
-        assert!(dial_tls(addr, &a, vec![b.public()], Arc::new(TrustAll), 4, &[5; 32]).await.is_err());
+        assert!(
+            dial_tls(addr, &a, vec![b.public()], Arc::new(TrustAll), 4, &[5; 32])
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn kcp_hop() {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
-        let ea = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false).await.unwrap();
-        let eb = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true).await.unwrap();
+        let ea = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let eb = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
         let addr = eb.local_addr().unwrap();
         let bk = b.clone();
         let srv = tokio::spawn(async move {
@@ -334,8 +486,12 @@ mod tests {
             h.io.flush().await.unwrap();
             tokio::time::sleep(Duration::from_millis(200)).await;
         });
-        let mut h = dial_kcp(&ea, addr, &a, vec![b.public()], Arc::new(TrustAll)).await.unwrap();
-        write_record(&mut h.io, rec::RELAY, &[7; 3000]).await.unwrap();
+        let mut h = dial_kcp(&ea, addr, &a, vec![b.public()], Arc::new(TrustAll))
+            .await
+            .unwrap();
+        write_record(&mut h.io, rec::RELAY, &[7; 3000])
+            .await
+            .unwrap();
         h.io.flush().await.unwrap();
         let (t, p) = read_record(&mut h.io).await.unwrap();
         assert_eq!(t, rec::RELAY);

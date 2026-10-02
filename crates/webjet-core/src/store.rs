@@ -96,7 +96,11 @@ impl View {
 
     /// The node owning an overlay address (longest prefix).
     pub fn node_by_ip(&self, ip: &IpAddr) -> Option<Bytes32> {
-        self.ip_routes.iter().filter(|(n, _)| n.contains(ip)).max_by_key(|(n, _)| n.prefix_len()).map(|(_, id)| *id)
+        self.ip_routes
+            .iter()
+            .filter(|(n, _)| n.contains(ip))
+            .max_by_key(|(n, _)| n.prefix_len())
+            .map(|(_, id)| *id)
     }
 
     pub fn subject(&self, n: &NodeInfo) -> Subject {
@@ -116,25 +120,41 @@ impl View {
     }
 
     pub fn subjects(&self) -> Vec<Subject> {
-        self.nodes.values().filter(|n| n.valid).map(|n| self.subject(n)).collect()
+        self.nodes
+            .values()
+            .filter(|n| n.valid)
+            .map(|n| self.subject(n))
+            .collect()
     }
 
     pub fn granted_prefixes(&self, id: &Bytes32) -> Vec<IpNet> {
-        self.nodes.get(id).map(|n| n.routes.iter().map(|g| g.published).collect()).unwrap_or_default()
+        self.nodes
+            .get(id)
+            .map(|n| n.routes.iter().map(|g| g.published).collect())
+            .unwrap_or_default()
     }
 
     pub fn is_controller(&self, id: &Bytes32) -> bool {
-        self.controllers.get(id).map(|v| !v.is_empty()).unwrap_or(false)
+        self.controllers
+            .get(id)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
     }
 
     pub fn suffix(&self) -> String {
-        self.dns.as_ref().and_then(|d| d.suffix.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "internal".into())
+        self.dns
+            .as_ref()
+            .and_then(|d| d.suffix.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "internal".into())
     }
 
     /// Effective value of a limit for a node (§16.4): built-in default,
     /// then tree defaults, then the highest matching override.
     pub fn limit(&self, me: Option<&Subject>, name: &str, builtin: u64) -> u64 {
-        let Some(l) = &self.limits else { return builtin };
+        let Some(l) = &self.limits else {
+            return builtin;
+        };
         let mut v = builtin;
         for d in l.defaults.clone().unwrap_or_default() {
             if d.name.as_deref() == Some(name) {
@@ -144,14 +164,30 @@ impl View {
         if let Some(me) = me {
             let mut best: Option<u64> = None;
             for o in l.overrides.clone().unwrap_or_default() {
-                let sels: Vec<_> = o.select.clone().unwrap_or_default().iter().filter_map(|s| crate::policy::Selector::parse(s).ok()).collect();
+                let sels: Vec<_> = o
+                    .select
+                    .clone()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|s| crate::policy::Selector::parse(s).ok())
+                    .collect();
                 let pol = Policy {
                     version: 0,
                     default: crate::policy::Decision::Deny,
-                    rules: vec![crate::policy::Rule { id: "x".into(), action: crate::policy::Decision::Allow, src: sels, dst: vec![crate::policy::Selector::Any], ports: crate::policy::PortSet::all() }],
+                    rules: vec![crate::policy::Rule {
+                        id: "x".into(),
+                        action: crate::policy::Decision::Allow,
+                        src: sels,
+                        dst: vec![crate::policy::Selector::Any],
+                        ports: crate::policy::PortSet::all(),
+                    }],
                     tests: vec![],
                 };
-                if pol.evaluate(me, crate::policy::Dest::Node(me), 6, 1).decision == crate::policy::Decision::Allow {
+                if pol
+                    .evaluate(me, crate::policy::Dest::Node(me), 6, 1)
+                    .decision
+                    == crate::policy::Decision::Allow
+                {
                     for x in o.values.clone().unwrap_or_default() {
                         if x.name.as_deref() == Some(name) {
                             best = Some(best.map_or(x.value, |b: u64| b.max(x.value)));
@@ -224,7 +260,13 @@ pub fn open_genesis(raw: &[u8]) -> Result<(wp::Genesis, Bytes32, Option<Bytes32>
 impl Store {
     pub fn new(genesis_raw: Vec<u8>) -> Result<Store> {
         let (genesis, root, emergency) = open_genesis(&genesis_raw)?;
-        let overlay_pool = genesis.overlay_pool.clone().unwrap_or_default().iter().filter_map(cidr_to_net).collect();
+        let overlay_pool = genesis
+            .overlay_pool
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(cidr_to_net)
+            .collect();
         let mut s = Store {
             genesis_raw,
             genesis,
@@ -290,7 +332,13 @@ impl Store {
         if self.certs.contains_key(&id) {
             return Ok(false);
         }
-        self.certs.insert(id, CertEntry { cert: c, raw: raw.to_vec() });
+        self.certs.insert(
+            id,
+            CertEntry {
+                cert: c,
+                raw: raw.to_vec(),
+            },
+        );
         self.rebuild();
         Ok(true)
     }
@@ -305,7 +353,13 @@ impl Store {
             return Ok(false);
         }
         let last_valid = t.last_valid_version;
-        self.key_tombs.insert(id, KeyTombEntry { tomb: t, raw: raw.to_vec() });
+        self.key_tombs.insert(
+            id,
+            KeyTombEntry {
+                tomb: t,
+                raw: raw.to_vec(),
+            },
+        );
         self.certs.remove(&id);
         // Discard state known only through heads above last_valid_version.
         if let Some(h) = &self.head {
@@ -328,7 +382,9 @@ impl Store {
         }
         // A retired key's cert is removed, so only heads from still-certified
         // keys can be verified; retired keys' older heads are kept as stored.
-        self.certs.get(key_id).map(|c| crypto::opt_k32(&c.cert.signing_key))
+        self.certs
+            .get(key_id)
+            .map(|c| crypto::opt_k32(&c.cert.signing_key))
     }
 
     /// Verify a head's signature and certificate chain.
@@ -339,12 +395,17 @@ impl Store {
         }
         let h: wp::SignedTreeHead = v.decode()?;
         let kid = crypto::opt_k32(&h.signing_key_id);
-        let key = self.key_for_head(&kid, h.version).ok_or_else(|| anyhow!("tree head from an unknown or retired key"))?;
+        let key = self
+            .key_for_head(&kid, h.version)
+            .ok_or_else(|| anyhow!("tree head from an unknown or retired key"))?;
         if key != v.signer {
             bail!("tree head signed by a key other than its signing_key_id");
         }
         if !wp::SUPPORTED_STATE_VERSIONS.contains(&h.state_version) {
-            bail!("tree head with unsupported state version {}", h.state_version);
+            bail!(
+                "tree head with unsupported state version {}",
+                h.state_version
+            );
         }
         if h.issued_at > now_ms() + SKEW_HEAD {
             bail!("tree head issued in the future");
@@ -372,7 +433,10 @@ impl Store {
                 }
                 if h.expires_at > cur.head.expires_at {
                     self.trusted_floor = self.trusted_floor.max(h.issued_at);
-                    self.head = Some(HeadEntry { head: h, raw: raw.to_vec() });
+                    self.head = Some(HeadEntry {
+                        head: h,
+                        raw: raw.to_vec(),
+                    });
                     self.generation += 1;
                     return Ok(HeadOutcome::Refreshed);
                 }
@@ -390,7 +454,10 @@ impl Store {
             // Same tree, newer version (e.g. a no-op entry): no sync needed.
             self.trusted_floor = self.trusted_floor.max(h.issued_at);
             self.high_water = h.version;
-            self.head = Some(HeadEntry { head: h, raw: raw.to_vec() });
+            self.head = Some(HeadEntry {
+                head: h,
+                raw: raw.to_vec(),
+            });
             self.generation += 1;
             return Ok(HeadOutcome::Refreshed);
         }
@@ -401,10 +468,18 @@ impl Store {
     /// to the current tree (`None` bytes = removed). The resulting root must
     /// equal the head's root, and no leaf may go back in version (§10.2,
     /// §21.1).
-    pub fn install(&mut self, head_raw: &[u8], updates: Vec<(u8, Bytes32, Option<Vec<u8>>)>) -> Result<()> {
+    pub fn install(
+        &mut self,
+        head_raw: &[u8],
+        updates: Vec<(u8, Bytes32, Option<Vec<u8>>)>,
+    ) -> Result<()> {
         let h = self.verify_head(head_raw)?;
         if h.version < self.high_water {
-            bail!("rollback: head version {} below {}", h.version, self.high_water);
+            bail!(
+                "rollback: head version {} below {}",
+                h.version,
+                self.high_water
+            );
         }
         let mut t = self.tree.clone();
         for (k, key, bytes) in &updates {
@@ -413,11 +488,17 @@ impl Store {
                     let new = leaf::decode(*k, key, b)?;
                     if let Some(old) = t.get(*k, key) {
                         if let Ok(oldv) = leaf::decode(*k, key, &old.bytes) {
-                            let tomb_old = matches!(oldv, LeafValue::NodeTombstone(_) | LeafValue::AccountTombstone(..));
+                            let tomb_old = matches!(
+                                oldv,
+                                LeafValue::NodeTombstone(_) | LeafValue::AccountTombstone(..)
+                            );
                             if tomb_old {
                                 bail!("a tombstone can't be replaced");
                             }
-                            if *k != kind::VALIDITY && leaf::version(&new) <= leaf::version(&oldv) && old.bytes != *b {
+                            if *k != kind::VALIDITY
+                                && leaf::version(&new) <= leaf::version(&oldv)
+                                && old.bytes != *b
+                            {
                                 bail!("leaf version went backwards");
                             }
                         }
@@ -434,14 +515,23 @@ impl Store {
         self.tree = t;
         self.high_water = h.version;
         self.trusted_floor = self.trusted_floor.max(h.issued_at);
-        self.head = Some(HeadEntry { head: h, raw: head_raw.to_vec() });
+        self.head = Some(HeadEntry {
+            head: h,
+            raw: head_raw.to_vec(),
+        });
         self.rebuild();
         Ok(())
     }
 
     /// Restore persisted state without the "newer" checks; the persisted
     /// root must still match the persisted head.
-    pub fn restore(&mut self, head_raw: Option<&[u8]>, leaves: Vec<(u8, Bytes32, Vec<u8>)>, high_water: u64, floor: u64) -> Result<()> {
+    pub fn restore(
+        &mut self,
+        head_raw: Option<&[u8]>,
+        leaves: Vec<(u8, Bytes32, Vec<u8>)>,
+        high_water: u64,
+        floor: u64,
+    ) -> Result<()> {
         let mut t = Tree::new();
         for (k, key, b) in leaves {
             t.insert(k, key, b);
@@ -452,7 +542,10 @@ impl Store {
             if crypto::opt_k32(&h.root) != t.root() {
                 bail!("persisted tree does not match the persisted head");
             }
-            self.head = Some(HeadEntry { head: h, raw: raw.to_vec() });
+            self.head = Some(HeadEntry {
+                head: h,
+                raw: raw.to_vec(),
+            });
         }
         self.tree = t;
         self.high_water = high_water;
@@ -516,10 +609,24 @@ impl Store {
 
     pub fn offline_hash(&self) -> Bytes32 {
         let mut ids: Vec<Bytes32> = Vec::new();
-        ids.extend(self.certs.keys().map(|k| crypto::hash(&[b"c".as_slice(), k].concat())));
-        ids.extend(self.key_tombs.keys().map(|k| crypto::hash(&[b"k".as_slice(), k].concat())));
-        ids.extend(self.offline_node_tombs.iter().map(|(k, (t, _))| crypto::hash(&[b"n".as_slice(), k, &t.version.to_be_bytes()].concat())));
-        ids.extend(self.offline_acct_tombs.keys().map(|k| crypto::hash(&[b"a".as_slice(), k].concat())));
+        ids.extend(
+            self.certs
+                .keys()
+                .map(|k| crypto::hash(&[b"c".as_slice(), k].concat())),
+        );
+        ids.extend(
+            self.key_tombs
+                .keys()
+                .map(|k| crypto::hash(&[b"k".as_slice(), k].concat())),
+        );
+        ids.extend(self.offline_node_tombs.iter().map(|(k, (t, _))| {
+            crypto::hash(&[b"n".as_slice(), k, &t.version.to_be_bytes()].concat())
+        }));
+        ids.extend(
+            self.offline_acct_tombs
+                .keys()
+                .map(|k| crypto::hash(&[b"a".as_slice(), k].concat())),
+        );
         ids.sort();
         let mut h = blake3::Hasher::new();
         for i in ids {
@@ -570,7 +677,13 @@ impl Store {
     // ------------------------------------------------------------ derived view
 
     fn rebuild(&mut self) {
-        self.view = build_view(&self.tree, &self.root, &self.certs, &self.offline_node_tombs, &self.offline_acct_tombs);
+        self.view = build_view(
+            &self.tree,
+            &self.root,
+            &self.certs,
+            &self.offline_node_tombs,
+            &self.offline_acct_tombs,
+        );
         self.generation += 1;
     }
 
@@ -586,11 +699,18 @@ impl Store {
     }
 
     pub fn leaves_by_path(&self, paths: &[Bytes32]) -> Vec<(u8, Bytes32, Vec<u8>)> {
-        paths.iter().filter_map(|p| self.tree.get_by_path(p)).map(|e| (e.kind, e.key, e.bytes.clone())).collect()
+        paths
+            .iter()
+            .filter_map(|p| self.tree.get_by_path(p))
+            .map(|e| (e.kind, e.key, e.bytes.clone()))
+            .collect()
     }
 
     pub fn all_leaves(&self) -> Vec<(u8, Bytes32, Vec<u8>)> {
-        self.tree.iter().map(|(_, e)| (e.kind, e.key, e.bytes.clone())).collect()
+        self.tree
+            .iter()
+            .map(|(_, e)| (e.kind, e.key, e.bytes.clone()))
+            .collect()
     }
 
     pub fn prove(&self, k: u8, key: &Bytes32) -> merkle::Proof {
@@ -599,25 +719,27 @@ impl Store {
 }
 
 pub fn build_view(
-tree: &Tree,
-root: &Bytes32,
-certs: &BTreeMap<Bytes32, CertEntry>,
-offline_node_tombs: &BTreeMap<Bytes32, (wp::Tombstone, Vec<u8>)>,
-offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
+    tree: &Tree,
+    root: &Bytes32,
+    certs: &BTreeMap<Bytes32, CertEntry>,
+    offline_node_tombs: &BTreeMap<Bytes32, (wp::Tombstone, Vec<u8>)>,
+    offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
 ) -> View {
     let mut v = View::default();
     // Accounts first: signature and signer checks (§6.10, §10.2).
     let mut raw_accounts: Vec<(wp::AccountRecord, crypto::Verified)> = Vec::new();
     for (_, e) in tree.iter() {
-        if e.kind == kind::ACCOUNT { match leaf::decode(e.kind, &e.key, &e.bytes) {
-            Ok(LeafValue::Account(r, ver)) => raw_accounts.push((r, ver)),
-            Ok(LeafValue::AccountTombstone(t, ver)) => {
-                let id = crypto::opt_k32(&t.account_id);
-                let _ = ver;
-                v.tombstoned_accounts.insert(id);
+        if e.kind == kind::ACCOUNT {
+            match leaf::decode(e.kind, &e.key, &e.bytes) {
+                Ok(LeafValue::Account(r, ver)) => raw_accounts.push((r, ver)),
+                Ok(LeafValue::AccountTombstone(t, ver)) => {
+                    let id = crypto::opt_k32(&t.account_id);
+                    let _ = ver;
+                    v.tombstoned_accounts.insert(id);
+                }
+                _ => {}
             }
-            _ => {}
-        } }
+        }
     }
     // Offline account tombstones, with `revoke_issued` cascades.
     let mut revoke_issuers: HashSet<Bytes32> = HashSet::new();
@@ -650,7 +772,9 @@ offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
             } else {
                 let issuer = crypto::opt_k32(&r.issuer);
                 let iss = v.accounts.get(&issuer);
-                let issuer_ok = iss.map(|a| a.admin && (a.valid || !revoke_issuers.contains(&issuer))).unwrap_or(false)
+                let issuer_ok = iss
+                    .map(|a| a.admin && (a.valid || !revoke_issuers.contains(&issuer)))
+                    .unwrap_or(false)
                     && !revoke_issuers.contains(&issuer);
                 valid &= issuer_ok && !r.admin;
             }
@@ -670,7 +794,9 @@ offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
     // Controllers from certs.
     let mut ctrl: HashMap<Bytes32, Vec<Bytes32>> = HashMap::new();
     for (id, c) in certs {
-        ctrl.entry(crypto::opt_k32(&c.cert.controller)).or_default().push(*id);
+        ctrl.entry(crypto::opt_k32(&c.cert.controller))
+            .or_default()
+            .push(*id);
     }
     v.controllers = ctrl;
     // Nodes and singletons.
@@ -684,7 +810,10 @@ offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
                 let id = crypto::opt_k32(&r.node_id);
                 let roles = r.roles.clone().unwrap_or_default();
                 let owner = crypto::opt_k32(&r.owner);
-                let offline_tomb = offline_node_tombs.get(&id).map(|(t, _)| t.version > r.version).unwrap_or(false);
+                let offline_tomb = offline_node_tombs
+                    .get(&id)
+                    .map(|(t, _)| t.version > r.version)
+                    .unwrap_or(false);
                 let owner_ok = v.accounts.get(&owner).map(|a| a.valid).unwrap_or(false);
                 let key = crypto::opt_k32(&r.identity_key);
                 let info = NodeInfo {
@@ -692,9 +821,21 @@ offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
                     key,
                     name: r.name.clone().unwrap_or_default(),
                     owner,
-                    ips: r.overlay_ips.clone().unwrap_or_default().iter().filter_map(cidr_to_net).collect(),
+                    ips: r
+                        .overlay_ips
+                        .clone()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(cidr_to_net)
+                        .collect(),
                     tags: r.tags.clone().unwrap_or_default(),
-                    routes: r.routes.clone().unwrap_or_default().iter().filter_map(|g| Grant::from_wire(g).ok()).collect(),
+                    routes: r
+                        .routes
+                        .clone()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|g| Grant::from_wire(g).ok())
+                        .collect(),
                     data: roles.contains(&wp::Role::Data),
                     relay: roles.contains(&wp::Role::Relay),
                     control: v.controllers.contains_key(&id),
@@ -734,13 +875,13 @@ offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
         }
     }
     // A controller only counts while its node is valid.
-    v.controllers.retain(|id, _| v.nodes.get(id).map(|n| n.valid).unwrap_or(false));
+    v.controllers
+        .retain(|id, _| v.nodes.get(id).map(|n| n.valid).unwrap_or(false));
     for n in v.nodes.values_mut() {
         n.control = v.controllers.contains_key(&n.id);
     }
     v
 }
-
 
 #[cfg(test)]
 pub(crate) mod testutil {
@@ -772,11 +913,24 @@ pub(crate) mod testutil {
         };
         let g = wp::Genesis {
             root_key: Some(crypto::k32(&root.public())),
-            emergency_cert: Some(root.sign_obj(mt::EMERGENCY_KEY_CERT, &wp::EmergencyKeyCert { key: Some(crypto::k32(&emergency.public())) })),
+            emergency_cert: Some(root.sign_obj(
+                mt::EMERGENCY_KEY_CERT,
+                &wp::EmergencyKeyCert {
+                    key: Some(crypto::k32(&emergency.public())),
+                },
+            )),
             first_admin: Some(root.sign_obj(mt::ACCOUNT_RECORD, &rec)),
-            overlay_pool: Some(vec![crate::types::net_to_cidr(&"10.7.0.0/16".parse().unwrap())]),
+            overlay_pool: Some(vec![crate::types::net_to_cidr(
+                &"10.7.0.0/16".parse().unwrap(),
+            )]),
             created_at: now_ms(),
         };
-        Net { root, emergency, admin, admin_id, genesis: g.encode_bytes() }
+        Net {
+            root,
+            emergency,
+            admin,
+            admin_id,
+            genesis: g.encode_bytes(),
+        }
     }
 }

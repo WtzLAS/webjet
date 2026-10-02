@@ -65,7 +65,10 @@ impl Storage {
     }
 
     fn save_meta(&self, term: u64, vote: Option<Bytes32>) {
-        let m = Meta { term, voted_for: vote.map(hex::encode) };
+        let m = Meta {
+            term,
+            voted_for: vote.map(hex::encode),
+        };
         if let Err(e) = crate::state::save_json(&self.meta_path(), &m) {
             tracing::error!("raft meta: {e}");
         }
@@ -84,10 +87,14 @@ impl Storage {
             buf.extend_from_slice(&(e.bytes.len() as u32).to_be_bytes());
             buf.extend_from_slice(&e.bytes);
         }
-        let r = std::fs::OpenOptions::new().create(true).append(true).open(self.log_path()).and_then(|mut f| {
-            f.write_all(&buf)?;
-            f.sync_data()
-        });
+        let r = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.log_path())
+            .and_then(|mut f| {
+                f.write_all(&buf)?;
+                f.sync_data()
+            });
         if let Err(e) = r {
             tracing::error!("raft log append: {e}");
         }
@@ -105,7 +112,9 @@ impl Storage {
     }
 
     fn load_log(&self) -> Vec<Entry> {
-        let Ok(b) = std::fs::read(self.log_path()) else { return Vec::new() };
+        let Ok(b) = std::fs::read(self.log_path()) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         let mut i = 0;
         while i + 4 <= b.len() {
@@ -116,7 +125,11 @@ impl Storage {
             }
             let bytes = b[i + 4..i + 4 + len].to_vec();
             if let Ok(e) = wp::LogEntry::decode_bytes(&bytes) {
-                out.push(Entry { term: e.term, index: e.index, bytes });
+                out.push(Entry {
+                    term: e.term,
+                    index: e.index,
+                    bytes,
+                });
             }
             i += 4 + len;
         }
@@ -157,7 +170,8 @@ pub struct Raft {
 pub type Out = Vec<(Bytes32, RaftBody)>;
 
 fn deadline() -> Instant {
-    let ms = rand::thread_rng().gen_range(ELECTION_MIN.as_millis()..=ELECTION_MAX.as_millis()) as u64;
+    let ms =
+        rand::thread_rng().gen_range(ELECTION_MIN.as_millis()..=ELECTION_MAX.as_millis()) as u64;
     Instant::now() + Duration::from_millis(ms)
 }
 
@@ -222,7 +236,9 @@ impl Raft {
         if idx < self.snap_index {
             return None;
         }
-        self.log.get((idx - self.snap_index - 1) as usize).map(|e| e.term)
+        self.log
+            .get((idx - self.snap_index - 1) as usize)
+            .map(|e| e.term)
     }
 
     pub fn entry(&self, idx: u64) -> Option<&Entry> {
@@ -258,7 +274,12 @@ impl Raft {
     }
 
     fn peers(&self) -> Vec<Bytes32> {
-        self.voters.iter().chain(self.learners.iter()).filter(|p| **p != self.id).copied().collect()
+        self.voters
+            .iter()
+            .chain(self.learners.iter())
+            .filter(|p| **p != self.id)
+            .copied()
+            .collect()
     }
 
     fn become_follower(&mut self, term: u64, leader: Option<Bytes32>) {
@@ -267,7 +288,11 @@ impl Raft {
             self.voted_for = None;
             self.storage.save_meta(self.term, self.voted_for);
         }
-        self.role = if self.is_voter() { Role::Follower } else { Role::Learner };
+        self.role = if self.is_voter() {
+            Role::Follower
+        } else {
+            Role::Learner
+        };
         self.leader = leader;
         self.election_deadline = deadline();
     }
@@ -285,7 +310,9 @@ impl Raft {
             term: self.term,
             index: next,
             timestamp: webjet_core::types::now_ms(),
-            payload: Some(wp::EntryPayload::NoopEntry(Box::new(wp::NoopEntry { term: self.term }))),
+            payload: Some(wp::EntryPayload::NoopEntry(Box::new(wp::NoopEntry {
+                term: self.term,
+            }))),
             random: None,
             leaves: Some(Vec::new()),
         };
@@ -295,7 +322,11 @@ impl Raft {
 
     fn append_local(&mut self, bytes: Vec<u8>) -> u64 {
         let index = self.last_index() + 1;
-        let e = Entry { term: self.term, index, bytes };
+        let e = Entry {
+            term: self.term,
+            index,
+            bytes,
+        };
         self.storage.append(std::slice::from_ref(&e));
         self.log.push(e);
         self.advance_commit();
@@ -326,8 +357,17 @@ impl Raft {
         if self.votes.len() >= self.quorum() {
             return self.become_leader();
         }
-        let msg = RaftBody::RaftVote(Box::new(wp::RaftVote { term: self.term, last_log_index: self.last_index(), last_log_term: self.last_term(), pre_vote: false }));
-        self.voters.iter().filter(|v| **v != self.id).map(|v| (*v, msg.clone())).collect()
+        let msg = RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: self.term,
+            last_log_index: self.last_index(),
+            last_log_term: self.last_term(),
+            pre_vote: false,
+        }));
+        self.voters
+            .iter()
+            .filter(|v| **v != self.id)
+            .map(|v| (*v, msg.clone()))
+            .collect()
     }
 
     fn append_msg(&self, peer: &Bytes32) -> Option<RaftBody> {
@@ -337,8 +377,20 @@ impl Raft {
         }
         let prev = next - 1;
         let prev_term = self.term_at(prev)?;
-        let entries: Vec<wp::Blob> = (next..=self.last_index()).take(MAX_BATCH).filter_map(|i| self.entry(i)).map(|e| wp::Blob { data: Some(e.bytes.clone()) }).collect();
-        Some(RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: self.term, prev_log_index: prev, prev_log_term: prev_term, entries: Some(entries), leader_commit: self.commit })))
+        let entries: Vec<wp::Blob> = (next..=self.last_index())
+            .take(MAX_BATCH)
+            .filter_map(|i| self.entry(i))
+            .map(|e| wp::Blob {
+                data: Some(e.bytes.clone()),
+            })
+            .collect();
+        Some(RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: self.term,
+            prev_log_index: prev,
+            prev_log_term: prev_term,
+            entries: Some(entries),
+            leader_commit: self.commit,
+        })))
     }
 
     /// Peers that need a snapshot (the caller builds and sends it).
@@ -346,14 +398,23 @@ impl Raft {
         if self.role != Role::Leader {
             return Vec::new();
         }
-        self.next_index.iter().filter(|(_, n)| **n <= self.snap_index).map(|(p, _)| *p).collect()
+        self.next_index
+            .iter()
+            .filter(|(_, n)| **n <= self.snap_index)
+            .map(|(p, _)| *p)
+            .collect()
     }
 
     fn broadcast(&mut self, force: bool) -> Out {
         let mut out = Vec::new();
         let now = Instant::now();
         for p in self.peers() {
-            let due = force || self.last_sent.get(&p).map(|t| now.duration_since(*t) >= HEARTBEAT).unwrap_or(true);
+            let due = force
+                || self
+                    .last_sent
+                    .get(&p)
+                    .map(|t| now.duration_since(*t) >= HEARTBEAT)
+                    .unwrap_or(true);
             if !due {
                 continue;
             }
@@ -371,7 +432,11 @@ impl Raft {
         }
         let mut idx = self.last_index();
         while idx > self.commit {
-            let count = self.voters.iter().filter(|v| **v == self.id || self.match_index.get(*v).copied().unwrap_or(0) >= idx).count();
+            let count = self
+                .voters
+                .iter()
+                .filter(|v| **v == self.id || self.match_index.get(*v).copied().unwrap_or(0) >= idx)
+                .count();
             if count >= self.quorum() && self.term_at(idx) == Some(self.term) {
                 self.commit = idx;
                 break;
@@ -418,30 +483,57 @@ impl Raft {
                 if v.term > self.term {
                     self.become_follower(v.term, None);
                 }
-                let up_to_date = (v.last_log_term, v.last_log_index) >= (self.last_term(), self.last_index());
+                let up_to_date =
+                    (v.last_log_term, v.last_log_index) >= (self.last_term(), self.last_index());
                 // Ignore votes while a leader is known to be alive (disruptive servers).
-                let leader_alive = self.leader.is_some() && self.last_leader_contact.elapsed() < ELECTION_MIN;
-                let grant = v.term == self.term && up_to_date && (self.voted_for.is_none() || self.voted_for == Some(from)) && self.voters.contains(&from) && !leader_alive;
+                let leader_alive =
+                    self.leader.is_some() && self.last_leader_contact.elapsed() < ELECTION_MIN;
+                let grant = v.term == self.term
+                    && up_to_date
+                    && (self.voted_for.is_none() || self.voted_for == Some(from))
+                    && self.voters.contains(&from)
+                    && !leader_alive;
                 if grant {
                     self.voted_for = Some(from);
                     self.storage.save_meta(self.term, self.voted_for);
                     self.election_deadline = deadline();
                 }
-                out.push((from, RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse { term: self.term, granted: grant, pre_vote: false }))));
+                out.push((
+                    from,
+                    RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse {
+                        term: self.term,
+                        granted: grant,
+                        pre_vote: false,
+                    })),
+                ));
             }
             RaftBody::RaftVoteResponse(r) => {
                 if r.term > self.term {
                     self.become_follower(r.term, None);
                 } else if self.role == Role::Candidate && r.term == self.term && r.granted {
                     self.votes.insert(from);
-                    if self.votes.iter().filter(|v| self.voters.contains(*v)).count() >= self.quorum() {
+                    if self
+                        .votes
+                        .iter()
+                        .filter(|v| self.voters.contains(*v))
+                        .count()
+                        >= self.quorum()
+                    {
                         out.extend(self.become_leader());
                     }
                 }
             }
             RaftBody::RaftAppend(a) => {
                 if a.term < self.term {
-                    out.push((from, RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse { term: self.term, success: false, match_index: 0, hint_index: self.last_index() + 1 }))));
+                    out.push((
+                        from,
+                        RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse {
+                            term: self.term,
+                            success: false,
+                            match_index: 0,
+                            hint_index: self.last_index() + 1,
+                        })),
+                    ));
                     return out;
                 }
                 self.become_follower(a.term, Some(from));
@@ -484,17 +576,21 @@ impl Raft {
                     self.advance_commit();
                 }
             }
-            RaftBody::RaftTimeoutNow(t)
-                if t.term == self.term && self.is_voter() => {
-                    out.extend(self.start_election());
-                }
+            RaftBody::RaftTimeoutNow(t) if t.term == self.term && self.is_voter() => {
+                out.extend(self.start_election());
+            }
             _ => {}
         }
         out
     }
 
     fn accept_append(&mut self, a: &wp::RaftAppend) -> wp::RaftAppendResponse {
-        let fail = |hint: u64, term| wp::RaftAppendResponse { term, success: false, match_index: 0, hint_index: hint };
+        let fail = |hint: u64, term| wp::RaftAppendResponse {
+            term,
+            success: false,
+            match_index: 0,
+            hint_index: hint,
+        };
         if a.prev_log_index > self.last_index() {
             return fail(self.last_index() + 1, self.term);
         }
@@ -517,7 +613,9 @@ impl Raft {
         let mut truncated = false;
         for b in a.entries.clone().unwrap_or_default() {
             let bytes = b.data.unwrap_or_default();
-            let Ok(e) = wp::LogEntry::decode_bytes(&bytes) else { return fail(idx + 1, self.term) };
+            let Ok(e) = wp::LogEntry::decode_bytes(&bytes) else {
+                return fail(idx + 1, self.term);
+            };
             idx += 1;
             if e.index != idx {
                 return fail(idx, self.term);
@@ -537,7 +635,11 @@ impl Raft {
                 }
                 None => {}
             }
-            let ent = Entry { term: e.term, index: idx, bytes };
+            let ent = Entry {
+                term: e.term,
+                index: idx,
+                bytes,
+            };
             appended.push(ent.clone());
             self.log.push(ent);
         }
@@ -549,13 +651,23 @@ impl Raft {
         if a.leader_commit > self.commit {
             self.commit = a.leader_commit.min(idx.max(a.prev_log_index));
         }
-        wp::RaftAppendResponse { term: self.term, success: true, match_index: idx, hint_index: 0 }
+        wp::RaftAppendResponse {
+            term: self.term,
+            success: true,
+            match_index: idx,
+            hint_index: 0,
+        }
     }
 
     /// Install a snapshot received from the leader.
     pub fn install_snapshot(&mut self, last_index: u64, last_term: u64) {
         self.log.retain(|e| e.index > last_index);
-        if self.log.first().map(|e| e.index != last_index + 1).unwrap_or(false) {
+        if self
+            .log
+            .first()
+            .map(|e| e.index != last_index + 1)
+            .unwrap_or(false)
+        {
             self.log.clear();
         }
         self.snap_index = last_index;
@@ -569,7 +681,9 @@ impl Raft {
         if index <= self.snap_index {
             return;
         }
-        let Some(term) = self.term_at(index) else { return };
+        let Some(term) = self.term_at(index) else {
+            return;
+        };
         self.log.retain(|e| e.index > index);
         self.snap_index = index;
         self.snap_term = term;
@@ -577,7 +691,12 @@ impl Raft {
     }
 
     pub fn snapshot_msg(&self, data: Vec<u8>) -> RaftBody {
-        RaftBody::RaftSnapshot(Box::new(wp::RaftSnapshot { term: self.term, last_index: self.snap_index, last_term: self.snap_term, data: Some(data) }))
+        RaftBody::RaftSnapshot(Box::new(wp::RaftSnapshot {
+            term: self.term,
+            last_index: self.snap_index,
+            last_term: self.snap_term,
+            data: Some(data),
+        }))
     }
 
     pub fn mark_snapshot_sent(&mut self, peer: &Bytes32) {
@@ -602,7 +721,12 @@ impl Raft {
 
 /// Encode a Raft message for the RPC layer.
 pub fn wrap(from: &Bytes32, to: &Bytes32, body: RaftBody) -> Vec<u8> {
-    wp::RaftMessage { from: Some(crypto::k32(from)), to: Some(crypto::k32(to)), body: Some(body) }.encode_bytes()
+    wp::RaftMessage {
+        from: Some(crypto::k32(from)),
+        to: Some(crypto::k32(to)),
+        body: Some(body),
+    }
+    .encode_bytes()
 }
 
 pub fn unwrap(bytes: &[u8]) -> Option<(Bytes32, Bytes32, RaftBody)> {

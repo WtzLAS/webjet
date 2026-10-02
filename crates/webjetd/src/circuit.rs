@@ -62,8 +62,12 @@ impl LocalCircuit {
 
     /// Send an end-to-end frame on this circuit.
     pub fn send(&self, n: &Node, frame: &[u8], ecn: u8) -> bool {
-        let Some(out) = *self.out_label.lock() else { return false };
-        let Some(hop) = n.best_hop(&self.next) else { return false };
+        let Some(out) = *self.out_label.lock() else {
+            return false;
+        };
+        let Some(hop) = n.best_hop(&self.next) else {
+            return false;
+        };
         let mut f = Vec::with_capacity(frames::RELAY_HEADER + frame.len());
         f.extend_from_slice(&frames::relay_header(out, DEFAULT_HOP_LIMIT, ecn));
         f.extend_from_slice(frame);
@@ -149,7 +153,9 @@ impl Table {
     fn alloc(&self, neighbor: &Bytes32) -> u32 {
         loop {
             let l = rand::random::<u32>() | 1;
-            if !self.entries.contains_key(&(*neighbor, l)) && !self.pending.contains_key(&(*neighbor, l)) {
+            if !self.entries.contains_key(&(*neighbor, l))
+                && !self.pending.contains_key(&(*neighbor, l))
+            {
                 return l;
             }
         }
@@ -159,19 +165,36 @@ impl Table {
         self.entries
             .values()
             .filter_map(|e| match &e.kind {
-                Kind::Local(c) if c.peer == *peer && c.out_label.lock().is_some() => Some(c.clone()),
+                Kind::Local(c) if c.peer == *peer && c.out_label.lock().is_some() => {
+                    Some(c.clone())
+                }
                 _ => None,
             })
             .collect()
     }
 
     pub fn transit_count(&self) -> usize {
-        self.entries.values().filter(|e| matches!(&e.kind, Kind::Transit(t) if t.forward)).count()
+        self.entries
+            .values()
+            .filter(|e| matches!(&e.kind, Kind::Transit(t) if t.forward))
+            .count()
     }
 
-    fn route(&mut self, rid: &Bytes32, src: &Bytes32, dst: &Bytes32, hops: &[Bytes32]) -> Arc<RouteAcct> {
+    fn route(
+        &mut self,
+        rid: &Bytes32,
+        src: &Bytes32,
+        dst: &Bytes32,
+        hops: &[Bytes32],
+    ) -> Arc<RouteAcct> {
         let r = self.routes.entry(*rid).or_insert_with(|| {
-            Arc::new(RouteAcct { src: *src, dst: *dst, hops: hops.to_vec(), active_since: AtomicU64::new(now_ms()), ..Default::default() })
+            Arc::new(RouteAcct {
+                src: *src,
+                dst: *dst,
+                hops: hops.to_vec(),
+                active_since: AtomicU64::new(now_ms()),
+                ..Default::default()
+            })
         });
         r.setups.fetch_add(1, Ordering::Relaxed);
         r.circuits.fetch_add(1, Ordering::Relaxed);
@@ -208,8 +231,16 @@ pub fn may_talk(n: &Node, a: &Bytes32, b: &Bytes32) -> bool {
     if v.is_controller(a) || v.is_controller(b) {
         return true;
     }
-    let (Some(na), Some(nb)) = (v.nodes.get(a), v.nodes.get(b)) else { return false };
-    webjet_core::policy::pair_may_talk(&v.policy, &v.subject(na), &v.subject(nb), &v.granted_prefixes(a), &v.granted_prefixes(b))
+    let (Some(na), Some(nb)) = (v.nodes.get(a), v.nodes.get(b)) else {
+        return false;
+    };
+    webjet_core::policy::pair_may_talk(
+        &v.policy,
+        &v.subject(na),
+        &v.subject(nb),
+        &v.granted_prefixes(a),
+        &v.granted_prefixes(b),
+    )
 }
 
 fn limit(n: &Node, name: &str, builtin: u64) -> u64 {
@@ -253,12 +284,30 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
             last_rx: Mutex::new(Instant::now()),
         });
         t.route(&route_id, &n.me, &peer, &hops);
-        t.entries.insert((next, label), Entry { kind: Kind::Local(c.clone()), created: Instant::now() });
-        t.pending.insert((next, label), PendingOpen { prev: None, waiter: Some(tx), at: Instant::now() });
+        t.entries.insert(
+            (next, label),
+            Entry {
+                kind: Kind::Local(c.clone()),
+                created: Instant::now(),
+            },
+        );
+        t.pending.insert(
+            (next, label),
+            PendingOpen {
+                prev: None,
+                waiter: Some(tx),
+                at: Instant::now(),
+            },
+        );
         c
     };
-    let hop = n.best_hop(&next).ok_or_else(|| anyhow!("hop to the first neighbor went away"))?;
-    hop.send_control(HopMsg::CircuitOpen(Box::new(wp::CircuitOpen { setup: Some(raw), label: c.label })));
+    let hop = n
+        .best_hop(&next)
+        .ok_or_else(|| anyhow!("hop to the first neighbor went away"))?;
+    hop.send_control(HopMsg::CircuitOpen(Box::new(wp::CircuitOpen {
+        setup: Some(raw),
+        label: c.label,
+    })));
     let res = tokio::time::timeout(OPEN_TIMEOUT, rx).await;
     let out = match res {
         Ok(Ok(Ok(out))) => out,
@@ -283,7 +332,10 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
 pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Result<()> {
     let from = hop.peer;
     let refuse = |why: &str| {
-        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse { label: o.label, reason: Some(why.to_string()) })));
+        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse {
+            label: o.label,
+            reason: Some(why.to_string()),
+        })));
     };
     let raw = o.setup.clone().unwrap_or_default();
     let v = match crypto::open_envelope(&raw) {
@@ -296,7 +348,13 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
     let s: wp::CircuitSetup = v.decode()?;
     let src = opt_k32(&s.src);
     let dst = opt_k32(&s.dst);
-    let hops: Vec<Bytes32> = s.hops.clone().unwrap_or_default().iter().map(|k| k.to_bytes()).collect();
+    let hops: Vec<Bytes32> = s
+        .hops
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .map(|k| k.to_bytes())
+        .collect();
     let nonce = s.nonce.map(|x| x.to_bytes()).unwrap_or_default();
     // Signature by the source's current key; source and destination trusted.
     let check = || -> std::result::Result<(), &'static str> {
@@ -327,7 +385,8 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
     {
         let mut t = n.circuits.lock();
         let now = Instant::now();
-        t.nonces.retain(|_, at| now.duration_since(*at) < Duration::from_secs(300));
+        t.nonces
+            .retain(|_, at| now.duration_since(*at) < Duration::from_secs(300));
         if t.nonces.insert(nonce, now).is_some() {
             t.refuse("replay");
             drop(t);
@@ -360,7 +419,14 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
     {
         let st = n.store.read();
         let vw = st.view();
-        let next_ok = if next == dst { st.node_trusted(&next) } else { vw.nodes.get(&next).map(|x| x.valid && x.relay).unwrap_or(false) };
+        let next_ok = if next == dst {
+            st.node_trusted(&next)
+        } else {
+            vw.nodes
+                .get(&next)
+                .map(|x| x.valid && x.relay)
+                .unwrap_or(false)
+        };
         if !next_ok {
             drop(st);
             return fail("next_hop");
@@ -372,11 +438,19 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         let rate = limit(n, "circuit_setups_per_sec", 200) as u32;
         let mut t = n.circuits.lock();
         let now = Instant::now();
-        if t.setup_rate.0.map(|x| now.duration_since(x) >= Duration::from_secs(1)).unwrap_or(true) {
+        if t.setup_rate
+            .0
+            .map(|x| now.duration_since(x) >= Duration::from_secs(1))
+            .unwrap_or(true)
+        {
             t.setup_rate = (Some(now), 0);
         }
         t.setup_rate.1 += 1;
-        let count_src = t.entries.values().filter(|e| matches!(&e.kind, Kind::Transit(x) if x.forward && x.src == src)).count();
+        let count_src = t
+            .entries
+            .values()
+            .filter(|e| matches!(&e.kind, Kind::Transit(x) if x.forward && x.src == src))
+            .count();
         let why = if t.setup_rate.1 > rate {
             Some("rate")
         } else if count_src >= per_src {
@@ -401,7 +475,9 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
             return fail("next_unreachable");
         }
     }
-    let Some(next_hop) = n.best_hop(&next) else { return fail("next_unreachable") };
+    let Some(next_hop) = n.best_hop(&next) else {
+        return fail("next_unreachable");
+    };
     let rid = opt_k32(&s.route_id);
     let out_back = {
         let mut t = n.circuits.lock();
@@ -410,26 +486,77 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         t.route(&rid, &src, &dst, &hops);
         let now = Instant::now();
         // Forward: frames from `from` with in_label go to next (label unknown yet).
-        t.entries.insert((from, in_label), Entry { kind: Kind::Transit(Transit { out_neighbor: next, out_label: None, route_id: rid, src, forward: true, pair: (next, back_label), last: now }), created: now });
+        t.entries.insert(
+            (from, in_label),
+            Entry {
+                kind: Kind::Transit(Transit {
+                    out_neighbor: next,
+                    out_label: None,
+                    route_id: rid,
+                    src,
+                    forward: true,
+                    pair: (next, back_label),
+                    last: now,
+                }),
+                created: now,
+            },
+        );
         // Reverse: frames from next with back_label go to `from` with the opener's label.
-        t.entries.insert((next, back_label), Entry { kind: Kind::Transit(Transit { out_neighbor: from, out_label: Some(o.label), route_id: rid, src, forward: false, pair: (from, in_label), last: now }), created: now });
-        t.pending.insert((next, back_label), PendingOpen { prev: Some((from, o.label, in_label)), waiter: None, at: now });
+        t.entries.insert(
+            (next, back_label),
+            Entry {
+                kind: Kind::Transit(Transit {
+                    out_neighbor: from,
+                    out_label: Some(o.label),
+                    route_id: rid,
+                    src,
+                    forward: false,
+                    pair: (from, in_label),
+                    last: now,
+                }),
+                created: now,
+            },
+        );
+        t.pending.insert(
+            (next, back_label),
+            PendingOpen {
+                prev: Some((from, o.label, in_label)),
+                waiter: None,
+                at: now,
+            },
+        );
         back_label
     };
-    next_hop.send_control(HopMsg::CircuitOpen(Box::new(wp::CircuitOpen { setup: Some(raw), label: out_back })));
+    next_hop.send_control(HopMsg::CircuitOpen(Box::new(wp::CircuitOpen {
+        setup: Some(raw),
+        label: out_back,
+    })));
     Ok(())
 }
 
-fn accept_as_destination(n: &Arc<Node>, hop: &Arc<Hop>, o: &wp::CircuitOpen, src: Bytes32, hops: Vec<Bytes32>, rid: Bytes32) -> Result<()> {
+fn accept_as_destination(
+    n: &Arc<Node>,
+    hop: &Arc<Hop>,
+    o: &wp::CircuitOpen,
+    src: Bytes32,
+    hops: Vec<Bytes32>,
+    rid: Bytes32,
+) -> Result<()> {
     let from = hop.peer;
     let expected_prev = hops.last().copied().unwrap_or(src);
     if expected_prev != from {
-        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse { label: o.label, reason: Some("wrong neighbor".into()) })));
+        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse {
+            label: o.label,
+            reason: Some("wrong neighbor".into()),
+        })));
         bail!("circuit setup from an unexpected neighbor");
     }
     if !may_talk(n, &n.me, &src) {
         n.circuits.lock().refuse("policy");
-        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse { label: o.label, reason: Some("policy".into()) })));
+        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse {
+            label: o.label,
+            reason: Some("policy".into()),
+        })));
         bail!("policy allows nothing with the circuit's source");
     }
     let label = {
@@ -449,17 +576,28 @@ fn accept_as_destination(n: &Arc<Node>, hop: &Arc<Hop>, o: &wp::CircuitOpen, src
             last_rx: Mutex::new(Instant::now()),
         });
         t.route(&rid, &src, &n.me, &c.hops);
-        t.entries.insert((from, label), Entry { kind: Kind::Local(c), created: Instant::now() });
+        t.entries.insert(
+            (from, label),
+            Entry {
+                kind: Kind::Local(c),
+                created: Instant::now(),
+            },
+        );
         label
     };
-    hop.send_control(HopMsg::CircuitAccept(Box::new(wp::CircuitAccept { label: o.label, peer_label: label })));
+    hop.send_control(HopMsg::CircuitAccept(Box::new(wp::CircuitAccept {
+        label: o.label,
+        peer_label: label,
+    })));
     Ok(())
 }
 
 pub fn on_accept(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::CircuitAccept) {
     let from = hop.peer;
     let mut t = n.circuits.lock();
-    let Some(p) = t.pending.remove(&(from, a.label)) else { return };
+    let Some(p) = t.pending.remove(&(from, a.label)) else {
+        return;
+    };
     match p.prev {
         None => {
             if let Some(w) = p.waiter {
@@ -467,14 +605,21 @@ pub fn on_accept(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::CircuitAccept) {
             }
         }
         Some((prev, prev_label, in_label)) => {
-            if let Some(Entry { kind: Kind::Transit(tr), .. }) = t.entries.get_mut(&(prev, in_label)) {
+            if let Some(Entry {
+                kind: Kind::Transit(tr),
+                ..
+            }) = t.entries.get_mut(&(prev, in_label))
+            {
                 tr.out_label = Some(a.peer_label);
             } else {
                 return;
             }
             drop(t);
             if let Some(h) = n.best_hop(&prev) {
-                h.send_control(HopMsg::CircuitAccept(Box::new(wp::CircuitAccept { label: prev_label, peer_label: in_label })));
+                h.send_control(HopMsg::CircuitAccept(Box::new(wp::CircuitAccept {
+                    label: prev_label,
+                    peer_label: in_label,
+                })));
             }
         }
     }
@@ -483,7 +628,9 @@ pub fn on_accept(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::CircuitAccept) {
 pub fn on_refuse(n: &Arc<Node>, hop: &Arc<Hop>, r: wp::CircuitRefuse) {
     let from = hop.peer;
     let mut t = n.circuits.lock();
-    let Some(p) = t.pending.remove(&(from, r.label)) else { return };
+    let Some(p) = t.pending.remove(&(from, r.label)) else {
+        return;
+    };
     let reason = r.reason.clone().unwrap_or_default();
     match p.prev {
         None => {
@@ -496,7 +643,10 @@ pub fn on_refuse(n: &Arc<Node>, hop: &Arc<Hop>, r: wp::CircuitRefuse) {
             t.remove_entry(&(from, r.label));
             drop(t);
             if let Some(h) = n.best_hop(&prev) {
-                h.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse { label: prev_label, reason: Some(reason) })));
+                h.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse {
+                    label: prev_label,
+                    reason: Some(reason),
+                })));
             }
         }
     }
@@ -510,7 +660,9 @@ pub fn on_close(n: &Arc<Node>, hop: &Arc<Hop>, label: u32) {
 /// Remove an entry and its pair, telling the neighbor on the other side.
 fn close_key(n: &Arc<Node>, key: (Bytes32, u32), propagate: bool) {
     let mut t = n.circuits.lock();
-    let Some(e) = t.remove_entry(&key) else { return };
+    let Some(e) = t.remove_entry(&key) else {
+        return;
+    };
     match e.kind {
         Kind::Local(c) => {
             drop(t);
@@ -523,7 +675,9 @@ fn close_key(n: &Arc<Node>, key: (Bytes32, u32), propagate: bool) {
             if propagate {
                 // Tell the neighbor on the other side, using its label.
                 if let (Some(out), Some(h)) = (tr.out_label, n.best_hop(&tr.out_neighbor)) {
-                    h.send_control(HopMsg::CircuitClose(Box::new(wp::CircuitClose { label: out })));
+                    h.send_control(HopMsg::CircuitClose(Box::new(wp::CircuitClose {
+                        label: out,
+                    })));
                 }
             }
         }
@@ -536,7 +690,9 @@ pub fn close_local(n: &Arc<Node>, c: &Arc<LocalCircuit>) {
     n.circuits.lock().remove_entry(&(c.next, c.label));
     n.e2e.on_circuit_closed(c);
     if let (Some(out), Some(h)) = (out, n.best_hop(&c.next)) {
-        h.send_control(HopMsg::CircuitClose(Box::new(wp::CircuitClose { label: out })));
+        h.send_control(HopMsg::CircuitClose(Box::new(wp::CircuitClose {
+            label: out,
+        })));
     }
 }
 
@@ -544,12 +700,24 @@ pub fn on_hop_down(n: &Arc<Node>, hop: &Hop) {
     if n.hops_to(&hop.peer).iter().any(|h| h.id != hop.id) {
         return; // another session to the same neighbor carries the circuits
     }
-    let keys: Vec<(Bytes32, u32)> = n.circuits.lock().entries.keys().filter(|k| k.0 == hop.peer).copied().collect();
+    let keys: Vec<(Bytes32, u32)> = n
+        .circuits
+        .lock()
+        .entries
+        .keys()
+        .filter(|k| k.0 == hop.peer)
+        .copied()
+        .collect();
     for k in keys {
         close_key(n, k, true);
     }
     let mut t = n.circuits.lock();
-    let dead: Vec<(Bytes32, u32)> = t.pending.keys().filter(|k| k.0 == hop.peer).copied().collect();
+    let dead: Vec<(Bytes32, u32)> = t
+        .pending
+        .keys()
+        .filter(|k| k.0 == hop.peer)
+        .copied()
+        .collect();
     for k in dead {
         if let Some(p) = t.pending.remove(&k) {
             if let Some(w) = p.waiter {
@@ -562,14 +730,22 @@ pub fn on_hop_down(n: &Arc<Node>, hop: &Hop) {
 // ---------------------------------------------------------------- frames
 
 pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
-    let Some((label, hop_limit, ecn, body)) = frames::parse_relay(&payload) else { return };
+    let Some((label, hop_limit, ecn, body)) = frames::parse_relay(&payload) else {
+        return;
+    };
     let key = (hop.peer, label);
     let action = {
         let mut t = n.circuits.lock();
         let found = match t.entries.get_mut(&key) {
             None => return,
-            Some(Entry { kind: Kind::Local(c), .. }) => Ok(c.clone()),
-            Some(Entry { kind: Kind::Transit(tr), .. }) => {
+            Some(Entry {
+                kind: Kind::Local(c),
+                ..
+            }) => Ok(c.clone()),
+            Some(Entry {
+                kind: Kind::Transit(tr),
+                ..
+            }) => {
                 tr.last = Instant::now();
                 Err((tr.out_neighbor, tr.out_label, tr.forward, tr.route_id))
             }
@@ -616,7 +792,10 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
             let mut f = Vec::with_capacity(payload.len());
             f.extend_from_slice(&frames::relay_header(out_l, hop_limit - 1, ecn));
             f.extend_from_slice(body);
-            let flow = route.as_ref().map(|r| u64::from_be_bytes(r.src[..8].try_into().unwrap())).unwrap_or(label as u64);
+            let flow = route
+                .as_ref()
+                .map(|r| u64::from_be_bytes(r.src[..8].try_into().unwrap()))
+                .unwrap_or(label as u64);
             if !h.send_relay(flow, f) {
                 if let Some(r) = &route {
                     r.dropped_queue.fetch_add(1, Ordering::Relaxed);
@@ -635,31 +814,60 @@ pub fn sweep(n: &Arc<Node>) {
     let mut stale: Vec<(Bytes32, u32)> = Vec::new();
     {
         let mut t = n.circuits.lock();
-        let dead: Vec<(Bytes32, u32)> = t.pending.iter().filter(|(_, p)| now.duration_since(p.at) > PENDING_TIMEOUT).map(|(k, _)| *k).collect();
+        let dead: Vec<(Bytes32, u32)> = t
+            .pending
+            .iter()
+            .filter(|(_, p)| now.duration_since(p.at) > PENDING_TIMEOUT)
+            .map(|(k, _)| *k)
+            .collect();
         for k in dead {
             t.pending.remove(&k);
         }
         for (k, e) in &t.entries {
             match &e.kind {
-                Kind::Transit(tr) if tr.forward && now.duration_since(tr.last) > TRANSIT_IDLE => stale.push(*k),
-                Kind::Transit(tr) if tr.forward && tr.out_label.is_none() && now.duration_since(e.created) > PENDING_TIMEOUT => stale.push(*k),
-                Kind::Local(c) if !c.is_source && now.duration_since(*c.last_rx.lock()) > TRANSIT_IDLE => stale.push(*k),
+                Kind::Transit(tr) if tr.forward && now.duration_since(tr.last) > TRANSIT_IDLE => {
+                    stale.push(*k)
+                }
+                Kind::Transit(tr)
+                    if tr.forward
+                        && tr.out_label.is_none()
+                        && now.duration_since(e.created) > PENDING_TIMEOUT =>
+                {
+                    stale.push(*k)
+                }
+                Kind::Local(c)
+                    if !c.is_source && now.duration_since(*c.last_rx.lock()) > TRANSIT_IDLE =>
+                {
+                    stale.push(*k)
+                }
                 _ => {}
             }
         }
-        t.routes.retain(|_, r| r.circuits.load(Ordering::Relaxed) > 0 || r.active_since.load(Ordering::Relaxed) != 0);
+        t.routes.retain(|_, r| {
+            r.circuits.load(Ordering::Relaxed) > 0 || r.active_since.load(Ordering::Relaxed) != 0
+        });
     }
     // Revoked sources or destinations lose their circuits (§10.5).
     let untrusted: HashSet<Bytes32> = {
         let st = n.store.read();
         let t = n.circuits.lock();
-        t.routes.values().flat_map(|r| [r.src, r.dst]).filter(|x| *x != n.me && !st.node_trusted(x)).collect()
+        t.routes
+            .values()
+            .flat_map(|r| [r.src, r.dst])
+            .filter(|x| *x != n.me && !st.node_trusted(x))
+            .collect()
     };
     if !untrusted.is_empty() {
         let t = n.circuits.lock();
         for (k, e) in &t.entries {
             let hit = match &e.kind {
-                Kind::Transit(tr) => tr.forward && t.routes.get(&tr.route_id).map(|r| untrusted.contains(&r.src) || untrusted.contains(&r.dst)).unwrap_or(false),
+                Kind::Transit(tr) => {
+                    tr.forward
+                        && t.routes
+                            .get(&tr.route_id)
+                            .map(|r| untrusted.contains(&r.src) || untrusted.contains(&r.dst))
+                            .unwrap_or(false)
+                }
                 Kind::Local(c) => untrusted.contains(&c.peer),
             };
             if hit {

@@ -3,8 +3,13 @@
 //! hostname checks, and `X25519MLKEM768` as the only key exchange group.
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{aws_lc_rs, verify_tls13_signature_with_raw_key, CryptoProvider, WebPkiSupportedAlgorithms};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, SubjectPublicKeyInfoDer, UnixTime};
+use rustls::crypto::{
+    aws_lc_rs, verify_tls13_signature_with_raw_key, CryptoProvider, WebPkiSupportedAlgorithms,
+};
+use rustls::pki_types::{
+    CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, SubjectPublicKeyInfoDer,
+    UnixTime,
+};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::sign::CertifiedKey;
 use rustls::{DigitallySignedStruct, DistinguishedName, Error, SignatureScheme};
@@ -39,7 +44,8 @@ impl PeerTrust for TrustAll {
 pub fn provider() -> Arc<CryptoProvider> {
     let mut p = aws_lc_rs::default_provider();
     p.kx_groups = vec![aws_lc_rs::kx_group::X25519MLKEM768];
-    p.cipher_suites.retain(|s| s.version() == &rustls::version::TLS13);
+    p.cipher_suites
+        .retain(|s| s.version() == &rustls::version::TLS13);
     Arc::new(p)
 }
 
@@ -59,11 +65,22 @@ pub fn certified_key(kp: &KeyPair) -> anyhow::Result<Arc<CertifiedKey>> {
 }
 
 fn key_of(cert: &CertificateDer<'_>) -> Result<Bytes32, Error> {
-    spki_to_key(cert.as_ref()).ok_or(Error::General("peer did not present an Ed25519 raw public key".into()))
+    spki_to_key(cert.as_ref()).ok_or(Error::General(
+        "peer did not present an Ed25519 raw public key".into(),
+    ))
 }
 
-fn verify_sig(message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
-    verify_tls13_signature_with_raw_key(message, &SubjectPublicKeyInfoDer::from(cert.as_ref()), dss, &algs())
+fn verify_sig(
+    message: &[u8],
+    cert: &CertificateDer<'_>,
+    dss: &DigitallySignedStruct,
+) -> Result<HandshakeSignatureValid, Error> {
+    verify_tls13_signature_with_raw_key(
+        message,
+        &SubjectPublicKeyInfoDer::from(cert.as_ref()),
+        dss,
+        &algs(),
+    )
 }
 
 /// Server verifier for the dialer: accepts exactly the expected key, and
@@ -76,7 +93,14 @@ pub struct ExpectKey {
 }
 
 impl ServerCertVerifier for ExpectKey {
-    fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], _: &ServerName<'_>, _: &[u8], _: UnixTime) -> Result<ServerCertVerified, Error> {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
         if !intermediates.is_empty() {
             return Err(Error::General("unexpected certificate chain".into()));
         }
@@ -89,10 +113,20 @@ impl ServerCertVerifier for ExpectKey {
         }
         Ok(ServerCertVerified::assertion())
     }
-    fn verify_tls12_signature(&self, _: &[u8], _: &CertificateDer<'_>, _: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &CertificateDer<'_>,
+        _: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
         Err(Error::General("TLS 1.2 not supported".into()))
     }
-    fn verify_tls13_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
         verify_sig(message, cert, dss)
     }
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -115,7 +149,12 @@ impl ClientCertVerifier for TrustedClient {
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
         &[]
     }
-    fn verify_client_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], _: UnixTime) -> Result<ClientCertVerified, Error> {
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        _: UnixTime,
+    ) -> Result<ClientCertVerified, Error> {
         if !intermediates.is_empty() {
             return Err(Error::General("unexpected certificate chain".into()));
         }
@@ -130,10 +169,20 @@ impl ClientCertVerifier for TrustedClient {
         }
         Ok(ClientCertVerified::assertion())
     }
-    fn verify_tls12_signature(&self, _: &[u8], _: &CertificateDer<'_>, _: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+    fn verify_tls12_signature(
+        &self,
+        _: &[u8],
+        _: &CertificateDer<'_>,
+        _: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
         Err(Error::General("TLS 1.2 not supported".into()))
     }
-    fn verify_tls13_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
         verify_sig(message, cert, dss)
     }
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -149,12 +198,19 @@ pub fn no_client_auth() -> Arc<dyn ClientCertVerifier> {
     Arc::new(rustls::server::NoClientAuth)
 }
 
-pub fn client_config(kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>, alpn: &[u8]) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+pub fn client_config(
+    kp: &KeyPair,
+    expected: Vec<Bytes32>,
+    trust: Arc<dyn PeerTrust>,
+    alpn: &[u8],
+) -> anyhow::Result<Arc<rustls::ClientConfig>> {
     let mut c = rustls::ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(ExpectKey { expected, trust }))
-        .with_client_cert_resolver(Arc::new(rustls::client::AlwaysResolvesClientRawPublicKeys::new(certified_key(kp)?)));
+        .with_client_cert_resolver(Arc::new(
+            rustls::client::AlwaysResolvesClientRawPublicKeys::new(certified_key(kp)?),
+        ));
     c.alpn_protocols = vec![alpn.to_vec()];
     c.enable_sni = false;
     c.resumption = rustls::client::Resumption::disabled();
@@ -163,7 +219,9 @@ pub fn client_config(kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTr
 
 /// Client config for enrollment: verifies the controller's key, presents no
 /// client identity (the node isn't enrolled yet).
-pub fn enroll_client_config(expected: Option<Bytes32>) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+pub fn enroll_client_config(
+    expected: Option<Bytes32>,
+) -> anyhow::Result<Arc<rustls::ClientConfig>> {
     #[derive(Debug)]
     struct AnyTrusted;
     impl PeerTrust for AnyTrusted {
@@ -174,14 +232,31 @@ pub fn enroll_client_config(expected: Option<Bytes32>) -> anyhow::Result<Arc<rus
     #[derive(Debug)]
     struct AnyKey;
     impl ServerCertVerifier for AnyKey {
-        fn verify_server_cert(&self, e: &CertificateDer<'_>, _: &[CertificateDer<'_>], _: &ServerName<'_>, _: &[u8], _: UnixTime) -> Result<ServerCertVerified, Error> {
+        fn verify_server_cert(
+            &self,
+            e: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, Error> {
             key_of(e)?;
             Ok(ServerCertVerified::assertion())
         }
-        fn verify_tls12_signature(&self, _: &[u8], _: &CertificateDer<'_>, _: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
             Err(Error::General("TLS 1.2 not supported".into()))
         }
-        fn verify_tls13_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+        fn verify_tls13_signature(
+            &self,
+            m: &[u8],
+            c: &CertificateDer<'_>,
+            d: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
             verify_sig(m, c, d)
         }
         fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -192,7 +267,10 @@ pub fn enroll_client_config(expected: Option<Bytes32>) -> anyhow::Result<Arc<rus
         }
     }
     let verifier: Arc<dyn ServerCertVerifier> = match expected {
-        Some(k) => Arc::new(ExpectKey { expected: vec![k], trust: Arc::new(AnyTrusted) }),
+        Some(k) => Arc::new(ExpectKey {
+            expected: vec![k],
+            trust: Arc::new(AnyTrusted),
+        }),
         None => Arc::new(AnyKey),
     };
     let mut c = rustls::ClientConfig::builder_with_provider(provider())
@@ -205,12 +283,23 @@ pub fn enroll_client_config(expected: Option<Bytes32>) -> anyhow::Result<Arc<rus
     Ok(Arc::new(c))
 }
 
-pub fn server_config(kp: &KeyPair, trust: Arc<dyn PeerTrust>, expected: Option<Bytes32>, alpn: &[&[u8]], allow_enroll: bool) -> anyhow::Result<Arc<rustls::ServerConfig>> {
-    let verifier: Arc<dyn ClientCertVerifier> = Arc::new(OptionalClient { inner: TrustedClient { trust, expected }, optional: allow_enroll });
+pub fn server_config(
+    kp: &KeyPair,
+    trust: Arc<dyn PeerTrust>,
+    expected: Option<Bytes32>,
+    alpn: &[&[u8]],
+    allow_enroll: bool,
+) -> anyhow::Result<Arc<rustls::ServerConfig>> {
+    let verifier: Arc<dyn ClientCertVerifier> = Arc::new(OptionalClient {
+        inner: TrustedClient { trust, expected },
+        optional: allow_enroll,
+    });
     let mut c = rustls::ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_client_cert_verifier(verifier)
-        .with_cert_resolver(Arc::new(rustls::server::AlwaysResolvesServerRawPublicKeys::new(certified_key(kp)?)));
+        .with_cert_resolver(Arc::new(
+            rustls::server::AlwaysResolvesServerRawPublicKeys::new(certified_key(kp)?),
+        ));
     c.alpn_protocols = alpn.iter().map(|a| a.to_vec()).collect();
     c.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     c.send_tls13_tickets = 0;
@@ -232,13 +321,28 @@ impl ClientCertVerifier for OptionalClient {
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
         &[]
     }
-    fn verify_client_cert(&self, e: &CertificateDer<'_>, i: &[CertificateDer<'_>], now: UnixTime) -> Result<ClientCertVerified, Error> {
+    fn verify_client_cert(
+        &self,
+        e: &CertificateDer<'_>,
+        i: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> Result<ClientCertVerified, Error> {
         self.inner.verify_client_cert(e, i, now)
     }
-    fn verify_tls12_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+    fn verify_tls12_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
         self.inner.verify_tls12_signature(m, c, d)
     }
-    fn verify_tls13_signature(&self, m: &[u8], c: &CertificateDer<'_>, d: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, Error> {
+    fn verify_tls13_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
         self.inner.verify_tls13_signature(m, c, d)
     }
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -254,7 +358,9 @@ pub fn enroll_server_config(kp: &KeyPair) -> anyhow::Result<Arc<rustls::ServerCo
     let mut c = rustls::ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_client_cert_verifier(no_client_auth())
-        .with_cert_resolver(Arc::new(rustls::server::AlwaysResolvesServerRawPublicKeys::new(certified_key(kp)?)));
+        .with_cert_resolver(Arc::new(
+            rustls::server::AlwaysResolvesServerRawPublicKeys::new(certified_key(kp)?),
+        ));
     c.alpn_protocols = vec![ALPN_ENROLL.to_vec()];
     c.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     c.send_tls13_tickets = 0;
@@ -275,7 +381,10 @@ pub fn peer_key(conn: &rustls::CommonState) -> Option<Bytes32> {
 pub fn check_pq(conn: &rustls::CommonState) -> anyhow::Result<()> {
     match conn.negotiated_key_exchange_group() {
         Some(g) if g.name() == rustls::NamedGroup::X25519MLKEM768 => Ok(()),
-        other => anyhow::bail!("handshake did not use X25519MLKEM768 ({:?})", other.map(|g| g.name())),
+        other => anyhow::bail!(
+            "handshake did not use X25519MLKEM768 ({:?})",
+            other.map(|g| g.name())
+        ),
     }
 }
 
@@ -288,7 +397,8 @@ mod tests {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
         let cc = client_config(&a, vec![b.public()], Arc::new(TrustAll), ALPN_E2E).unwrap();
-        let sc = server_config(&b, Arc::new(TrustAll), Some(a.public()), &[ALPN_E2E], false).unwrap();
+        let sc =
+            server_config(&b, Arc::new(TrustAll), Some(a.public()), &[ALPN_E2E], false).unwrap();
         let mut c = rustls::ClientConnection::new(cc, server_name()).unwrap();
         let mut s = rustls::ServerConnection::new(sc).unwrap();
         for _ in 0..10 {
@@ -320,8 +430,10 @@ mod tests {
         check_pq(&c).unwrap();
         let mut k1 = [0u8; 64];
         let mut k2 = [0u8; 64];
-        c.export_keying_material(&mut k1, b"webjet-e2e-v1", Some(b"ctx")).unwrap();
-        s.export_keying_material(&mut k2, b"webjet-e2e-v1", Some(b"ctx")).unwrap();
+        c.export_keying_material(&mut k1, b"webjet-e2e-v1", Some(b"ctx"))
+            .unwrap();
+        s.export_keying_material(&mut k2, b"webjet-e2e-v1", Some(b"ctx"))
+            .unwrap();
         assert_eq!(k1, k2);
     }
 

@@ -72,11 +72,15 @@ fn admin_view(n: &Node) -> webjet_core::store::View {
 }
 
 fn str_arg<'a>(req: &'a Value, k: &str) -> Result<&'a str> {
-    req.get(k).and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing {k}"))
+    req.get(k)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing {k}"))
 }
 
 fn node_json(v: &webjet_core::store::View, id: &Bytes32) -> Value {
-    let Some(info) = v.nodes.get(id) else { return json!({"id": hex::encode(id)}) };
+    let Some(info) = v.nodes.get(id) else {
+        return json!({"id": hex::encode(id)});
+    };
     json!({
         "id": hex::encode(id),
         "name": info.name,
@@ -123,11 +127,16 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             Ok(json!(hops))
         }
         "sessions" => {
-            let v: Vec<Value> = n.e2e.all().iter().map(|s| {
-                let mut j = crate::e2e::summary(s);
-                j["peer"] = json!(n.name_of(&s.peer));
-                j
-            }).collect();
+            let v: Vec<Value> = n
+                .e2e
+                .all()
+                .iter()
+                .map(|s| {
+                    let mut j = crate::e2e::summary(s);
+                    j["peer"] = json!(n.name_of(&s.peer));
+                    j
+                })
+                .collect();
             Ok(json!({"sessions": v, "circuits": crate::circuit::summary(n)}))
         }
         "nodes" => {
@@ -166,7 +175,14 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             Ok(json!({"index": i, "applied": desc}))
         }
         "submit_offline" => {
-            let items: Vec<Vec<u8>> = req.get("items").and_then(|v| v.as_array()).ok_or_else(|| anyhow!("missing items"))?.iter().filter_map(|x| x.as_str()).map(unb64).collect::<Result<_>>()?;
+            let items: Vec<Vec<u8>> = req
+                .get("items")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| anyhow!("missing items"))?
+                .iter()
+                .filter_map(|x| x.as_str())
+                .map(unb64)
+                .collect::<Result<_>>()?;
             let mut added = 0;
             for it in &items {
                 if n.store.write().add_offline_item(it)? {
@@ -177,7 +193,16 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             crate::gossip::push_head(n);
             // Make sure controllers have them too.
             if !n.is_controller() {
-                let body = RpcBody::OfflineSubmit(Box::new(wp::OfflineSubmit { items: Some(items.iter().map(|b| wp::Blob { data: Some(b.clone()) }).collect()) }));
+                let body = RpcBody::OfflineSubmit(Box::new(wp::OfflineSubmit {
+                    items: Some(
+                        items
+                            .iter()
+                            .map(|b| wp::Blob {
+                                data: Some(b.clone()),
+                            })
+                            .collect(),
+                    ),
+                }));
                 let _ = crate::rpc::call_any(n, body, Duration::from_secs(10)).await;
             }
             Ok(json!({"added": added}))
@@ -194,22 +219,42 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 Ok(ip) => ip,
                 Err(_) => {
                     let v = admin_view(n);
-                    let id = v.by_name.get(target.trim_end_matches(&format!(".{}", v.suffix()))).ok_or_else(|| anyhow!("unknown node {target}"))?;
-                    v.nodes.get(id).and_then(|x| x.ips.first()).map(|i| i.addr()).ok_or_else(|| anyhow!("{target} has no address"))?
+                    let id = v
+                        .by_name
+                        .get(target.trim_end_matches(&format!(".{}", v.suffix())))
+                        .ok_or_else(|| anyhow!("unknown node {target}"))?;
+                    v.nodes
+                        .get(id)
+                        .and_then(|x| x.ips.first())
+                        .map(|i| i.addr())
+                        .ok_or_else(|| anyhow!("{target} has no address"))?
                 }
             };
-            let dp = n.dataplane.get().ok_or_else(|| anyhow!("the data plane isn't running yet"))?;
+            let dp = n
+                .dataplane
+                .get()
+                .ok_or_else(|| anyhow!("the data plane isn't running yet"))?;
             let r = dp.ping(ip, count).await;
-            Ok(json!({"target": ip.to_string(), "replies": r.iter().map(|d| d.map(|x| x.as_secs_f64() * 1000.0)).collect::<Vec<_>>()}))
+            Ok(
+                json!({"target": ip.to_string(), "replies": r.iter().map(|d| d.map(|x| x.as_secs_f64() * 1000.0)).collect::<Vec<_>>()}),
+            )
         }
         "cert_request" => {
-            let c = n.controller.get().ok_or_else(|| anyhow!("this node doesn't run the controller role"))?;
+            let c = n
+                .controller
+                .get()
+                .ok_or_else(|| anyhow!("this node doesn't run the controller role"))?;
             Ok(json!({"request": b64(&c.cert_request()?)}))
         }
         "controller" => match n.controller.get() {
             Some(c) => Ok(c.status()),
             None => {
-                let (_, r) = crate::rpc::call_any(n, RpcBody::GetControllerStatus(Box::new(wp::GetControllerStatus {})), Duration::from_secs(10)).await?;
+                let (_, r) = crate::rpc::call_any(
+                    n,
+                    RpcBody::GetControllerStatus(Box::new(wp::GetControllerStatus {})),
+                    Duration::from_secs(10),
+                )
+                .await?;
                 Ok(serde_json::to_value(match r {
                     RpcBody::ControllerStatus(s) => *s,
                     _ => bail!("unexpected reply"),
@@ -217,7 +262,11 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             }
         },
         "redeem_self" => {
-            let c = n.controller.get().ok_or_else(|| anyhow!("only a bootstrapping controller enrolls itself through the control channel"))?;
+            let c = n.controller.get().ok_or_else(|| {
+                anyhow!(
+                    "only a bootstrapping controller enrolls itself through the control channel"
+                )
+            })?;
             let token = unb64(str_arg(&req, "token")?)?;
             let id = c.redeem_self(&token).await?;
             Ok(json!({"node_id": hex::encode(id)}))
@@ -229,9 +278,15 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             Ok(json!({"openmetrics": crate::metrics::openmetrics(&n.name_of(&n.me), &rep)}))
         }
         "reports" => {
-            let c = n.controller.get().ok_or_else(|| anyhow!("not a controller"))?;
+            let c = n
+                .controller
+                .get()
+                .ok_or_else(|| anyhow!("not a controller"))?;
             let r = c.reports.lock();
-            Ok(json!(r.iter().map(|(k, (t, v))| (n.name_of(k), json!({"received": t, "report": v}))).collect::<serde_json::Map<_, _>>()))
+            Ok(json!(r
+                .iter()
+                .map(|(k, (t, v))| (n.name_of(k), json!({"received": t, "report": v})))
+                .collect::<serde_json::Map<_, _>>()))
         }
         "head" => {
             let s = n.store.read();
@@ -255,7 +310,9 @@ pub async fn submit_op(n: &Arc<Node>, raw: Vec<u8>) -> Result<(u64, String)> {
         RpcBody::SubmitResult(r) if r.ok => {
             // Wait for the change to reach us.
             let start = std::time::Instant::now();
-            while n.store.read().head().map(|h| h.head.version).unwrap_or(0) < r.index && start.elapsed() < Duration::from_secs(15) {
+            while n.store.read().head().map(|h| h.head.version).unwrap_or(0) < r.index
+                && start.elapsed() < Duration::from_secs(15)
+            {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             Ok((r.index, String::new()))
@@ -285,7 +342,11 @@ pub async fn submit_signed(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
             n.persist_store();
             crate::gossip::push_head(n);
             if !n.is_controller() {
-                let body = RpcBody::OfflineSubmit(Box::new(wp::OfflineSubmit { items: Some(vec![wp::Blob { data: Some(raw.clone()) }]) }));
+                let body = RpcBody::OfflineSubmit(Box::new(wp::OfflineSubmit {
+                    items: Some(vec![wp::Blob {
+                        data: Some(raw.clone()),
+                    }]),
+                }));
                 let _ = crate::rpc::call_any(n, body, Duration::from_secs(10)).await;
             }
             out.insert("added".into(), json!(added));
@@ -302,11 +363,23 @@ pub async fn submit_signed(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
             let idx = match n.controller.get() {
                 Some(c) => {
                     let p = crate::controller::root_payload(&raw)?;
-                    c.submit(p, Some(RpcBody::SubmitRoot(Box::new(wp::SubmitRoot { signed: Some(raw.clone()) })))).await?.0
+                    c.submit(
+                        p,
+                        Some(RpcBody::SubmitRoot(Box::new(wp::SubmitRoot {
+                            signed: Some(raw.clone()),
+                        }))),
+                    )
+                    .await?
+                    .0
                 }
                 None => {
-                    let body = RpcBody::SubmitRoot(Box::new(wp::SubmitRoot { signed: Some(raw.clone()) }));
-                    match crate::rpc::call_any(n, body, Duration::from_secs(20)).await?.1 {
+                    let body = RpcBody::SubmitRoot(Box::new(wp::SubmitRoot {
+                        signed: Some(raw.clone()),
+                    }));
+                    match crate::rpc::call_any(n, body, Duration::from_secs(20))
+                        .await?
+                        .1
+                    {
                         RpcBody::SubmitResult(r) if r.ok => r.index,
                         RpcBody::SubmitResult(r) => bail!(r.error.unwrap_or_default()),
                         _ => bail!("unexpected reply"),
@@ -352,7 +425,12 @@ fn enroll_info(n: &Arc<Node>) -> Value {
     }
     let cam = v.transport.as_ref().and_then(|t| t.camouflage.clone());
     #[cfg(feature = "anytls")]
-    let pin = cam.as_ref().and_then(|c| c.certificate.clone()).and_then(|c| c.first().and_then(|b| b.data.clone())).and_then(|d| webjet_net::anytls::spki_pin(&d).ok()).map(hex::encode);
+    let pin = cam
+        .as_ref()
+        .and_then(|c| c.certificate.clone())
+        .and_then(|c| c.first().and_then(|b| b.data.clone()))
+        .and_then(|d| webjet_net::anytls::spki_pin(&d).ok())
+        .map(hex::encode);
     #[cfg(not(feature = "anytls"))]
     let pin: Option<String> = None;
     json!({
@@ -400,18 +478,29 @@ pub mod client {
     pub async fn call(path: &std::path::Path, req: Value) -> Result<Value> {
         #[cfg(unix)]
         {
-            let s = tokio::net::UnixStream::connect(path).await.map_err(|e| anyhow!("connect to {}: {e} (is webjetd running? are you root?)", path.display()))?;
+            let s = tokio::net::UnixStream::connect(path).await.map_err(|e| {
+                anyhow!(
+                    "connect to {}: {e} (is webjetd running? are you root?)",
+                    path.display()
+                )
+            })?;
             let (r, mut w) = s.into_split();
             let mut line = serde_json::to_vec(&req)?;
             line.push(b'\n');
             w.write_all(&line).await?;
             let mut lines = BufReader::new(r).lines();
-            let resp = tokio::time::timeout(Duration::from_secs(60), lines.next_line()).await.map_err(|_| anyhow!("timeout"))??.ok_or_else(|| anyhow!("no reply"))?;
+            let resp = tokio::time::timeout(Duration::from_secs(60), lines.next_line())
+                .await
+                .map_err(|_| anyhow!("timeout"))??
+                .ok_or_else(|| anyhow!("no reply"))?;
             let v: Value = serde_json::from_str(&resp)?;
             if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
                 Ok(v.get("result").cloned().unwrap_or(Value::Null))
             } else {
-                bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or("error"))
+                bail!(
+                    "{}",
+                    v.get("error").and_then(|e| e.as_str()).unwrap_or("error")
+                )
             }
         }
         #[cfg(not(unix))]

@@ -6,12 +6,16 @@ use anyhow::{anyhow, bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use webjet_core::crypto::{self, KeyPair};
-use webjet_core::types::{now_ms, parse_net, net_to_cidr};
+use webjet_core::types::{net_to_cidr, now_ms, parse_net};
 use webjet_proto::{self as wp, msg_type as mt, Decodable, Encodable};
 use webjet_tools::*;
 
 #[derive(Parser)]
-#[command(name = "webjet-root", version, about = "Offline root-key tool for Webjet")]
+#[command(
+    name = "webjet-root",
+    version,
+    about = "Offline root-key tool for Webjet"
+)]
 struct Cli {
     /// Directory holding the encrypted root and emergency keys.
     #[arg(long, global = true, default_value = "./webjet-root")]
@@ -97,7 +101,11 @@ enum AdminCmd {
 #[derive(Subcommand)]
 enum ControllerCmd {
     /// Sign a controller's certificate request.
-    Sign { request: PathBuf, #[arg(long)] out: PathBuf },
+    Sign {
+        request: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Retire a controller signing key (runbook 9).
     Retire {
         #[arg(long)]
@@ -201,7 +209,12 @@ fn main() -> Result<()> {
             let emergency = KeyPair::generate();
             write_private(&root_path(dir), &seal(&pass, &root.seed()[..])?)?;
             write_private(&emergency_path(dir), &seal(&pass, &emergency.seed()[..])?)?;
-            let cert = root.sign_obj(mt::EMERGENCY_KEY_CERT, &wp::EmergencyKeyCert { key: Some(crypto::k32(&emergency.public())) });
+            let cert = root.sign_obj(
+                mt::EMERGENCY_KEY_CERT,
+                &wp::EmergencyKeyCert {
+                    key: Some(crypto::k32(&emergency.public())),
+                },
+            );
             write_public(&dir.join("emergency.cert"), &cert)?;
             println!("root key:      {}", crypto::key_b64(&root.public()));
             println!("emergency key: {}", crypto::key_b64(&emergency.public()));
@@ -226,7 +239,12 @@ fn main() -> Result<()> {
             write_private(&emergency_path(dir), &seal(&newpass, &plain[32..])?)?;
             let root = keypair_from(&plain[..32])?;
             let emergency = keypair_from(&plain[32..])?;
-            let cert = root.sign_obj(mt::EMERGENCY_KEY_CERT, &wp::EmergencyKeyCert { key: Some(crypto::k32(&emergency.public())) });
+            let cert = root.sign_obj(
+                mt::EMERGENCY_KEY_CERT,
+                &wp::EmergencyKeyCert {
+                    key: Some(crypto::k32(&emergency.public())),
+                },
+            );
             write_public(&dir.join("emergency.cert"), &cert)?;
             println!("restored root key {}", crypto::key_b64(&root.public()));
         }
@@ -235,7 +253,9 @@ fn main() -> Result<()> {
             println!("root key:      {}", crypto::key_b64(&k.root.public()));
             println!("emergency key: {}", crypto::key_b64(&k.emergency.public()));
         }
-        Cmd::Admin { cmd: AdminCmd::Sign { name, key, out } } => {
+        Cmd::Admin {
+            cmd: AdminCmd::Sign { name, key, out },
+        } => {
             let k = load_keys(dir)?;
             let mut p = AccountPub::load(&key)?;
             p.name = name;
@@ -243,33 +263,81 @@ fn main() -> Result<()> {
             write_public(&out, &k.root.sign_obj(mt::ACCOUNT_RECORD, &rec))?;
             println!("signed admin account {} → {}", p.name, out.display());
         }
-        Cmd::Admin { cmd: AdminCmd::Revoke { key, reason, revoke_issued, with, out } } | Cmd::Account { cmd: AccountCmd::Revoke { key, reason, revoke_issued, with, out } } => {
+        Cmd::Admin {
+            cmd:
+                AdminCmd::Revoke {
+                    key,
+                    reason,
+                    revoke_issued,
+                    with,
+                    out,
+                },
+        }
+        | Cmd::Account {
+            cmd:
+                AccountCmd::Revoke {
+                    key,
+                    reason,
+                    revoke_issued,
+                    with,
+                    out,
+                },
+        } => {
             let k = load_keys(dir)?;
             let p = AccountPub::load(&key)?;
-            let t = wp::AccountTombstone { account_id: Some(crypto::k32(&p.id()?)), version: now_ms(), revoke_issued, reason };
+            let t = wp::AccountTombstone {
+                account_id: Some(crypto::k32(&p.id()?)),
+                version: now_ms(),
+                revoke_issued,
+                reason,
+            };
             write_public(&out, &pick(&k, &with)?.sign_obj(mt::ACCOUNT_TOMBSTONE, &t))?;
             println!("account tombstone for {} → {} (submit with `webjetctl submit`, or inject on any node)", p.name, out.display());
         }
-        Cmd::Genesis { overlay_pool, admin, out } => {
+        Cmd::Genesis {
+            overlay_pool,
+            admin,
+            out,
+        } => {
             let k = load_keys(dir)?;
             if overlay_pool.is_empty() {
                 bail!("--overlay-pool is required");
             }
-            let pool: Vec<wp::Cidr> = overlay_pool.iter().map(|p| Ok(net_to_cidr(&parse_net(p)?))).collect::<Result<_>>()?;
+            let pool: Vec<wp::Cidr> = overlay_pool
+                .iter()
+                .map(|p| Ok(net_to_cidr(&parse_net(p)?)))
+                .collect::<Result<_>>()?;
             let admin_raw = read(&admin)?;
             let v = crypto::open_expect(&admin_raw, mt::ACCOUNT_RECORD, &[k.root.public()])?;
             let rec: wp::AccountRecord = v.decode()?;
             if !rec.admin {
                 bail!("{} is not an admin account", admin.display());
             }
-            let cert = k.root.sign_obj(mt::EMERGENCY_KEY_CERT, &wp::EmergencyKeyCert { key: Some(crypto::k32(&k.emergency.public())) });
-            let g = wp::Genesis { root_key: Some(crypto::k32(&k.root.public())), emergency_cert: Some(cert), first_admin: Some(admin_raw), overlay_pool: Some(pool), created_at: now_ms() };
+            let cert = k.root.sign_obj(
+                mt::EMERGENCY_KEY_CERT,
+                &wp::EmergencyKeyCert {
+                    key: Some(crypto::k32(&k.emergency.public())),
+                },
+            );
+            let g = wp::Genesis {
+                root_key: Some(crypto::k32(&k.root.public())),
+                emergency_cert: Some(cert),
+                first_admin: Some(admin_raw),
+                overlay_pool: Some(pool),
+                created_at: now_ms(),
+            };
             let bytes = g.encode_bytes();
             webjet_core::store::open_genesis(&bytes)?;
             write_public(&out, &bytes)?;
-            println!("genesis written to {} (root key {})", out.display(), crypto::key_b64(&k.root.public()));
+            println!(
+                "genesis written to {} (root key {})",
+                out.display(),
+                crypto::key_b64(&k.root.public())
+            );
         }
-        Cmd::Controller { cmd: ControllerCmd::Sign { request, out } } => {
+        Cmd::Controller {
+            cmd: ControllerCmd::Sign { request, out },
+        } => {
             let k = load_keys(dir)?;
             let raw = read(&request)?;
             let v = crypto::open_envelope(&raw)?;
@@ -278,31 +346,80 @@ fn main() -> Result<()> {
             }
             let c = wp::SigningKeyCert::decode_bytes(&v.body)?;
             let key = crypto::opt_k32(&c.signing_key);
-            if key != v.signer || crypto::signing_key_id(&key) != crypto::opt_k32(&c.signing_key_id) {
+            if key != v.signer || crypto::signing_key_id(&key) != crypto::opt_k32(&c.signing_key_id)
+            {
                 bail!("the request isn't signed by the key it certifies");
             }
-            println!("controller node: {}", hex::encode(crypto::opt_k32(&c.controller)));
+            println!(
+                "controller node: {}",
+                hex::encode(crypto::opt_k32(&c.controller))
+            );
             println!("signing key:     {}", crypto::key_b64(&key));
-            println!("key id:          {}", hex::encode(crypto::opt_k32(&c.signing_key_id)));
+            println!(
+                "key id:          {}",
+                hex::encode(crypto::opt_k32(&c.signing_key_id))
+            );
             write_public(&out, &k.root.sign_obj(mt::SIGNING_KEY_CERT, &c))?;
             println!("certificate → {}", out.display());
         }
-        Cmd::Controller { cmd: ControllerCmd::Retire { key_id, last_valid_version, reason, with, out } } => {
+        Cmd::Controller {
+            cmd:
+                ControllerCmd::Retire {
+                    key_id,
+                    last_valid_version,
+                    reason,
+                    with,
+                    out,
+                },
+        } => {
             let k = load_keys(dir)?;
-            let id = crypto::parse_hex32(&key_id).ok_or_else(|| anyhow!("--key-id must be 64 hex characters"))?;
-            let t = wp::SigningKeyTombstone { signing_key_id: Some(crypto::k32(&id)), last_valid_version, reason };
-            write_public(&out, &pick(&k, &with)?.sign_obj(mt::SIGNING_KEY_TOMBSTONE, &t))?;
+            let id = crypto::parse_hex32(&key_id)
+                .ok_or_else(|| anyhow!("--key-id must be 64 hex characters"))?;
+            let t = wp::SigningKeyTombstone {
+                signing_key_id: Some(crypto::k32(&id)),
+                last_valid_version,
+                reason,
+            };
+            write_public(
+                &out,
+                &pick(&k, &with)?.sign_obj(mt::SIGNING_KEY_TOMBSTONE, &t),
+            )?;
             println!("key tombstone → {}", out.display());
         }
-        Cmd::Node { cmd: NodeCmd::Revoke { node, reason, with, out } } => {
+        Cmd::Node {
+            cmd:
+                NodeCmd::Revoke {
+                    node,
+                    reason,
+                    with,
+                    out,
+                },
+        } => {
             let k = load_keys(dir)?;
-            let id = crypto::parse_hex32(&node).ok_or_else(|| anyhow!("--node must be the node id (64 hex characters; see `webjetctl node list`)"))?;
+            let id = crypto::parse_hex32(&node).ok_or_else(|| {
+                anyhow!("--node must be the node id (64 hex characters; see `webjetctl node list`)")
+            })?;
             // A high version beats any record version the controllers may hold.
-            let t = wp::Tombstone { node_id: Some(crypto::k32(&id)), version: now_ms(), reason };
+            let t = wp::Tombstone {
+                node_id: Some(crypto::k32(&id)),
+                version: now_ms(),
+                reason,
+            };
             write_public(&out, &pick(&k, &with)?.sign_obj(mt::TOMBSTONE, &t))?;
-            println!("node tombstone → {} (inject on any node: `webjetctl inject`)", out.display());
+            println!(
+                "node tombstone → {} (inject on any node: `webjetctl inject`)",
+                out.display()
+            );
         }
-        Cmd::StateVersion { cmd: StateVersionCmd::Sign { version, min_wire_protocol, min_node_software, out } } => {
+        Cmd::StateVersion {
+            cmd:
+                StateVersionCmd::Sign {
+                    version,
+                    min_wire_protocol,
+                    min_node_software,
+                    out,
+                },
+        } => {
             let k = load_keys(dir)?;
             let sv = wp::StateVersion {
                 version,

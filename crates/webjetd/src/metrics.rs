@@ -29,7 +29,11 @@ pub struct Counters {
 
 impl Counters {
     pub fn rule_hit(&self, rule: &str, allow: bool) {
-        *self.rule_hits.lock().entry((rule.to_string(), allow)).or_insert(0) += 1;
+        *self
+            .rule_hits
+            .lock()
+            .entry((rule.to_string(), allow))
+            .or_insert(0) += 1;
     }
 }
 
@@ -41,7 +45,12 @@ fn capacity_mbps(n: &Node) -> u32 {
 /// proxy (queue pressure), and circuits against the cap.
 pub fn relay_load(n: &Node) -> wp::RelayLoad {
     let cap = capacity_mbps(n).max(1);
-    let total: u64 = n.hops.lock().values().map(|h| h.tx_bytes.load(Ordering::Relaxed)).sum();
+    let total: u64 = n
+        .hops
+        .lock()
+        .values()
+        .map(|h| h.tx_bytes.load(Ordering::Relaxed))
+        .sum();
     let util = {
         let mut g = n.metrics.transit_sample.lock();
         let now = std::time::Instant::now();
@@ -62,7 +71,13 @@ pub fn relay_load(n: &Node) -> wp::RelayLoad {
     };
     let circuits_cap = limit(n, "circuits_global", 50_000).max(1);
     let transit = n.circuits.lock().transit_count() as u64;
-    let queue = n.hops.lock().values().map(|h| h.queue_delay_us.load(Ordering::Relaxed)).max().unwrap_or(0);
+    let queue = n
+        .hops
+        .lock()
+        .values()
+        .map(|h| h.queue_delay_us.load(Ordering::Relaxed))
+        .max()
+        .unwrap_or(0);
     wp::RelayLoad {
         util_pct: util,
         cpu_pct: ((queue as f64 / 1000.0).min(100.0)) as u8,
@@ -72,7 +87,10 @@ pub fn relay_load(n: &Node) -> wp::RelayLoad {
 }
 
 fn counter(name: &str, v: u64) -> wp::Counter {
-    wp::Counter { name: Some(name.into()), value: v }
+    wp::Counter {
+        name: Some(name.into()),
+        value: v,
+    }
 }
 
 /// Build this node's signed metric report (§12.5).
@@ -96,9 +114,18 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                     dst: Some(crypto::k32(&r.dst)),
                     hops: Some(r.hops.iter().map(crypto::k32).collect()),
                     role,
-                    fwd: Some(Box::new(wp::RouteDir { frames: r.fwd.frames.load(Ordering::Relaxed), bytes: r.fwd.bytes.load(Ordering::Relaxed) })),
-                    rev: Some(Box::new(wp::RouteDir { frames: r.rev.frames.load(Ordering::Relaxed), bytes: r.rev.bytes.load(Ordering::Relaxed) })),
-                    dropped: Some(vec![counter("queue", r.dropped_queue.load(Ordering::Relaxed)), counter("hop_limit", r.dropped_hop_limit.load(Ordering::Relaxed))]),
+                    fwd: Some(Box::new(wp::RouteDir {
+                        frames: r.fwd.frames.load(Ordering::Relaxed),
+                        bytes: r.fwd.bytes.load(Ordering::Relaxed),
+                    })),
+                    rev: Some(Box::new(wp::RouteDir {
+                        frames: r.rev.frames.load(Ordering::Relaxed),
+                        bytes: r.rev.bytes.load(Ordering::Relaxed),
+                    })),
+                    dropped: Some(vec![
+                        counter("queue", r.dropped_queue.load(Ordering::Relaxed)),
+                        counter("hop_limit", r.dropped_hop_limit.load(Ordering::Relaxed)),
+                    ]),
                     ecn_marked: r.ecn_marked.load(Ordering::Relaxed),
                     circuit_setups: r.setups.load(Ordering::Relaxed),
                     active_since: r.active_since.load(Ordering::Relaxed),
@@ -117,15 +144,20 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             wp::LinkMetrics {
                 peer: Some(crypto::k32(&h.peer)),
                 transport: h.transport,
-                wire_tx: k.map(|k| k.wire_tx.load(Ordering::Relaxed)).unwrap_or(h.tx_bytes.load(Ordering::Relaxed)),
-                wire_rx: k.map(|k| k.wire_rx.load(Ordering::Relaxed)).unwrap_or(h.rx_bytes.load(Ordering::Relaxed)),
+                wire_tx: k
+                    .map(|k| k.wire_tx.load(Ordering::Relaxed))
+                    .unwrap_or(h.tx_bytes.load(Ordering::Relaxed)),
+                wire_rx: k
+                    .map(|k| k.wire_rx.load(Ordering::Relaxed))
+                    .unwrap_or(h.rx_bytes.load(Ordering::Relaxed)),
                 payload_tx: h.tx_bytes.load(Ordering::Relaxed),
                 payload_rx: h.rx_bytes.load(Ordering::Relaxed),
                 fec_parity_tx: k.map(|k| k.fec_parity_tx.load(Ordering::Relaxed)),
                 kcp_retrans: k.map(|k| k.retrans.load(Ordering::Relaxed)),
                 fec_recovered: k.map(|k| k.fec_recovered.load(Ordering::Relaxed)),
                 fec_ratio_pct: k.map(|k| k.fec_ratio_pct.load(Ordering::Relaxed) as u8),
-                bw_estimate_mbps: k.map(|k| (k.bw_estimate_kbps.load(Ordering::Relaxed) / 1000) as u32),
+                bw_estimate_mbps: k
+                    .map(|k| (k.bw_estimate_kbps.load(Ordering::Relaxed) / 1000) as u32),
                 queue_delay_ms: (h.queue_delay_us.load(Ordering::Relaxed) / 1000) as u32,
                 rtt_ms: st.srtt_ms as u32,
                 loss_pct: (st.loss * 100.0) as u8,
@@ -133,9 +165,37 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
         })
         .collect();
     let m = &n.metrics;
-    let rule_hits = m.rule_hits.lock().iter().map(|((r, a), v)| wp::RuleHit { rule_id: Some(r.clone()), decision: if *a { wp::Action::Allow } else { wp::Action::Deny }, flows: *v }).collect();
-    let refused = n.circuits.lock().refused.iter().map(|(k, v)| counter(k, *v)).collect();
-    let alarms = n.alarms.lock().iter().map(|(k, (sev, since))| wp::Alarm { name: Some(k.clone()), severity: Some(sev.clone()), since: *since }).collect();
+    let rule_hits = m
+        .rule_hits
+        .lock()
+        .iter()
+        .map(|((r, a), v)| wp::RuleHit {
+            rule_id: Some(r.clone()),
+            decision: if *a {
+                wp::Action::Allow
+            } else {
+                wp::Action::Deny
+            },
+            flows: *v,
+        })
+        .collect();
+    let refused = n
+        .circuits
+        .lock()
+        .refused
+        .iter()
+        .map(|(k, v)| counter(k, *v))
+        .collect();
+    let alarms = n
+        .alarms
+        .lock()
+        .iter()
+        .map(|(k, (sev, since))| wp::Alarm {
+            name: Some(k.clone()),
+            severity: Some(sev.clone()),
+            since: *since,
+        })
+        .collect();
     let rep = wp::MetricReport {
         node_id: Some(crypto::k32(&n.me)),
         boot_id: Some(wp::Id16::from_bytes(&n.boot_id)),
@@ -152,7 +212,10 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             counter("conntrack_limit", m.conntrack_limit.load(Ordering::Relaxed)),
             counter("snat_exhausted", m.snat_exhausted.load(Ordering::Relaxed)),
             counter("no_route", m.no_route.load(Ordering::Relaxed)),
-            counter("cryptokey_dropped", m.cryptokey_dropped.load(Ordering::Relaxed)),
+            counter(
+                "cryptokey_dropped",
+                m.cryptokey_dropped.load(Ordering::Relaxed),
+            ),
             counter("aqm_dropped", m.aqm_dropped.load(Ordering::Relaxed)),
             counter("ecn_marked", m.ecn_marked.load(Ordering::Relaxed)),
         ]),
@@ -169,7 +232,14 @@ pub async fn run(n: Arc<Node>) {
     loop {
         tick.tick().await;
         let rep = build_report(&n);
-        let mut ring: Vec<Vec<u8>> = crate::state::load_json::<Vec<String>>(&n.paths.metrics_ring()).ok().flatten().unwrap_or_default().iter().filter_map(|s| crate::state::unb64(s).ok()).collect();
+        let mut ring: Vec<Vec<u8>> =
+            crate::state::load_json::<Vec<String>>(&n.paths.metrics_ring())
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|s| crate::state::unb64(s).ok())
+                .collect();
         ring.push(rep);
         if ring.len() > 120 {
             let drop = ring.len() - 120;
@@ -201,9 +271,15 @@ pub async fn run(n: Arc<Node>) {
 /// local debug endpoint).
 pub fn openmetrics(node: &str, rep: &wp::MetricReport) -> String {
     let mut out = String::new();
-    let node_id = rep.node_id.map(|k| hex::encode(&k.to_bytes()[..6])).unwrap_or_default();
+    let node_id = rep
+        .node_id
+        .map(|k| hex::encode(&k.to_bytes()[..6]))
+        .unwrap_or_default();
     for r in rep.routes.clone().unwrap_or_default() {
-        let rid = r.route_id.map(|k| hex::encode(&k.to_bytes()[..8])).unwrap_or_default();
+        let rid = r
+            .route_id
+            .map(|k| hex::encode(&k.to_bytes()[..8]))
+            .unwrap_or_default();
         let role = format!("{:?}", r.role).to_lowercase();
         for (dir, d) in [("fwd", r.fwd), ("rev", r.rev)] {
             if let Some(d) = d {
@@ -213,18 +289,36 @@ pub fn openmetrics(node: &str, rep: &wp::MetricReport) -> String {
         }
     }
     for l in rep.links.clone().unwrap_or_default() {
-        let peer = l.peer.map(|k| hex::encode(&k.to_bytes()[..6])).unwrap_or_default();
+        let peer = l
+            .peer
+            .map(|k| hex::encode(&k.to_bytes()[..6]))
+            .unwrap_or_default();
         let t = l.transport.name();
-        out.push_str(&format!("webjet_link_rtt_ms{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n", l.rtt_ms));
-        out.push_str(&format!("webjet_link_loss_pct{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n", l.loss_pct));
+        out.push_str(&format!(
+            "webjet_link_rtt_ms{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n",
+            l.rtt_ms
+        ));
+        out.push_str(&format!(
+            "webjet_link_loss_pct{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n",
+            l.loss_pct
+        ));
         out.push_str(&format!("webjet_link_wire_tx_bytes_total{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n", l.wire_tx));
         out.push_str(&format!("webjet_link_wire_rx_bytes_total{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n", l.wire_rx));
     }
     for c in rep.limit_hits.clone().unwrap_or_default() {
-        out.push_str(&format!("webjet_{}_total{{node=\"{node}\"}} {}\n", c.name.unwrap_or_default(), c.value));
+        out.push_str(&format!(
+            "webjet_{}_total{{node=\"{node}\"}} {}\n",
+            c.name.unwrap_or_default(),
+            c.value
+        ));
     }
     for h in rep.rule_hits.clone().unwrap_or_default() {
-        out.push_str(&format!("webjet_rule_flows_total{{node=\"{node}\",rule=\"{}\",decision=\"{:?}\"}} {}\n", h.rule_id.unwrap_or_default(), h.decision, h.flows));
+        out.push_str(&format!(
+            "webjet_rule_flows_total{{node=\"{node}\",rule=\"{}\",decision=\"{:?}\"}} {}\n",
+            h.rule_id.unwrap_or_default(),
+            h.decision,
+            h.flows
+        ));
     }
     out
 }

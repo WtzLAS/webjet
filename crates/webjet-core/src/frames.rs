@@ -52,7 +52,10 @@ impl SessionKey {
         out.extend_from_slice(&counter.to_be_bytes());
         let mut body = payload.to_vec();
         let aad: [u8; HEADER] = out[..HEADER].try_into().unwrap();
-        let tag = self.cipher.encrypt_in_place_detached(&Self::nonce(counter), &aad, &mut body).expect("encrypt");
+        let tag = self
+            .cipher
+            .encrypt_in_place_detached(&Self::nonce(counter), &aad, &mut body)
+            .expect("encrypt");
         out.extend_from_slice(&body);
         out.extend_from_slice(&tag);
         out
@@ -68,7 +71,9 @@ impl SessionKey {
         let counter = u64::from_be_bytes(hdr[5..13].try_into().unwrap());
         let (ct, tag) = rest.split_at(rest.len() - TAG);
         let mut body = ct.to_vec();
-        self.cipher.decrypt_in_place_detached(&Self::nonce(counter), hdr, &mut body, tag.into()).ok()?;
+        self.cipher
+            .decrypt_in_place_detached(&Self::nonce(counter), hdr, &mut body, tag.into())
+            .ok()?;
         Some(body)
     }
 }
@@ -86,12 +91,20 @@ pub fn parse_header(frame: &[u8]) -> Option<FrameHeader> {
     }
     let ty = frame[0];
     if ty == ftype::HANDSHAKE {
-        return Some(FrameHeader { ty, key_id: 0, counter: 0 });
+        return Some(FrameHeader {
+            ty,
+            key_id: 0,
+            counter: 0,
+        });
     }
     if frame.len() < OVERHEAD {
         return None;
     }
-    Some(FrameHeader { ty, key_id: u32::from_be_bytes(frame[1..5].try_into().unwrap()), counter: u64::from_be_bytes(frame[5..13].try_into().unwrap()) })
+    Some(FrameHeader {
+        ty,
+        key_id: u32::from_be_bytes(frame[1..5].try_into().unwrap()),
+        counter: u64::from_be_bytes(frame[5..13].try_into().unwrap()),
+    })
 }
 
 /// HANDSHAKE frames: `type || initiator flag || session nonce[16] || flight[2]
@@ -105,7 +118,10 @@ pub fn handshake_frame(initiator: bool, nonce: &[u8; 16], flight: u16, tls: &[u8
     f.extend_from_slice(&flight.to_be_bytes());
     f.extend_from_slice(&(tls.len() as u16).to_be_bytes());
     f.extend_from_slice(tls);
-    let bucket = [256usize, 512, 1024, 1500, 2048, 4096, 8192, 16384].into_iter().find(|b| *b >= f.len()).unwrap_or(f.len());
+    let bucket = [256usize, 512, 1024, 1500, 2048, 4096, 8192, 16384]
+        .into_iter()
+        .find(|b| *b >= f.len())
+        .unwrap_or(f.len());
     f.resize(bucket, 0);
     f
 }
@@ -126,7 +142,12 @@ pub fn parse_handshake(f: &[u8]) -> Option<Handshake<'_>> {
     let flight = u16::from_be_bytes([f[18], f[19]]);
     let len = u16::from_be_bytes([f[20], f[21]]) as usize;
     let tls = f.get(22..22 + len)?;
-    Some(Handshake { initiator, nonce, flight, tls })
+    Some(Handshake {
+        initiator,
+        nonce,
+        flight,
+        tls,
+    })
 }
 
 // ---------------------------------------------------------------- replay window
@@ -144,7 +165,11 @@ pub struct ReplayWindow {
 
 impl Default for ReplayWindow {
     fn default() -> Self {
-        ReplayWindow { top: 0, bits: [0; WORDS], any: false }
+        ReplayWindow {
+            top: 0,
+            bits: [0; WORDS],
+            any: false,
+        }
     }
 }
 
@@ -167,7 +192,11 @@ impl ReplayWindow {
             return false;
         }
         if !self.any || c > self.top {
-            let start = if self.any { self.top + 1 } else { c.saturating_sub(WINDOW - 1) };
+            let start = if self.any {
+                self.top + 1
+            } else {
+                c.saturating_sub(WINDOW - 1)
+            };
             if !self.any || c - self.top >= WINDOW {
                 self.bits = [0; WORDS];
             } else {
@@ -225,7 +254,10 @@ pub fn exporter_context(initiator_key_id: u32, responder_key_id: u32) -> [u8; 8]
 pub const E2E_EXPORTER_LABEL: &[u8] = b"webjet-e2e-v1";
 
 pub fn split_keys(material: &[u8; 64]) -> (Bytes32, Bytes32) {
-    (material[..32].try_into().unwrap(), material[32..].try_into().unwrap())
+    (
+        material[..32].try_into().unwrap(),
+        material[32..].try_into().unwrap(),
+    )
 }
 
 #[cfg(test)]

@@ -33,11 +33,16 @@ mod b64v {
 mod b64vv {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     pub fn serialize<S: Serializer>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
-        v.iter().map(|x| super::b64(x)).collect::<Vec<_>>().serialize(s)
+        v.iter()
+            .map(|x| super::b64(x))
+            .collect::<Vec<_>>()
+            .serialize(s)
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
         let v = Vec::<String>::deserialize(d)?;
-        v.iter().map(|s| super::unb64(s).map_err(serde::de::Error::custom)).collect()
+        v.iter()
+            .map(|s| super::unb64(s).map_err(serde::de::Error::custom))
+            .collect()
     }
 }
 
@@ -60,7 +65,9 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut f = opts.open(&tmp).with_context(|| format!("write {}", tmp.display()))?;
+        let mut f = opts
+            .open(&tmp)
+            .with_context(|| format!("write {}", tmp.display()))?;
         f.write_all(data)?;
         f.sync_all()?;
     }
@@ -74,7 +81,9 @@ pub struct Paths {
 
 impl Paths {
     pub fn new(dir: &Path) -> Paths {
-        Paths { dir: dir.to_path_buf() }
+        Paths {
+            dir: dir.to_path_buf(),
+        }
     }
     pub fn identity(&self) -> PathBuf {
         self.dir.join("identity.key")
@@ -148,7 +157,9 @@ fn platform_unseal(raw: &[u8]) -> Result<Zeroizing<Bytes32>> {
         return Ok(s);
     }
     if raw.len() == 52 && &raw[..4] == b"WJK1" {
-        let k = machine_wrap_key().ok_or_else(|| anyhow!("identity key is device-bound but the device key is unavailable"))?;
+        let k = machine_wrap_key().ok_or_else(|| {
+            anyhow!("identity key is device-bound but the device key is unavailable")
+        })?;
         let pad = webjet_core::crypto::derive("webjet key wrap v1", &k);
         let mut s = Zeroizing::new([0u8; 32]);
         for i in 0..32 {
@@ -203,7 +214,9 @@ pub fn load_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>>
         return Ok(None);
     }
     let s = std::fs::read(path)?;
-    Ok(Some(serde_json::from_slice(&s).with_context(|| format!("parse {}", path.display()))?))
+    Ok(Some(
+        serde_json::from_slice(&s).with_context(|| format!("parse {}", path.display()))?,
+    ))
 }
 
 pub fn save_json<T: Serialize>(path: &Path, v: &T) -> Result<()> {
@@ -258,7 +271,15 @@ pub fn save_store(p: &Paths, s: &webjet_core::store::Store) -> Result<()> {
         head: s.head().map(|h| h.raw.clone()).unwrap_or_default(),
         high_water: s.high_water,
         trusted_floor: s.trusted_floor,
-        leaves: s.all_leaves().into_iter().map(|(k, key, b)| LeafFile { kind: k, key: hex::encode(key), bytes: b }).collect(),
+        leaves: s
+            .all_leaves()
+            .into_iter()
+            .map(|(k, key, b)| LeafFile {
+                kind: k,
+                key: hex::encode(key),
+                bytes: b,
+            })
+            .collect(),
         offline: s.offline_items(),
     };
     save_json(&p.store(), &f)
@@ -275,9 +296,19 @@ pub fn load_store(p: &Paths, genesis: Vec<u8>) -> Result<webjet_core::store::Sto
         let leaves = f
             .leaves
             .iter()
-            .filter_map(|l| Some((l.kind, webjet_core::crypto::parse_hex32(&l.key)?, l.bytes.clone())))
+            .filter_map(|l| {
+                Some((
+                    l.kind,
+                    webjet_core::crypto::parse_hex32(&l.key)?,
+                    l.bytes.clone(),
+                ))
+            })
             .collect();
-        let head = if f.head.is_empty() { None } else { Some(&f.head[..]) };
+        let head = if f.head.is_empty() {
+            None
+        } else {
+            Some(&f.head[..])
+        };
         if let Err(e) = s.restore(head, leaves, f.high_water, f.trusted_floor) {
             tracing::error!("persisted tree state rejected ({e}); resyncing from peers");
             s.high_water = f.high_water;
@@ -288,7 +319,10 @@ pub fn load_store(p: &Paths, genesis: Vec<u8>) -> Result<webjet_core::store::Sto
 }
 
 pub fn save_psk(p: &Paths, e: &webjet_net::gate::Epochs) -> Result<()> {
-    let f = PskFile { current: e.current, epochs: e.keys.iter().map(|(k, v)| (*k, hex::encode(v))).collect() };
+    let f = PskFile {
+        current: e.current,
+        epochs: e.keys.iter().map(|(k, v)| (*k, hex::encode(v))).collect(),
+    };
     save_json(&p.psk(), &f)
 }
 

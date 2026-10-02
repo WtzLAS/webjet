@@ -66,7 +66,11 @@ pub struct Tun {
 
 impl Default for Tun {
     fn default() -> Self {
-        Tun { enabled: true, name: None, mtu: default_mtu() }
+        Tun {
+            enabled: true,
+            name: None,
+            mtu: default_mtu(),
+        }
     }
 }
 
@@ -80,7 +84,9 @@ pub struct Dns {
 
 impl Default for Dns {
     fn default() -> Self {
-        Dns { configure_system: true }
+        Dns {
+            configure_system: true,
+        }
     }
 }
 
@@ -172,7 +178,9 @@ impl Default for Config {
 
 impl Config {
     pub fn load(path: Option<&Path>) -> Result<Config> {
-        let Some(p) = path else { return Ok(Config::default()) };
+        let Some(p) = path else {
+            return Ok(Config::default());
+        };
         if !p.exists() {
             return Ok(Config::default());
         }
@@ -185,7 +193,10 @@ impl Config {
     }
 
     pub fn local_priority(&self, t: Transport) -> Option<u8> {
-        self.transport.iter().find(|(k, _)| Transport::parse(k) == Some(t)).map(|(_, v)| *v)
+        self.transport
+            .iter()
+            .find(|(k, _)| Transport::parse(k) == Some(t))
+            .map(|(_, v)| *v)
     }
 }
 

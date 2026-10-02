@@ -29,7 +29,10 @@ static HOP_IDS: AtomicU64 = AtomicU64::new(1);
 
 /// An encoded hop record carrying a control message.
 pub fn ctl(msg: HopMsg) -> Vec<u8> {
-    hop::encode_record(rec::CONTROL, &wp::HopControl { msg: Some(msg) }.encode_bytes())
+    hop::encode_record(
+        rec::CONTROL,
+        &wp::HopControl { msg: Some(msg) }.encode_bytes(),
+    )
 }
 
 /// Offset of the relay header's hop-limit/ECN byte inside an encoded record.
@@ -161,7 +164,13 @@ pub struct Node {
     pub metrics: crate::metrics::Counters,
     pub seq: AtomicU64,
     #[cfg(feature = "anytls")]
-    pub anytls_acceptor: Mutex<Option<(Arc<boring::ssl::SslAcceptor>, webjet_net::anytls::CamouflageSecret, bool)>>,
+    pub anytls_acceptor: Mutex<
+        Option<(
+            Arc<boring::ssl::SslAcceptor>,
+            webjet_net::anytls::CamouflageSecret,
+            bool,
+        )>,
+    >,
     pub me_weak: OnceLock<Weak<Node>>,
 }
 
@@ -172,18 +181,31 @@ pub struct HopTrust(pub Weak<Node>);
 
 impl PeerTrust for HopTrust {
     fn trusted(&self, key: &Bytes32) -> bool {
-        let Some(n) = self.0.upgrade() else { return false };
+        let Some(n) = self.0.upgrade() else {
+            return false;
+        };
         let s = n.store.read();
         if s.trusted_by_key(key).is_some() {
             return true;
         }
         let v = s.view();
-        v.by_key.get(key).and_then(|id| v.nodes.get(id)).map(|ni| ni.valid && (ni.relay || ni.control)).unwrap_or(false)
+        v.by_key
+            .get(key)
+            .and_then(|id| v.nodes.get(id))
+            .map(|ni| ni.valid && (ni.relay || ni.control))
+            .unwrap_or(false)
     }
 }
 
 impl Node {
-    pub fn new(cfg: Config, kp: KeyPair, me: Bytes32, store: Store, epochs: SharedEpochs, node_file: state::NodeFile) -> Arc<Node> {
+    pub fn new(
+        cfg: Config,
+        kp: KeyPair,
+        me: Bytes32,
+        store: Store,
+        epochs: SharedEpochs,
+        node_file: state::NodeFile,
+    ) -> Arc<Node> {
         let (events, _) = tokio::sync::broadcast::channel(1024);
         let paths = Paths::new(&cfg.data_dir);
         let n = Arc::new(Node {
@@ -218,7 +240,10 @@ impl Node {
     }
 
     pub fn arc(&self) -> Arc<Node> {
-        self.me_weak.get().and_then(|w| w.upgrade()).expect("node alive")
+        self.me_weak
+            .get()
+            .and_then(|w| w.upgrade())
+            .expect("node alive")
     }
 
     pub fn trust(&self) -> Arc<dyn PeerTrust> {
@@ -244,7 +269,8 @@ impl Node {
         if !a.contains_key(name) {
             tracing::warn!(alarm = name, "{msg}");
         }
-        a.entry(name.to_string()).or_insert((severity.to_string(), now_ms()));
+        a.entry(name.to_string())
+            .or_insert((severity.to_string(), now_ms()));
     }
 
     pub fn clear_alarm(&self, name: &str) {
@@ -252,7 +278,13 @@ impl Node {
     }
 
     pub fn is_relay(&self) -> bool {
-        self.store.read().view().nodes.get(&self.me).map(|n| n.relay).unwrap_or(false)
+        self.store
+            .read()
+            .view()
+            .nodes
+            .get(&self.me)
+            .map(|n| n.relay)
+            .unwrap_or(false)
     }
 
     pub fn is_controller(&self) -> bool {
@@ -261,8 +293,18 @@ impl Node {
 
     /// Live hops to a peer, best first.
     pub fn hops_to(&self, peer: &Bytes32) -> Vec<Arc<Hop>> {
-        let mut v: Vec<Arc<Hop>> = self.hops.lock().values().filter(|h| h.peer == *peer && h.alive()).cloned().collect();
-        v.sort_by(|a, b| a.cost().partial_cmp(&b.cost()).unwrap_or(std::cmp::Ordering::Equal));
+        let mut v: Vec<Arc<Hop>> = self
+            .hops
+            .lock()
+            .values()
+            .filter(|h| h.peer == *peer && h.alive())
+            .cloned()
+            .collect();
+        v.sort_by(|a, b| {
+            a.cost()
+                .partial_cmp(&b.cost())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         v
     }
 
@@ -277,8 +319,16 @@ impl Node {
             .iter()
             .map(|h| webjet_core::routing::TransportCand {
                 transport: h.transport,
-                cost: { let c = h.cost(); if c.is_finite() { c } else { 1e6 } },
-                prio_sum: view_prio(h.transport) as u16 + crate::transport::priority(self, &h.peer, h.transport) as u16,
+                cost: {
+                    let c = h.cost();
+                    if c.is_finite() {
+                        c
+                    } else {
+                        1e6
+                    }
+                },
+                prio_sum: view_prio(h.transport) as u16
+                    + crate::transport::priority(self, &h.peer, h.transport) as u16,
             })
             .collect();
         let t = webjet_core::routing::choose_transport(&cands)?;
@@ -286,7 +336,13 @@ impl Node {
     }
 
     pub fn peers(&self) -> Vec<Bytes32> {
-        let mut v: Vec<Bytes32> = self.hops.lock().values().filter(|h| h.alive()).map(|h| h.peer).collect();
+        let mut v: Vec<Bytes32> = self
+            .hops
+            .lock()
+            .values()
+            .filter(|h| h.alive())
+            .map(|h| h.peer)
+            .collect();
         v.sort();
         v.dedup();
         v
@@ -309,8 +365,16 @@ impl Node {
         let peer = {
             let s = self.store.read();
             let v = s.view();
-            let id = *v.by_key.get(&est.peer_key).ok_or_else(|| anyhow!("hop peer has no node record"))?;
-            if !v.nodes.get(&id).map(|n| n.valid && n.key == est.peer_key).unwrap_or(false) {
+            let id = *v
+                .by_key
+                .get(&est.peer_key)
+                .ok_or_else(|| anyhow!("hop peer has no node record"))?;
+            if !v
+                .nodes
+                .get(&id)
+                .map(|n| n.valid && n.key == est.peer_key)
+                .unwrap_or(false)
+            {
                 bail!("hop peer is not valid");
             }
             id
@@ -321,7 +385,10 @@ impl Node {
         // One hop per (peer, transport): the lower node id's outbound wins.
         {
             let hops = self.hops.lock();
-            if let Some(dup) = hops.values().find(|h| h.peer == peer && h.transport == est.transport && h.alive()) {
+            if let Some(dup) = hops
+                .values()
+                .find(|h| h.peer == peer && h.transport == est.transport && h.alive())
+            {
                 let keep_new = (self.me < peer) == outbound;
                 if !keep_new {
                     bail!("duplicate hop to {}", crypto::short(&peer));
@@ -393,8 +460,12 @@ impl Node {
                 .values()
                 .filter(|h| {
                     let info = v.nodes.get(&h.peer);
-                    let key_ok = info.map(|x| x.key == h.peer_key && x.valid).unwrap_or(false);
-                    !key_ok || (!s.node_trusted(&h.peer) && !info.map(|x| x.relay || x.control).unwrap_or(false))
+                    let key_ok = info
+                        .map(|x| x.key == h.peer_key && x.valid)
+                        .unwrap_or(false);
+                    !key_ok
+                        || (!s.node_trusted(&h.peer)
+                            && !info.map(|x| x.relay || x.control).unwrap_or(false))
                 })
                 .cloned()
                 .collect()
@@ -407,19 +478,38 @@ impl Node {
     }
 
     pub fn name_of(&self, id: &Bytes32) -> String {
-        self.store.read().view().nodes.get(id).map(|n| n.name.clone()).unwrap_or_else(|| crypto::short(id))
+        self.store
+            .read()
+            .view()
+            .nodes
+            .get(id)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| crypto::short(id))
     }
 
     // ------------------------------------------------------------ dialing
 
     /// Dial a peer over one transport at `addr`, expecting one of `keys`.
-    pub async fn dial(self: &Arc<Self>, addr: SocketAddr, t: Transport, keys: Vec<Bytes32>) -> Result<Arc<Hop>> {
+    pub async fn dial(
+        self: &Arc<Self>,
+        addr: SocketAddr,
+        t: Transport,
+        keys: Vec<Bytes32>,
+    ) -> Result<Arc<Hop>> {
         let trust = self.trust();
-        let (epoch, psk) = self.epochs.read().current_key().ok_or_else(|| anyhow!("no PSK yet"))?;
+        let (epoch, psk) = self
+            .epochs
+            .read()
+            .current_key()
+            .ok_or_else(|| anyhow!("no PSK yet"))?;
         let est = match t {
             Transport::TcpTls => hop::dial_tls(addr, &self.kp, keys, trust, epoch, &psk).await?,
             Transport::KcpFecTls => {
-                let ep = self.udp.get().ok_or_else(|| anyhow!("no UDP endpoint"))?.clone();
+                let ep = self
+                    .udp
+                    .get()
+                    .ok_or_else(|| anyhow!("no UDP endpoint"))?
+                    .clone();
                 hop::dial_kcp(&ep, addr, &self.kp, keys, trust).await?
             }
             Transport::AnyTls => self.dial_anytls(addr, keys, trust, &psk).await?,
@@ -428,13 +518,26 @@ impl Node {
     }
 
     #[cfg(feature = "anytls")]
-    async fn dial_anytls(&self, addr: SocketAddr, keys: Vec<Bytes32>, trust: Arc<dyn PeerTrust>, psk: &Bytes32) -> Result<Established> {
-        let cam = crate::transport::camouflage(self).ok_or_else(|| anyhow!("no camouflage configuration for AnyTLS"))?;
+    async fn dial_anytls(
+        &self,
+        addr: SocketAddr,
+        keys: Vec<Bytes32>,
+        trust: Arc<dyn PeerTrust>,
+        psk: &Bytes32,
+    ) -> Result<Established> {
+        let cam = crate::transport::camouflage(self)
+            .ok_or_else(|| anyhow!("no camouflage configuration for AnyTLS"))?;
         webjet_net::anytls::dial(addr, &cam, &self.kp, keys, trust, psk).await
     }
 
     #[cfg(not(feature = "anytls"))]
-    async fn dial_anytls(&self, _: SocketAddr, _: Vec<Bytes32>, _: Arc<dyn PeerTrust>, _: &Bytes32) -> Result<Established> {
+    async fn dial_anytls(
+        &self,
+        _: SocketAddr,
+        _: Vec<Bytes32>,
+        _: Arc<dyn PeerTrust>,
+        _: &Bytes32,
+    ) -> Result<Established> {
         bail!("built without AnyTLS")
     }
 
@@ -443,7 +546,14 @@ impl Node {
         if let Some(h) = self.best_hop(&peer) {
             return Ok(h);
         }
-        let key = self.store.read().view().nodes.get(&peer).map(|n| n.key).ok_or_else(|| anyhow!("unknown node"))?;
+        let key = self
+            .store
+            .read()
+            .view()
+            .nodes
+            .get(&peer)
+            .map(|n| n.key)
+            .ok_or_else(|| anyhow!("unknown node"))?;
         let addrs = self.endpoint_addrs(&peer);
         if addrs.is_empty() {
             bail!("no known address for {}", self.name_of(&peer));
@@ -458,7 +568,11 @@ impl Node {
             match r {
                 Ok(h) => return Ok(h),
                 Err(e) => {
-                    tracing::debug!("dial {} via {} at {addr}: {e}", self.name_of(&peer), t.name());
+                    tracing::debug!(
+                        "dial {} via {} at {addr}: {e}",
+                        self.name_of(&peer),
+                        t.name()
+                    );
                     last = e;
                 }
             }
@@ -469,7 +583,15 @@ impl Node {
     /// Candidate addresses of a node, best transport first.
     pub fn endpoint_addrs(&self, peer: &Bytes32) -> Vec<(SocketAddr, Transport)> {
         // Clone first: priority() takes the records lock itself.
-        let Some(r) = self.records.lock().endpoints.get(peer).map(|(r, _)| r.clone()) else { return Vec::new() };
+        let Some(r) = self
+            .records
+            .lock()
+            .endpoints
+            .get(peer)
+            .map(|(r, _)| r.clone())
+        else {
+            return Vec::new();
+        };
         let mut v: Vec<(u8, SocketAddr, Transport)> = r
             .addrs
             .clone()
@@ -477,7 +599,8 @@ impl Node {
             .iter()
             .filter_map(|a| {
                 let sa = a.addr.as_ref()?.to_sock()?;
-                let p = crate::transport::priority(self, &self.me, a.transport) as u16 + crate::transport::priority(self, peer, a.transport) as u16;
+                let p = crate::transport::priority(self, &self.me, a.transport) as u16
+                    + crate::transport::priority(self, peer, a.transport) as u16;
                 if crate::transport::priority(self, &self.me, a.transport) == 0 {
                     return None;
                 }
@@ -508,7 +631,8 @@ impl Node {
     pub fn set_psk(&self, current: u16, epochs: Vec<(u16, Bytes32)>) {
         {
             let mut e = self.epochs.write();
-            let changed = e.current != current || epochs.iter().any(|(k, v)| e.keys.get(k) != Some(v));
+            let changed =
+                e.current != current || epochs.iter().any(|(k, v)| e.keys.get(k) != Some(v));
             if !changed {
                 return;
             }
@@ -532,7 +656,13 @@ impl Node {
 
 // ---------------------------------------------------------------- per-hop tasks
 
-async fn writer(n: Arc<Node>, hop: Arc<Hop>, mut w: WriteHalf<BoxIo>, mut rx: mpsc::Receiver<Out>, mut ctl_rx: mpsc::UnboundedReceiver<Vec<u8>>) {
+async fn writer(
+    n: Arc<Node>,
+    hop: Arc<Hop>,
+    mut w: WriteHalf<BoxIo>,
+    mut rx: mpsc::Receiver<Out>,
+    mut ctl_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+) {
     let mut q = HopQueue::new(4 << 20);
     let mut pad_budget = webjet_core::padding::Scheme::default_scheme();
     let mut pkt_no: u32 = 0;
@@ -560,7 +690,12 @@ async fn writer(n: Arc<Node>, hop: Arc<Hop>, mut w: WriteHalf<BoxIo>, mut rx: mp
             match m {
                 Out::Control(c) => q.push_control(c),
                 Out::Relay { flow, frame } => {
-                    let _ = q.push(Item { flow, data: frame, at: Instant::now(), ecn_offset: Some(RELAY_ECN_OFFSET) });
+                    let _ = q.push(Item {
+                        flow,
+                        data: frame,
+                        at: Instant::now(),
+                        ecn_offset: Some(RELAY_ECN_OFFSET),
+                    });
                 }
             }
         }
@@ -579,19 +714,29 @@ async fn writer(n: Arc<Node>, hop: Arc<Hop>, mut w: WriteHalf<BoxIo>, mut rx: mp
             if let Some(plan) = pad_budget.plan(pkt_no, item.len()) {
                 let pad: usize = plan.iter().map(|x| x.1).sum();
                 if pad > 0 {
-                    batch.extend_from_slice(&hop::encode_record(rec::PAD, &vec![0u8; pad.min(4096)]));
+                    batch.extend_from_slice(&hop::encode_record(
+                        rec::PAD,
+                        &vec![0u8; pad.min(4096)],
+                    ));
                 }
             } else if pkt_no > 64 {
                 pad_budget.stop = 0;
             }
         }
-        hop.queue_delay_us.store(q.stats.last_sojourn.as_micros() as u64, Ordering::Relaxed);
-        n.metrics.ecn_marked.fetch_add(std::mem::take(&mut q.stats.marked), Ordering::Relaxed);
-        n.metrics.aqm_dropped.fetch_add(std::mem::take(&mut q.stats.dropped_aqm) + std::mem::take(&mut q.stats.dropped_full), Ordering::Relaxed);
+        hop.queue_delay_us
+            .store(q.stats.last_sojourn.as_micros() as u64, Ordering::Relaxed);
+        n.metrics
+            .ecn_marked
+            .fetch_add(std::mem::take(&mut q.stats.marked), Ordering::Relaxed);
+        n.metrics.aqm_dropped.fetch_add(
+            std::mem::take(&mut q.stats.dropped_aqm) + std::mem::take(&mut q.stats.dropped_full),
+            Ordering::Relaxed,
+        );
         if batch.is_empty() {
             continue;
         }
-        hop.tx_bytes.fetch_add(batch.len() as u64, Ordering::Relaxed);
+        hop.tx_bytes
+            .fetch_add(batch.len() as u64, Ordering::Relaxed);
         if w.write_all(&batch).await.is_err() || w.flush().await.is_err() {
             break;
         }
@@ -599,7 +744,6 @@ async fn writer(n: Arc<Node>, hop: Arc<Hop>, mut w: WriteHalf<BoxIo>, mut rx: mp
     let _ = w.shutdown().await;
     n.hop_down(&hop);
 }
-
 
 async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
     loop {
@@ -617,7 +761,8 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
             break;
         }
         *hop.last_rx.lock() = Instant::now();
-        hop.rx_bytes.fetch_add(payload.len() as u64 + 4, Ordering::Relaxed);
+        hop.rx_bytes
+            .fetch_add(payload.len() as u64 + 4, Ordering::Relaxed);
         match ty {
             rec::CONTROL => match wp::HopControl::decode_bytes(&payload) {
                 Ok(c) => {
@@ -629,10 +774,9 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
                 }
                 Err(e) => tracing::debug!("bad control message: {e}"),
             },
-            rec::RELAY
-                if !hop.restricted => {
-                    crate::circuit::on_relay_frame(&n, &hop, payload);
-                }
+            rec::RELAY if !hop.restricted => {
+                crate::circuit::on_relay_frame(&n, &hop, payload);
+            }
             _ => {}
         }
     }
@@ -654,8 +798,17 @@ async fn keepalive(n: Arc<Node>, hop: Arc<Hop>) {
         let seq = hop.keepalive_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let us = n.started.elapsed().as_micros() as u64;
         hop.stats.lock().on_sent(seq, us);
-        let digest = if n.is_relay() || n.is_controller() { None } else { Some(crypto::k32(&n.store.read().digest())) };
-        hop.send_control(HopMsg::Keepalive(Box::new(wp::Keepalive { seq, echo_us: us, wall_ms: now_ms(), digest })));
+        let digest = if n.is_relay() || n.is_controller() {
+            None
+        } else {
+            Some(crypto::k32(&n.store.read().digest()))
+        };
+        hop.send_control(HopMsg::Keepalive(Box::new(wp::Keepalive {
+            seq,
+            echo_us: us,
+            wall_ms: now_ms(),
+            digest,
+        })));
     }
 }
 

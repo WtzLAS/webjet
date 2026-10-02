@@ -40,7 +40,12 @@ pub struct Dataplane {
 
 impl Dataplane {
     pub fn serving_prefixes(&self) -> Vec<IpNet> {
-        let mut v: Vec<IpNet> = self.serving.read().iter().map(|(g, _)| g.published).collect();
+        let mut v: Vec<IpNet> = self
+            .serving
+            .read()
+            .iter()
+            .map(|(g, _)| g.published)
+            .collect();
         v.sort();
         v.dedup();
         v
@@ -52,7 +57,9 @@ impl Dataplane {
 
     fn write_tun(&self, p: Vec<u8>) {
         if let Some(pp) = packet::parse(&p) {
-            if pp.icmp == Some(packet::IcmpKind::Echo { request: false }) && p.len() >= pp.l4_offset + 8 {
+            if pp.icmp == Some(packet::IcmpKind::Echo { request: false })
+                && p.len() >= pp.l4_offset + 8
+            {
                 let id = u16::from_be_bytes([p[pp.l4_offset + 4], p[pp.l4_offset + 5]]);
                 let seq = u16::from_be_bytes([p[pp.l4_offset + 6], p[pp.l4_offset + 7]]);
                 if let Some(tx) = self.pings.lock().get(&id) {
@@ -100,8 +107,15 @@ impl Dataplane {
     /// Send `count` pings to `dst` through the overlay and wait for replies
     /// (control channel `ping`; works with or without a tun interface).
     pub async fn ping(&self, dst: IpAddr, count: u16) -> Vec<Option<std::time::Duration>> {
-        let Some(n) = self.node() else { return Vec::new() };
-        let src = match self.my_ips.read().iter().find(|i| i.addr().is_ipv4() == dst.is_ipv4()) {
+        let Some(n) = self.node() else {
+            return Vec::new();
+        };
+        let src = match self
+            .my_ips
+            .read()
+            .iter()
+            .find(|i| i.addr().is_ipv4() == dst.is_ipv4())
+        {
             Some(i) => i.addr(),
             None => return Vec::new(),
         };
@@ -147,7 +161,9 @@ impl Dataplane {
     pub fn outbound(&self, mut p: Vec<u8>) {
         let Some(n) = self.node() else { return };
         n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
-        let Some(parsed) = packet::parse(&p) else { return };
+        let Some(parsed) = packet::parse(&p) else {
+            return;
+        };
         let (src, dst) = (parsed.flow.src, parsed.flow.dst);
         // The local resolver (§11.10.1).
         if self.resolver.read().contains(&dst) {
@@ -163,15 +179,29 @@ impl Dataplane {
         }
         // Gateway return traffic: LAN → overlay (§11.9.4).
         if !self.is_mine(&src) {
-            let grant = self.serving.read().iter().map(|(g, _)| *g).find(|g| g.lan.contains(&src));
+            let grant = self
+                .serving
+                .read()
+                .iter()
+                .map(|(g, _)| *g)
+                .find(|g| g.lan.contains(&src));
             let Some(g) = grant else { return };
-            let Some(peer) = n.store.read().view().node_by_ip(&dst) else { return };
+            let Some(peer) = n.store.read().view().node_by_ip(&dst) else {
+                return;
+            };
             if g.mapped() {
-                let Some(ps) = map_prefix(src, &g.lan, &g.published) else { return };
+                let Some(ps) = map_prefix(src, &g.lan, &g.published) else {
+                    return;
+                };
                 packet::rewrite(&mut p, Some((ps, parsed.flow.sport)), None);
             }
-            let Some(after) = packet::parse(&p) else { return };
-            let v = self.conntrack.lock().classify(&peer, &after, true, Instant::now());
+            let Some(after) = packet::parse(&p) else {
+                return;
+            };
+            let v = self
+                .conntrack
+                .lock()
+                .classify(&peer, &after, true, Instant::now());
             if !matches!(v, Ct::Tracked | Ct::RelatedError) {
                 return; // replies only; LAN hosts can't start flows (§11.9.4)
             }
@@ -197,29 +227,51 @@ impl Dataplane {
                 let verdict = {
                     let s = n.store.read();
                     let vw = s.view();
-                    let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else { return };
+                    let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {
+                        return;
+                    };
                     match (dest_is_node, vw.nodes.get(&peer)) {
                         (true, Some(pn)) => {
                             let ps = vw.subject(pn);
-                            vw.policy.evaluate(&me, Dest::Node(&ps), parsed.flow.proto, parsed.flow.dport)
+                            vw.policy.evaluate(
+                                &me,
+                                Dest::Node(&ps),
+                                parsed.flow.proto,
+                                parsed.flow.dport,
+                            )
                         }
-                        _ => vw.policy.evaluate(&me, Dest::Addr(dst), parsed.flow.proto, parsed.flow.dport),
+                        _ => vw.policy.evaluate(
+                            &me,
+                            Dest::Addr(dst),
+                            parsed.flow.proto,
+                            parsed.flow.dport,
+                        ),
                     }
                 };
-                n.metrics.rule_hit(verdict.rule_id(), verdict.decision == Decision::Allow);
+                n.metrics
+                    .rule_hit(verdict.rule_id(), verdict.decision == Decision::Allow);
                 if verdict.decision == Decision::Deny {
                     n.metrics.acl_denied.fetch_add(1, Ordering::Relaxed);
                     self.icmp(&p, Unreach::Prohibited);
                     return;
                 }
                 if v == Ct::New
-                    && self.conntrack.lock().insert(&peer, &parsed, true, verdict.rule.clone(), now).is_err() {
-                        n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
+                    && self
+                        .conntrack
+                        .lock()
+                        .insert(&peer, &parsed, true, verdict.rule.clone(), now)
+                        .is_err()
+                {
+                    n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
             }
         }
-        if crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p)) == crate::e2e::SendResult::NoRoute { self.unreachable(&p) }
+        if crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p))
+            == crate::e2e::SendResult::NoRoute
+        {
+            self.unreachable(&p)
+        }
     }
 
     /// The node or serving gateway for a destination address.
@@ -230,6 +282,7 @@ impl Dataplane {
         }
         // Published prefixes: gateways that hold the grant and serve it.
         let mut best: Option<(u8, IpNet, Vec<Bytes32>)> = None;
+        let mut unknown: Vec<Bytes32> = Vec::new();
         {
             let s = n.store.read();
             let v = s.view();
@@ -238,13 +291,26 @@ impl Dataplane {
                 if !info.valid || *id == n.me {
                     continue;
                 }
+                // No record yet (edge nodes learn other nodes' records by
+                // lookup): treat a grant holder as serving until we know.
+                let known = recs.endpoints.get(id).is_some();
+                if !known && info.routes.iter().any(|g| g.published.contains(dst)) {
+                    unknown.push(*id);
+                }
                 let serving: Vec<IpNet> = recs
                     .endpoints
                     .get(id)
-                    .map(|(r, _)| r.serving.clone().unwrap_or_default().iter().filter_map(webjet_core::types::cidr_to_net).collect())
+                    .map(|(r, _)| {
+                        r.serving
+                            .clone()
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(webjet_core::types::cidr_to_net)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 for g in &info.routes {
-                    if g.published.contains(dst) && serving.contains(&g.published) {
+                    if g.published.contains(dst) && (serving.contains(&g.published) || !known) {
                         let pl = g.published.prefix_len();
                         match &mut best {
                             Some((bp, _, ids)) if *bp == pl => ids.push(*id),
@@ -255,11 +321,21 @@ impl Dataplane {
                 }
             }
         }
+        for id in &unknown {
+            crate::gossip::lookup(n, id);
+        }
         let (_, prefix, gws) = best?;
         // A published prefix that clashes with a directly connected LAN is
         // skipped (§11.9.3).
-        if crate::platform::local_networks().iter().any(|l| webjet_core::types::overlaps(l, &prefix)) {
-            n.alarm("route_clash", "warning", format!("published prefix {prefix} overlaps a local network; not routed"));
+        if crate::platform::local_networks()
+            .iter()
+            .any(|l| webjet_core::types::overlaps(l, &prefix))
+        {
+            n.alarm(
+                "route_clash",
+                "warning",
+                format!("published prefix {prefix} overlaps a local network; not routed"),
+            );
             return None;
         }
         let mut choice = self.gw_choice.lock();
@@ -268,7 +344,11 @@ impl Dataplane {
                 return Some((*c, false));
             }
         }
-        let pick = gws.iter().find(|g| n.e2e.get(g).map(|s| s.established()).unwrap_or(false)).copied().unwrap_or_else(|| gws[rand::random::<usize>() % gws.len()]);
+        let pick = gws
+            .iter()
+            .find(|g| n.e2e.get(g).map(|s| s.established()).unwrap_or(false))
+            .copied()
+            .unwrap_or_else(|| gws[rand::random::<usize>() % gws.len()]);
         choice.insert(prefix, pick);
         Some((pick, false))
     }
@@ -278,7 +358,9 @@ impl Dataplane {
     /// A decrypted packet from `peer` (§9.4.4 step 5, §14.4).
     pub fn inbound(&self, peer: &Bytes32, mut p: Vec<u8>) {
         let Some(n) = self.node() else { return };
-        let Some(parsed) = packet::parse(&p) else { return };
+        let Some(parsed) = packet::parse(&p) else {
+            return;
+        };
         let (src, dst) = (parsed.flow.src, parsed.flow.dst);
         // Never answer queries to our resolver from the network (§11.10.1).
         if self.resolver.read().contains(&dst) {
@@ -289,16 +371,38 @@ impl Dataplane {
             let s = n.store.read();
             let v = s.view();
             match v.nodes.get(peer) {
-                Some(info) => (info.ips.iter().any(|i| i.contains(&src)), Some(v.subject(info))),
+                Some(info) => (
+                    info.ips.iter().any(|i| i.contains(&src)),
+                    Some(v.subject(info)),
+                ),
                 None => (false, None),
             }
         };
-        let Some(peer_subject) = peer_subject else { return };
+        let Some(peer_subject) = peer_subject else {
+            return;
+        };
         let now = Instant::now();
         if !src_ok {
             // Gateway replies: only on a flow this node started (§9.5 exception).
-            let served = n.records.lock().endpoints.get(peer).map(|(r, _)| r.serving.clone().unwrap_or_default().iter().filter_map(webjet_core::types::cidr_to_net).any(|x| x.contains(&src))).unwrap_or(false);
-            let tracked = served && matches!(self.conntrack.lock().classify(peer, &parsed, false, now), Ct::Tracked | Ct::RelatedError);
+            let served = n
+                .records
+                .lock()
+                .endpoints
+                .get(peer)
+                .map(|(r, _)| {
+                    r.serving
+                        .clone()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(webjet_core::types::cidr_to_net)
+                        .any(|x| x.contains(&src))
+                })
+                .unwrap_or(false);
+            let tracked = served
+                && matches!(
+                    self.conntrack.lock().classify(peer, &parsed, false, now),
+                    Ct::Tracked | Ct::RelatedError
+                );
             if !tracked || !self.is_mine(&dst) {
                 n.metrics.cryptokey_dropped.fetch_add(1, Ordering::Relaxed);
                 return;
@@ -310,7 +414,12 @@ impl Dataplane {
         let gw = if self.is_mine(&dst) {
             None
         } else {
-            match self.serving.read().iter().find(|(g, _)| g.published.contains(&dst)) {
+            match self
+                .serving
+                .read()
+                .iter()
+                .find(|(g, _)| g.published.contains(&dst))
+            {
                 Some((g, _)) => Some(*g),
                 None => {
                     n.metrics.cryptokey_dropped.fetch_add(1, Ordering::Relaxed);
@@ -328,18 +437,35 @@ impl Dataplane {
                     let vw = s.view();
                     match gw {
                         None => {
-                            let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else { return };
-                            vw.policy.evaluate(&peer_subject, Dest::Node(&me), parsed.flow.proto, parsed.flow.dport)
+                            let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {
+                                return;
+                            };
+                            vw.policy.evaluate(
+                                &peer_subject,
+                                Dest::Node(&me),
+                                parsed.flow.proto,
+                                parsed.flow.dport,
+                            )
                         }
-                        Some(_) => vw.policy.evaluate(&peer_subject, Dest::Addr(dst), parsed.flow.proto, parsed.flow.dport),
+                        Some(_) => vw.policy.evaluate(
+                            &peer_subject,
+                            Dest::Addr(dst),
+                            parsed.flow.proto,
+                            parsed.flow.dport,
+                        ),
                     }
                 };
-                n.metrics.rule_hit(verdict.rule_id(), verdict.decision == Decision::Allow);
+                n.metrics
+                    .rule_hit(verdict.rule_id(), verdict.decision == Decision::Allow);
                 if verdict.decision == Decision::Deny {
                     n.metrics.acl_denied.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-                if let Err(e) = self.conntrack.lock().insert(peer, &parsed, false, verdict.rule.clone(), now) {
+                if let Err(e) =
+                    self.conntrack
+                        .lock()
+                        .insert(peer, &parsed, false, verdict.rule.clone(), now)
+                {
                     tracing::trace!("conntrack: {e:?}");
                     n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
                     return;
@@ -349,7 +475,9 @@ impl Dataplane {
         if let Some(g) = gw {
             // Destination translation for mapped routes; the kernel does SNAT.
             if g.mapped() {
-                let Some(ld) = map_prefix(dst, &g.published, &g.lan) else { return };
+                let Some(ld) = map_prefix(dst, &g.published, &g.lan) else {
+                    return;
+                };
                 packet::rewrite(&mut p, None, Some((ld, parsed.flow.dport)));
             }
         }
@@ -369,35 +497,71 @@ impl Dataplane {
             let s = n.store.read();
             let v = s.view();
             let me = v.nodes.get(&n.me);
-            let resolver: Vec<IpAddr> = v.dns.as_ref().map(|d| d.resolver_ip.clone().unwrap_or_default().iter().filter_map(|i| i.to_ip()).collect()).unwrap_or_default();
+            let resolver: Vec<IpAddr> = v
+                .dns
+                .as_ref()
+                .map(|d| {
+                    d.resolver_ip
+                        .clone()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|i| i.to_ip())
+                        .collect()
+                })
+                .unwrap_or_default();
             let zones: Vec<String> = v
                 .dns
                 .as_ref()
                 .map(|d| {
-                    let mut z: Vec<String> = d.forward.clone().unwrap_or_default().iter().filter_map(|f| f.zone.clone()).collect();
-                    z.extend(d.records.clone().unwrap_or_default().iter().filter_map(|r| r.name.clone()).filter_map(|nm| nm.split_once('.').map(|x| x.1.to_string())));
+                    let mut z: Vec<String> = d
+                        .forward
+                        .clone()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|f| f.zone.clone())
+                        .collect();
+                    z.extend(
+                        d.records
+                            .clone()
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|r| r.name.clone())
+                            .filter_map(|nm| nm.split_once('.').map(|x| x.1.to_string())),
+                    );
                     z
                 })
                 .unwrap_or_default();
-            (me.map(|m| m.ips.clone()).unwrap_or_default(), me.map(|m| m.routes.clone()).unwrap_or_default(), s.overlay_pool.clone(), resolver, v.suffix(), zones)
+            (
+                me.map(|m| m.ips.clone()).unwrap_or_default(),
+                me.map(|m| m.routes.clone()).unwrap_or_default(),
+                s.overlay_pool.clone(),
+                resolver,
+                v.suffix(),
+                zones,
+            )
         };
         *self.my_ips.write() = my_ips;
         *self.resolver.write() = resolver.clone();
         // Gateway serving (§11.9.2): local config ∩ grants, LAN interface up.
         let mut serving = Vec::new();
         for r in &n.cfg.gateway.route {
-            let Ok(pubnet) = webjet_core::types::parse_net(&r.published) else { continue };
+            let Ok(pubnet) = webjet_core::types::parse_net(&r.published) else {
+                continue;
+            };
             if let Some(g) = grants.iter().find(|g| g.published == pubnet) {
                 if crate::platform::iface_up(&r.interface) {
                     serving.push((*g, r.interface.clone()));
                     let mut done = self.nat_done.lock();
-                    if !done.contains(&r.interface) && crate::platform::setup_gateway_nat(&pool, &self.dev_name, &r.interface) {
+                    if !done.contains(&r.interface)
+                        && crate::platform::setup_gateway_nat(&pool, &self.dev_name, &r.interface)
+                    {
                         done.push(r.interface.clone());
                     }
                 }
             }
         }
-        let changed = *self.serving.read().iter().map(|x| x.0).collect::<Vec<_>>() != serving.iter().map(|x| x.0).collect::<Vec<_>>();
+        let changed = *self.serving.read().iter().map(|x| x.0).collect::<Vec<_>>()
+            != serving.iter().map(|x| x.0).collect::<Vec<_>>();
         *self.serving.write() = serving;
         if changed {
             crate::gossip::publish_endpoint(&n, true);
@@ -442,19 +606,25 @@ impl Dataplane {
             let mut ct = self.conntrack.lock();
             ct.reevaluate(|k, e| {
                 let Some(me) = me.as_ref() else { return false };
-                let Some(pn) = vw.nodes.get(&k.peer).filter(|x| x.valid) else { return false };
+                let Some(pn) = vw.nodes.get(&k.peer).filter(|x| x.valid) else {
+                    return false;
+                };
                 let ps = vw.subject(pn);
                 let to_node = vw.node_by_ip(&k.flow.dst).is_some();
                 let d = if e.outbound {
                     if to_node {
-                        vw.policy.evaluate(me, Dest::Node(&ps), k.flow.proto, k.flow.dport)
+                        vw.policy
+                            .evaluate(me, Dest::Node(&ps), k.flow.proto, k.flow.dport)
                     } else {
-                        vw.policy.evaluate(me, Dest::Addr(k.flow.dst), k.flow.proto, k.flow.dport)
+                        vw.policy
+                            .evaluate(me, Dest::Addr(k.flow.dst), k.flow.proto, k.flow.dport)
                     }
                 } else if to_node {
-                    vw.policy.evaluate(&ps, Dest::Node(me), k.flow.proto, k.flow.dport)
+                    vw.policy
+                        .evaluate(&ps, Dest::Node(me), k.flow.proto, k.flow.dport)
                 } else {
-                    vw.policy.evaluate(&ps, Dest::Addr(k.flow.dst), k.flow.proto, k.flow.dport)
+                    vw.policy
+                        .evaluate(&ps, Dest::Addr(k.flow.dst), k.flow.proto, k.flow.dport)
                 };
                 d.decision == Decision::Allow
             })
@@ -469,14 +639,27 @@ impl Dataplane {
 pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     let (my_ips, pool) = {
         let s = n.store.read();
-        (s.view().nodes.get(&n.me).map(|m| m.ips.clone()).unwrap_or_default(), s.overlay_pool.clone())
+        (
+            s.view()
+                .nodes
+                .get(&n.me)
+                .map(|m| m.ips.clone())
+                .unwrap_or_default(),
+            s.overlay_pool.clone(),
+        )
     };
     let ct = Conntrack::new(
         crate::metrics::limit(n, "conntrack_per_peer", 4096) as usize,
         crate::metrics::limit(n, "conntrack_new_per_sec", 500) as u32,
         crate::metrics::limit(n, "conntrack_global", 262_144) as usize,
     );
-    let mut dev_name = n.cfg.tun.name.clone().unwrap_or_else(|| if cfg!(target_os = "macos") { "utun".into() } else { "webjet0".into() });
+    let mut dev_name = n.cfg.tun.name.clone().unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            "utun".into()
+        } else {
+            "webjet0".into()
+        }
+    });
     let mut tun_tx = None;
     let mut dev_handle = None;
     if n.cfg.tun.enabled {
@@ -485,13 +668,19 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
             b = b.name(dev_name.clone());
         }
         for ip in &my_ips {
-            let plen = pool.iter().find(|p| p.contains(&ip.addr())).map(|p| p.prefix_len()).unwrap_or(ip.prefix_len());
+            let plen = pool
+                .iter()
+                .find(|p| p.contains(&ip.addr()))
+                .map(|p| p.prefix_len())
+                .unwrap_or(ip.prefix_len());
             match ip.addr() {
                 IpAddr::V4(a) => b = b.ipv4(a, plen, None),
                 IpAddr::V6(a) => b = b.ipv6(a, plen),
             }
         }
-        let dev = Arc::new(b.build_async().map_err(|e| anyhow::anyhow!("creating the tun interface: {e} (root/CAP_NET_ADMIN needed)"))?);
+        let dev = Arc::new(b.build_async().map_err(|e| {
+            anyhow::anyhow!("creating the tun interface: {e} (root/CAP_NET_ADMIN needed)")
+        })?);
         if let Ok(name) = dev.name() {
             dev_name = name;
         }

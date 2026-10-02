@@ -104,7 +104,11 @@ impl Graph {
     }
 
     fn relays_of(&self, nodes: &[Bytes32], src: &Bytes32, dst: &Bytes32) -> Vec<Bytes32> {
-        nodes.iter().filter(|n| *n != src && *n != dst).copied().collect()
+        nodes
+            .iter()
+            .filter(|n| *n != src && *n != dst)
+            .copied()
+            .collect()
     }
 
     fn path_cost(&self, nodes: &[Bytes32], src: &Bytes32, dst: &Bytes32) -> Option<(f64, u8)> {
@@ -125,7 +129,13 @@ impl Graph {
     }
 
     /// Dijkstra avoiding `banned_nodes` and `banned_edges`, with a relay-count cap.
-    fn shortest(&self, src: &Bytes32, dst: &Bytes32, banned_nodes: &BTreeSet<Bytes32>, banned_edges: &BTreeSet<(Bytes32, Bytes32)>) -> Option<Vec<Bytes32>> {
+    fn shortest(
+        &self,
+        src: &Bytes32,
+        dst: &Bytes32,
+        banned_nodes: &BTreeSet<Bytes32>,
+        banned_edges: &BTreeSet<(Bytes32, Bytes32)>,
+    ) -> Option<Vec<Bytes32>> {
         #[derive(PartialEq)]
         struct St(f64, Vec<Bytes32>);
         impl Eq for St {}
@@ -136,7 +146,8 @@ impl Graph {
         }
         impl Ord for St {
             fn cmp(&self, o: &Self) -> std::cmp::Ordering {
-                o.0.partial_cmp(&self.0).unwrap_or(std::cmp::Ordering::Equal)
+                o.0.partial_cmp(&self.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }
         }
         let mut best: HashMap<(Bytes32, usize), f64> = HashMap::new();
@@ -149,7 +160,8 @@ impl Graph {
             }
             let relays_used = path.len() - 1;
             for (m, ec) in self.edges(&n, src, dst) {
-                if banned_nodes.contains(&m) || banned_edges.contains(&(n, m)) || path.contains(&m) {
+                if banned_nodes.contains(&m) || banned_edges.contains(&(n, m)) || path.contains(&m)
+                {
                     continue;
                 }
                 let is_relay = m != *dst;
@@ -183,7 +195,9 @@ impl Graph {
     pub fn k_paths(&self, src: &Bytes32, dst: &Bytes32, k: usize) -> Vec<Path> {
         let mut a: Vec<Vec<Bytes32>> = Vec::new();
         let mut b: Vec<(f64, Vec<Bytes32>)> = Vec::new();
-        let Some(first) = self.shortest(src, dst, &BTreeSet::new(), &BTreeSet::new()) else { return Vec::new() };
+        let Some(first) = self.shortest(src, dst, &BTreeSet::new(), &BTreeSet::new()) else {
+            return Vec::new();
+        };
         a.push(first);
         while a.len() < k {
             let last = a.last().unwrap().clone();
@@ -197,7 +211,9 @@ impl Graph {
                     }
                 }
                 let banned_nodes: BTreeSet<Bytes32> = root[..i].iter().copied().collect();
-                if let Some(spur_path) = self.shortest_from(src, &spur, dst, &banned_nodes, &banned_edges, i) {
+                if let Some(spur_path) =
+                    self.shortest_from(src, &spur, dst, &banned_nodes, &banned_edges, i)
+                {
                     let mut total = root[..i].to_vec();
                     total.extend(spur_path);
                     if total.len() - 2 > MAX_RELAYS {
@@ -220,14 +236,26 @@ impl Graph {
             .into_iter()
             .filter_map(|p| {
                 let (cost, spare) = self.path_cost(&p, src, dst)?;
-                Some(Path { hops: self.relays_of(&p, src, dst), cost, spare })
+                Some(Path {
+                    hops: self.relays_of(&p, src, dst),
+                    cost,
+                    spare,
+                })
             })
             .collect();
         out.sort_by(|x, y| x.cost.partial_cmp(&y.cost).unwrap());
         out
     }
 
-    fn shortest_from(&self, src: &Bytes32, from: &Bytes32, dst: &Bytes32, banned_nodes: &BTreeSet<Bytes32>, banned_edges: &BTreeSet<(Bytes32, Bytes32)>, prefix_relays: usize) -> Option<Vec<Bytes32>> {
+    fn shortest_from(
+        &self,
+        src: &Bytes32,
+        from: &Bytes32,
+        dst: &Bytes32,
+        banned_nodes: &BTreeSet<Bytes32>,
+        banned_edges: &BTreeSet<(Bytes32, Bytes32)>,
+        prefix_relays: usize,
+    ) -> Option<Vec<Bytes32>> {
         if from == src {
             return self.shortest(src, dst, banned_nodes, banned_edges);
         }
@@ -235,7 +263,12 @@ impl Graph {
         let mut best: HashMap<Bytes32, f64> = HashMap::new();
         let mut frontier: Vec<(f64, Vec<Bytes32>)> = vec![(0.0, vec![*from])];
         let mut found: Option<(f64, Vec<Bytes32>)> = None;
-        while let Some(idx) = frontier.iter().enumerate().min_by(|a, b| a.1 .0.partial_cmp(&b.1 .0).unwrap()).map(|(i, _)| i) {
+        while let Some(idx) = frontier
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1 .0.partial_cmp(&b.1 .0).unwrap())
+            .map(|(i, _)| i)
+        {
             let (c, path) = frontier.swap_remove(idx);
             let n = *path.last().unwrap();
             if n == *dst {
@@ -243,11 +276,22 @@ impl Graph {
                 break;
             }
             for (m, ec) in self.edges(&n, src, dst) {
-                if banned_nodes.contains(&m) || banned_edges.contains(&(n, m)) || path.contains(&m) || m == *src {
+                if banned_nodes.contains(&m)
+                    || banned_edges.contains(&(n, m))
+                    || path.contains(&m)
+                    || m == *src
+                {
                     continue;
                 }
                 let relays = prefix_relays + path.len();
-                if m != *dst && (relays > MAX_RELAYS || self.relays.get(&m).and_then(|r| load_penalty(r.load)).is_none()) {
+                if m != *dst
+                    && (relays > MAX_RELAYS
+                        || self
+                            .relays
+                            .get(&m)
+                            .and_then(|r| load_penalty(r.load))
+                            .is_none())
+                {
                     continue;
                 }
                 let nc = c + ec;
@@ -268,7 +312,10 @@ impl Graph {
 /// capacity (§11.8.3).
 pub fn spread_pick(cands: &[Path]) -> Option<&Path> {
     let best = cands.first()?.cost;
-    let near: Vec<&Path> = cands.iter().filter(|p| p.cost <= best * (1.0 + SPREAD)).collect();
+    let near: Vec<&Path> = cands
+        .iter()
+        .filter(|p| p.cost <= best * (1.0 + SPREAD))
+        .collect();
     let total: u32 = near.iter().map(|p| p.spare.max(1) as u32).sum();
     let mut x = rand::thread_rng().gen_range(0..total.max(1));
     for p in &near {
@@ -289,7 +336,14 @@ pub struct Hysteresis {
 }
 
 impl Hysteresis {
-    pub fn should_switch(&mut self, current_cost: f64, cand_id: u64, cand_cost: f64, now_ms: u64, hold_ms: u64) -> bool {
+    pub fn should_switch(
+        &mut self,
+        current_cost: f64,
+        cand_id: u64,
+        cand_cost: f64,
+        now_ms: u64,
+        hold_ms: u64,
+    ) -> bool {
         if !current_cost.is_finite() {
             self.challenger = None;
             return cand_cost.is_finite();
@@ -313,7 +367,11 @@ impl Hysteresis {
 
 // ---------------------------------------------------------------- transport choice (§9.6)
 
-pub const DEFAULT_PRIORITIES: [(Transport, u8); 3] = [(Transport::KcpFecTls, 30), (Transport::AnyTls, 20), (Transport::TcpTls, 10)];
+pub const DEFAULT_PRIORITIES: [(Transport, u8); 3] = [
+    (Transport::KcpFecTls, 30),
+    (Transport::AnyTls, 20),
+    (Transport::TcpTls, 10),
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct TransportCand {
@@ -325,12 +383,23 @@ pub struct TransportCand {
 /// Choose the transport to send on: lowest cost; near-ties (within 10%) go
 /// to the highest priority sum, then the fixed tie order.
 pub fn choose_transport(cands: &[TransportCand]) -> Option<Transport> {
-    let best = cands.iter().filter(|c| c.cost.is_finite()).map(|c| c.cost).fold(f64::INFINITY, f64::min);
+    let best = cands
+        .iter()
+        .filter(|c| c.cost.is_finite())
+        .map(|c| c.cost)
+        .fold(f64::INFINITY, f64::min);
     if !best.is_finite() {
         return None;
     }
-    let mut near: Vec<&TransportCand> = cands.iter().filter(|c| c.cost.is_finite() && c.cost <= best * 1.10).collect();
-    near.sort_by(|a, b| b.prio_sum.cmp(&a.prio_sum).then(a.transport.tie_rank().cmp(&b.transport.tie_rank())));
+    let mut near: Vec<&TransportCand> = cands
+        .iter()
+        .filter(|c| c.cost.is_finite() && c.cost <= best * 1.10)
+        .collect();
+    near.sort_by(|a, b| {
+        b.prio_sum
+            .cmp(&a.prio_sum)
+            .then(a.transport.tie_rank().cmp(&b.transport.tie_rank()))
+    });
     near.first().map(|c| c.transport)
 }
 
@@ -345,7 +414,12 @@ pub struct LinkStats {
 
 impl Default for LinkStats {
     fn default() -> Self {
-        LinkStats { srtt_ms: 0.0, loss: 0.0, samples: 0, sent: BTreeMap::new() }
+        LinkStats {
+            srtt_ms: 0.0,
+            loss: 0.0,
+            samples: 0,
+            sent: BTreeMap::new(),
+        }
     }
 }
 
@@ -368,7 +442,11 @@ impl LinkStats {
             self.loss = self.loss * 0.9 + 0.1;
         }
         let rtt = (now_us.saturating_sub(at)) as f64 / 1000.0;
-        self.srtt_ms = if self.samples == 0 { rtt } else { self.srtt_ms * 0.875 + rtt * 0.125 };
+        self.srtt_ms = if self.samples == 0 {
+            rtt
+        } else {
+            self.srtt_ms * 0.875 + rtt * 0.125
+        };
         self.loss *= 0.9;
         self.samples += 1;
         Some(rtt)
@@ -381,8 +459,15 @@ impl LinkStats {
     }
     /// Quantized values for adverts (so small changes don't trigger updates).
     pub fn quantized(&self) -> (u16, u8) {
-        let rtt = if self.srtt_ms < 10.0 { self.srtt_ms.ceil() } else { (self.srtt_ms / 5.0).round() * 5.0 };
-        (rtt.min(65535.0) as u16, (self.loss * 100.0).round().min(100.0) as u8)
+        let rtt = if self.srtt_ms < 10.0 {
+            self.srtt_ms.ceil()
+        } else {
+            (self.srtt_ms / 5.0).round() * 5.0
+        };
+        (
+            rtt.min(65535.0) as u16,
+            (self.loss * 100.0).round().min(100.0) as u8,
+        )
     }
 }
 
@@ -397,13 +482,21 @@ mod tests {
     fn mesh() -> Graph {
         let mut g = Graph::default();
         // relays 1..=4 in a ring with a diagonal 1-3
-        let links = [(1, 2, 10.0), (2, 3, 10.0), (3, 4, 15.0), (4, 1, 15.0), (1, 3, 25.0)];
+        let links = [
+            (1, 2, 10.0),
+            (2, 3, 10.0),
+            (3, 4, 15.0),
+            (4, 1, 15.0),
+            (1, 3, 25.0),
+        ];
         for (a, b, c) in links {
             g.relays.entry(id(a)).or_default().links.insert(id(b), c);
             g.relays.entry(id(b)).or_default().links.insert(id(a), c);
         }
-        g.attachments.insert(id(100), [(id(1), 5.0)].into_iter().collect());
-        g.attachments.insert(id(200), [(id(3), 5.0)].into_iter().collect());
+        g.attachments
+            .insert(id(100), [(id(1), 5.0)].into_iter().collect());
+        g.attachments
+            .insert(id(200), [(id(3), 5.0)].into_iter().collect());
         g
     }
 
@@ -454,11 +547,36 @@ mod tests {
 
     #[test]
     fn transport_choice() {
-        let c = |t, cost, p| TransportCand { transport: t, cost, prio_sum: p };
-        assert_eq!(choose_transport(&[c(Transport::KcpFecTls, 50.0, 60), c(Transport::AnyTls, 53.0, 40)]), Some(Transport::KcpFecTls));
-        assert_eq!(choose_transport(&[c(Transport::KcpFecTls, 100.0, 60), c(Transport::TcpTls, 50.0, 20)]), Some(Transport::TcpTls));
-        assert_eq!(choose_transport(&[c(Transport::KcpFecTls, 50.0, 60), c(Transport::TcpTls, 51.0, 200)]), Some(Transport::TcpTls));
-        assert_eq!(choose_transport(&[c(Transport::KcpFecTls, f64::INFINITY, 60)]), None);
+        let c = |t, cost, p| TransportCand {
+            transport: t,
+            cost,
+            prio_sum: p,
+        };
+        assert_eq!(
+            choose_transport(&[
+                c(Transport::KcpFecTls, 50.0, 60),
+                c(Transport::AnyTls, 53.0, 40)
+            ]),
+            Some(Transport::KcpFecTls)
+        );
+        assert_eq!(
+            choose_transport(&[
+                c(Transport::KcpFecTls, 100.0, 60),
+                c(Transport::TcpTls, 50.0, 20)
+            ]),
+            Some(Transport::TcpTls)
+        );
+        assert_eq!(
+            choose_transport(&[
+                c(Transport::KcpFecTls, 50.0, 60),
+                c(Transport::TcpTls, 51.0, 200)
+            ]),
+            Some(Transport::TcpTls)
+        );
+        assert_eq!(
+            choose_transport(&[c(Transport::KcpFecTls, f64::INFINITY, 60)]),
+            None
+        );
     }
 
     #[test]

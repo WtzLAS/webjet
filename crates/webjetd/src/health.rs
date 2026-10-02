@@ -20,7 +20,10 @@ pub fn check_floor(n: &Node) -> Result<(), String> {
 pub fn check_floor_raw(floor: u64) -> Result<(), String> {
     let now = now_ms();
     if floor > now + SKEW_HEAD {
-        return Err(format!("system clock is {} s behind the newest signed tree head; fix the clock (§18.6)", (floor - now) / 1000));
+        return Err(format!(
+            "system clock is {} s behind the newest signed tree head; fix the clock (§18.6)",
+            (floor - now) / 1000
+        ));
     }
     Ok(())
 }
@@ -33,7 +36,12 @@ pub fn check_clock(n: &Arc<Node>) {
         n.hops
             .lock()
             .values()
-            .filter(|h| v.nodes.get(&h.peer).map(|x| x.relay || x.control).unwrap_or(false))
+            .filter(|h| {
+                v.nodes
+                    .get(&h.peer)
+                    .map(|x| x.relay || x.control)
+                    .unwrap_or(false)
+            })
             .filter_map(|h| *h.clock_offset.lock())
             .collect()
     };
@@ -47,20 +55,34 @@ pub fn check_clock(n: &Arc<Node>) {
     let mut fatal = false;
     for (i, a) in sorted.iter().enumerate() {
         for b in sorted.iter().skip(i + 1) {
-            if a.abs() > FATAL_MS && b.abs() > FATAL_MS && (a - b).abs() <= 5_000 && a.signum() == b.signum() {
+            if a.abs() > FATAL_MS
+                && b.abs() > FATAL_MS
+                && (a - b).abs() <= 5_000
+                && a.signum() == b.signum()
+            {
                 fatal = true;
             }
         }
     }
     if fatal {
-        let msg = format!("clock is off by about {} s according to several peers; fix the clock (§18.6)", median / 1000);
+        let msg = format!(
+            "clock is off by about {} s according to several peers; fix the clock (§18.6)",
+            median / 1000
+        );
         if CLOCK_FATAL.set(msg.clone()).is_ok() {
             tracing::error!("{msg}");
         }
         return;
     }
     if offsets.iter().any(|o| o.abs() > WARN_MS) {
-        n.alarm("clock_skew", "warning", format!("clock offset against peers up to {} ms", offsets.iter().map(|o| o.abs()).max().unwrap_or(0)));
+        n.alarm(
+            "clock_skew",
+            "warning",
+            format!(
+                "clock offset against peers up to {} ms",
+                offsets.iter().map(|o| o.abs()).max().unwrap_or(0)
+            ),
+        );
     } else {
         n.clear_alarm("clock_skew");
     }
@@ -77,10 +99,19 @@ pub async fn run(n: Arc<Node>) {
         let now = now_ms();
         let (expired, horizon, me_ok, tomb) = {
             let s = n.store.read();
-            (s.head_expired(now), s.horizon_passed(now), s.view().nodes.get(&n.me).map(|x| x.valid).unwrap_or(false), s.view().tombstoned_nodes.contains(&n.me))
+            (
+                s.head_expired(now),
+                s.horizon_passed(now),
+                s.view().nodes.get(&n.me).map(|x| x.valid).unwrap_or(false),
+                s.view().tombstoned_nodes.contains(&n.me),
+            )
         };
         if expired {
-            n.alarm("soft_mode", "warning", "no fresh tree head: running in soft mode (§21.2)".into());
+            n.alarm(
+                "soft_mode",
+                "warning",
+                "no fresh tree head: running in soft mode (§21.2)".into(),
+            );
         } else {
             n.clear_alarm("soft_mode");
         }
@@ -90,9 +121,17 @@ pub async fn run(n: Arc<Node>) {
             n.clear_alarm("validity_horizon");
         }
         if tomb {
-            n.alarm("node_tombstoned", "critical", "this node has been revoked; re-enroll it (§10.5)".into());
+            n.alarm(
+                "node_tombstoned",
+                "critical",
+                "this node has been revoked; re-enroll it (§10.5)".into(),
+            );
         } else if !me_ok && n.store.read().head().is_some() {
-            n.alarm("node_invalid", "critical", "this node's record is missing or its key was replaced".into());
+            n.alarm(
+                "node_invalid",
+                "critical",
+                "this node's record is missing or its key was replaced".into(),
+            );
         } else {
             n.clear_alarm("node_tombstoned");
             n.clear_alarm("node_invalid");

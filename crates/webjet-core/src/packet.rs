@@ -16,14 +16,22 @@ pub struct Flow {
 
 impl Flow {
     pub fn reverse(&self) -> Flow {
-        Flow { proto: self.proto, src: self.dst, dst: self.src, sport: self.dport, dport: self.sport }
+        Flow {
+            proto: self.proto,
+            src: self.dst,
+            dst: self.src,
+            sport: self.dport,
+            dport: self.sport,
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IcmpKind {
     /// Echo request/reply: `sport` holds the identifier.
-    Echo { request: bool },
+    Echo {
+        request: bool,
+    },
     /// An error message that quotes another packet's header.
     Error,
     Other,
@@ -53,7 +61,10 @@ pub fn version(p: &[u8]) -> Option<u8> {
 
 pub fn src_dst(p: &[u8]) -> Option<(IpAddr, IpAddr)> {
     match version(p)? {
-        4 if p.len() >= 20 => Some((IpAddr::V4(Ipv4Addr::new(p[12], p[13], p[14], p[15])), IpAddr::V4(Ipv4Addr::new(p[16], p[17], p[18], p[19])))),
+        4 if p.len() >= 20 => Some((
+            IpAddr::V4(Ipv4Addr::new(p[12], p[13], p[14], p[15])),
+            IpAddr::V4(Ipv4Addr::new(p[16], p[17], p[18], p[19])),
+        )),
         6 if p.len() >= 40 => {
             let s: [u8; 16] = p[8..24].try_into().ok()?;
             let d: [u8; 16] = p[24..40].try_into().ok()?;
@@ -80,7 +91,20 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
             }
             let frag_off = u16::from_be_bytes([p[6], p[7]]) & 0x1fff;
             if frag_off != 0 {
-                return Some(Parsed { flow: Flow { proto: p[9], src, dst, sport: 0, dport: 0 }, l4_offset: ihl, tcp_flags: 0, icmp: None, ecn: p[1] & 3, inner: None });
+                return Some(Parsed {
+                    flow: Flow {
+                        proto: p[9],
+                        src,
+                        dst,
+                        sport: 0,
+                        dport: 0,
+                    },
+                    l4_offset: ihl,
+                    tcp_flags: 0,
+                    icmp: None,
+                    ecn: p[1] & 3,
+                    inner: None,
+                });
             }
             (p[9], ihl, p[1] & 3)
         }
@@ -105,7 +129,20 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
                         nh = p[off];
                         off += 8;
                         if frag != 0 {
-                            return Some(Parsed { flow: Flow { proto: nh, src, dst, sport: 0, dport: 0 }, l4_offset: off, tcp_flags: 0, icmp: None, ecn, inner: None });
+                            return Some(Parsed {
+                                flow: Flow {
+                                    proto: nh,
+                                    src,
+                                    dst,
+                                    sport: 0,
+                                    dport: 0,
+                                },
+                                l4_offset: off,
+                                tcp_flags: 0,
+                                icmp: None,
+                                ecn,
+                                inner: None,
+                            });
                         }
                     }
                     _ => break,
@@ -116,7 +153,20 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
         _ => return None,
     };
     let l4 = p.get(off..)?;
-    let mut parsed = Parsed { flow: Flow { proto, src, dst, sport: 0, dport: 0 }, l4_offset: off, tcp_flags: 0, icmp: None, ecn, inner: None };
+    let mut parsed = Parsed {
+        flow: Flow {
+            proto,
+            src,
+            dst,
+            sport: 0,
+            dport: 0,
+        },
+        l4_offset: off,
+        tcp_flags: 0,
+        icmp: None,
+        ecn,
+        inner: None,
+    };
     match proto {
         PROTO_TCP if l4.len() >= 20 => {
             parsed.flow.sport = u16::from_be_bytes([l4[0], l4[1]]);
@@ -129,7 +179,11 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
         }
         PROTO_ICMP | PROTO_ICMPV6 if l4.len() >= 8 => {
             let ty = l4[0];
-            let (echo_req, echo_rep, is_err) = if proto == PROTO_ICMP { (ty == 8, ty == 0, matches!(ty, 3 | 4 | 5 | 11 | 12)) } else { (ty == 128, ty == 129, ty < 128) };
+            let (echo_req, echo_rep, is_err) = if proto == PROTO_ICMP {
+                (ty == 8, ty == 0, matches!(ty, 3 | 4 | 5 | 11 | 12))
+            } else {
+                (ty == 128, ty == 129, ty < 128)
+            };
             if echo_req || echo_rep {
                 let id = u16::from_be_bytes([l4[4], l4[5]]);
                 parsed.flow.sport = id;
@@ -158,14 +212,25 @@ fn parse_quoted(q: &[u8]) -> Option<Flow> {
     };
     let l4 = q.get(off..off + 4)?;
     let (sport, dport) = match proto {
-        PROTO_TCP | PROTO_UDP => (u16::from_be_bytes([l4[0], l4[1]]), u16::from_be_bytes([l4[2], l4[3]])),
+        PROTO_TCP | PROTO_UDP => (
+            u16::from_be_bytes([l4[0], l4[1]]),
+            u16::from_be_bytes([l4[2], l4[3]]),
+        ),
         PROTO_ICMP | PROTO_ICMPV6 => {
-            let id = q.get(off + 4..off + 6).map(|b| u16::from_be_bytes([b[0], b[1]]))?;
+            let id = q
+                .get(off + 4..off + 6)
+                .map(|b| u16::from_be_bytes([b[0], b[1]]))?;
             (id, id)
         }
         _ => (0, 0),
     };
-    Some(Flow { proto, src, dst, sport, dport })
+    Some(Flow {
+        proto,
+        src,
+        dst,
+        sport,
+        dport,
+    })
 }
 
 // ---------------------------------------------------------------- checksums
@@ -230,7 +295,11 @@ pub fn fix_checksums(p: &mut [u8]) {
             return;
         }
     }
-    let total = if version(p) == Some(4) { u16::from_be_bytes([p[2], p[3]]) as usize } else { 40 + u16::from_be_bytes([p[4], p[5]]) as usize };
+    let total = if version(p) == Some(4) {
+        u16::from_be_bytes([p[2], p[3]]) as usize
+    } else {
+        40 + u16::from_be_bytes([p[4], p[5]]) as usize
+    };
     let end = total.min(p.len());
     if end <= off {
         return;
@@ -290,10 +359,9 @@ fn set_port(p: &mut [u8], off: usize, proto: u8, src: bool, port: u16) {
                 p[o..o + 2].copy_from_slice(&port.to_be_bytes());
             }
         }
-        PROTO_ICMP | PROTO_ICMPV6
-            if p.len() >= off + 6 => {
-                p[off + 4..off + 6].copy_from_slice(&port.to_be_bytes());
-            }
+        PROTO_ICMP | PROTO_ICMPV6 if p.len() >= off + 6 => {
+            p[off + 4..off + 6].copy_from_slice(&port.to_be_bytes());
+        }
         _ => {}
     }
 }
@@ -449,11 +517,17 @@ pub struct Bucket {
 
 impl Bucket {
     pub fn new(rate: f64, burst: f64) -> Self {
-        Bucket { tokens: burst, rate, burst, last: std::time::Instant::now() }
+        Bucket {
+            tokens: burst,
+            rate,
+            burst,
+            last: std::time::Instant::now(),
+        }
     }
     pub fn take(&mut self) -> bool {
         let now = std::time::Instant::now();
-        self.tokens = (self.tokens + now.duration_since(self.last).as_secs_f64() * self.rate).min(self.burst);
+        self.tokens =
+            (self.tokens + now.duration_since(self.last).as_secs_f64() * self.rate).min(self.burst);
         self.last = now;
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;
@@ -497,7 +571,11 @@ pub mod tests {
     fn verify_udp(p: &[u8]) -> bool {
         let parsed = parse(p).unwrap();
         let off = parsed.l4_offset;
-        fold(sum16(&p[off..], pseudo(&parsed.flow.src, &parsed.flow.dst, 17, p.len() - off))) == 0 && checksum(&p[..20]) == 0
+        fold(sum16(
+            &p[off..],
+            pseudo(&parsed.flow.src, &parsed.flow.dst, 17, p.len() - off),
+        )) == 0
+            && checksum(&p[..20]) == 0
     }
 
     #[test]
@@ -506,7 +584,11 @@ pub mod tests {
         assert!(verify_udp(&p));
         let f = parse(&p).unwrap().flow;
         assert_eq!((f.sport, f.dport, f.proto), (5000, 53, 17));
-        rewrite(&mut p, Some(("192.168.1.1".parse().unwrap(), 40000)), Some(("192.168.1.17".parse().unwrap(), 53)));
+        rewrite(
+            &mut p,
+            Some(("192.168.1.1".parse().unwrap(), 40000)),
+            Some(("192.168.1.17".parse().unwrap(), 53)),
+        );
         assert!(verify_udp(&p));
         let f = parse(&p).unwrap().flow;
         assert_eq!(f.src, "192.168.1.1".parse::<IpAddr>().unwrap());
@@ -525,7 +607,11 @@ pub mod tests {
         assert!(icmp_unreachable(&r, Unreach::Host).is_none());
         // Translate the error as a gateway would.
         let mut r2 = r.clone();
-        rewrite(&mut r2, Some(("10.2.2.17".parse().unwrap(), 0)), Some(("10.7.0.9".parse().unwrap(), 4321)));
+        rewrite(
+            &mut r2,
+            Some(("10.2.2.17".parse().unwrap(), 0)),
+            Some(("10.7.0.9".parse().unwrap(), 4321)),
+        );
         let pr = parse(&r2).unwrap();
         assert_eq!(pr.inner.unwrap().src, "10.7.0.9".parse::<IpAddr>().unwrap());
         assert_eq!(pr.inner.unwrap().sport, 4321);
@@ -557,7 +643,14 @@ pub mod tests {
 }
 
 /// Build an ICMP(v6) echo request or reply.
-pub fn icmp_echo(src: IpAddr, dst: IpAddr, request: bool, id: u16, seq: u16, payload: &[u8]) -> Vec<u8> {
+pub fn icmp_echo(
+    src: IpAddr,
+    dst: IpAddr,
+    request: bool,
+    id: u16,
+    seq: u16,
+    payload: &[u8],
+) -> Vec<u8> {
     let l4len = 8 + payload.len();
     let mut p = match (src, dst) {
         (IpAddr::V4(s), IpAddr::V4(d)) => {
@@ -602,5 +695,12 @@ pub fn echo_reply(req: &[u8]) -> Option<Vec<u8>> {
     let off = p.l4_offset;
     let id = u16::from_be_bytes([*req.get(off + 4)?, *req.get(off + 5)?]);
     let seq = u16::from_be_bytes([*req.get(off + 6)?, *req.get(off + 7)?]);
-    Some(icmp_echo(p.flow.dst, p.flow.src, false, id, seq, req.get(off + 8..)?))
+    Some(icmp_echo(
+        p.flow.dst,
+        p.flow.src,
+        false,
+        id,
+        seq,
+        req.get(off + 8..)?,
+    ))
 }

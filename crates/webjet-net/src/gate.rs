@@ -76,7 +76,10 @@ pub struct ReplayCache {
 
 impl ReplayCache {
     pub fn new(cap: usize) -> Self {
-        ReplayCache { seen: Mutex::new((HashMap::new(), VecDeque::new())), cap }
+        ReplayCache {
+            seen: Mutex::new((HashMap::new(), VecDeque::new())),
+            cap,
+        }
     }
 
     /// Returns false if the nonce was already seen.
@@ -120,7 +123,11 @@ pub fn tcp_preamble(epoch: u16, psk: &Bytes32) -> [u8; TCP_PREAMBLE] {
 
 /// Check a TCP preamble. Returns `None` on any failure; the caller closes
 /// the connection without a reply.
-pub fn check_tcp_preamble(p: &[u8; TCP_PREAMBLE], epochs: &Epochs, replay: &ReplayCache) -> Option<GateResult> {
+pub fn check_tcp_preamble(
+    p: &[u8; TCP_PREAMBLE],
+    epochs: &Epochs,
+    replay: &ReplayCache,
+) -> Option<GateResult> {
     let epoch = u16::from_be_bytes([p[0], p[1]]);
     let res = epochs.classify(epoch)?;
     let psk = epochs.keys.get(&epoch)?;
@@ -161,7 +168,10 @@ pub struct UdpObfs {
 
 impl UdpObfs {
     pub fn new(root_key: &Bytes32) -> Self {
-        UdpObfs { k_obfs: derive(ctx::UDP_OBFS, root_key), ciphers: parking_lot::RwLock::new(BTreeMap::new()) }
+        UdpObfs {
+            k_obfs: derive(ctx::UDP_OBFS, root_key),
+            ciphers: parking_lot::RwLock::new(BTreeMap::new()),
+        }
     }
 
     pub fn set_epochs(&self, e: &Epochs) {
@@ -193,7 +203,9 @@ impl UdpObfs {
         pt.extend_from_slice(&padding);
         let m = self.mask(&nonce);
         let me = [epoch.to_be_bytes()[0] ^ m[0], epoch.to_be_bytes()[1] ^ m[1]];
-        let ct = c.encrypt(XNonce::from_slice(&nonce), Payload { msg: &pt, aad: &me }).ok()?;
+        let ct = c
+            .encrypt(XNonce::from_slice(&nonce), Payload { msg: &pt, aad: &me })
+            .ok()?;
         let mut out = Vec::with_capacity(26 + ct.len());
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&me);
@@ -212,7 +224,15 @@ impl UdpObfs {
         let res = epochs.classify(epoch)?;
         let ciphers = self.ciphers.read();
         let c = ciphers.get(&epoch)?;
-        let pt = c.decrypt(XNonce::from_slice(nonce), Payload { msg: &d[26..], aad: &d[24..26] }).ok()?;
+        let pt = c
+            .decrypt(
+                XNonce::from_slice(nonce),
+                Payload {
+                    msg: &d[26..],
+                    aad: &d[24..26],
+                },
+            )
+            .ok()?;
         let len = u16::from_be_bytes([pt[0], pt[1]]) as usize;
         let inner = pt.get(2..2 + len)?.to_vec();
         Some((res, inner))
@@ -250,10 +270,17 @@ mod tests {
         assert_eq!(check_tcp_preamble(&p, &e, &rc), Some(GateResult::Normal(3)));
         assert_eq!(check_tcp_preamble(&p, &e, &rc), None, "replay");
         let p = tcp_preamble(1, &[1; 32]);
-        assert_eq!(check_tcp_preamble(&p, &e, &rc), None, "too old for a normal node");
+        assert_eq!(
+            check_tcp_preamble(&p, &e, &rc),
+            None,
+            "too old for a normal node"
+        );
         let mut seed = e.clone();
         seed.accept_all = true;
-        assert_eq!(check_tcp_preamble(&p, &seed, &rc), Some(GateResult::Bootstrap(1)));
+        assert_eq!(
+            check_tcp_preamble(&p, &seed, &rc),
+            Some(GateResult::Bootstrap(1))
+        );
         let mut bad = tcp_preamble(3, &[3; 32]);
         bad[40] ^= 1;
         assert_eq!(check_tcp_preamble(&bad, &e, &rc), None);

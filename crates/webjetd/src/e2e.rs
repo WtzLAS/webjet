@@ -82,7 +82,10 @@ pub struct Session {
 impl Session {
     pub fn established(&self) -> bool {
         let i = self.inner.lock();
-        i.send.as_ref().map(|s| s.created.elapsed() < REJECT_AFTER).unwrap_or(false)
+        i.send
+            .as_ref()
+            .map(|s| s.created.elapsed() < REJECT_AFTER)
+            .unwrap_or(false)
     }
 
     pub fn handshaking(&self) -> bool {
@@ -152,7 +155,9 @@ impl Sessions {
 
     fn in_progress(&self) -> usize {
         let all: Vec<Arc<Session>> = self.map.lock().values().cloned().collect();
-        all.iter().filter(|s| s.inner.try_lock().map(|i| i.hs.is_some()).unwrap_or(true)).count()
+        all.iter()
+            .filter(|s| s.inner.try_lock().map(|i| i.hs.is_some()).unwrap_or(true))
+            .count()
     }
 }
 
@@ -161,7 +166,10 @@ struct E2eTrust(std::sync::Weak<Node>);
 
 impl tls::PeerTrust for E2eTrust {
     fn trusted(&self, key: &Bytes32) -> bool {
-        self.0.upgrade().map(|n| n.store.read().trusted_by_key(key).is_some()).unwrap_or(false)
+        self.0
+            .upgrade()
+            .map(|n| n.store.read().trusted_by_key(key).is_some())
+            .unwrap_or(false)
     }
 }
 
@@ -182,10 +190,16 @@ pub enum SendResult {
 /// Send one payload of type `ty` to `peer`, setting up the session and a
 /// circuit on demand (§9.4.1).
 pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> SendResult {
-    let Some(s) = n.e2e.get_or_create(n, peer) else { return SendResult::NoRoute };
+    let Some(s) = n.e2e.get_or_create(n, peer) else {
+        return SendResult::NoRoute;
+    };
     *s.last_used.lock() = Instant::now();
     let mut i = s.inner.lock();
-    let usable = i.send.as_ref().map(|k| k.created.elapsed() < REJECT_AFTER && k.counter < frames::REKEY_PACKETS).unwrap_or(false);
+    let usable = i
+        .send
+        .as_ref()
+        .map(|k| k.created.elapsed() < REJECT_AFTER && k.counter < frames::REKEY_PACKETS)
+        .unwrap_or(false);
     if usable {
         let circ = pick_circuit(n, &s, &mut i);
         if let Some(c) = circ {
@@ -199,7 +213,11 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
                 maybe_rekey(n, &s);
             }
             s.tx_packets.fetch_add(1, Ordering::Relaxed);
-            return if c.send(n, &f, ecn) { SendResult::Sent } else { SendResult::Dropped };
+            return if c.send(n, &f, ecn) {
+                SendResult::Sent
+            } else {
+                SendResult::Dropped
+            };
         }
     }
     if i.queue.len() >= MAX_QUEUED {
@@ -217,17 +235,29 @@ fn pick_circuit(n: &Node, s: &Session, i: &mut Inner) -> Option<Arc<LocalCircuit
         i.primary = None;
         return None;
     }
-    let cur = i.primary.and_then(|l| circuits.iter().find(|c| c.label == l).cloned());
+    let cur = i
+        .primary
+        .and_then(|l| circuits.iter().find(|c| c.label == l).cloned());
     let best = circuits.iter().min_by(|a, b| {
         let (ca, cb) = (a.cost(), b.cost());
-        let ca = if ca.is_finite() { ca } else { 1e9 + a.hops.len() as f64 };
-        let cb = if cb.is_finite() { cb } else { 1e9 + b.hops.len() as f64 };
+        let ca = if ca.is_finite() {
+            ca
+        } else {
+            1e9 + a.hops.len() as f64
+        };
+        let cb = if cb.is_finite() {
+            cb
+        } else {
+            1e9 + b.hops.len() as f64
+        };
         ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
     })?;
     let chosen = match cur {
         Some(c) if c.label != best.label => {
             let now = webjet_core::types::now_ms();
-            if i.hyst.should_switch(c.cost(), best.label as u64, best.cost(), now, 3000) {
+            if i.hyst
+                .should_switch(c.cost(), best.label as u64, best.cost(), now, 3000)
+            {
                 s.path_switches.fetch_add(1, Ordering::Relaxed);
                 best.clone()
             } else {
@@ -281,7 +311,13 @@ fn ensure(n: &Arc<Node>, s: &Arc<Session>) {
 
 fn maybe_rekey(n: &Arc<Node>, s: &Arc<Session>) {
     // The lower node id rekeys at 120 s; the other side only as a fallback.
-    let age = s.inner.lock().send.as_ref().map(|k| k.created.elapsed()).unwrap_or_default();
+    let age = s
+        .inner
+        .lock()
+        .send
+        .as_ref()
+        .map(|k| k.created.elapsed())
+        .unwrap_or_default();
     let mine = n.me < s.peer || age > REKEY_AFTER + Duration::from_secs(20);
     if mine && !s.handshaking() {
         if let Some(c) = n.circuits.lock().local_circuits(&s.peer).into_iter().next() {
@@ -369,8 +405,12 @@ fn derive(conn: &rustls::Connection, init_kid: u32, resp_kid: u32) -> Result<(By
     let mut km = [0u8; 64];
     let ctx = frames::exporter_context(init_kid, resp_kid);
     match conn {
-        rustls::Connection::Client(c) => c.export_keying_material(&mut km, frames::E2E_EXPORTER_LABEL, Some(&ctx))?,
-        rustls::Connection::Server(c) => c.export_keying_material(&mut km, frames::E2E_EXPORTER_LABEL, Some(&ctx))?,
+        rustls::Connection::Client(c) => {
+            c.export_keying_material(&mut km, frames::E2E_EXPORTER_LABEL, Some(&ctx))?
+        }
+        rustls::Connection::Server(c) => {
+            c.export_keying_material(&mut km, frames::E2E_EXPORTER_LABEL, Some(&ctx))?
+        }
     };
     Ok(frames::split_keys(&km))
 }
@@ -383,14 +423,30 @@ fn install(i: &mut Inner, send_key: Bytes32, recv_key: Bytes32, my_kid: u32, pee
             k.retire_at = Some(now + OLD_KEY_GRACE);
         }
     }
-    i.recv.insert(my_kid, RecvKey { key: SessionKey::new(recv_key), window: ReplayWindow::default(), created: now, retire_at: None });
-    i.send = Some(SendKey { key: SessionKey::new(send_key), peer_kid, counter: 0, created: now });
+    i.recv.insert(
+        my_kid,
+        RecvKey {
+            key: SessionKey::new(recv_key),
+            window: ReplayWindow::default(),
+            created: now,
+            retire_at: None,
+        },
+    );
+    i.send = Some(SendKey {
+        key: SessionKey::new(send_key),
+        peer_kid,
+        counter: 0,
+        created: now,
+    });
     i.established_at = Some(now);
 }
 
 fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()> {
     let h = frames::parse_handshake(frame).ok_or_else(|| anyhow!("bad handshake frame"))?;
-    let s = n.e2e.get_or_create(n, &c.peer).ok_or_else(|| anyhow!("handshake from an untrusted peer"))?;
+    let s = n
+        .e2e
+        .get_or_create(n, &c.peer)
+        .ok_or_else(|| anyhow!("handshake from an untrusted peer"))?;
     *s.last_used.lock() = Instant::now();
     // Count before taking our own lock: in_progress() locks every session.
     let busy = n.e2e.in_progress() >= MAX_HS_IN_PROGRESS;
@@ -425,7 +481,8 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
     // A new handshake: we are the responder.
     {
         let now = Instant::now();
-        i.hs_times.retain(|t| now.duration_since(*t) < Duration::from_secs(1));
+        i.hs_times
+            .retain(|t| now.duration_since(*t) < Duration::from_secs(1));
         if i.hs_times.len() >= 10 {
             bail!("handshake rate limit");
         }
@@ -458,7 +515,14 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
     continue_handshake(n, &s, c, i, h.flight, h.tls)
 }
 
-fn continue_handshake(n: &Arc<Node>, s: &Arc<Session>, c: &Arc<LocalCircuit>, mut i: parking_lot::MutexGuard<'_, Inner>, flight: u16, data: &[u8]) -> Result<()> {
+fn continue_handshake(
+    n: &Arc<Node>,
+    s: &Arc<Session>,
+    c: &Arc<LocalCircuit>,
+    mut i: parking_lot::MutexGuard<'_, Inner>,
+    flight: u16,
+    data: &[u8],
+) -> Result<()> {
     let hs = i.hs.as_mut().unwrap();
     hs.peer_flight = flight;
     hs.circuit = c.label;
@@ -531,21 +595,32 @@ fn continue_handshake(n: &Arc<Node>, s: &Arc<Session>, c: &Arc<LocalCircuit>, mu
 // ---------------------------------------------------------------- receiving
 
 pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
-    let Some(h) = frames::parse_header(body) else { return };
+    let Some(h) = frames::parse_header(body) else {
+        return;
+    };
     if h.ty == ftype::HANDSHAKE {
         if let Err(e) = on_handshake(n, c, body) {
             tracing::debug!("{e}");
         }
         return;
     }
-    let Some(s) = n.e2e.get(&c.peer).or_else(|| n.e2e.get_or_create(n, &c.peer)) else { return };
+    let Some(s) = n
+        .e2e
+        .get(&c.peer)
+        .or_else(|| n.e2e.get_or_create(n, &c.peer))
+    else {
+        return;
+    };
     let plain = {
         let mut i = s.inner.lock();
         let Some(k) = i.recv.get_mut(&h.key_id) else {
             // A frame under a key we don't have: we restarted, or the peer
             // holds stale keys. Start a fresh handshake so it re-keys (rate
             // limited; the peer answers as responder).
-            let due = i.last_unknown_hs.map(|t| t.elapsed() > Duration::from_secs(5)).unwrap_or(true);
+            let due = i
+                .last_unknown_hs
+                .map(|t| t.elapsed() > Duration::from_secs(5))
+                .unwrap_or(true);
             if due && i.hs.is_none() {
                 i.last_unknown_hs = Some(Instant::now());
                 drop(i);
@@ -555,7 +630,9 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
             }
             return;
         };
-        if k.created.elapsed() > REJECT_AFTER || k.retire_at.map(|t| Instant::now() > t).unwrap_or(false) {
+        if k.created.elapsed() > REJECT_AFTER
+            || k.retire_at.map(|t| Instant::now() > t).unwrap_or(false)
+        {
             return;
         }
         if !k.window.check(h.counter) {
@@ -564,7 +641,11 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
         let Some(p) = k.key.open(body) else { return };
         k.window.mark(h.counter);
         // The responder's handshake state can go once traffic flows.
-        if i.hs.as_ref().map(|x| x.done && !x.initiator).unwrap_or(false) {
+        if i.hs
+            .as_ref()
+            .map(|x| x.done && !x.initiator)
+            .unwrap_or(false)
+        {
             i.hs = None;
         }
         p
@@ -601,7 +682,9 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
 pub fn send_on(n: &Arc<Node>, s: &Session, c: &LocalCircuit, ty: u8, payload: &[u8]) -> bool {
     let f = {
         let mut i = s.inner.lock();
-        let Some(k) = i.send.as_mut() else { return false };
+        let Some(k) = i.send.as_mut() else {
+            return false;
+        };
         if k.created.elapsed() > REJECT_AFTER {
             return false;
         }
@@ -635,7 +718,10 @@ pub async fn run(n: Arc<Node>) {
             let mut failed = false;
             {
                 let mut i = s.inner.lock();
-                i.recv.retain(|_, k| k.created.elapsed() < REJECT_AFTER && k.retire_at.map(|t| now < t).unwrap_or(true));
+                i.recv.retain(|_, k| {
+                    k.created.elapsed() < REJECT_AFTER
+                        && k.retire_at.map(|t| now < t).unwrap_or(true)
+                });
                 if let Some(hs) = i.hs.as_mut() {
                     // The initiator keeps retransmitting flight 3 until the
                     // responder's key_id arrives; a finished responder only
@@ -644,7 +730,10 @@ pub async fn run(n: Arc<Node>) {
                     if hs.started.elapsed() > HS_GIVE_UP {
                         failed = !finished_responder;
                         i.hs = None;
-                    } else if !finished_responder && now.duration_since(hs.sent_at) > hs.rto && !hs.last_sent.is_empty() {
+                    } else if !finished_responder
+                        && now.duration_since(hs.sent_at) > hs.rto
+                        && !hs.last_sent.is_empty()
+                    {
                         hs.rto = (hs.rto * 2).min(Duration::from_secs(8));
                         hs.sent_at = now;
                         resend = Some((hs.circuit, hs.last_sent.clone()));
@@ -664,13 +753,23 @@ pub async fn run(n: Arc<Node>) {
             }
             if let Some((label, f)) = resend {
                 let all = n.circuits.lock().local_circuits(&s.peer);
-                let c = all.iter().find(|c| c.label == label).or_else(|| all.first()).cloned();
+                let c = all
+                    .iter()
+                    .find(|c| c.label == label)
+                    .or_else(|| all.first())
+                    .cloned();
                 if let Some(c) = c {
                     c.send(&n, &f, 0);
                 }
             }
             if s.established() {
-                let age = s.inner.lock().send.as_ref().map(|k| k.created.elapsed()).unwrap_or_default();
+                let age = s
+                    .inner
+                    .lock()
+                    .send
+                    .as_ref()
+                    .map(|k| k.created.elapsed())
+                    .unwrap_or_default();
                 if age > REKEY_AFTER && s.last_used.lock().elapsed() < Duration::from_secs(60) {
                     maybe_rekey(&n, &s);
                 }

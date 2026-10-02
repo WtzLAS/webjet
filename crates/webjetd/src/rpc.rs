@@ -33,7 +33,12 @@ fn encode(id: u64, kind: u8, body: RpcBody) -> Vec<u8> {
 }
 
 /// Call `peer` and wait for its answer.
-pub async fn call(n: &Arc<Node>, peer: &Bytes32, body: RpcBody, timeout: Duration) -> Result<RpcBody> {
+pub async fn call(
+    n: &Arc<Node>,
+    peer: &Bytes32,
+    body: RpcBody,
+    timeout: Duration,
+) -> Result<RpcBody> {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     pending().lock().insert(id, tx);
@@ -65,7 +70,9 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
     }
     let id = u64::from_be_bytes(payload[..8].try_into().unwrap());
     let kind = payload[8];
-    let Ok(rpc) = wp::Rpc::decode_bytes(&payload[9..]) else { return };
+    let Ok(rpc) = wp::Rpc::decode_bytes(&payload[9..]) else {
+        return;
+    };
     let Some(body) = rpc.body else { return };
     match kind {
         RESPONSE => {
@@ -79,7 +86,10 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
             tokio::spawn(async move {
                 let reply = match n.controller.get() {
                     Some(c) => c.clone().handle_rpc(from, body).await,
-                    None => Some(RpcBody::RpcAck(Box::new(wp::RpcAck { ok: false, error: Some("not a controller".into()) }))),
+                    None => Some(RpcBody::RpcAck(Box::new(wp::RpcAck {
+                        ok: false,
+                        error: Some("not a controller".into()),
+                    }))),
                 };
                 if kind == REQUEST {
                     if let Some(r) = reply {
@@ -95,14 +105,24 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
 /// Controllers this node knows of, nearest first (by hop availability).
 pub fn controllers(n: &Node) -> Vec<Bytes32> {
     let s = n.store.read();
-    let mut v: Vec<Bytes32> = s.view().controllers.keys().copied().filter(|c| *c != n.me).collect();
+    let mut v: Vec<Bytes32> = s
+        .view()
+        .controllers
+        .keys()
+        .copied()
+        .filter(|c| *c != n.me)
+        .collect();
     drop(s);
     v.sort_by_key(|c| (n.best_hop(c).is_none(), *c));
     v
 }
 
 /// Call any controller, trying them in order.
-pub async fn call_any(n: &Arc<Node>, body: RpcBody, timeout: Duration) -> Result<(Bytes32, RpcBody)> {
+pub async fn call_any(
+    n: &Arc<Node>,
+    body: RpcBody,
+    timeout: Duration,
+) -> Result<(Bytes32, RpcBody)> {
     let list = controllers(n);
     if list.is_empty() {
         return Err(anyhow!("no controller known"));

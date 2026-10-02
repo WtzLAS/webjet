@@ -35,7 +35,13 @@ pub async fn handle(n: &Arc<Node>, p: &[u8]) -> Option<Vec<u8>> {
     let q = Message::from_vec(payload).ok()?;
     let reply = answer(n, &q).await;
     let bytes = reply.to_vec().ok()?;
-    Some(udp_packet(parsed.flow.dst, 53, parsed.flow.src, parsed.flow.sport, &bytes))
+    Some(udp_packet(
+        parsed.flow.dst,
+        53,
+        parsed.flow.src,
+        parsed.flow.sport,
+        &bytes,
+    ))
 }
 
 pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
@@ -62,7 +68,8 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
     if let Some(cfg) = &cfg {
         for f in cfg.forward.clone().unwrap_or_default() {
             let zone = f.zone.clone().unwrap_or_default();
-            if in_zone(&name, &zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, &f)) {
+            if in_zone(&name, &zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, &f))
+            {
                 return forward(n, q, &f).await.unwrap_or_else(|| {
                     let mut e = r.clone();
                     e.set_response_code(ResponseCode::ServFail);
@@ -78,18 +85,31 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
             if let Some(id) = s.view().node_by_ip(&ip) {
                 if let Some(info) = s.view().nodes.get(&id) {
                     if let Ok(target) = Name::from_ascii(format!("{}.{suffix}.", info.name)) {
-                        r.add_answer(Record::from_rdata(query.name().clone(), TTL, RData::PTR(PTR(target))));
+                        r.add_answer(Record::from_rdata(
+                            query.name().clone(),
+                            TTL,
+                            RData::PTR(PTR(target)),
+                        ));
                         answered = true;
                     }
                 }
             }
         }
     }
-    let records = cfg.as_ref().map(|c| c.records.clone().unwrap_or_default()).unwrap_or_default();
+    let records = cfg
+        .as_ref()
+        .map(|c| c.records.clone().unwrap_or_default())
+        .unwrap_or_default();
     if !answered {
         answered = resolve(n, &name, qtype, &suffix, &records, &mut r, 0);
     }
-    let known_zone = in_zone(&name, &suffix) || records.iter().any(|x| x.name.as_deref().map(|z| in_zone(&name, z.split_once('.').map(|y| y.1).unwrap_or(z))).unwrap_or(false));
+    let known_zone = in_zone(&name, &suffix)
+        || records.iter().any(|x| {
+            x.name
+                .as_deref()
+                .map(|z| in_zone(&name, z.split_once('.').map(|y| y.1).unwrap_or(z)))
+                .unwrap_or(false)
+        });
     if !answered && known_zone && !name_exists(n, &name, &suffix, &records) {
         r.set_response_code(ResponseCode::NXDomain);
     } else if !answered && !known_zone && qtype != RecordType::PTR {
@@ -99,7 +119,12 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
 }
 
 fn name_exists(n: &Node, name: &str, suffix: &str, records: &[wp::DnsRecord]) -> bool {
-    if records.iter().any(|x| x.name.as_deref().map(|y| lower(y) == lower(name)).unwrap_or(false)) {
+    if records.iter().any(|x| {
+        x.name
+            .as_deref()
+            .map(|y| lower(y) == lower(name))
+            .unwrap_or(false)
+    }) {
         return true;
     }
     node_by_magic(n, name, suffix).is_some()
@@ -129,7 +154,10 @@ fn node_ref_ips(n: &Node, value: &str) -> Option<(String, Vec<IpAddr>)> {
     if !info.valid {
         return None;
     }
-    Some((info.name.clone(), info.ips.iter().map(|i| i.addr()).collect()))
+    Some((
+        info.name.clone(),
+        info.ips.iter().map(|i| i.addr()).collect(),
+    ))
 }
 
 fn push_addrs(r: &mut Message, owner: &Name, ips: &[IpAddr], qtype: RecordType) -> bool {
@@ -141,7 +169,11 @@ fn push_addrs(r: &mut Message, owner: &Name, ips: &[IpAddr], qtype: RecordType) 
                 any = true;
             }
             (IpAddr::V6(a), RecordType::AAAA | RecordType::ANY) => {
-                r.add_answer(Record::from_rdata(owner.clone(), TTL, RData::AAAA(AAAA(*a))));
+                r.add_answer(Record::from_rdata(
+                    owner.clone(),
+                    TTL,
+                    RData::AAAA(AAAA(*a)),
+                ));
                 any = true;
             }
             _ => {}
@@ -150,16 +182,31 @@ fn push_addrs(r: &mut Message, owner: &Name, ips: &[IpAddr], qtype: RecordType) 
     any || !ips.is_empty()
 }
 
-fn resolve(n: &Node, name: &str, qtype: RecordType, suffix: &str, records: &[wp::DnsRecord], r: &mut Message, depth: u8) -> bool {
+fn resolve(
+    n: &Node,
+    name: &str,
+    qtype: RecordType,
+    suffix: &str,
+    records: &[wp::DnsRecord],
+    r: &mut Message,
+    depth: u8,
+) -> bool {
     if depth > 4 {
         return false;
     }
-    let Ok(owner) = Name::from_ascii(format!("{}.", lower(name))) else { return false };
+    let Ok(owner) = Name::from_ascii(format!("{}.", lower(name))) else {
+        return false;
+    };
     if let Some(ips) = node_by_magic(n, name, suffix) {
         return push_addrs(r, &owner, &ips, qtype);
     }
     let mut answered = false;
-    for rec in records.iter().filter(|x| x.name.as_deref().map(|y| lower(y) == lower(name)).unwrap_or(false)) {
+    for rec in records.iter().filter(|x| {
+        x.name
+            .as_deref()
+            .map(|y| lower(y) == lower(name))
+            .unwrap_or(false)
+    }) {
         let value = rec.value.clone().unwrap_or_default();
         let ttl = if rec.ttl > 0 { rec.ttl } else { TTL };
         match rec.rtype {
@@ -176,7 +223,11 @@ fn resolve(n: &Node, name: &str, qtype: RecordType, suffix: &str, records: &[wp:
                     None => value.clone(),
                 };
                 if let Ok(t) = Name::from_ascii(format!("{}.", lower(&target))) {
-                    r.add_answer(Record::from_rdata(owner.clone(), ttl, RData::CNAME(CNAME(t))));
+                    r.add_answer(Record::from_rdata(
+                        owner.clone(),
+                        ttl,
+                        RData::CNAME(CNAME(t)),
+                    ));
                     answered = true;
                     if qtype != RecordType::CNAME {
                         resolve(n, &target, qtype, suffix, records, r, depth + 1);
@@ -184,14 +235,27 @@ fn resolve(n: &Node, name: &str, qtype: RecordType, suffix: &str, records: &[wp:
                 }
             }
             wp::DnsType::Txt if matches!(qtype, RecordType::TXT | RecordType::ANY) => {
-                r.add_answer(Record::from_rdata(owner.clone(), ttl, RData::TXT(TXT::new(vec![value.clone()]))));
+                r.add_answer(Record::from_rdata(
+                    owner.clone(),
+                    ttl,
+                    RData::TXT(TXT::new(vec![value.clone()])),
+                ));
                 answered = true;
             }
             wp::DnsType::Srv if matches!(qtype, RecordType::SRV | RecordType::ANY) => {
                 let f: Vec<&str> = value.split_whitespace().collect();
                 if f.len() == 4 {
-                    if let (Ok(pr), Ok(w), Ok(port), Ok(t)) = (f[0].parse(), f[1].parse(), f[2].parse(), Name::from_ascii(format!("{}.", lower(f[3])))) {
-                        r.add_answer(Record::from_rdata(owner.clone(), ttl, RData::SRV(SRV::new(pr, w, port, t))));
+                    if let (Ok(pr), Ok(w), Ok(port), Ok(t)) = (
+                        f[0].parse(),
+                        f[1].parse(),
+                        f[2].parse(),
+                        Name::from_ascii(format!("{}.", lower(f[3]))),
+                    ) {
+                        r.add_answer(Record::from_rdata(
+                            owner.clone(),
+                            ttl,
+                            RData::SRV(SRV::new(pr, w, port, t)),
+                        ));
                         answered = true;
                     }
                 }
@@ -241,11 +305,18 @@ fn ip_to_ptr(ip: IpAddr) -> String {
 }
 
 fn grants(f: &wp::ForwardZone) -> Vec<Grant> {
-    f.rewrite.clone().unwrap_or_default().iter().filter_map(|g| Grant::from_wire(g).ok()).collect()
+    f.rewrite
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|g| Grant::from_wire(g).ok())
+        .collect()
 }
 
 fn reverse_in_rewrite(name: &str, f: &wp::ForwardZone) -> bool {
-    ptr_to_ip(name).map(|ip| grants(f).iter().any(|g| g.published.contains(&ip))).unwrap_or(false)
+    ptr_to_ip(name)
+        .map(|ip| grants(f).iter().any(|g| g.published.contains(&ip)))
+        .unwrap_or(false)
 }
 
 /// Forward a query to the zone's servers over the overlay (§11.10.4) and
@@ -271,21 +342,51 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
         }
     }
     let bytes = out.to_vec().ok()?;
-    let servers: Vec<IpAddr> = f.servers.clone().unwrap_or_default().iter().filter_map(|s| s.to_ip()).collect();
+    let servers: Vec<IpAddr> = f
+        .servers
+        .clone()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| s.to_ip())
+        .collect();
     let _ = n;
     for srv in servers {
-        let bind: SocketAddr = if srv.is_ipv4() { "0.0.0.0:0".parse().unwrap() } else { "[::]:0".parse().unwrap() };
-        let Ok(sock) = tokio::net::UdpSocket::bind(bind).await else { continue };
-        if sock.send_to(&bytes, SocketAddr::new(srv, 53)).await.is_err() {
+        let bind: SocketAddr = if srv.is_ipv4() {
+            "0.0.0.0:0".parse().unwrap()
+        } else {
+            "[::]:0".parse().unwrap()
+        };
+        let Ok(sock) = tokio::net::UdpSocket::bind(bind).await else {
+            continue;
+        };
+        if sock
+            .send_to(&bytes, SocketAddr::new(srv, 53))
+            .await
+            .is_err()
+        {
             continue;
         }
         let mut buf = vec![0u8; 4096];
-        let Ok(Ok((len, _))) = tokio::time::timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await else { continue };
-        let Ok(mut resp) = Message::from_vec(&buf[..len]) else { continue };
+        let Ok(Ok((len, _))) =
+            tokio::time::timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await
+        else {
+            continue;
+        };
+        let Ok(mut resp) = Message::from_vec(&buf[..len]) else {
+            continue;
+        };
         if gs.iter().any(|g| g.mapped()) {
-            let answers: Vec<Record> = resp.take_answers().into_iter().map(|rec| rewrite_record(rec, &gs)).collect();
+            let answers: Vec<Record> = resp
+                .take_answers()
+                .into_iter()
+                .map(|rec| rewrite_record(rec, &gs))
+                .collect();
             resp.add_answers(answers);
-            let adds: Vec<Record> = resp.take_additionals().into_iter().map(|rec| rewrite_record(rec, &gs)).collect();
+            let adds: Vec<Record> = resp
+                .take_additionals()
+                .into_iter()
+                .map(|rec| rewrite_record(rec, &gs))
+                .collect();
             resp.add_additionals(adds);
             resp.set_authentic_data(false);
         }
@@ -314,17 +415,23 @@ fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
     let new = match rec.data() {
         Some(RData::A(a)) => {
             let ip = IpAddr::V4(a.0);
-            gs.iter().find(|g| g.lan.contains(&ip)).and_then(|g| map_prefix(ip, &g.lan, &g.published)).and_then(|x| match x {
-                IpAddr::V4(v) => Some(RData::A(A(v))),
-                _ => None,
-            })
+            gs.iter()
+                .find(|g| g.lan.contains(&ip))
+                .and_then(|g| map_prefix(ip, &g.lan, &g.published))
+                .and_then(|x| match x {
+                    IpAddr::V4(v) => Some(RData::A(A(v))),
+                    _ => None,
+                })
         }
         Some(RData::AAAA(a)) => {
             let ip = IpAddr::V6(a.0);
-            gs.iter().find(|g| g.lan.contains(&ip)).and_then(|g| map_prefix(ip, &g.lan, &g.published)).and_then(|x| match x {
-                IpAddr::V6(v) => Some(RData::AAAA(AAAA(v))),
-                _ => None,
-            })
+            gs.iter()
+                .find(|g| g.lan.contains(&ip))
+                .and_then(|g| map_prefix(ip, &g.lan, &g.published))
+                .and_then(|x| match x {
+                    IpAddr::V6(v) => Some(RData::AAAA(AAAA(v))),
+                    _ => None,
+                })
         }
         _ => None,
     };
@@ -381,7 +488,13 @@ mod tests {
     }
     #[test]
     fn udp_builds() {
-        let p = udp_packet("10.7.255.53".parse().unwrap(), 53, "10.7.0.1".parse().unwrap(), 5353, b"hello");
+        let p = udp_packet(
+            "10.7.255.53".parse().unwrap(),
+            53,
+            "10.7.0.1".parse().unwrap(),
+            5353,
+            b"hello",
+        );
         let parsed = packet::parse(&p).unwrap();
         assert_eq!(parsed.flow.sport, 53);
         assert_eq!(parsed.flow.dport, 5353);

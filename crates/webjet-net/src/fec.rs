@@ -22,7 +22,9 @@ pub struct Encoder {
 }
 
 fn codec(cache: &mut HashMap<(usize, usize), ReedSolomon>, k: usize, m: usize) -> &ReedSolomon {
-    cache.entry((k, m)).or_insert_with(|| ReedSolomon::new(k, m).expect("rs params"))
+    cache
+        .entry((k, m))
+        .or_insert_with(|| ReedSolomon::new(k, m).expect("rs params"))
 }
 
 fn header(group: u32, idx: u8, k: u8, m: u8, len: u16) -> [u8; HDR] {
@@ -43,14 +45,22 @@ impl Default for Encoder {
 
 impl Encoder {
     pub fn new() -> Self {
-        Encoder { group: 0, pending: Vec::new(), ratio: 0.0, parity_bytes: 0, codecs: HashMap::new() }
+        Encoder {
+            group: 0,
+            pending: Vec::new(),
+            ratio: 0.0,
+            parity_bytes: 0,
+            codecs: HashMap::new(),
+        }
     }
 
     fn parity_count(&self, k: usize) -> usize {
         if self.ratio <= 0.001 {
             return 0;
         }
-        ((k as f64) * self.ratio).ceil().clamp(1.0, (k as f64 * MAX_PARITY_RATIO).ceil().max(1.0)) as usize
+        ((k as f64) * self.ratio)
+            .ceil()
+            .clamp(1.0, (k as f64 * MAX_PARITY_RATIO).ceil().max(1.0)) as usize
     }
 
     /// Wrap one data packet; returns the shards to send now (the data shard
@@ -113,7 +123,11 @@ impl Encoder {
     /// Adapt the ratio to the measured loss, aiming at <0.1% residual loss
     /// (§17.6). Moves gradually.
     pub fn adapt(&mut self, loss: f64) {
-        let target = if loss < 0.002 { 0.0 } else { (loss * 3.0 + 0.05).min(MAX_PARITY_RATIO) };
+        let target = if loss < 0.002 {
+            0.0
+        } else {
+            (loss * 3.0 + 0.05).min(MAX_PARITY_RATIO)
+        };
         self.ratio = self.ratio * 0.8 + target * 0.2;
         if self.ratio < 0.005 {
             self.ratio = 0.0;
@@ -145,7 +159,13 @@ impl Default for Decoder {
 
 impl Decoder {
     pub fn new() -> Self {
-        Decoder { groups: BTreeMap::new(), newest: 0, recovered: 0, received: 0, codecs: HashMap::new() }
+        Decoder {
+            groups: BTreeMap::new(),
+            newest: 0,
+            recovered: 0,
+            received: 0,
+            codecs: HashMap::new(),
+        }
     }
 
     /// Process one shard; returns the data packets to hand to KCP.
@@ -157,7 +177,9 @@ impl Decoder {
         let idx = shard[4];
         let (k, m) = (shard[5], shard[6]);
         let len = u16::from_be_bytes([shard[7], shard[8]]) as usize;
-        let Some(payload) = shard.get(HDR..HDR + len) else { return Vec::new() };
+        let Some(payload) = shard.get(HDR..HDR + len) else {
+            return Vec::new();
+        };
         self.received += 1;
         // Keep a bounded window of groups.
         if group.wrapping_sub(self.newest) < u32::MAX / 2 {
@@ -167,7 +189,13 @@ impl Decoder {
             let first = *self.groups.keys().next().unwrap();
             self.groups.remove(&first);
         }
-        let g = self.groups.entry(group).or_insert(Group { data: BTreeMap::new(), parity: BTreeMap::new(), k: 0, m: 0, done: false });
+        let g = self.groups.entry(group).or_insert(Group {
+            data: BTreeMap::new(),
+            parity: BTreeMap::new(),
+            k: 0,
+            m: 0,
+            done: false,
+        });
         let mut out = Vec::new();
         if k == 0 {
             // A data shard: deliver immediately.
@@ -212,7 +240,9 @@ impl Decoder {
             return out;
         }
         let missing: Vec<usize> = (0..kk).filter(|i| slots[*i].is_none()).collect();
-        let ok = codec(&mut self.codecs, kk, mm).reconstruct_data(&mut slots).is_ok();
+        let ok = codec(&mut self.codecs, kk, mm)
+            .reconstruct_data(&mut slots)
+            .is_ok();
         let g = self.groups.get_mut(&group).unwrap();
         g.done = true;
         if ok {

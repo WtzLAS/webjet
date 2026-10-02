@@ -25,11 +25,19 @@ impl FileSigner {
         if !path.exists() {
             let kp = KeyPair::generate();
             crate::state::write_private(path, &kp.seed()[..])?;
-            tracing::warn!("generated an in-process signing key at {} (use webjet-signer in production)", path.display());
+            tracing::warn!(
+                "generated an in-process signing key at {} (use webjet-signer in production)",
+                path.display()
+            );
         }
         let b = std::fs::read(path)?;
-        let seed: Bytes32 = b.as_slice().try_into().map_err(|_| anyhow!("bad signing key file"))?;
-        Ok(FileSigner { kp: KeyPair::from_seed(&seed) })
+        let seed: Bytes32 = b
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("bad signing key file"))?;
+        Ok(FileSigner {
+            kp: KeyPair::from_seed(&seed),
+        })
     }
 }
 
@@ -61,7 +69,8 @@ impl SocketSigner {
     #[cfg(unix)]
     fn call(&self, req: serde_json::Value) -> Result<serde_json::Value> {
         use std::io::{BufRead, BufReader, Write};
-        let mut s = std::os::unix::net::UnixStream::connect(&self.path).with_context(|| format!("webjet-signer at {}", self.path.display()))?;
+        let mut s = std::os::unix::net::UnixStream::connect(&self.path)
+            .with_context(|| format!("webjet-signer at {}", self.path.display()))?;
         s.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut line = serde_json::to_vec(&req)?;
         line.push(b'\n');
@@ -85,11 +94,19 @@ impl SocketSigner {
 impl Signer for SocketSigner {
     fn public(&self) -> Result<Bytes32> {
         let v = self.call(serde_json::json!({"op": "pubkey"}))?;
-        v.get("pubkey").and_then(|p| p.as_str()).and_then(webjet_core::crypto::parse_hex32).ok_or_else(|| anyhow!("bad pubkey reply"))
+        v.get("pubkey")
+            .and_then(|p| p.as_str())
+            .and_then(webjet_core::crypto::parse_hex32)
+            .ok_or_else(|| anyhow!("bad pubkey reply"))
     }
     fn sign(&self, ty: u16, body: Vec<u8>) -> Result<Vec<u8>> {
-        let v = self.call(serde_json::json!({"op": "sign", "type": ty, "body": crate::state::b64(&body)}))?;
-        let e = v.get("envelope").and_then(|p| p.as_str()).ok_or_else(|| anyhow!("bad sign reply"))?;
+        let v = self.call(
+            serde_json::json!({"op": "sign", "type": ty, "body": crate::state::b64(&body)}),
+        )?;
+        let e = v
+            .get("envelope")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| anyhow!("bad sign reply"))?;
         crate::state::unb64(e)
     }
 }

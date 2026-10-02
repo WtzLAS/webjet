@@ -25,7 +25,13 @@ fn direct_possible(n: &Node, peer: &Bytes32) -> bool {
     let recs = n.records.lock();
     recs.endpoints
         .get(peer)
-        .map(|(r, _)| r.addrs.clone().unwrap_or_default().iter().any(|a| a.kind == wp::AddrKind::Public && a.priority > 0))
+        .map(|(r, _)| {
+            r.addrs
+                .clone()
+                .unwrap_or_default()
+                .iter()
+                .any(|a| a.kind == wp::AddrKind::Public && a.priority > 0)
+        })
         .unwrap_or(false)
 }
 
@@ -34,12 +40,32 @@ pub fn candidates(n: &Arc<Node>, peer: &Bytes32) -> Vec<Path> {
     let g = crate::gossip::graph(n);
     let mut v = g.k_paths(&n.me, peer, K_PATHS);
     // Only relays we can actually reach (or dial) as the first hop.
-    v.retain(|p| p.hops.first().map(|h| n.best_hop(h).is_some() || !n.endpoint_addrs(h).is_empty()).unwrap_or(true));
+    v.retain(|p| {
+        p.hops
+            .first()
+            .map(|h| n.best_hop(h).is_some() || !n.endpoint_addrs(h).is_empty())
+            .unwrap_or(true)
+    });
     if direct_possible(n, peer) && !v.iter().any(|p| p.hops.is_empty()) {
-        let cost = n.best_hop(peer).map(|h| h.cost()).filter(|c| c.is_finite()).unwrap_or(f64::INFINITY);
-        v.insert(0, Path { hops: Vec::new(), cost, spare: 100 });
+        let cost = n
+            .best_hop(peer)
+            .map(|h| h.cost())
+            .filter(|c| c.is_finite())
+            .unwrap_or(f64::INFINITY);
+        v.insert(
+            0,
+            Path {
+                hops: Vec::new(),
+                cost,
+                spare: 100,
+            },
+        );
     }
-    v.sort_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal));
+    v.sort_by(|a, b| {
+        a.cost
+            .partial_cmp(&b.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     v
 }
 
@@ -64,14 +90,24 @@ pub async fn open_best(n: &Arc<Node>, peer: Bytes32) -> Result<Arc<LocalCircuit>
     let first = if n.best_hop(&peer).is_some() {
         cands.iter().position(|p| p.hops.is_empty()).unwrap_or(0)
     } else {
-        let relayed: Vec<Path> = cands.iter().filter(|p| !p.hops.is_empty()).cloned().collect();
+        let relayed: Vec<Path> = cands
+            .iter()
+            .filter(|p| !p.hops.is_empty())
+            .cloned()
+            .collect();
         match spread_pick(&relayed) {
             Some(p) => cands.iter().position(|c| c == p).unwrap_or(0),
             None => 0,
         }
     };
     let mut order: Vec<Path> = vec![cands[first].clone()];
-    order.extend(cands.iter().enumerate().filter(|(i, _)| *i != first).map(|(_, p)| p.clone()));
+    order.extend(
+        cands
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != first)
+            .map(|(_, p)| p.clone()),
+    );
     let mut last = anyhow!("no route");
     for p in order {
         match circuit::open(n, peer, p.hops.clone()).await {
@@ -90,7 +126,9 @@ pub fn on_established(n: &Arc<Node>, peer: &Bytes32) {
 }
 
 pub fn on_probe_ack(n: &Arc<Node>, c: &Arc<LocalCircuit>, payload: &[u8]) {
-    let Ok(p) = wp::Probe::decode_bytes(payload) else { return };
+    let Ok(p) = wp::Probe::decode_bytes(payload) else {
+        return;
+    };
     if opt_k32(&p.route_id) != c.route_id {
         return;
     }
@@ -107,7 +145,11 @@ fn send_probe(n: &Arc<Node>, c: &Arc<LocalCircuit>, seq: u64) {
     }
     let us = n.started.elapsed().as_micros() as u64;
     c.probes.lock().on_sent(seq, us);
-    let p = wp::Probe { route_id: Some(crypto::k32(&c.route_id)), probe_seq: seq, sent_at_us: us };
+    let p = wp::Probe {
+        route_id: Some(crypto::k32(&c.route_id)),
+        probe_seq: seq,
+        sent_at_us: us,
+    };
     crate::e2e::send_on(n, &s, c, ftype::PROBE, &p.encode_bytes());
 }
 
@@ -137,11 +179,16 @@ pub async fn run(n: Arc<Node>) {
             let want_more = s.established() && mine.len() < MAX_CIRCUITS && !circs.is_empty();
             let have_direct = circs.iter().any(|c| c.direct());
             let direct_now = n.best_hop(&s.peer).is_some() && !have_direct;
-            let due = backup_tried.get(&s.peer).map(|t| t.elapsed() > Duration::from_secs(30)).unwrap_or(true);
+            let due = backup_tried
+                .get(&s.peer)
+                .map(|t| t.elapsed() > Duration::from_secs(30))
+                .unwrap_or(true);
             if (want_more || direct_now) && (due || direct_now) {
                 backup_tried.insert(s.peer, Instant::now());
                 let existing: Vec<Vec<Bytes32>> = circs.iter().map(|c| c.hops.clone()).collect();
-                let pick = candidates(&n, &s.peer).into_iter().find(|p| !existing.contains(&p.hops));
+                let pick = candidates(&n, &s.peer)
+                    .into_iter()
+                    .find(|p| !existing.contains(&p.hops));
                 if let Some(p) = pick {
                     let n2 = n.clone();
                     let peer = s.peer;
@@ -155,14 +202,25 @@ pub async fn run(n: Arc<Node>) {
             // More than two of our circuits: drop the worst.
             if mine.len() > MAX_CIRCUITS {
                 let primary = s.primary();
-                if let Some(worst) = mine.iter().filter(|c| Some(c.label) != primary).max_by(|a, b| a.cost().partial_cmp(&b.cost()).unwrap_or(std::cmp::Ordering::Equal)) {
+                if let Some(worst) =
+                    mine.iter()
+                        .filter(|c| Some(c.label) != primary)
+                        .max_by(|a, b| {
+                            a.cost()
+                                .partial_cmp(&b.cost())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                {
                     circuit::close_local(&n, worst);
                 }
             }
             // A circuit whose probes all fail for a while is dead.
             for c in &circs {
                 let st = c.probes.lock();
-                if c.created.elapsed() > Duration::from_secs(15) && st.loss > 0.95 && circs.len() > 1 {
+                if c.created.elapsed() > Duration::from_secs(15)
+                    && st.loss > 0.95
+                    && circs.len() > 1
+                {
                     drop(st);
                     circuit::close_local(&n, c);
                 }
@@ -180,7 +238,8 @@ pub async fn run(n: Arc<Node>) {
                 .collect()
         };
         for c in locals {
-            let keep = active.contains_key(&c.peer) || c.created.elapsed() < Duration::from_secs(30);
+            let keep =
+                active.contains_key(&c.peer) || c.created.elapsed() < Duration::from_secs(30);
             if !keep && c.is_source {
                 circuit::close_local(&n, &c);
             }

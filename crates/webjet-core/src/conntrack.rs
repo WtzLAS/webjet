@@ -89,7 +89,15 @@ pub struct Conntrack {
 
 impl Conntrack {
     pub fn new(per_peer_quota: usize, new_per_sec: u32, global_cap: usize) -> Self {
-        Conntrack { entries: HashMap::new(), per_peer: HashMap::new(), new_rate: HashMap::new(), per_peer_quota, new_per_sec, global_cap, evictions: 0 }
+        Conntrack {
+            entries: HashMap::new(),
+            per_peer: HashMap::new(),
+            new_rate: HashMap::new(),
+            per_peer_quota,
+            new_per_sec,
+            global_cap,
+            evictions: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -120,12 +128,21 @@ impl Conntrack {
 
     /// Classify a packet travelling `outbound` (we send it) or inbound
     /// (from `peer`), updating state for tracked flows.
-    pub fn classify(&mut self, peer: &Bytes32, p: &Parsed, outbound: bool, now: Instant) -> Verdict {
+    pub fn classify(
+        &mut self,
+        peer: &Bytes32,
+        p: &Parsed,
+        outbound: bool,
+        now: Instant,
+    ) -> Verdict {
         if p.icmp == Some(IcmpKind::Error) {
             if let Some(inner) = p.inner {
                 // The quoted packet travelled the opposite way.
                 for f in [inner, inner.reverse()] {
-                    if let Some(e) = self.entries.get(&Key { peer: *peer, flow: f }) {
+                    if let Some(e) = self.entries.get(&Key {
+                        peer: *peer,
+                        flow: f,
+                    }) {
                         if now.duration_since(e.last) < e.state.timeout() {
                             return Verdict::RelatedError;
                         }
@@ -134,10 +151,18 @@ impl Conntrack {
             }
             return Verdict::Invalid;
         }
-        let fwd = Key { peer: *peer, flow: p.flow };
-        let rev = Key { peer: *peer, flow: p.flow.reverse() };
+        let fwd = Key {
+            peer: *peer,
+            flow: p.flow,
+        };
+        let rev = Key {
+            peer: *peer,
+            flow: p.flow.reverse(),
+        };
         for (k, is_reply) in [(fwd, false), (rev, true)] {
-            let Some(e) = self.entries.get_mut(&k) else { continue };
+            let Some(e) = self.entries.get_mut(&k) else {
+                continue;
+            };
             if now.duration_since(e.last) >= e.state.timeout() {
                 continue;
             }
@@ -151,7 +176,9 @@ impl Conntrack {
             }
             e.state = match (e.state, p.flow.proto) {
                 (_, PROTO_TCP) if p.tcp_flags & (tcpf::FIN | tcpf::RST) != 0 => State::TcpClosing,
-                (State::TcpOpening, PROTO_TCP) if is_reply && p.tcp_flags & tcpf::ACK != 0 => State::TcpEstablished,
+                (State::TcpOpening, PROTO_TCP) if is_reply && p.tcp_flags & tcpf::ACK != 0 => {
+                    State::TcpEstablished
+                }
                 (State::UdpOneWay, _) if is_reply => State::UdpBoth,
                 (s, _) => s,
             };
@@ -164,8 +191,17 @@ impl Conntrack {
     }
 
     /// Track a new flow after the policy allowed it.
-    pub fn insert(&mut self, peer: &Bytes32, p: &Parsed, outbound: bool, rule: Option<String>, now: Instant) -> Result<(), InsertError> {
-        let Some(state) = Self::initial_state(p) else { return Ok(()) };
+    pub fn insert(
+        &mut self,
+        peer: &Bytes32,
+        p: &Parsed,
+        outbound: bool,
+        rule: Option<String>,
+        now: Instant,
+    ) -> Result<(), InsertError> {
+        let Some(state) = Self::initial_state(p) else {
+            return Ok(());
+        };
         // New-flow rate per peer.
         let r = self.new_rate.entry(*peer).or_insert((now, 0));
         if now.duration_since(r.0) >= Duration::from_secs(1) {
@@ -188,8 +224,24 @@ impl Conntrack {
             }
         }
         self.new_rate.get_mut(peer).unwrap().1 += 1;
-        let k = Key { peer: *peer, flow: p.flow };
-        if self.entries.insert(k, Entry { state, last: now, outbound, saw_reply: false, rule }).is_none() {
+        let k = Key {
+            peer: *peer,
+            flow: p.flow,
+        };
+        if self
+            .entries
+            .insert(
+                k,
+                Entry {
+                    state,
+                    last: now,
+                    outbound,
+                    saw_reply: false,
+                    rule,
+                },
+            )
+            .is_none()
+        {
             *self.per_peer.entry(*peer).or_insert(0) += 1;
         }
         Ok(())
@@ -207,7 +259,16 @@ impl Conntrack {
     }
 
     fn evict_one(&mut self, now: Instant) {
-        let victim = self.entries.iter().min_by_key(|(_, e)| (e.state.evict_rank(), std::cmp::Reverse(now.duration_since(e.last)))).map(|(k, _)| *k);
+        let victim = self
+            .entries
+            .iter()
+            .min_by_key(|(_, e)| {
+                (
+                    e.state.evict_rank(),
+                    std::cmp::Reverse(now.duration_since(e.last)),
+                )
+            })
+            .map(|(k, _)| *k);
         if let Some(k) = victim {
             self.remove(&k);
             self.evictions += 1;
@@ -215,7 +276,12 @@ impl Conntrack {
     }
 
     fn expire_peer(&mut self, peer: &Bytes32, now: Instant) {
-        let dead: Vec<Key> = self.entries.iter().filter(|(k, e)| k.peer == *peer && now.duration_since(e.last) >= e.state.timeout()).map(|(k, _)| *k).collect();
+        let dead: Vec<Key> = self
+            .entries
+            .iter()
+            .filter(|(k, e)| k.peer == *peer && now.duration_since(e.last) >= e.state.timeout())
+            .map(|(k, _)| *k)
+            .collect();
         for k in dead {
             self.remove(&k);
         }
@@ -223,17 +289,28 @@ impl Conntrack {
 
     /// Drop expired entries.
     pub fn expire(&mut self, now: Instant) {
-        let dead: Vec<Key> = self.entries.iter().filter(|(_, e)| now.duration_since(e.last) >= e.state.timeout()).map(|(k, _)| *k).collect();
+        let dead: Vec<Key> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| now.duration_since(e.last) >= e.state.timeout())
+            .map(|(k, _)| *k)
+            .collect();
         for k in dead {
             self.remove(&k);
         }
-        self.new_rate.retain(|_, (t, _)| now.duration_since(*t) < Duration::from_secs(2));
+        self.new_rate
+            .retain(|_, (t, _)| now.duration_since(*t) < Duration::from_secs(2));
     }
 
     /// Re-evaluate every tracked flow after a policy change (§14.4); `keep`
     /// returns whether the flow is still allowed.
     pub fn reevaluate(&mut self, mut keep: impl FnMut(&Key, &Entry) -> bool) -> usize {
-        let dead: Vec<Key> = self.entries.iter().filter(|(k, e)| !keep(k, e)).map(|(k, _)| *k).collect();
+        let dead: Vec<Key> = self
+            .entries
+            .iter()
+            .filter(|(k, e)| !keep(k, e))
+            .map(|(k, _)| *k)
+            .collect();
         let n = dead.len();
         for k in dead {
             self.remove(&k);
@@ -243,7 +320,12 @@ impl Conntrack {
 
     /// Drop every flow with a peer (session destroyed).
     pub fn drop_peer(&mut self, peer: &Bytes32) {
-        let dead: Vec<Key> = self.entries.keys().filter(|k| k.peer == *peer).copied().collect();
+        let dead: Vec<Key> = self
+            .entries
+            .keys()
+            .filter(|k| k.peer == *peer)
+            .copied()
+            .collect();
         for k in dead {
             self.remove(&k);
         }
@@ -267,13 +349,23 @@ mod tests {
         let syn = parse(&tcp4([10, 7, 0, 1], [10, 7, 0, 2], 1000, 22, tcpf::SYN)).unwrap();
         assert_eq!(ct.classify(&peer, &syn, false, now), Verdict::New);
         ct.insert(&peer, &syn, false, None, now).unwrap();
-        let synack = parse(&tcp4([10, 7, 0, 2], [10, 7, 0, 1], 22, 1000, tcpf::SYN | tcpf::ACK)).unwrap();
+        let synack = parse(&tcp4(
+            [10, 7, 0, 2],
+            [10, 7, 0, 1],
+            22,
+            1000,
+            tcpf::SYN | tcpf::ACK,
+        ))
+        .unwrap();
         assert_eq!(ct.classify(&peer, &synack, true, now), Verdict::Tracked);
         // A bare ACK that starts nothing is invalid.
         let ack = parse(&tcp4([10, 7, 0, 3], [10, 7, 0, 2], 5, 22, tcpf::ACK)).unwrap();
         assert_eq!(ct.classify(&peer, &ack, false, now), Verdict::Invalid);
         // Expiry.
-        assert_eq!(ct.classify(&peer, &synack, true, now + Duration::from_secs(4000)), Verdict::Invalid);
+        assert_eq!(
+            ct.classify(&peer, &synack, true, now + Duration::from_secs(4000)),
+            Verdict::Invalid
+        );
     }
 
     #[test]
@@ -286,7 +378,10 @@ mod tests {
             ct.insert(&a, &u, false, None, now).unwrap();
         }
         let u = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 2], 2000, 53, b"")).unwrap();
-        assert_eq!(ct.insert(&a, &u, false, None, now), Err(InsertError::PeerQuota));
+        assert_eq!(
+            ct.insert(&a, &u, false, None, now),
+            Err(InsertError::PeerQuota)
+        );
         // Another peer: an established UDP flow plus the global cap.
         let b = [2; 32];
         let u2 = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 3], 3000, 53, b"")).unwrap();

@@ -80,7 +80,12 @@ pub struct UdpEndpoint {
 }
 
 impl UdpEndpoint {
-    pub async fn bind(addr: SocketAddr, root_key: &[u8; 32], epochs: SharedEpochs, listening: bool) -> anyhow::Result<Arc<UdpEndpoint>> {
+    pub async fn bind(
+        addr: SocketAddr,
+        root_key: &[u8; 32],
+        epochs: SharedEpochs,
+        listening: bool,
+    ) -> anyhow::Result<Arc<UdpEndpoint>> {
         let sock = Arc::new(UdpSocket::bind(addr).await?);
         let obfs = Arc::new(UdpObfs::new(root_key));
         obfs.set_epochs(&epochs.read());
@@ -113,7 +118,8 @@ impl UdpEndpoint {
 
     fn seal(&self, inner: &[u8]) -> Option<Vec<u8>> {
         let (epoch, _) = self.epochs.read().current_key()?;
-        self.obfs.seal(epoch, inner, small_packet_padding(inner.len()))
+        self.obfs
+            .seal(epoch, inner, small_packet_padding(inner.len()))
     }
 
     /// Send PUNCH datagrams to open a NAT mapping toward `to` (§11.7).
@@ -136,7 +142,9 @@ impl UdpEndpoint {
                     continue;
                 }
             };
-            let Some((gate, inner)) = self.obfs.open(&buf[..n], &self.epochs.read()) else { continue };
+            let Some((gate, inner)) = self.obfs.open(&buf[..n], &self.epochs.read()) else {
+                continue;
+            };
             if inner.len() < 5 {
                 continue;
             }
@@ -162,7 +170,10 @@ impl UdpEndpoint {
             if ts.abs_diff(now_ms()) > SKEW_PSK_GATE {
                 continue;
             }
-            if !self.replay.check_and_insert(body[8..24].try_into().unwrap(), now_ms()) {
+            if !self
+                .replay
+                .check_and_insert(body[8..24].try_into().unwrap(), now_ms())
+            {
                 continue;
             }
             if !self.admit_ip(from.ip()) {
@@ -172,7 +183,16 @@ impl UdpEndpoint {
             let mut d = vec![K_OPEN];
             d.extend_from_slice(body);
             let _ = tx.try_send(d);
-            if self.accept_tx.try_send(KcpConn { stream, peer: from, gate, stats }).is_err() {
+            if self
+                .accept_tx
+                .try_send(KcpConn {
+                    stream,
+                    peer: from,
+                    gate,
+                    stats,
+                })
+                .is_err()
+            {
                 self.sessions.lock().remove(&key);
             }
         }
@@ -195,17 +215,33 @@ impl UdpEndpoint {
         let conv = rand::random::<u32>() | 1;
         let (stream, _tx, stats) = self.clone().spawn_session_inner(to, conv, true);
         let gate = GateResult::Normal(self.epochs.read().current);
-        KcpConn { stream, peer: to, gate, stats }
+        KcpConn {
+            stream,
+            peer: to,
+            gate,
+            stats,
+        }
     }
 
-    fn spawn_session(self: Arc<Self>, peer: SocketAddr, conv: u32) -> (DuplexStream, mpsc::Sender<Vec<u8>>, Arc<KcpStats>) {
+    fn spawn_session(
+        self: Arc<Self>,
+        peer: SocketAddr,
+        conv: u32,
+    ) -> (DuplexStream, mpsc::Sender<Vec<u8>>, Arc<KcpStats>) {
         self.spawn_session_inner(peer, conv, false)
     }
 
-    fn spawn_session_inner(self: Arc<Self>, peer: SocketAddr, conv: u32, dialer: bool) -> (DuplexStream, mpsc::Sender<Vec<u8>>, Arc<KcpStats>) {
+    fn spawn_session_inner(
+        self: Arc<Self>,
+        peer: SocketAddr,
+        conv: u32,
+        dialer: bool,
+    ) -> (DuplexStream, mpsc::Sender<Vec<u8>>, Arc<KcpStats>) {
         let (user, inner) = tokio::io::duplex(DUPLEX);
         let (tx, rx) = mpsc::channel(4096);
-        self.sessions.lock().insert((peer, conv), SessionHandle { tx: tx.clone() });
+        self.sessions
+            .lock()
+            .insert((peer, conv), SessionHandle { tx: tx.clone() });
         let stats = Arc::new(KcpStats::default());
         let st = stats.clone();
         tokio::spawn(async move {
@@ -324,7 +360,15 @@ impl Write for OutQueue {
     }
 }
 
-async fn run_session(ep: Arc<UdpEndpoint>, peer: SocketAddr, conv: u32, dialer: bool, mut user: DuplexStream, mut rx: mpsc::Receiver<Vec<u8>>, stats: Arc<KcpStats>) {
+async fn run_session(
+    ep: Arc<UdpEndpoint>,
+    peer: SocketAddr,
+    conv: u32,
+    dialer: bool,
+    mut user: DuplexStream,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+    stats: Arc<KcpStats>,
+) {
     let out = OutQueue::default();
     let mut kcp = kcp::Kcp::new_stream(conv, out.clone());
     let _ = kcp.set_mtu(KCP_MTU);
@@ -427,7 +471,9 @@ async fn run_session(ep: Arc<UdpEndpoint>, peer: SocketAddr, conv: u32, dialer: 
         bbr.ceiling = ep.rate_ceiling_bps.load(Ordering::Relaxed) as f64 / 8.0;
         let wnd = bbr.window();
         kcp.set_wndsize(wnd, 1024);
-        stats.bw_estimate_kbps.store((bbr.btl_bw * 8.0 / 1000.0) as u64, Ordering::Relaxed);
+        stats
+            .bw_estimate_kbps
+            .store((bbr.btl_bw * 8.0 / 1000.0) as u64, Ordering::Relaxed);
         // FEC-wrap new KCP packets; parity counts toward the paced rate.
         let pkts: Vec<Vec<u8>> = out.0.lock().drain(..).collect();
         for p in pkts {
@@ -444,7 +490,9 @@ async fn run_session(ep: Arc<UdpEndpoint>, peer: SocketAddr, conv: u32, dialer: 
             }
             fec_flush_at = None;
         }
-        stats.fec_parity_tx.store(enc.parity_bytes, Ordering::Relaxed);
+        stats
+            .fec_parity_tx
+            .store(enc.parity_bytes, Ordering::Relaxed);
         // Loss feedback for the peer's FEC (§17.6).
         if now.duration_since(stats_sent_at) > Duration::from_secs(1) && got_shards > 0 {
             let expected = got_shards.max(1);
@@ -461,7 +509,8 @@ async fn run_session(ep: Arc<UdpEndpoint>, peer: SocketAddr, conv: u32, dialer: 
         }
         // Pace.
         let rate = bbr.pacing_rate(now);
-        tokens = (tokens + now.duration_since(last_tick).as_secs_f64() * rate).min(rate * 0.01 + 16_000.0);
+        tokens = (tokens + now.duration_since(last_tick).as_secs_f64() * rate)
+            .min(rate * 0.01 + 16_000.0);
         last_tick = now;
         while let Some(s) = paced.front() {
             if tokens < s.len() as f64 {
@@ -500,7 +549,11 @@ fn kcp_rtt<O>(k: &kcp::Kcp<O>) -> Option<Duration> {
     let i = s.find("rx_srtt: ")?;
     let rest = &s[i + 9..];
     let end = rest.find(|c: char| !c.is_ascii_digit())?;
-    rest[..end].parse::<u64>().ok().filter(|v| *v > 0).map(Duration::from_millis)
+    rest[..end]
+        .parse::<u64>()
+        .ok()
+        .filter(|v| *v > 0)
+        .map(Duration::from_millis)
 }
 
 #[cfg(test)]
@@ -517,8 +570,12 @@ mod tests {
 
     #[tokio::test]
     async fn kcp_roundtrip() {
-        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false).await.unwrap();
-        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true).await.unwrap();
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
         let mut c = ep_a.dial(ep_b.local_addr().unwrap());
         let data: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
         let d2 = data.clone();
@@ -528,22 +585,39 @@ mod tests {
             c.stream.read_exact(&mut back).await.unwrap();
             back
         });
-        let mut s = tokio::time::timeout(Duration::from_secs(5), async { ep_b.accept_rx.lock().await.recv().await.unwrap() }).await.unwrap();
+        let mut s = tokio::time::timeout(Duration::from_secs(5), async {
+            ep_b.accept_rx.lock().await.recv().await.unwrap()
+        })
+        .await
+        .unwrap();
         let mut got = vec![0u8; data.len()];
-        tokio::time::timeout(Duration::from_secs(20), s.stream.read_exact(&mut got)).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(20), s.stream.read_exact(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got, data);
         s.stream.write_all(b"thanks").await.unwrap();
-        let back = tokio::time::timeout(Duration::from_secs(5), w).await.unwrap().unwrap();
+        let back = tokio::time::timeout(Duration::from_secs(5), w)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(&back, b"thank");
     }
 
     #[tokio::test]
     async fn wrong_network_is_silent() {
-        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false).await.unwrap();
-        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[2; 32], epochs(), true).await.unwrap();
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[2; 32], epochs(), true)
+            .await
+            .unwrap();
         let mut c = ep_a.dial(ep_b.local_addr().unwrap());
         c.stream.write_all(b"hello").await.unwrap();
-        let r = tokio::time::timeout(Duration::from_millis(500), async { ep_b.accept_rx.lock().await.recv().await }).await;
+        let r = tokio::time::timeout(Duration::from_millis(500), async {
+            ep_b.accept_rx.lock().await.recv().await
+        })
+        .await;
         assert!(r.is_err(), "no session must be created");
     }
 }

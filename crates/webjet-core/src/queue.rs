@@ -35,7 +35,13 @@ struct Codel {
 impl Codel {
     /// Returns true if the item dequeued at `now` with sojourn `s` must be
     /// dropped/marked.
-    fn should_drop(&mut self, s: Duration, now: Instant, interval: Duration, queue_empty_after: bool) -> bool {
+    fn should_drop(
+        &mut self,
+        s: Duration,
+        now: Instant,
+        interval: Duration,
+        queue_empty_after: bool,
+    ) -> bool {
         let ok_to_drop = if s < TARGET || queue_empty_after {
             self.first_above = None;
             false
@@ -107,13 +113,26 @@ impl Default for HopQueue {
 
 impl HopQueue {
     pub fn new(max_bytes: usize) -> Self {
-        HopQueue { control: VecDeque::new(), flows: HashMap::new(), active: VecDeque::new(), bytes: 0, max_bytes, interval: INTERVAL, stats: Stats::default(), control_budget: 0 }
+        HopQueue {
+            control: VecDeque::new(),
+            flows: HashMap::new(),
+            active: VecDeque::new(),
+            bytes: 0,
+            max_bytes,
+            interval: INTERVAL,
+            stats: Stats::default(),
+            control_budget: 0,
+        }
     }
 
     /// Adapt CoDel's interval to the hop RTT (§17.2) and the hard cap to
     /// ~100 ms at the current rate.
     pub fn tune(&mut self, rtt: Duration, rate_bytes_per_sec: f64) {
-        self.interval = if rtt > Duration::from_millis(50) { rtt * 2 } else { INTERVAL };
+        self.interval = if rtt > Duration::from_millis(50) {
+            rtt * 2
+        } else {
+            INTERVAL
+        };
         self.max_bytes = ((rate_bytes_per_sec * 0.1) as usize).clamp(64 * 1024, 16 << 20);
     }
 
@@ -144,7 +163,8 @@ impl HopQueue {
     /// Dequeue the next frame to send. Control goes first but is limited to
     /// roughly a quarter of the bytes while data is waiting (§17.3).
     pub fn pop(&mut self, now: Instant) -> Option<Vec<u8>> {
-        if !self.control.is_empty() && (self.active.is_empty() || self.control_budget < 3 * QUANTUM) {
+        if !self.control.is_empty() && (self.active.is_empty() || self.control_budget < 3 * QUANTUM)
+        {
             let c = self.control.pop_front().unwrap();
             self.control_budget += c.len();
             return Some(c);
@@ -168,7 +188,9 @@ impl HopQueue {
             let sojourn = now.duration_since(it.at);
             self.stats.last_sojourn = sojourn;
             let empty_after = f.items.is_empty();
-            let drop = f.codel.should_drop(sojourn, now, self.interval, empty_after);
+            let drop = f
+                .codel
+                .should_drop(sojourn, now, self.interval, empty_after);
             if empty_after {
                 self.active.pop_front();
                 self.flows.remove(&flow);
@@ -203,9 +225,21 @@ mod tests {
         let mut q = HopQueue::new(1 << 20);
         let t = Instant::now();
         for i in 0..10 {
-            q.push(Item { flow: 1, data: vec![1; 1000], at: t, ecn_offset: None }).unwrap();
+            q.push(Item {
+                flow: 1,
+                data: vec![1; 1000],
+                at: t,
+                ecn_offset: None,
+            })
+            .unwrap();
             if i < 2 {
-                q.push(Item { flow: 2, data: vec![2; 1000], at: t, ecn_offset: None }).unwrap();
+                q.push(Item {
+                    flow: 2,
+                    data: vec![2; 1000],
+                    at: t,
+                    ecn_offset: None,
+                })
+                .unwrap();
             }
         }
         q.push_control(vec![9; 10]);
@@ -220,10 +254,20 @@ mod tests {
         let mut q = HopQueue::new(1 << 20);
         let t0 = Instant::now();
         for i in 0..200u32 {
-            let ecn = if i % 2 == 0 { crate::frames::ecn::ECT0 } else { 0 };
+            let ecn = if i % 2 == 0 {
+                crate::frames::ecn::ECT0
+            } else {
+                0
+            };
             let mut d = vec![0u8; 100];
             d[4] = ecn;
-            q.push(Item { flow: (i % 2) as u64, data: d, at: t0, ecn_offset: Some(4) }).unwrap();
+            q.push(Item {
+                flow: (i % 2) as u64,
+                data: d,
+                at: t0,
+                ecn_offset: Some(4),
+            })
+            .unwrap();
         }
         let mut now = t0 + Duration::from_millis(50);
         let mut out = 0;
@@ -240,7 +284,22 @@ mod tests {
     fn hard_cap() {
         let mut q = HopQueue::new(1000);
         let t = Instant::now();
-        assert!(q.push(Item { flow: 1, data: vec![0; 900], at: t, ecn_offset: None }).is_ok());
-        assert_eq!(q.push(Item { flow: 1, data: vec![0; 200], at: t, ecn_offset: None }), Err(Dropped::QueueFull));
+        assert!(q
+            .push(Item {
+                flow: 1,
+                data: vec![0; 900],
+                at: t,
+                ecn_offset: None
+            })
+            .is_ok());
+        assert_eq!(
+            q.push(Item {
+                flow: 1,
+                data: vec![0; 200],
+                at: t,
+                ecn_offset: None
+            }),
+            Err(Dropped::QueueFull)
+        );
     }
 }
