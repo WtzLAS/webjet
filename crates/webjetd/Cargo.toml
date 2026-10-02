@@ -1,0 +1,47 @@
+[package]
+name = "webjetd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["anytls"]
+anytls = ["webjet-net/anytls", "dep:boring"]
+
+[lib]
+name = "webjetd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "webjetd"
+path = "src/main.rs"
+
+[dependencies]
+webjet-core = { path = "../webjet-core" }
+webjet-proto = { path = "../webjet-proto" }
+webjet-net = { path = "../webjet-net", default-features = false }
+anyhow.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+rand.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+parking_lot.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+clap.workspace = true
+ipnet.workspace = true
+hex.workspace = true
+base64.workspace = true
+zeroize.workspace = true
+futures.workspace = true
+hickory-proto.workspace = true
+snap = "1"
+tun-rs = { workspace = true }
+libc = "0.2"
+boring = { version = "5", optional = true }

@@ -98,7 +98,7 @@ pub fn enroll_preamble(token_hash: &Bytes32) -> [u8; TCP_PREAMBLE] {
     tcp_preamble(ENROLL_EPOCH, &gate::anytls_enroll_password(token_hash))
 }
 
-pub async fn dial_tls(addr: SocketAddr, kp: &KeyPair, expected: Bytes32, trust: Arc<dyn PeerTrust>, epoch: u16, psk: &Bytes32) -> Result<Established> {
+pub async fn dial_tls(addr: SocketAddr, kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>, epoch: u16, psk: &Bytes32) -> Result<Established> {
     let fut = async {
         let mut s = TcpStream::connect(addr).await?;
         tune_tcp(&s);
@@ -199,7 +199,7 @@ pub async fn accept_tls(mut s: TcpStream, remote: SocketAddr, kp: &KeyPair, trus
 
 // ---------------------------------------------------------------- UDP + KCP + FEC + TLS
 
-pub async fn dial_kcp(ep: &Arc<UdpEndpoint>, addr: SocketAddr, kp: &KeyPair, expected: Bytes32, trust: Arc<dyn PeerTrust>) -> Result<Established> {
+pub async fn dial_kcp(ep: &Arc<UdpEndpoint>, addr: SocketAddr, kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>) -> Result<Established> {
     let fut = async {
         let c = ep.dial(addr);
         let cfg = tls::client_config(kp, expected, trust, tls::ALPN_HOP)?;
@@ -224,7 +224,7 @@ pub async fn accept_kcp(c: crate::kcp::KcpConn, kp: &KeyPair, trust: Arc<dyn Pee
 /// Prove identity over an already-encrypted outer channel: each side signs
 /// `label || exporter || role` with its identity key and checks the other's
 /// signature (§9.2, AnyTLS).
-pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(io: &mut S, exporter: &[u8; 32], kp: &KeyPair, initiator: bool, expected: Option<Bytes32>, trust: &dyn PeerTrust) -> Result<Bytes32> {
+pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(io: &mut S, exporter: &[u8; 32], kp: &KeyPair, initiator: bool, expected: Option<&[Bytes32]>, trust: &dyn PeerTrust) -> Result<Bytes32> {
     let my_role = if initiator { b'i' } else { b'r' };
     let mut msg = Vec::with_capacity(64);
     msg.extend_from_slice(webjet_core::crypto::ctx::ANYTLS_BIND.as_bytes());
@@ -247,7 +247,7 @@ pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(io: &mut S, ex
         bail!("bad identity signature");
     }
     if let Some(e) = expected {
-        if e != pk {
+        if !e.contains(&pk) {
             bail!("peer presented an unexpected key");
         }
     }
@@ -294,7 +294,7 @@ mod tests {
                 _ => panic!(),
             }
         });
-        let mut h = dial_tls(addr, &a, b.public(), Arc::new(TrustAll), 4, &[4; 32]).await.unwrap();
+        let mut h = dial_tls(addr, &a, vec![b.public()], Arc::new(TrustAll), 4, &[4; 32]).await.unwrap();
         write_record(&mut h.io, rec::CONTROL, b"ping").await.unwrap();
         let (t, p) = read_record(&mut h.io).await.unwrap();
         assert_eq!((t, &p[..]), (rec::CONTROL, &b"ping"[..]));
@@ -313,7 +313,7 @@ mod tests {
             let (s, r) = l.listener.accept().await.unwrap();
             assert!(accept_tls(s, r, &bk, Arc::new(TrustAll), &ep, &l.replay, None).await.is_err());
         });
-        assert!(dial_tls(addr, &a, b.public(), Arc::new(TrustAll), 4, &[5; 32]).await.is_err());
+        assert!(dial_tls(addr, &a, vec![b.public()], Arc::new(TrustAll), 4, &[5; 32]).await.is_err());
     }
 
     #[tokio::test]
@@ -332,7 +332,7 @@ mod tests {
             h.io.flush().await.unwrap();
             tokio::time::sleep(Duration::from_millis(200)).await;
         });
-        let mut h = dial_kcp(&ea, addr, &a, b.public(), Arc::new(TrustAll)).await.unwrap();
+        let mut h = dial_kcp(&ea, addr, &a, vec![b.public()], Arc::new(TrustAll)).await.unwrap();
         write_record(&mut h.io, rec::RELAY, &[7; 3000]).await.unwrap();
         h.io.flush().await.unwrap();
         let (t, p) = read_record(&mut h.io).await.unwrap();

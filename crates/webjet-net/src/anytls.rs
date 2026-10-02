@@ -140,7 +140,7 @@ async fn send_password<S: AsyncWrite + Unpin>(s: &mut S, pw: &Bytes32) -> Result
     Ok(())
 }
 
-pub async fn dial(addr: SocketAddr, cam: &Camouflage, kp: &KeyPair, expected: Bytes32, trust: Arc<dyn PeerTrust>, psk: &Bytes32) -> Result<Established> {
+pub async fn dial(addr: SocketAddr, cam: &Camouflage, kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>, psk: &Bytes32) -> Result<Established> {
     let fut = async {
         let mut tls = client_outer(addr, cam).await?;
         send_password(&mut tls, &anytls_password(psk)).await?;
@@ -150,7 +150,7 @@ pub async fn dial(addr: SocketAddr, cam: &Camouflage, kp: &KeyPair, expected: By
             bail!("bad AnyTLS version hello");
         }
         let ex = exporter(tls.ssl())?;
-        let peer = exchange_identity(&mut tls, &ex, kp, true, Some(expected), trust.as_ref()).await?;
+        let peer = exchange_identity(&mut tls, &ex, kp, true, Some(&expected), trust.as_ref()).await?;
         Ok(Established { io: Box::new(tls) as BoxIo, peer_key: peer, transport: Transport::AnyTls, remote: addr, bootstrap: false, kcp_stats: None })
     };
     tokio::time::timeout(Duration::from_secs(15), fut).await.map_err(|_| anyhow!("AnyTLS to {addr} timed out"))?
@@ -333,7 +333,7 @@ mod tests {
             }
         });
         let ckp = KeyPair::generate();
-        let mut h = dial(addr, &cam, &ckp, server_kp.public(), Arc::new(TrustAll), &[7; 32]).await.unwrap();
+        let mut h = dial(addr, &cam, &ckp, vec![server_kp.public()], Arc::new(TrustAll), &[7; 32]).await.unwrap();
         crate::hop::write_record(&mut h.io, 1, b"over anytls").await.unwrap();
         let (_, p) = crate::hop::read_record(&mut h.io).await.unwrap();
         assert_eq!(p, b"over anytls");

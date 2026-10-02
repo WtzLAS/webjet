@@ -106,6 +106,8 @@ table SubmitResult { ok: bool; index: uint64; error: string; }
 table MetricUpload { report: [ubyte]; }
 table RpcAck { ok: bool; error: string; }
 table RaftRpc { message: [ubyte]; }          // RaftMessage
+table RedeemRequest { request: [ubyte]; }     // EnrollRequest, forwarded to the leader
+table OfflineSubmit { items: [Blob]; }        // root-signed certs and tombstones
 table GetControllerStatus {}
 table ControllerStatus {
     node_id: Key32;
@@ -131,6 +133,8 @@ union RpcBody {
     RaftRpc,
     GetControllerStatus,
     ControllerStatus,
+    RedeemRequest,
+    OfflineSubmit,
 }
 
 table Rpc { body: RpcBody; }

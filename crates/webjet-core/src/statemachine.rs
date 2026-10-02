@@ -276,7 +276,7 @@ impl Machine {
         let ts = e.timestamp;
         let random = e.random.clone().map(|b| *b).unwrap_or(wp::EntryRandom { node_id: None, psk: None });
         let payload = e.payload.as_ref().ok_or_else(|| ApplyError::Rejected("entry without payload".into()))?;
-        if self.genesis.is_none() && !matches!(payload, EntryPayload::GenesisEntry(_)) {
+        if self.genesis.is_none() && !matches!(payload, EntryPayload::GenesisEntry(_) | EntryPayload::NoopEntry(_)) {
             return rej("the first entry must be the genesis");
         }
         let mut fx = Effects::default();
@@ -816,7 +816,11 @@ impl Machine {
         if key == [0; 32] || self.used_keys.contains(&key) {
             return rej("identity key already used");
         }
-        if p.node_id != opt_k32(&r.node_id) {
+        // The node id is the pending one, except that a Raft member without a
+        // record (a bootstrapping controller) keeps its own id (runbook 1).
+        let node_id = opt_k32(&r.node_id);
+        let member_bootstrap = !p.is_rekey && node_id != p.node_id && self.members.contains(&node_id) && self.tree.get(kind::NODE, &node_id).is_none();
+        if p.node_id != node_id && !member_bootstrap {
             return rej("node id does not match the pending enrollment");
         }
         if p.is_rekey {
@@ -831,13 +835,13 @@ impl Machine {
             if !self.view.accounts.get(&opt_k32(&c.owner)).map(|a| a.valid).unwrap_or(false) {
                 return rej("owner account no longer valid");
             }
-            let rec = record_from(&c, p.node_id, key);
-            fx.leaves.push((kind::NODE, p.node_id, Some(leaf::encode_node(&rec))));
+            let rec = record_from(&c, node_id, key);
+            fx.leaves.push((kind::NODE, node_id, Some(leaf::encode_node(&rec))));
             fx.outcome.description = format!("enrollment redeemed for {}", rec.name.unwrap_or_default());
         }
         fx.pending_del.push(th);
         fx.used_keys.push(key);
-        fx.outcome.node_id = Some(p.node_id);
+        fx.outcome.node_id = Some(node_id);
         Ok(())
     }
 

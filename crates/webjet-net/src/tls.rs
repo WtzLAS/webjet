@@ -70,7 +70,8 @@ fn verify_sig(message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedSt
 /// only while it is trusted (§9.2: "the dialer ... rejects any other key").
 #[derive(Debug)]
 pub struct ExpectKey {
-    pub expected: Bytes32,
+    /// Acceptable keys; the peer must present one of them.
+    pub expected: Vec<Bytes32>,
     pub trust: Arc<dyn PeerTrust>,
 }
 
@@ -80,7 +81,7 @@ impl ServerCertVerifier for ExpectKey {
             return Err(Error::General("unexpected certificate chain".into()));
         }
         let k = key_of(end_entity)?;
-        if k != self.expected {
+        if !self.expected.contains(&k) {
             return Err(Error::General("peer presented an unexpected key".into()));
         }
         if !self.trust.trusted(&k) {
@@ -148,7 +149,7 @@ pub fn no_client_auth() -> Arc<dyn ClientCertVerifier> {
     Arc::new(rustls::server::NoClientAuth)
 }
 
-pub fn client_config(kp: &KeyPair, expected: Bytes32, trust: Arc<dyn PeerTrust>, alpn: &[u8]) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+pub fn client_config(kp: &KeyPair, expected: Vec<Bytes32>, trust: Arc<dyn PeerTrust>, alpn: &[u8]) -> anyhow::Result<Arc<rustls::ClientConfig>> {
     let mut c = rustls::ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .dangerous()
@@ -191,7 +192,7 @@ pub fn enroll_client_config(expected: Option<Bytes32>) -> anyhow::Result<Arc<rus
         }
     }
     let verifier: Arc<dyn ServerCertVerifier> = match expected {
-        Some(k) => Arc::new(ExpectKey { expected: k, trust: Arc::new(AnyTrusted) }),
+        Some(k) => Arc::new(ExpectKey { expected: vec![k], trust: Arc::new(AnyTrusted) }),
         None => Arc::new(AnyKey),
     };
     let mut c = rustls::ClientConfig::builder_with_provider(provider())
@@ -274,7 +275,7 @@ mod tests {
     fn memory_handshake() {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
-        let cc = client_config(&a, b.public(), Arc::new(TrustAll), ALPN_E2E).unwrap();
+        let cc = client_config(&a, vec![b.public()], Arc::new(TrustAll), ALPN_E2E).unwrap();
         let sc = server_config(&b, Arc::new(TrustAll), Some(a.public()), &[ALPN_E2E], false).unwrap();
         let mut c = rustls::ClientConnection::new(cc, server_name()).unwrap();
         let mut s = rustls::ServerConnection::new(sc).unwrap();
@@ -317,7 +318,7 @@ mod tests {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
         let other = KeyPair::generate();
-        let cc = client_config(&a, other.public(), Arc::new(TrustAll), ALPN_HOP).unwrap();
+        let cc = client_config(&a, vec![other.public()], Arc::new(TrustAll), ALPN_HOP).unwrap();
         let sc = server_config(&b, Arc::new(TrustAll), None, &[ALPN_HOP], false).unwrap();
         let mut c = rustls::ClientConnection::new(cc, server_name()).unwrap();
         let mut s = rustls::ServerConnection::new(sc).unwrap();
