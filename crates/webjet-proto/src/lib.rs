@@ -152,10 +152,21 @@ impl From<Key32> for [u8; 32] {
 impl Sig64 {
     pub fn from_bytes(b: &[u8; 64]) -> Self {
         let [b0, b1, b2, b3, b4, b5, b6, b7] = bytes_to_words::<64, 8>(b);
-        Sig64 { b0, b1, b2, b3, b4, b5, b6, b7 }
+        Sig64 {
+            b0,
+            b1,
+            b2,
+            b3,
+            b4,
+            b5,
+            b6,
+            b7,
+        }
     }
     pub fn to_bytes(&self) -> [u8; 64] {
-        words_to_bytes::<64, 8>([self.b0, self.b1, self.b2, self.b3, self.b4, self.b5, self.b6, self.b7])
+        words_to_bytes::<64, 8>([
+            self.b0, self.b1, self.b2, self.b3, self.b4, self.b5, self.b6, self.b7,
+        ])
     }
 }
 
@@ -212,7 +223,12 @@ impl IpAddress {
 impl SockAddr {
     pub fn from_sock(sa: SocketAddr) -> Self {
         let (family, a0, a1) = ip_words(&sa.ip());
-        SockAddr { family, port: sa.port(), a0, a1 }
+        SockAddr {
+            family,
+            port: sa.port(),
+            a0,
+            a1,
+        }
     }
     pub fn to_sock(&self) -> Option<SocketAddr> {
         words_ip(self.family, self.a0, self.a1).map(|ip| SocketAddr::new(ip, self.port))
@@ -223,7 +239,12 @@ impl Cidr {
     /// Builds a CIDR; the caller is responsible for host bits (see `webjet-core`).
     pub fn new(ip: IpAddr, prefix: u8) -> Self {
         let (family, a0, a1) = ip_words(&ip);
-        Cidr { family, prefix, a0, a1 }
+        Cidr {
+            family,
+            prefix,
+            a0,
+            a1,
+        }
     }
     pub fn addr(&self) -> Option<IpAddr> {
         words_ip(self.family, self.a0, self.a1)
@@ -339,7 +360,12 @@ mod tests {
         }
         let k = Key32::from_bytes(&b);
         assert_eq!(k.to_bytes(), b);
-        let rec = NodeRecord { node_id: Some(k), name: Some("a".into()), version: 3, ..Default::default() };
+        let rec = NodeRecord {
+            node_id: Some(k),
+            name: Some("a".into()),
+            version: 3,
+            ..Default::default()
+        };
         let bytes = rec.encode_bytes();
         let back = NodeRecord::decode_bytes(&bytes).unwrap();
         assert_eq!(back, rec);

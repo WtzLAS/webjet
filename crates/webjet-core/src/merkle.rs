@@ -4,7 +4,7 @@
 //! `leaf = BLAKE3(0x00 ‖ kind ‖ key ‖ bytes)`, `internal = BLAKE3(0x01 ‖ l ‖ r)`,
 //! `empty[d]` = a fixed constant per depth. Empty subtrees prove absence.
 
-use crate::crypto::{derive, ctx, Bytes32};
+use crate::crypto::{ctx, derive, Bytes32};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -110,7 +110,15 @@ impl Tree {
 
     pub fn insert(&mut self, kind: u8, key: Bytes32, bytes: Vec<u8>) {
         let hash = leaf_hash(kind, &key, &bytes);
-        self.leaves.insert(path_of(kind, &key), LeafEntry { kind, key, bytes, hash });
+        self.leaves.insert(
+            path_of(kind, &key),
+            LeafEntry {
+                kind,
+                key,
+                bytes,
+                hash,
+            },
+        );
         self.root = None;
     }
 
@@ -128,7 +136,8 @@ impl Tree {
         if let Some(r) = self.root {
             return r;
         }
-        let items: Vec<(Bytes32, Bytes32)> = self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
+        let items: Vec<(Bytes32, Bytes32)> =
+            self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
         let r = subtree(&items, 0);
         self.root = Some(r);
         r
@@ -139,7 +148,8 @@ impl Tree {
         if let Some(r) = self.root {
             return r;
         }
-        let items: Vec<(Bytes32, Bytes32)> = self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
+        let items: Vec<(Bytes32, Bytes32)> =
+            self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
         subtree(&items, 0)
     }
 
@@ -158,7 +168,10 @@ impl Tree {
     }
 
     pub fn bucket_entries(&self, b: u8) -> Vec<(Bytes32, Bytes32)> {
-        self.leaves.range(bucket_range(b)).map(|(p, e)| (*p, e.hash)).collect()
+        self.leaves
+            .range(bucket_range(b))
+            .map(|(p, e)| (*p, e.hash))
+            .collect()
     }
 
     pub fn prove(&self, kind: u8, key: &Bytes32) -> Proof {
@@ -166,7 +179,8 @@ impl Tree {
     }
 
     pub fn prove_path(&self, path: &Bytes32) -> Proof {
-        let items: Vec<(Bytes32, Bytes32)> = self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
+        let items: Vec<(Bytes32, Bytes32)> =
+            self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
         let mut sibs_top_down: Vec<Bytes32> = Vec::with_capacity(DEPTH);
         let mut slice: &[(Bytes32, Bytes32)] = &items;
         for d in 0..DEPTH {
@@ -213,7 +227,11 @@ fn subtree(items: &[(Bytes32, Bytes32)], d: usize) -> Bytes32 {
         let mut acc = *h;
         for dd in (d..DEPTH).rev() {
             let e = empty(dd + 1);
-            acc = if bit(path, dd) { internal_hash(&e, &acc) } else { internal_hash(&acc, &e) };
+            acc = if bit(path, dd) {
+                internal_hash(&e, &acc)
+            } else {
+                internal_hash(&acc, &e)
+            };
         }
         return acc;
     }
@@ -235,7 +253,11 @@ pub fn root_from_proof(path: &Bytes32, leaf: Option<Bytes32>, proof: &Proof) -> 
         let d = DEPTH - 1 - i;
         let present = (proof.bitmap[i / 8] >> (i % 8)) & 1 == 1;
         let s = if present { *it.next()? } else { empty(d + 1) };
-        acc = if bit(path, d) { internal_hash(&s, &acc) } else { internal_hash(&acc, &s) };
+        acc = if bit(path, d) {
+            internal_hash(&s, &acc)
+        } else {
+            internal_hash(&acc, &s)
+        };
     }
     if it.next().is_some() {
         return None;
@@ -243,7 +265,13 @@ pub fn root_from_proof(path: &Bytes32, leaf: Option<Bytes32>, proof: &Proof) -> 
     Some(acc)
 }
 
-pub fn verify_inclusion(root: &Bytes32, kind: u8, key: &Bytes32, bytes: &[u8], proof: &Proof) -> bool {
+pub fn verify_inclusion(
+    root: &Bytes32,
+    kind: u8,
+    key: &Bytes32,
+    bytes: &[u8],
+    proof: &Proof,
+) -> bool {
     let path = path_of(kind, key);
     root_from_proof(&path, Some(leaf_hash(kind, key, bytes)), proof).as_ref() == Some(root)
 }
@@ -262,7 +290,13 @@ impl Proof {
     pub fn from_wire(p: &webjet_proto::MerkleProof) -> Self {
         Proof {
             bitmap: p.bitmap.clone().unwrap_or_default(),
-            siblings: p.siblings.clone().unwrap_or_default().iter().map(|k| k.to_bytes()).collect(),
+            siblings: p
+                .siblings
+                .clone()
+                .unwrap_or_default()
+                .iter()
+                .map(|k| k.to_bytes())
+                .collect(),
         }
     }
 }
@@ -300,7 +334,10 @@ mod tests {
         let b = t.buckets();
         let mut level = b;
         while level.len() > 1 {
-            level = level.chunks(2).map(|c| internal_hash(&c[0], &c[1])).collect();
+            level = level
+                .chunks(2)
+                .map(|c| internal_hash(&c[0], &c[1]))
+                .collect();
         }
         assert_eq!(level[0], root);
     }
@@ -312,7 +349,10 @@ mod tests {
         let mut cat = Vec::new();
         cat.extend_from_slice(&l);
         cat.extend_from_slice(&r);
-        assert_ne!(internal_hash(&l, &r), *blake3::hash(&[&[0u8][..], &cat].concat()).as_bytes());
+        assert_ne!(
+            internal_hash(&l, &r),
+            *blake3::hash(&[&[0u8][..], &cat].concat()).as_bytes()
+        );
     }
 
     proptest! {

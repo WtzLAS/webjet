@@ -36,7 +36,9 @@ pub struct KeyPair {
 
 impl Clone for KeyPair {
     fn clone(&self) -> Self {
-        KeyPair { sk: SigningKey::from_bytes(&self.sk.to_bytes()) }
+        KeyPair {
+            sk: SigningKey::from_bytes(&self.sk.to_bytes()),
+        }
     }
 }
 
@@ -50,11 +52,15 @@ impl KeyPair {
     pub fn generate() -> Self {
         let mut seed = Zeroizing::new([0u8; 32]);
         rand::rngs::OsRng.fill_bytes(&mut seed[..]);
-        KeyPair { sk: SigningKey::from_bytes(&seed) }
+        KeyPair {
+            sk: SigningKey::from_bytes(&seed),
+        }
     }
 
     pub fn from_seed(seed: &Bytes32) -> Self {
-        KeyPair { sk: SigningKey::from_bytes(seed) }
+        KeyPair {
+            sk: SigningKey::from_bytes(seed),
+        }
     }
 
     pub fn seed(&self) -> Zeroizing<Bytes32> {
@@ -122,8 +128,11 @@ fn sig_input(ty: u16, schema: u16, body: &[u8]) -> Vec<u8> {
 }
 
 pub fn verify_raw(pk: &Bytes32, msg: &[u8], sig: &[u8; 64]) -> bool {
-    let Ok(vk) = VerifyingKey::from_bytes(pk) else { return false };
-    vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(sig)).is_ok()
+    let Ok(vk) = VerifyingKey::from_bytes(pk) else {
+        return false;
+    };
+    vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(sig))
+        .is_ok()
 }
 
 /// A decoded and signature-checked envelope. `body` is the exact received
@@ -153,22 +162,42 @@ pub fn open_envelope(raw: &[u8]) -> Result<Verified> {
         bail!("unsupported signature algorithm {}", env.alg);
     }
     if env.schema != webjet_proto::SCHEMA_V1 {
-        bail!("unsupported schema version {} for {}", env.schema, msg_type::name(env.type_));
+        bail!(
+            "unsupported schema version {} for {}",
+            env.schema,
+            msg_type::name(env.type_)
+        );
     }
     let body = env.body.ok_or_else(|| anyhow!("envelope without body"))?;
-    let signer = env.signer.ok_or_else(|| anyhow!("envelope without signer"))?.to_bytes();
-    let sig = env.sig.ok_or_else(|| anyhow!("envelope without signature"))?.to_bytes();
+    let signer = env
+        .signer
+        .ok_or_else(|| anyhow!("envelope without signer"))?
+        .to_bytes();
+    let sig = env
+        .sig
+        .ok_or_else(|| anyhow!("envelope without signature"))?
+        .to_bytes();
     if !verify_raw(&signer, &sig_input(env.type_, env.schema, &body), &sig) {
         bail!("bad signature on {}", msg_type::name(env.type_));
     }
-    Ok(Verified { ty: env.type_, schema: env.schema, body, signer, raw: raw.to_vec() })
+    Ok(Verified {
+        ty: env.type_,
+        schema: env.schema,
+        body,
+        signer,
+        raw: raw.to_vec(),
+    })
 }
 
 /// Open an envelope that must be of type `ty` and signed by one of `allowed`.
 pub fn open_expect(raw: &[u8], ty: u16, allowed: &[Bytes32]) -> Result<Verified> {
     let v = open_envelope(raw)?;
     if v.ty != ty {
-        bail!("expected {}, got {}", msg_type::name(ty), msg_type::name(v.ty));
+        bail!(
+            "expected {}, got {}",
+            msg_type::name(ty),
+            msg_type::name(v.ty)
+        );
     }
     if !allowed.contains(&v.signer) {
         bail!("{} signed by an unexpected key", msg_type::name(ty));
@@ -250,7 +279,11 @@ pub fn parse_key_b64(s: &str) -> Option<Bytes32> {
     if s.len() != 44 || !s.ends_with('=') {
         return None;
     }
-    base64::engine::general_purpose::STANDARD.decode(s).ok()?.try_into().ok()
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .ok()?
+        .try_into()
+        .ok()
 }
 
 pub fn short(id: &Bytes32) -> String {
@@ -276,7 +309,9 @@ mod tests {
     #[test]
     fn envelope_sign_verify() {
         let kp = KeyPair::generate();
-        let raw = kp.sign_envelope(msg_type::POLICY, b"hello".to_vec()).encode_bytes();
+        let raw = kp
+            .sign_envelope(msg_type::POLICY, b"hello".to_vec())
+            .encode_bytes();
         let v = open_envelope(&raw).unwrap();
         assert_eq!(v.body, b"hello");
         assert_eq!(v.signer, kp.public());

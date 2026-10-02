@@ -74,7 +74,12 @@ fn has(v: &[(u16, u16)], p: u16) -> bool {
 
 impl PortSet {
     pub fn all() -> Self {
-        PortSet { tcp: vec![(0, 65535)], udp: vec![(0, 65535)], icmp: true, other: true }
+        PortSet {
+            tcp: vec![(0, 65535)],
+            udp: vec![(0, 65535)],
+            icmp: true,
+            other: true,
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.tcp.is_empty() && self.udp.is_empty() && !self.icmp && !self.other
@@ -113,7 +118,10 @@ impl PortSet {
             return Ok(PortSet::all());
         }
         if s == "icmp" {
-            return Ok(PortSet { icmp: true, ..Default::default() });
+            return Ok(PortSet {
+                icmp: true,
+                ..Default::default()
+            });
         }
         let (proto, ports) = match s.split_once(':') {
             Some((p, r)) => (p, r),
@@ -132,8 +140,14 @@ impl PortSet {
             (p, p)
         };
         match proto {
-            "tcp" => Ok(PortSet { tcp: vec![range], ..Default::default() }),
-            "udp" => Ok(PortSet { udp: vec![range], ..Default::default() }),
+            "tcp" => Ok(PortSet {
+                tcp: vec![range],
+                ..Default::default()
+            }),
+            "udp" => Ok(PortSet {
+                udp: vec![range],
+                ..Default::default()
+            }),
             _ => bail!("unknown protocol in port spec {s:?}"),
         }
     }
@@ -177,7 +191,9 @@ impl Selector {
         if valid_tag(s) {
             return Ok(Selector::Tag(s.to_string()));
         }
-        let (k, v) = s.split_once(':').ok_or_else(|| anyhow!("bad selector {s:?}"))?;
+        let (k, v) = s
+            .split_once(':')
+            .ok_or_else(|| anyhow!("bad selector {s:?}"))?;
         Ok(match k {
             "role" => Selector::Role(match v {
                 "relay" => RoleSel::Relay,
@@ -280,7 +296,12 @@ impl Verdict {
 impl Default for Policy {
     fn default() -> Self {
         // With no policy in the tree, nothing is allowed (default deny, §6.12).
-        Policy { version: 0, default: Decision::Deny, rules: Vec::new(), tests: Vec::new() }
+        Policy {
+            version: 0,
+            default: Decision::Deny,
+            rules: Vec::new(),
+            tests: Vec::new(),
+        }
     }
 }
 
@@ -300,8 +321,20 @@ impl Policy {
             if id.is_empty() || !ids.insert(id.clone()) {
                 bail!("rule ids must be present and unique ({id:?})");
             }
-            let src = r.src.clone().unwrap_or_default().iter().map(|s| Selector::parse(s)).collect::<Result<Vec<_>>>()?;
-            let dst = r.dst.clone().unwrap_or_default().iter().map(|s| Selector::parse(s)).collect::<Result<Vec<_>>>()?;
+            let src = r
+                .src
+                .clone()
+                .unwrap_or_default()
+                .iter()
+                .map(|s| Selector::parse(s))
+                .collect::<Result<Vec<_>>>()?;
+            let dst = r
+                .dst
+                .clone()
+                .unwrap_or_default()
+                .iter()
+                .map(|s| Selector::parse(s))
+                .collect::<Result<Vec<_>>>()?;
             if src.iter().any(|s| matches!(s, Selector::Cidr(_))) {
                 bail!("rule {id}: cidr: selectors are allowed only in dst (§14.2)");
             }
@@ -309,7 +342,13 @@ impl Policy {
                 bail!("rule {id}: src and dst must not be empty");
             }
             let ports = PortSet::parse_list(&r.ports.clone().unwrap_or_default())?;
-            rules.push(Rule { id, action: action(r.action), src, dst, ports });
+            rules.push(Rule {
+                id,
+                action: action(r.action),
+                src,
+                dst,
+                ports,
+            });
         }
         Ok(Policy {
             version: p.version,
@@ -332,11 +371,19 @@ impl Policy {
     pub fn evaluate(&self, src: &Subject, dst: Dest, proto: u8, port: u16) -> Verdict {
         let mut allow: Option<&Rule> = None;
         for r in &self.rules {
-            if !r.ports.contains(proto, port) || !r.src.iter().any(|s| s.matches_node(src)) || !Self::dst_matches(&r.dst, dst) {
+            if !r.ports.contains(proto, port)
+                || !r.src.iter().any(|s| s.matches_node(src))
+                || !Self::dst_matches(&r.dst, dst)
+            {
                 continue;
             }
             match r.action {
-                Decision::Deny => return Verdict { decision: Decision::Deny, rule: Some(r.id.clone()) },
+                Decision::Deny => {
+                    return Verdict {
+                        decision: Decision::Deny,
+                        rule: Some(r.id.clone()),
+                    }
+                }
                 Decision::Allow => {
                     if allow.is_none() {
                         allow = Some(r);
@@ -345,15 +392,25 @@ impl Policy {
             }
         }
         match allow {
-            Some(r) => Verdict { decision: Decision::Allow, rule: Some(r.id.clone()) },
-            None => Verdict { decision: self.default, rule: None },
+            Some(r) => Verdict {
+                decision: Decision::Allow,
+                rule: Some(r.id.clone()),
+            },
+            None => Verdict {
+                decision: self.default,
+                rule: None,
+            },
         }
     }
 
     /// The set of (proto, port) a flow from `src` to `dst` may use, after
     /// deny rules.
     pub fn allowed(&self, src: &Subject, dst: Dest) -> PortSet {
-        let mut allow = if self.default == Decision::Allow { PortSet::all() } else { PortSet::default() };
+        let mut allow = if self.default == Decision::Allow {
+            PortSet::all()
+        } else {
+            PortSet::default()
+        };
         let mut deny = PortSet::default();
         for r in &self.rules {
             if !r.src.iter().any(|s| s.matches_node(src)) || !Self::dst_matches(&r.dst, dst) {
@@ -372,13 +429,20 @@ impl Policy {
     /// rules whose cidr: selectors overlap the prefix. Conservative: the
     /// union over addresses, minus denies covering the whole prefix.
     pub fn allowed_prefix(&self, src: &Subject, prefix: &IpNet) -> PortSet {
-        let mut allow = if self.default == Decision::Allow { PortSet::all() } else { PortSet::default() };
+        let mut allow = if self.default == Decision::Allow {
+            PortSet::all()
+        } else {
+            PortSet::default()
+        };
         let mut deny = PortSet::default();
         for r in &self.rules {
             if !r.src.iter().any(|s| s.matches_node(src)) {
                 continue;
             }
-            let touches = r.dst.iter().any(|s| matches!(s, Selector::Cidr(n) if crate::types::overlaps(n, prefix)));
+            let touches = r
+                .dst
+                .iter()
+                .any(|s| matches!(s, Selector::Cidr(n) if crate::types::overlaps(n, prefix)));
             let covers = r.dst.iter().any(|s| matches!(s, Selector::Cidr(n) if n.contains(&prefix.network()) && n.prefix_len() <= prefix.prefix_len()));
             match r.action {
                 Decision::Allow if touches => allow.union(&r.ports),
@@ -440,9 +504,15 @@ impl Policy {
             for a in self.rules.iter().filter(|r| r.action == Decision::Allow) {
                 let mut rest = a.ports.clone();
                 rest.subtract(&d.ports);
-                let overlap_sel = subjects.iter().any(|s| d.src.iter().any(|x| x.matches_node(s)) && a.src.iter().any(|x| x.matches_node(s)));
+                let overlap_sel = subjects.iter().any(|s| {
+                    d.src.iter().any(|x| x.matches_node(s))
+                        && a.src.iter().any(|x| x.matches_node(s))
+                });
                 if rest.is_empty() && overlap_sel && d.dst == a.dst {
-                    w.push(format!("deny rule {} overrides all of allow rule {}", d.id, a.id));
+                    w.push(format!(
+                        "deny rule {} overrides all of allow rule {}",
+                        d.id, a.id
+                    ));
                 }
             }
         }
@@ -454,7 +524,10 @@ fn synth(s: &Selector, lookup: &dyn Fn(&Selector) -> Option<Subject>) -> Subject
     if let Some(n) = lookup(s) {
         return n;
     }
-    let mut n = Subject { enrolled: true, ..Default::default() };
+    let mut n = Subject {
+        enrolled: true,
+        ..Default::default()
+    };
     match s {
         Selector::Tag(t) => n.tags.push(t.clone()),
         Selector::Role(RoleSel::Relay) => n.relay = true,
@@ -473,7 +546,9 @@ fn parse_test_port(s: &str) -> Result<(u8, u16)> {
     if s == "icmp" {
         return Ok((PROTO_ICMP, 0));
     }
-    let (p, port) = s.split_once(':').ok_or_else(|| anyhow!("bad test port {s:?}"))?;
+    let (p, port) = s
+        .split_once(':')
+        .ok_or_else(|| anyhow!("bad test port {s:?}"))?;
     let proto = match p {
         "tcp" => PROTO_TCP,
         "udp" => PROTO_UDP,
@@ -496,8 +571,16 @@ pub struct Compiled {
 }
 
 impl Compiled {
-    pub fn build(policy: &Policy, me: &Subject, others: &[Subject], my_prefixes: &[IpNet]) -> Compiled {
-        let mut c = Compiled { version: policy.version, ..Default::default() };
+    pub fn build(
+        policy: &Policy,
+        me: &Subject,
+        others: &[Subject],
+        my_prefixes: &[IpNet],
+    ) -> Compiled {
+        let mut c = Compiled {
+            version: policy.version,
+            ..Default::default()
+        };
         for o in others {
             if o.node_id == me.node_id {
                 continue;
@@ -527,18 +610,30 @@ impl Compiled {
     /// Pair reachability (§14.4): some flow allowed in either direction, or
     /// the peer may reach one of my prefixes.
     pub fn may_talk(&self, peer: &Bytes32) -> bool {
-        self.inbound.contains_key(peer) || self.outbound.contains_key(peer) || self.subnet_in.contains_key(peer)
+        self.inbound.contains_key(peer)
+            || self.outbound.contains_key(peer)
+            || self.subnet_in.contains_key(peer)
     }
 }
 
 /// Pair reachability evaluated directly (relays, §11.5): `a` and `b` may
 /// talk if any flow is allowed in either direction, or either may reach a
 /// prefix the other is granted.
-pub fn pair_may_talk(policy: &Policy, a: &Subject, b: &Subject, a_prefixes: &[IpNet], b_prefixes: &[IpNet]) -> bool {
+pub fn pair_may_talk(
+    policy: &Policy,
+    a: &Subject,
+    b: &Subject,
+    a_prefixes: &[IpNet],
+    b_prefixes: &[IpNet],
+) -> bool {
     !policy.allowed(a, Dest::Node(b)).is_empty()
         || !policy.allowed(b, Dest::Node(a)).is_empty()
-        || b_prefixes.iter().any(|p| !policy.allowed_prefix(a, p).is_empty())
-        || a_prefixes.iter().any(|p| !policy.allowed_prefix(b, p).is_empty())
+        || b_prefixes
+            .iter()
+            .any(|p| !policy.allowed_prefix(a, p).is_empty())
+        || a_prefixes
+            .iter()
+            .any(|p| !policy.allowed_prefix(b, p).is_empty())
 }
 
 // ---------------------------------------------------------------- YAML form (admin tool)
@@ -662,7 +757,13 @@ tests:
 "#;
 
     fn subj(id: u8, tags: &[&str]) -> Subject {
-        Subject { node_id: [id; 32], enrolled: true, tags: tags.iter().map(|s| s.to_string()).collect(), data: true, ..Default::default() }
+        Subject {
+            node_id: [id; 32],
+            enrolled: true,
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            data: true,
+            ..Default::default()
+        }
     }
 
     fn policy() -> Policy {
@@ -680,28 +781,56 @@ tests:
         let p = policy();
         let admin = subj(1, &["tag:admin"]);
         let db = subj(2, &["tag:db"]);
-        assert_eq!(p.evaluate(&admin, Dest::Node(&db), PROTO_TCP, 22).decision, Decision::Deny);
-        assert_eq!(p.evaluate(&admin, Dest::Node(&db), PROTO_TCP, 5432).decision, Decision::Allow);
+        assert_eq!(
+            p.evaluate(&admin, Dest::Node(&db), PROTO_TCP, 22).decision,
+            Decision::Deny
+        );
+        assert_eq!(
+            p.evaluate(&admin, Dest::Node(&db), PROTO_TCP, 5432)
+                .decision,
+            Decision::Allow
+        );
         let mut rev = p.clone();
         rev.rules.reverse();
         for port in [22u16, 80, 443, 5432, 9999] {
-            assert_eq!(p.evaluate(&admin, Dest::Node(&db), PROTO_TCP, port).decision, rev.evaluate(&admin, Dest::Node(&db), PROTO_TCP, port).decision);
+            assert_eq!(
+                p.evaluate(&admin, Dest::Node(&db), PROTO_TCP, port)
+                    .decision,
+                rev.evaluate(&admin, Dest::Node(&db), PROTO_TCP, port)
+                    .decision
+            );
         }
     }
 
     #[test]
     fn compiled_agrees_with_direct() {
         let p = policy();
-        let nodes = vec![subj(1, &["tag:admin"]), subj(2, &["tag:db", "tag:prod"]), subj(3, &["tag:web"]), subj(4, &["tag:laptop"])];
+        let nodes = vec![
+            subj(1, &["tag:admin"]),
+            subj(2, &["tag:db", "tag:prod"]),
+            subj(3, &["tag:web"]),
+            subj(4, &["tag:laptop"]),
+        ];
         for me in &nodes {
             let c = Compiled::build(&p, me, &nodes, &[]);
             for o in &nodes {
                 if o.node_id == me.node_id {
                     continue;
                 }
-                for (proto, port) in [(PROTO_TCP, 22u16), (PROTO_TCP, 80), (PROTO_TCP, 5432), (PROTO_UDP, 53), (PROTO_ICMP, 0)] {
-                    let direct = p.evaluate(o, Dest::Node(me), proto, port).decision == Decision::Allow;
-                    let comp = c.inbound.get(&o.node_id).map(|s| s.contains(proto, port)).unwrap_or(false);
+                for (proto, port) in [
+                    (PROTO_TCP, 22u16),
+                    (PROTO_TCP, 80),
+                    (PROTO_TCP, 5432),
+                    (PROTO_UDP, 53),
+                    (PROTO_ICMP, 0),
+                ] {
+                    let direct =
+                        p.evaluate(o, Dest::Node(me), proto, port).decision == Decision::Allow;
+                    let comp = c
+                        .inbound
+                        .get(&o.node_id)
+                        .map(|s| s.contains(proto, port))
+                        .unwrap_or(false);
                     assert_eq!(direct, comp, "{:?} -> {:?} {proto}/{port}", o.tags, me.tags);
                 }
             }
@@ -713,7 +842,13 @@ tests:
         assert!(Policy::from_wire(&wp::Policy {
             version: 1,
             default_action: wp::Action::Deny,
-            rules: Some(vec![wp::Rule { id: Some("x".into()), action: wp::Action::Allow, src: Some(vec!["cidr:10.0.0.0/8".into()]), dst: Some(vec!["*".into()]), ports: Some(vec!["*".into()]) }]),
+            rules: Some(vec![wp::Rule {
+                id: Some("x".into()),
+                action: wp::Action::Allow,
+                src: Some(vec!["cidr:10.0.0.0/8".into()]),
+                dst: Some(vec!["*".into()]),
+                ports: Some(vec!["*".into()])
+            }]),
             tests: None,
         })
         .is_err());
@@ -722,8 +857,14 @@ tests:
     #[test]
     fn names_and_keys_never_collide() {
         let k = crate::crypto::key_b64(&[7u8; 32]);
-        assert!(matches!(Selector::parse(&format!("node:{k}")).unwrap(), Selector::NodeKey(_)));
-        assert!(matches!(Selector::parse("node:build-01").unwrap(), Selector::NodeName(_)));
+        assert!(matches!(
+            Selector::parse(&format!("node:{k}")).unwrap(),
+            Selector::NodeKey(_)
+        ));
+        assert!(matches!(
+            Selector::parse("node:build-01").unwrap(),
+            Selector::NodeName(_)
+        ));
     }
 
     #[test]

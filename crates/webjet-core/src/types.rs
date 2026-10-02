@@ -8,7 +8,10 @@ use webjet_proto as wp;
 
 /// Wall-clock milliseconds since the Unix epoch, UTC (§18.4).
 pub fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub const SECOND: u64 = 1000;
@@ -25,7 +28,10 @@ pub const VALIDITY_PERIOD: u64 = 30 * DAY;
 
 /// `[a-z0-9-]{1,32}` (§11.10.2, §6.10).
 pub fn valid_name(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    !s.is_empty()
+        && s.len() <= 32
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// `tag:` followed by `[a-z0-9-]{1,32}` (§14.1).
@@ -45,7 +51,9 @@ pub fn net_to_cidr(n: &IpNet) -> wp::Cidr {
 
 /// Canonical: host bits zero and address family consistent (§15.2).
 pub fn canonical(c: &wp::Cidr) -> Result<IpNet> {
-    let Some(n) = cidr_to_net(c) else { bail!("malformed CIDR") };
+    let Some(n) = cidr_to_net(c) else {
+        bail!("malformed CIDR")
+    };
     if n.network() != n.addr() {
         bail!("CIDR {n} has host bits set");
     }
@@ -104,13 +112,18 @@ impl Grant {
         if lan.prefix_len() == 0 || published.prefix_len() == 0 {
             bail!("/0 route grants are not allowed");
         }
-        if lan.prefix_len() != published.prefix_len() || lan.addr().is_ipv4() != published.addr().is_ipv4() {
+        if lan.prefix_len() != published.prefix_len()
+            || lan.addr().is_ipv4() != published.addr().is_ipv4()
+        {
             bail!("mapped route must keep family and prefix length");
         }
         Ok(Grant { lan, published })
     }
     pub fn to_wire(&self) -> wp::RouteGrant {
-        wp::RouteGrant { lan: net_to_cidr(&self.lan), published: net_to_cidr(&self.published) }
+        wp::RouteGrant {
+            lan: net_to_cidr(&self.lan),
+            published: net_to_cidr(&self.published),
+        }
     }
     pub fn mapped(&self) -> bool {
         self.lan != self.published
@@ -124,7 +137,10 @@ impl Grant {
                 (n, n)
             }
         };
-        Grant::from_wire(&wp::RouteGrant { lan: net_to_cidr(&lan), published: net_to_cidr(&published) })
+        Grant::from_wire(&wp::RouteGrant {
+            lan: net_to_cidr(&lan),
+            published: net_to_cidr(&published),
+        })
     }
 }
 
@@ -152,7 +168,9 @@ pub fn parse_roles(s: &str) -> Result<Vec<wp::Role>> {
         v.push(match p {
             "data" => wp::Role::Data,
             "relay" => wp::Role::Relay,
-            other => bail!("unknown role {other} (CONTROL comes only from a root-signed certificate)"),
+            other => {
+                bail!("unknown role {other} (CONTROL comes only from a root-signed certificate)")
+            }
         });
     }
     Ok(sort_dedup(v))
