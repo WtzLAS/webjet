@@ -398,7 +398,9 @@ impl Raft {
             }
             Role::Learner => Vec::new(),
             _ => {
-                if now >= self.election_deadline {
+                // A cluster of one doesn't need to wait for anybody.
+                let alone = self.voters.len() == 1 && self.is_voter();
+                if now >= self.election_deadline || (alone && self.role != Role::Leader) {
                     self.start_election()
                 } else {
                     Vec::new()
@@ -482,11 +484,10 @@ impl Raft {
                     self.advance_commit();
                 }
             }
-            RaftBody::RaftTimeoutNow(t) => {
-                if t.term == self.term && self.is_voter() {
+            RaftBody::RaftTimeoutNow(t)
+                if t.term == self.term && self.is_voter() => {
                     out.extend(self.start_election());
                 }
-            }
             _ => {}
         }
         out
@@ -588,7 +589,7 @@ impl Raft {
         serde_json::json!({
             "role": self.role,
             "term": self.term,
-            "leader": self.leader.map(|l| hex::encode(l)),
+            "leader": self.leader.map(hex::encode),
             "commit": self.commit,
             "last_index": self.last_index(),
             "snapshot_index": self.snap_index,

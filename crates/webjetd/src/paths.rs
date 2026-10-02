@@ -186,7 +186,7 @@ pub async fn run(n: Arc<Node>) {
             }
         }
         backup_tried.retain(|_, t| t.elapsed() < Duration::from_secs(600));
-        if seq % 10 == 0 {
+        if seq.is_multiple_of(10) {
             circuit::sweep(&n);
         }
     }

@@ -604,7 +604,7 @@ fn my_links(n: &Arc<Node>, relays_only: bool) -> Vec<(Bytes32, Transport, u16, u
             out.push((p, h.transport, rtt.max(1), loss));
         }
     }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.sort_by_key(|a| a.0);
     out
 }
 
@@ -752,7 +752,7 @@ pub async fn run(n: Arc<Node>) {
                 h.send_control(HopMsg::Digest(Box::new(wp::Digest { digest: Some(d) })));
             }
         }
-        if i % 600 == 0 {
+        if i.is_multiple_of(600) {
             push_head(&n);
         }
         // Stuck walk: give up after 30 s.
@@ -769,7 +769,7 @@ pub async fn run(n: Arc<Node>) {
         if i % 5 == 3 {
             publish_attachment(&n);
         }
-        if i % 30 == 0 {
+        if i.is_multiple_of(30) {
             expire_records(&n);
             n.sync.subs.lock().retain(|_, v| {
                 v.retain(|(_, u)| *u > Instant::now());

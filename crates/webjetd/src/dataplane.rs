@@ -35,6 +35,7 @@ pub struct Dataplane {
     /// Sticky gateway choice per published prefix (§11.9.3).
     gw_choice: Mutex<HashMap<IpNet, Bytes32>>,
     nat_done: Mutex<Vec<String>>,
+    pings: Mutex<HashMap<u16, mpsc::UnboundedSender<u16>>>,
 }
 
 impl Dataplane {
@@ -50,6 +51,16 @@ impl Dataplane {
     }
 
     fn write_tun(&self, p: Vec<u8>) {
+        if let Some(pp) = packet::parse(&p) {
+            if pp.icmp == Some(packet::IcmpKind::Echo { request: false }) && p.len() >= pp.l4_offset + 8 {
+                let id = u16::from_be_bytes([p[pp.l4_offset + 4], p[pp.l4_offset + 5]]);
+                let seq = u16::from_be_bytes([p[pp.l4_offset + 6], p[pp.l4_offset + 7]]);
+                if let Some(tx) = self.pings.lock().get(&id) {
+                    let _ = tx.send(seq);
+                    return;
+                }
+            }
+        }
         if let Some(n) = self.node() {
             n.metrics.tun_tx.fetch_add(1, Ordering::Relaxed);
         }
@@ -58,6 +69,18 @@ impl Dataplane {
                 let _ = tx.try_send(p);
             }
             None => {
+                // No tun interface: answer pings ourselves, like a host stack
+                // would, so connectivity can be checked without root.
+                if let Some(reply) = packet::echo_reply(&p) {
+                    if let Some(n) = self.node() {
+                        let n2 = n.clone();
+                        tokio::spawn(async move {
+                            if let Some(dp) = n2.dataplane.get() {
+                                dp.outbound(reply);
+                            }
+                        });
+                    }
+                }
                 if let Some(s) = self.sink.lock().as_ref() {
                     let _ = s.send(p);
                 }
@@ -72,6 +95,38 @@ impl Dataplane {
         if let Some(r) = packet::icmp_unreachable(orig, why) {
             self.write_tun(r);
         }
+    }
+
+    /// Send `count` pings to `dst` through the overlay and wait for replies
+    /// (control channel `ping`; works with or without a tun interface).
+    pub async fn ping(&self, dst: IpAddr, count: u16) -> Vec<Option<std::time::Duration>> {
+        let Some(n) = self.node() else { return Vec::new() };
+        let src = match self.my_ips.read().iter().find(|i| i.addr().is_ipv4() == dst.is_ipv4()) {
+            Some(i) => i.addr(),
+            None => return Vec::new(),
+        };
+        let id: u16 = rand::random();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        self.pings.lock().insert(id, tx);
+        let mut out = Vec::new();
+        for seq in 0..count {
+            let t0 = Instant::now();
+            self.outbound(packet::icmp_echo(src, dst, true, id, seq, b"webjet ping"));
+            let got = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while let Some(s) = rx.recv().await {
+                    if s == seq {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await
+            .unwrap_or(false);
+            out.push(got.then(|| t0.elapsed()));
+            let _ = &n;
+        }
+        self.pings.lock().remove(&id);
+        out
     }
 
     /// No route to the destination (§9.5): host unreachable.
@@ -157,18 +212,14 @@ impl Dataplane {
                     self.icmp(&p, Unreach::Prohibited);
                     return;
                 }
-                if v == Ct::New {
-                    if self.conntrack.lock().insert(&peer, &parsed, true, verdict.rule.clone(), now).is_err() {
+                if v == Ct::New
+                    && self.conntrack.lock().insert(&peer, &parsed, true, verdict.rule.clone(), now).is_err() {
                         n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
                         return;
                     }
-                }
             }
         }
-        match crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p)) {
-            crate::e2e::SendResult::NoRoute => self.unreachable(&p),
-            _ => {}
-        }
+        if crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p)) == crate::e2e::SendResult::NoRoute { self.unreachable(&p) }
     }
 
     /// The node or serving gateway for a destination address.
@@ -473,6 +524,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         resolver: RwLock::new(Vec::new()),
         gw_choice: Mutex::new(HashMap::new()),
         nat_done: Mutex::new(Vec::new()),
+        pings: Mutex::new(HashMap::new()),
     });
     if let Some(dev) = dev_handle {
         let dp2 = dp.clone();

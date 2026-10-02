@@ -587,11 +587,10 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
                 }
                 Err(e) => tracing::debug!("bad control message: {e}"),
             },
-            rec::RELAY => {
-                if !hop.restricted {
+            rec::RELAY
+                if !hop.restricted => {
                     crate::circuit::on_relay_frame(&n, &hop, payload);
                 }
-            }
             _ => {}
         }
     }

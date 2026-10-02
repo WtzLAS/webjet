@@ -1,0 +1,31 @@
+[package]
+name = "webjet-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["anytls"]
+anytls = ["webjetd/anytls", "webjet-net/anytls"]
+
+[dependencies]
+webjet-core = { path = "../webjet-core" }
+webjet-proto = { path = "../webjet-proto" }
+webjet-net = { path = "../webjet-net", default-features = false }
+webjetd = { path = "../webjetd", default-features = false }
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+hex.workspace = true
+base64.workspace = true
+ipnet.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+chacha20poly1305.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+argon2 = "0.5"
+dirs = "5"

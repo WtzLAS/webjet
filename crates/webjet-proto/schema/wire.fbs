@@ -108,6 +108,7 @@ table RpcAck { ok: bool; error: string; }
 table RaftRpc { message: [ubyte]; }          // RaftMessage
 table RedeemRequest { request: [ubyte]; }     // EnrollRequest, forwarded to the leader
 table OfflineSubmit { items: [Blob]; }        // root-signed certs and tombstones
+table SubmitRoot { signed: [ubyte]; }         // root-signed AccountRecord/AccountTombstone/StateVersion
 table GetControllerStatus {}
 table ControllerStatus {
     node_id: Key32;
@@ -135,6 +136,7 @@ union RpcBody {
     ControllerStatus,
     RedeemRequest,
     OfflineSubmit,
+    SubmitRoot,
 }
 
 table Rpc { body: RpcBody; }

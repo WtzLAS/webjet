@@ -58,13 +58,24 @@ pub async fn serve(n: Arc<Node>) -> Result<()> {
     }
 }
 
+/// The state admins see: a controller's own state machine (which is ahead
+/// of signed heads, and the only state before the first certificate), or
+/// the node's verified tree.
+fn admin_view(n: &Node) -> webjet_core::store::View {
+    if let Some(c) = n.controller.get() {
+        let m = c.machine.lock();
+        if m.genesis.is_some() {
+            return m.view().clone();
+        }
+    }
+    n.store.read().view().clone()
+}
+
 fn str_arg<'a>(req: &'a Value, k: &str) -> Result<&'a str> {
     req.get(k).and_then(|v| v.as_str()).ok_or_else(|| anyhow!("missing {k}"))
 }
 
-fn node_json(n: &Node, id: &Bytes32) -> Value {
-    let s = n.store.read();
-    let v = s.view();
+fn node_json(v: &webjet_core::store::View, id: &Bytes32) -> Value {
     let Some(info) = v.nodes.get(id) else { return json!({"id": hex::encode(id)}) };
     json!({
         "id": hex::encode(id),
@@ -120,15 +131,14 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             Ok(json!({"sessions": v, "circuits": crate::circuit::summary(n)}))
         }
         "nodes" => {
-            let ids: Vec<Bytes32> = n.store.read().view().nodes.keys().copied().collect();
-            let mut v: Vec<Value> = ids.iter().map(|id| node_json(n, id)).collect();
+            let view = admin_view(n);
+            let mut v: Vec<Value> = view.nodes.keys().map(|id| node_json(&view, id)).collect();
             v.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
             Ok(json!(v))
         }
         "accounts" => {
-            let s = n.store.read();
-            let mut v: Vec<Value> = s
-                .view()
+            let view = admin_view(n);
+            let mut v: Vec<Value> = view
                 .accounts
                 .values()
                 .map(|a| json!({"id": hex::encode(a.id), "name": a.name, "admin": a.admin, "valid": a.valid, "key": crypto::key_b64(&a.key), "version": a.rec.version}))
@@ -139,7 +149,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
         "tree" => {
             // Current singleton configs, for `webjetctl * show`.
             let s = n.store.read();
-            let v = s.view();
+            let v = &admin_view(n);
             Ok(json!({
                 "policy_version": v.policy_version,
                 "dns": v.dns.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
@@ -171,6 +181,26 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 let _ = crate::rpc::call_any(n, body, Duration::from_secs(10)).await;
             }
             Ok(json!({"added": added}))
+        }
+        "submit_signed" => {
+            let raw = unb64(str_arg(&req, "signed")?)?;
+            submit_signed(n, raw).await
+        }
+        "enroll_info" => Ok(enroll_info(n)),
+        "ping" => {
+            let target = str_arg(&req, "target")?;
+            let count = req.get("count").and_then(|c| c.as_u64()).unwrap_or(3) as u16;
+            let ip: std::net::IpAddr = match target.parse() {
+                Ok(ip) => ip,
+                Err(_) => {
+                    let v = admin_view(n);
+                    let id = v.by_name.get(target.trim_end_matches(&format!(".{}", v.suffix()))).ok_or_else(|| anyhow!("unknown node {target}"))?;
+                    v.nodes.get(id).and_then(|x| x.ips.first()).map(|i| i.addr()).ok_or_else(|| anyhow!("{target} has no address"))?
+                }
+            };
+            let dp = n.dataplane.get().ok_or_else(|| anyhow!("the data plane isn't running yet"))?;
+            let r = dp.ping(ip, count).await;
+            Ok(json!({"target": ip.to_string(), "replies": r.iter().map(|d| d.map(|x| x.as_secs_f64() * 1000.0)).collect::<Vec<_>>()}))
         }
         "cert_request" => {
             let c = n.controller.get().ok_or_else(|| anyhow!("this node doesn't run the controller role"))?;
@@ -234,6 +264,106 @@ pub async fn submit_op(n: &Arc<Node>, raw: Vec<u8>) -> Result<(u64, String)> {
         RpcBody::RpcAck(a) => bail!(a.error.unwrap_or_default()),
         _ => bail!("unexpected reply"),
     }
+}
+
+/// Submit any signed file an admin produced: offline-signed material is
+/// installed and gossiped; root-signed accounts and state versions go
+/// through the log; SignedOps are submitted as operations.
+pub async fn submit_signed(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
+    use webjet_proto::msg_type as mt;
+    let v = crypto::open_envelope(&raw)?;
+    let mut out = serde_json::Map::new();
+    out.insert("type".into(), json!(mt::name(v.ty)));
+    match v.ty {
+        mt::SIGNED_OP => {
+            let (i, d) = submit_op(n, raw).await?;
+            out.insert("index".into(), json!(i));
+            out.insert("applied".into(), json!(d));
+        }
+        mt::SIGNING_KEY_CERT | mt::SIGNING_KEY_TOMBSTONE | mt::TOMBSTONE => {
+            let added = n.store.write().add_offline_item(&raw)?;
+            n.persist_store();
+            crate::gossip::push_head(n);
+            if !n.is_controller() {
+                let body = RpcBody::OfflineSubmit(Box::new(wp::OfflineSubmit { items: Some(vec![wp::Blob { data: Some(raw.clone()) }]) }));
+                let _ = crate::rpc::call_any(n, body, Duration::from_secs(10)).await;
+            }
+            out.insert("added".into(), json!(added));
+        }
+        mt::ACCOUNT_RECORD | mt::ACCOUNT_TOMBSTONE | mt::STATE_VERSION => {
+            if v.ty == mt::ACCOUNT_TOMBSTONE {
+                // Root- or emergency-signed account tombstones also spread
+                // standalone (§6.11), so they work without a controller majority.
+                if n.store.write().add_offline_item(&raw).unwrap_or(false) {
+                    n.persist_store();
+                    crate::gossip::push_head(n);
+                }
+            }
+            let idx = match n.controller.get() {
+                Some(c) => {
+                    let p = crate::controller::root_payload(&raw)?;
+                    c.submit(p, Some(RpcBody::SubmitRoot(Box::new(wp::SubmitRoot { signed: Some(raw.clone()) })))).await?.0
+                }
+                None => {
+                    let body = RpcBody::SubmitRoot(Box::new(wp::SubmitRoot { signed: Some(raw.clone()) }));
+                    match crate::rpc::call_any(n, body, Duration::from_secs(20)).await?.1 {
+                        RpcBody::SubmitResult(r) if r.ok => r.index,
+                        RpcBody::SubmitResult(r) => bail!(r.error.unwrap_or_default()),
+                        _ => bail!("unexpected reply"),
+                    }
+                }
+            };
+            out.insert("index".into(), json!(idx));
+        }
+        t => bail!("don't know how to submit a {}", mt::name(t)),
+    }
+    Ok(Value::Object(out))
+}
+
+/// What `webjetctl node enroll` needs for an enrollment string.
+fn enroll_info(n: &Arc<Node>) -> Value {
+    let s = n.store.read();
+    let v = &admin_view(n);
+    let mut controllers: Vec<Value> = Vec::new();
+    let recs = n.records.lock();
+    for id in v.controllers.keys() {
+        if let Some((r, _)) = recs.endpoints.get(id) {
+            for a in r.addrs.clone().unwrap_or_default() {
+                if a.kind == wp::AddrKind::Public && a.transport != wp::Transport::KcpFecTls {
+                    if let Some(sa) = a.addr.as_ref().and_then(|x| x.to_sock()) {
+                        controllers.push(json!({"host": sa.ip().to_string(), "port": sa.port(), "transport": a.transport.name()}));
+                    }
+                }
+            }
+        }
+    }
+    drop(recs);
+    if n.is_controller() {
+        for a in crate::transport::my_addrs(n) {
+            if a.kind == wp::AddrKind::Public && a.transport != wp::Transport::KcpFecTls {
+                if let Some(sa) = a.addr.as_ref().and_then(|x| x.to_sock()) {
+                    let j = json!({"host": sa.ip().to_string(), "port": sa.port(), "transport": a.transport.name()});
+                    if !controllers.contains(&j) {
+                        controllers.push(j);
+                    }
+                }
+            }
+        }
+    }
+    let cam = v.transport.as_ref().and_then(|t| t.camouflage.clone());
+    #[cfg(feature = "anytls")]
+    let pin = cam.as_ref().and_then(|c| c.certificate.clone()).and_then(|c| c.first().and_then(|b| b.data.clone())).and_then(|d| webjet_net::anytls::spki_pin(&d).ok()).map(hex::encode);
+    #[cfg(not(feature = "anytls"))]
+    let pin: Option<String> = None;
+    json!({
+        "root_key": crypto::key_b64(&s.root),
+        "controllers": controllers,
+        "camouflage_domain": cam.as_ref().and_then(|c| c.domain.clone()),
+        "camouflage_pin": pin,
+        "overlay_pool": s.overlay_pool.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+        "used_ips": v.nodes.values().filter(|x| !v.tombstoned_nodes.contains(&x.id)).flat_map(|x| x.ips.iter().map(|i| i.addr().to_string())).collect::<Vec<_>>(),
+        "resolver": v.dns.as_ref().map(|d| d.resolver_ip.clone().unwrap_or_default().iter().filter_map(|i| i.to_ip()).map(|i| i.to_string()).collect::<Vec<_>>()),
+    })
 }
 
 pub fn status(n: &Arc<Node>) -> Value {

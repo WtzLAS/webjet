@@ -308,7 +308,8 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
         hints.extend(nf.enroll_seeds.iter().cloned());
         hints.extend(nf.enroll_controllers.iter().cloned());
     }
-    let all = infra_keys(n);
+    let all: Vec<Bytes32> = infra_keys(n).into_iter().filter(|k| *k != n.kp.public()).collect();
+    let mine: Vec<SocketAddr> = [n.cfg.listen.tls, n.cfg.listen.kcp, n.cfg.listen.anytls].into_iter().flatten().collect();
     for h in hints {
         let Some(t) = Transport::parse(&h.transport) else { continue };
         let keys = match &h.node {
@@ -318,6 +319,7 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
                 let r = r.strip_prefix("node:").unwrap_or(r);
                 let id = crypto::parse_key_b64(r).and_then(|k| v.by_key.get(&k).copied()).or_else(|| v.by_name.get(r).copied());
                 match id.and_then(|id| v.nodes.get(&id)) {
+                    Some(x) if x.id == n.me => continue,
                     Some(x) => vec![x.key],
                     None => all.clone(),
                 }
@@ -325,6 +327,9 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
             None => all.clone(),
         };
         for a in resolve(&h.host, h.port).await {
+            if mine.contains(&a) {
+                continue;
+            }
             out.push((a, t, keys.clone()));
         }
     }

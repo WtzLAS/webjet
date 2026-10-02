@@ -150,7 +150,8 @@ impl Sessions {
     }
 
     fn in_progress(&self) -> usize {
-        self.map.lock().values().filter(|s| s.handshaking()).count()
+        let all: Vec<Arc<Session>> = self.map.lock().values().cloned().collect();
+        all.iter().filter(|s| s.inner.try_lock().map(|i| i.hs.is_some()).unwrap_or(true)).count()
     }
 }
 
@@ -390,6 +391,8 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
     let h = frames::parse_handshake(frame).ok_or_else(|| anyhow!("bad handshake frame"))?;
     let s = n.e2e.get_or_create(n, &c.peer).ok_or_else(|| anyhow!("handshake from an untrusted peer"))?;
     *s.last_used.lock() = Instant::now();
+    // Count before taking our own lock: in_progress() locks every session.
+    let busy = n.e2e.in_progress() >= MAX_HS_IN_PROGRESS;
     let mut i = s.inner.lock();
     // A frame for the handshake in progress?
     if let Some(hs) = i.hs.as_mut() {
@@ -427,7 +430,7 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
         }
         i.hs_times.push_back(now);
     }
-    if n.e2e.in_progress() >= MAX_HS_IN_PROGRESS {
+    if busy {
         bail!("too many handshakes in progress");
     }
     if !crate::circuit::may_talk(n, &n.me, &s.peer) {
@@ -646,7 +649,8 @@ pub async fn run(n: Arc<Node>) {
                 }
             }
             if let Some((label, f)) = resend {
-                let c = n.circuits.lock().local_circuits(&s.peer).into_iter().find(|c| c.label == label).or_else(|| n.circuits.lock().local_circuits(&s.peer).into_iter().next());
+                let all = n.circuits.lock().local_circuits(&s.peer);
+                let c = all.iter().find(|c| c.label == label).or_else(|| all.first()).cloned();
                 if let Some(c) = c {
                     c.send(&n, &f, 0);
                 }

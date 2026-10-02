@@ -124,7 +124,7 @@ impl Controller {
             self.send_raft(&n, out);
             self.apply_committed(&n);
             self.send_snapshots(&n);
-            if i % 10 == 0 {
+            if i.is_multiple_of(10) {
                 self.maybe_sign_head(&n);
                 if self.is_leader() {
                     let me = self.clone();
@@ -200,7 +200,7 @@ impl Controller {
                     if let Some(w) = self.waiters.lock().remove(&next) {
                         let _ = w.tx.send(if w.hash == entry_hash(&bytes) { Ok(outcome) } else { Err("entry was superseded by a new leader".into()) });
                     }
-                    if next % raft::COMPACT_EVERY == 0 {
+                    if next.is_multiple_of(raft::COMPACT_EVERY) {
                         self.compact();
                     }
                 }
@@ -443,7 +443,11 @@ impl Controller {
     pub async fn handle_rpc(self: Arc<Self>, from: Bytes32, body: RpcBody) -> Option<RpcBody> {
         let n = self.node()?;
         let ack = |ok: bool, e: Option<String>| Some(RpcBody::RpcAck(Box::new(wp::RpcAck { ok, error: e })));
-        let trusted = n.store.read().node_trusted(&from) || self.raft.lock().voters.contains(&from) || self.raft.lock().learners.contains(&from);
+        let member = {
+            let r = self.raft.lock();
+            r.voters.contains(&from) || r.learners.contains(&from)
+        };
+        let trusted = member || n.store.read().node_trusted(&from);
         if !trusted {
             return ack(false, Some("untrusted caller".into()));
         }
@@ -453,7 +457,7 @@ impl Controller {
                 if src != from || to != n.me {
                     return None;
                 }
-                let is_ctl = n.store.read().view().is_controller(&from) || self.raft.lock().voters.contains(&from) || self.raft.lock().learners.contains(&from);
+                let is_ctl = member || n.store.read().view().is_controller(&from);
                 if !is_ctl {
                     return None;
                 }
@@ -508,6 +512,14 @@ impl Controller {
                 n.persist_store();
                 crate::gossip::push_head(&n);
                 ack(errs.is_empty(), (!errs.is_empty()).then(|| errs.join("; ")))
+            }
+            RpcBody::SubmitRoot(r) => {
+                let raw = r.signed.clone().unwrap_or_default();
+                let res = match root_payload(&raw) {
+                    Ok(p) => self.submit(p, Some(RpcBody::SubmitRoot(r))).await,
+                    Err(e) => Err(e),
+                };
+                Some(submit_result(res))
             }
             RpcBody::GetControllerStatus(_) => Some(RpcBody::ControllerStatus(Box::new(self.status_wire(&n)))),
             _ => None,
@@ -718,6 +730,16 @@ impl Controller {
             "camouflage_secret": m.camouflage.is_some(),
         })
     }
+}
+
+/// The log payload for a root-signed item submitted by an admin.
+pub fn root_payload(raw: &[u8]) -> Result<EntryPayload> {
+    let v = crypto::open_envelope(raw)?;
+    Ok(match v.ty {
+        mt::ACCOUNT_RECORD | mt::ACCOUNT_TOMBSTONE => EntryPayload::RootAccountEntry(Box::new(wp::RootAccountEntry { record: Some(raw.to_vec()) })),
+        mt::STATE_VERSION => EntryPayload::SetStateVersionEntry(Box::new(wp::SetStateVersionEntry { state_version: Some(raw.to_vec()) })),
+        t => bail!("{} is not submitted through the log", mt::name(t)),
+    })
 }
 
 fn submit_result(res: Result<(u64, Outcome)>) -> RpcBody {

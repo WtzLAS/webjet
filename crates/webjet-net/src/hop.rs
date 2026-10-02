@@ -179,7 +179,9 @@ pub async fn accept_tls(mut s: TcpStream, remote: SocketAddr, kp: &KeyPair, trus
         let e = epochs.read().clone();
         check_tcp_preamble(&pre, &e, replay).ok_or_else(|| anyhow!("PSK gate rejected {remote}"))?
     };
-    let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP, tls::ALPN_ENROLL], is_enroll)?;
+    // The enrollment credential gets a config without client certificates;
+    // everything else must present a raw public key.
+    let cfg = if is_enroll { tls::enroll_server_config(kp)? } else { tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)? };
     let tls = tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_rustls::TlsAcceptor::from(cfg).accept(s)).await.map_err(|_| anyhow!("TLS accept timeout"))??;
     let conn = tls.get_ref().1;
     tls::check_pq(conn)?;

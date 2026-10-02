@@ -249,6 +249,18 @@ impl ClientCertVerifier for OptionalClient {
     }
 }
 
+/// Server side of the enrollment endpoint: no client certificate (§8).
+pub fn enroll_server_config(kp: &KeyPair) -> anyhow::Result<Arc<rustls::ServerConfig>> {
+    let mut c = rustls::ServerConfig::builder_with_provider(provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_client_cert_verifier(no_client_auth())
+        .with_cert_resolver(Arc::new(rustls::server::AlwaysResolvesServerRawPublicKeys::new(certified_key(kp)?)));
+    c.alpn_protocols = vec![ALPN_ENROLL.to_vec()];
+    c.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    c.send_tls13_tickets = 0;
+    Ok(Arc::new(c))
+}
+
 pub fn server_name() -> ServerName<'static> {
     ServerName::try_from(SERVER_NAME).unwrap()
 }

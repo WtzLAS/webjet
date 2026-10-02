@@ -555,3 +555,52 @@ pub mod tests {
         }
     }
 }
+
+/// Build an ICMP(v6) echo request or reply.
+pub fn icmp_echo(src: IpAddr, dst: IpAddr, request: bool, id: u16, seq: u16, payload: &[u8]) -> Vec<u8> {
+    let l4len = 8 + payload.len();
+    let mut p = match (src, dst) {
+        (IpAddr::V4(s), IpAddr::V4(d)) => {
+            let mut h = vec![0u8; 20];
+            h[0] = 0x45;
+            h[2..4].copy_from_slice(&((20 + l4len) as u16).to_be_bytes());
+            h[8] = 64;
+            h[9] = PROTO_ICMP;
+            h[12..16].copy_from_slice(&s.octets());
+            h[16..20].copy_from_slice(&d.octets());
+            h.push(if request { 8 } else { 0 });
+            h
+        }
+        (IpAddr::V6(s), IpAddr::V6(d)) => {
+            let mut h = vec![0u8; 40];
+            h[0] = 0x60;
+            h[4..6].copy_from_slice(&(l4len as u16).to_be_bytes());
+            h[6] = PROTO_ICMPV6;
+            h[7] = 64;
+            h[8..24].copy_from_slice(&s.octets());
+            h[24..40].copy_from_slice(&d.octets());
+            h.push(if request { 128 } else { 129 });
+            h
+        }
+        _ => return Vec::new(),
+    };
+    p.push(0);
+    p.extend_from_slice(&[0, 0]);
+    p.extend_from_slice(&id.to_be_bytes());
+    p.extend_from_slice(&seq.to_be_bytes());
+    p.extend_from_slice(payload);
+    fix_checksums(&mut p);
+    p
+}
+
+/// Turn an echo request into its reply (for a userspace host stack).
+pub fn echo_reply(req: &[u8]) -> Option<Vec<u8>> {
+    let p = parse(req)?;
+    if p.icmp != Some(IcmpKind::Echo { request: true }) {
+        return None;
+    }
+    let off = p.l4_offset;
+    let id = u16::from_be_bytes([*req.get(off + 4)?, *req.get(off + 5)?]);
+    let seq = u16::from_be_bytes([*req.get(off + 6)?, *req.get(off + 7)?]);
+    Some(icmp_echo(p.flow.dst, p.flow.src, false, id, seq, req.get(off + 8..)?))
+}
