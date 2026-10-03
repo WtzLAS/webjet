@@ -50,7 +50,8 @@ package() { # target directory-with-binaries
         cp "$2/$b" "$stage/"
     done
     f=webjet-$TAG-$1.tar.gz
-    tar -czf "$DIST/$f" -C "$stage" $BINS
+    # macOS tar would add Apple extended attributes, which GNU tar warns about.
+    COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$DIST/$f" -C "$stage" $BINS
     (cd "$DIST" && shasum -a 256 "$f" > "$f.sha256")
     rm -rf "$stage"
     echo "packaged $DIST/$f"

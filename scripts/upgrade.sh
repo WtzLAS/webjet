@@ -59,7 +59,10 @@ if [ -z "$SOURCE" ]; then
   tar -xzf "$TMP/$F" -C "$TMP"; SOURCE=$TMP
 fi
 stop
-for b in webjetd webjetctl webjet-signer webjet-root; do [ -f "$SOURCE/$b" ] && install -m 0755 "$SOURCE/$b" $BIN/$b; done
+# /usr/local/bin doesn't exist on a fresh Apple Silicon Mac (Homebrew lives
+# in /opt/homebrew), so create it.
+install -d -m 0755 "$BIN"
+for b in webjetd webjetctl webjet-signer webjet-root; do [ -f "$SOURCE/$b" ] && install -m 0755 "$SOURCE/$b" "$BIN/$b"; done
 mkdir -p "$STATE"; chmod 700 "$STATE"
 if [ "$OS" = Darwin ]; then
   [ -f "$PLIST" ] || cat > "$PLIST" <<EOT
