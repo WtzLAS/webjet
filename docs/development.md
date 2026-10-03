@@ -190,15 +190,27 @@ backslashes or newlines. Everything an operator needs is in docs/docker.md.
    message (they become the release's description).
 2. With the tag checked out and Docker running, on macOS:
    `WEBJET_FORGEJO_TOKEN=… scripts/release.sh vX.Y.Z --publish`. It checks
-   the tag, version and a clean source tree, builds macOS binaries natively
-   and Linux binaries in `docker/release.Dockerfile`, packages
-   `webjet-<tag>-<target>.tar.gz` with `.sha256` files into `dist/<tag>`,
+   the tag, version and a clean source tree, builds macOS binaries natively,
+   Linux binaries in `docker/release.Dockerfile` and Windows binaries with
+   `cargo xwin`, packages `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`
+   with `wintun.dll` and its license) with `.sha256` files into `dist/<tag>`,
    pushes the tag and creates the Forgejo release with the files. Without
    `--publish` it only builds and packages.
 3. Check the published release the way hosts install it:
    `WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download docker/release-test.sh vX.Y.Z`
    runs `scripts/upgrade.sh` in fresh Debian 11, Ubuntu 20.04 and Debian 12
    containers on amd64 and arm64.
+
+The Windows build needs `cargo install cargo-xwin` and Homebrew's `llvm` and
+`lld`. Without Homebrew's `lld-link` on `PATH`, cargo-xwin links rustup's
+`rust-lld` into its cache, which can't run on its own (it misses
+`libLLVM.dylib`), and CMake-built dependencies (BoringSSL, aws-lc) fail their
+compiler check. If that happened once, delete `~/Library/Caches/cargo-xwin/lld-link`
+and the `boring-sys-*`/`aws-lc-sys-*` directories under
+`target/x86_64-pc-windows-msvc/release/build`, since CMake keeps the linker
+path in its cache. Wintun's version and checksum are pinned in
+`scripts/release.sh`; its license allows shipping `wintun.dll` with software
+that uses it through its API, with the license file alongside.
 
 The Linux build uses Debian 11 so the binaries need only glibc 2.31. Debian
 11 is archived, which `docker/release.Dockerfile` works around: CMake comes

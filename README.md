@@ -117,8 +117,9 @@ is described in [docs/configuration.md](docs/configuration.md).
 
 Releases are published at
 <https://forgejo.wolf109909.top/webj8/webjet/releases> with binaries for
-Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+)
-and macOS (x86_64 and aarch64). Install or upgrade a host as root from a
+Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+),
+macOS (x86_64 and aarch64) and Windows (x86_64). Install or upgrade a Linux
+or macOS host as root from a
 checkout of the release tag:
 
 ```sh
@@ -131,8 +132,18 @@ WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download
 `upgrade.sh` downloads `webjet-<tag>-<target>.tar.gz`, checks it against the
 `.sha256` next to it, installs the four binaries into `/usr/local/bin` and
 sets up the systemd unit (Linux) or launchd daemon (macOS).
-`./scripts/upgrade.sh --uninstall` removes them again. Windows binaries
-aren't published yet; build them from source.
+`./scripts/upgrade.sh --uninstall` removes them again.
+
+On Windows, in PowerShell as Administrator from the same checkout:
+
+```powershell
+$env:WEBJET_RELEASE_URL = "https://forgejo.wolf109909.top/webj8/webjet/releases/download"
+.\scripts\upgrade.ps1 v0.1.0
+```
+
+It installs the programs and `wintun.dll` into `%ProgramFiles%\Webjet` and
+registers the `webjetd` service. The zip includes Wintun from wintun.net
+with its license (`wintun-LICENSE.txt`).
 
 ## Platform notes
 

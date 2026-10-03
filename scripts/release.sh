@@ -7,11 +7,16 @@
 #
 # Run from a clean checkout of the release tag on macOS with Docker: macOS
 # binaries are built natively, Linux binaries in docker/release.Dockerfile
-# (Debian 11, glibc 2.31+). Each archive holds webjetd, webjetctl, webjet-root
-# and webjet-signer at the top level, next to a `.sha256` file:
+# (Debian 11, glibc 2.31+), Windows binaries with cargo-xwin (needs
+# `cargo install cargo-xwin` and Homebrew's llvm and lld: rustup's rust-lld,
+# which cargo-xwin falls back to, can't run standalone). Each archive holds
+# webjetd, webjetctl, webjet-root and webjet-signer at the top level, next to
+# a `.sha256` file:
 #
 #   webjet-<tag>-<target>.tar.gz          target: {x86_64,aarch64}-unknown-linux-gnu,
 #   webjet-<tag>-<target>.tar.gz.sha256           {x86_64,aarch64}-apple-darwin
+#   webjet-<tag>-x86_64-pc-windows-msvc.zip       (.exe files, plus wintun.dll
+#   webjet-<tag>-x86_64-pc-windows-msvc.zip.sha256  and its license)
 #
 # Publishing needs WEBJET_FORGEJO_TOKEN (a token with write access to the
 # repository) and uses WEBJET_FORGEJO_API (default: the origin's Forgejo).
@@ -65,6 +70,28 @@ for p in arm64:aarch64 amd64:x86_64; do
     package "$arch-unknown-linux-gnu" "$out"
     rm -rf "$out"
 done
+
+# Windows (scripts/upgrade.ps1 expects a zip with wintun.dll next to the
+# programs). Wintun is WireGuard LLC's prebuilt driver, redistributable with
+# software that uses it through its API, with its license alongside.
+WINTUN_VERSION=0.14.1
+WINTUN_SHA256=07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+win=x86_64-pc-windows-msvc
+PATH="/opt/homebrew/opt/lld/bin:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --locked --target "$win" -p webjetd -p webjet-tools
+stage=$(mktemp -d)
+curl -fsSL "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip" -o "$stage/wintun.zip"
+echo "$WINTUN_SHA256  $stage/wintun.zip" | shasum -a 256 -c - >/dev/null || die "wintun-$WINTUN_VERSION.zip checksum mismatch"
+unzip -q "$stage/wintun.zip" -d "$stage"
+mkdir "$stage/pkg"
+for b in $BINS; do cp "target/$win/release/$b.exe" "$stage/pkg/"; done
+cp "$stage/wintun/bin/amd64/wintun.dll" "$stage/pkg/"
+cp "$stage/wintun/LICENSE.txt" "$stage/pkg/wintun-LICENSE.txt"
+f=webjet-$TAG-$win.zip
+(cd "$stage/pkg" && zip -q -X "../$f" ./*)
+mv "$stage/$f" "$DIST/"
+(cd "$DIST" && shasum -a 256 "$f" > "$f.sha256")
+rm -rf "$stage"
+echo "packaged $DIST/$f"
 
 # A built binary must report the tag's version.
 case "$(uname -m)" in arm64) native=aarch64-apple-darwin ;; *) native=x86_64-apple-darwin ;; esac
