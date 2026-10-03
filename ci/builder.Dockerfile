@@ -3,16 +3,16 @@
 # The CI image for Webjet (.forgejo/workflows): checks, tests and release
 # builds for every target except macOS, on one linux/amd64 runner.
 #
-#   docker build -f ci/builder.Dockerfile -t forgejo.wolf109909.top/webj8/webjet-builder:1 ci
-#   docker push forgejo.wolf109909.top/webj8/webjet-builder:1
+#   docker build -f ci/builder.Dockerfile -t forgejo.wolf109909.top/webj8/webjet-builder:2 ci
+#   docker push forgejo.wolf109909.top/webj8/webjet-builder:2
 #
-# (or let .forgejo/workflows/builder-image.yml do it). What it holds:
+# What it holds:
 #
 # - Debian 11 (glibc 2.31) with Rust stable, rustfmt and clippy: Linux
 #   binaries built here run on Debian 11+, Ubuntu 20.04+, RHEL 9+
 # - the aarch64 cross toolchain (gcc-aarch64-linux-gnu, Debian 11's
 #   glibc 2.31 for arm64), so the amd64 runner builds Linux arm64 too
-# - LLVM 18 from the LLVM release: libclang for bindgen (BoringSSL), and
+# - LLVM 20 from apt.llvm.org: libclang for bindgen (BoringSSL), and
 #   clang-cl, lld-link and llvm-lib for cargo-xwin; NASM for the assembly in
 #   BoringSSL and aws-lc on Windows
 # - cargo-xwin with the Microsoft CRT and Windows SDK already downloaded
@@ -22,12 +22,12 @@
 # - Node.js 20 for JavaScript actions (actions/checkout), plus git, curl,
 #   jq, zip, python3
 #
-# Bump the tag (and WEBJET_BUILDER in the workflows) when changing it.
+# Bump the tag (and the image in .forgejo/workflows/*.yml) when changing it.
 
 FROM rust:1-bullseye
 
 ARG CMAKE_VERSION=3.31.6
-ARG LLVM_VERSION=18.1.8
+ARG LLVM_VERSION=20
 ARG NODE_VERSION=20.18.1
 ARG CARGO_XWIN_VERSION=0.23.1
 
@@ -39,7 +39,7 @@ RUN sed -i '/security/d' /etc/apt/sources.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
-      nasm ninja-build libtinfo5 git curl ca-certificates jq zip unzip xz-utils python3 file \
+      nasm ninja-build git curl ca-certificates jq zip unzip xz-utils python3 file \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
@@ -47,20 +47,21 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
  && ln -s "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake \
  && cmake --version | head -n 1
 
-# Only what's used is kept of the LLVM release (about 1 GB unpacked): the
-# compiler and linker drivers, llvm-ar/llvm-lib, libclang and its headers.
-# Not on PATH as a whole, so `cc` stays Debian's gcc for Linux builds.
-RUN curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-x86_64-linux-gnu-ubuntu-18.04.tar.xz" \
-      | tar -xJ -C /opt \
- && mv "/opt/clang+llvm-${LLVM_VERSION}-x86_64-linux-gnu-ubuntu-18.04" /opt/llvm \
- && cd /opt/llvm \
- && find bin -type f ! -name 'clang-18' ! -name 'lld' ! -name 'llvm-ar' ! -name 'llvm-rc' -delete \
- && find bin -type l ! -name clang ! -name clang-cl ! -name 'clang++' ! -name lld-link ! -name 'ld.lld' ! -name llvm-lib ! -name llvm-dlltool ! -name llvm-ranlib -delete \
- && find lib -maxdepth 1 -type f ! -name 'libclang.so*' -delete \
- && find lib -maxdepth 1 -type l ! -name 'libclang.so*' -delete \
- && rm -rf include share libexec lib/cmake lib/x86_64-unknown-linux-gnu \
- && for t in clang-cl lld-link llvm-lib llvm-dlltool llvm-ar llvm-rc; do ln -s "/opt/llvm/bin/$t" "/usr/local/bin/$t"; done \
- && clang-cl --version | head -n 1 && lld-link --version
+# LLVM from apt.llvm.org, built for Debian 11. The Windows build needs
+# Clang 19 or newer: the Microsoft C++ headers cargo-xwin downloads refuse
+# older compilers (STL1000). Its bin directory goes on PATH so bindgen finds
+# `clang` for the system include paths; `cc` stays Debian's gcc.
+RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
+ && echo "deb http://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-${LLVM_VERSION} main" \
+      > /etc/apt/sources.list.d/llvm.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}" "llvm-${LLVM_VERSION}" "libclang-${LLVM_VERSION}-dev" \
+ && rm -rf /var/lib/apt/lists/* \
+ && cd "/usr/lib/llvm-${LLVM_VERSION}/bin" \
+ && for t in clang-cl:clang lld-link:lld llvm-lib:llvm-ar llvm-dlltool:llvm-ar; do \
+      [ -e "${t%%:*}" ] || ln -s "${t#*:}" "${t%%:*}"; \
+    done
 
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       | tar -xJ -C /usr/local --strip-components=1 --exclude='*.md' --exclude=LICENSE \
@@ -68,8 +69,9 @@ RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-l
 
 ENV CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
-    # bindgen (boring-sys) uses LLVM 18's libclang for every target.
-    LIBCLANG_PATH=/opt/llvm/lib \
+    PATH="/usr/lib/llvm-${LLVM_VERSION}/bin:${PATH}" \
+    # bindgen (boring-sys) uses this libclang for every target.
+    LIBCLANG_PATH="/usr/lib/llvm-${LLVM_VERSION}/lib" \
     # Linux arm64 by cross-compiling.
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
@@ -87,7 +89,16 @@ RUN rustup component add rustfmt clippy \
  && cargo xwin cache xwin \
  && chmod -R a+rX /opt/xwin "$CARGO_HOME" "$RUSTUP_HOME"
 
-# Smoke test: a C file through each cross toolchain.
+# Smoke tests: each toolchain compiles. The C++ one includes <regex> through
+# the Microsoft headers (they check the Clang version), and the C one checks
+# that clang finds its own headers (bindgen needs stddef.h).
 RUN printf 'int main(void){return 0;}\n' > /tmp/t.c \
  && aarch64-linux-gnu-gcc /tmp/t.c -o /tmp/t-arm64 && file /tmp/t-arm64 | grep -q aarch64 \
- && rm -f /tmp/t.c /tmp/t-arm64
+ && printf '#include <stddef.h>\n' | clang -fsyntax-only -x c - \
+ && printf '#include <regex>\nint main(){std::regex r("a");return 0;}\n' > /tmp/t.cpp \
+ && clang-cl --target=x86_64-pc-windows-msvc /EHsc -std:c++17 \
+      /imsvc /opt/xwin/xwin/crt/include /imsvc /opt/xwin/xwin/sdk/include/ucrt \
+      /imsvc /opt/xwin/xwin/sdk/include/um /imsvc /opt/xwin/xwin/sdk/include/shared \
+      -c /tmp/t.cpp /Fo/tmp/t.obj \
+ && clang-cl --version | head -n 1 && lld-link --version && llvm-lib /? > /dev/null \
+ && rm -f /tmp/t.c /tmp/t-arm64 /tmp/t.cpp /tmp/t.obj

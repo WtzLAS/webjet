@@ -20,7 +20,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+      image: forgejo.wolf109909.top/webj8/webjet-builder:2
     steps:
       - uses: actions/checkout@v4
       - name: cargo fmt
@@ -42,7 +42,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+      image: forgejo.wolf109909.top/webj8/webjet-builder:2
     steps:
       - uses: actions/checkout@v4
       - name: cargo test

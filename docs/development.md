@@ -187,7 +187,7 @@ backslashes or newlines. Everything an operator needs is in docs/docker.md.
 
 `.forgejo/workflows/` runs on the project's Forgejo runner (`linux/amd64`,
 label `ubuntu-latest`), with every job in the builder image
-`forgejo.wolf109909.top/webj8/webjet-builder:1` (`ci/builder.Dockerfile`):
+`forgejo.wolf109909.top/webj8/webjet-builder:2` (`ci/builder.Dockerfile`):
 
 | Workflow | When | What |
 | --- | --- | --- |
@@ -203,7 +203,7 @@ the CRT and SDK, as cargo-xwin does on first use.
 
 The runner pulls job images on every run (`force_pull`), so the image must be
 in the registry (the package is public). To change it, edit
-`ci/builder.Dockerfile`, bump the tag (`:1` → `:2`) in `ci.yml` and
+`ci/builder.Dockerfile`, bump the tag (`:2` → `:3`) in `ci.yml` and
 `release.yml`, then build and push it from any machine with Docker and a
 Forgejo token with `write:package`:
 

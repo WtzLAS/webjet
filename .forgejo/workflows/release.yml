@@ -26,7 +26,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+      image: forgejo.wolf109909.top/webj8/webjet-builder:2
     steps:
       - uses: actions/checkout@v4
       - name: cargo test
@@ -36,7 +36,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+      image: forgejo.wolf109909.top/webj8/webjet-builder:2
     steps:
       - uses: actions/checkout@v4
       # actions/checkout fetches the tagged commit, not the tag object, so
