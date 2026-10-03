@@ -30,6 +30,8 @@ fi
 N=${1:-3}
 W=${2:-/tmp/webjet-local}
 TUN=${TUN:-false}
+# ANYTLS=true adds an AnyTLS listener on port+2000 to every node.
+ANYTLS=${ANYTLS:-false}
 rm -rf "$W"; mkdir -p "$W"
 export WEBJET_ROOT_PASSPHRASE=root-pass WEBJET_ACCOUNT_PASSPHRASE=acct-pass WEBJET_KEYS="$W/keys"
 export RUST_LOG=${RUST_LOG:-info}
@@ -41,6 +43,9 @@ control_socket = "$W/$1/control.sock"
 [listen]
 tls = "127.0.0.1:$2"
 kcp = "127.0.0.1:$2"
+EOT
+  if [ "$ANYTLS" = true ]; then echo "anytls = \"127.0.0.1:$(($2 + 2000))\"" >> "$W/$1/webjetd.toml"; fi
+  cat >> "$W/$1/webjetd.toml" <<EOT
 [tun]
 enabled = $TUN
 [dns]

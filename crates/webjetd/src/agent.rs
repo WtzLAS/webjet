@@ -650,7 +650,22 @@ async fn secrets(n: Arc<Node>) {
             _ = tokio::time::sleep(wait) => {}
             e = ev.recv() => { if !matches!(e, Ok(Event::HeadChanged)) { continue; } }
         }
-        if n.is_controller() || n.peers().is_empty() {
+        if n.is_controller() {
+            // A controller has the camouflage secret in its own state: write
+            // it where the AnyTLS listener reads it, as relays do below.
+            if n.cfg.listen.anytls.is_some()
+                && let Some(c) = n.controller.get()
+            {
+                let secret = c.machine.lock().camouflage.clone();
+                if let Some((key_pem, site)) = secret {
+                    let f = state::CamouflageFile { key_pem, site };
+                    let _ = state::save_json(&n.paths.camouflage(), &f);
+                    crate::transport::refresh_anytls(&n);
+                }
+            }
+            continue;
+        }
+        if n.peers().is_empty() {
             continue;
         }
         let relay = n.is_relay();

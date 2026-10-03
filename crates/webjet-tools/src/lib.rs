@@ -426,12 +426,80 @@ pub struct PriorityOverrideFile {
 pub struct CamouflageFile {
     /// `website` or `refuse`.
     pub mode: String,
-    pub domain: String,
-    /// PEM certificate chain file, leaf first.
-    pub certificate: String,
+    /// SNI and certificate name. Website mode only.
+    #[serde(default)]
+    pub domain: Option<String>,
+    /// PEM certificate chain file, leaf first. Website mode only.
+    #[serde(default)]
+    pub certificate: Option<String>,
     /// Optional PEM certificate of the next key, for a key change (runbook 6).
+    /// Website mode only.
     #[serde(default)]
     pub next_certificate: Option<String>,
+}
+
+impl CamouflageFile {
+    pub fn refuse(&self) -> bool {
+        self.mode == "refuse"
+    }
+
+    /// Fields set in the file that refuse mode doesn't read.
+    pub fn ignored(&self) -> Vec<&'static str> {
+        if !self.refuse() {
+            return Vec::new();
+        }
+        [
+            ("domain", self.domain.is_some()),
+            ("certificate", self.certificate.is_some()),
+            ("next_certificate", self.next_certificate.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(k, set)| set.then_some(k))
+        .collect()
+    }
+}
+
+/// What [`refuse_certificate`] did.
+pub enum RefuseCertificate {
+    /// The network's current certificate (and domain) were kept.
+    Kept,
+    /// A new self-signed certificate was made; its private key must be
+    /// submitted with `SetCamouflageSecret` before the transport config.
+    New { key_pem: Vec<u8> },
+}
+
+/// Fill in a refuse-mode camouflage's domain and certificate. Refuse mode
+/// needs no public certificate, but AnyTLS clients still pin one so nobody
+/// can intercept the PSK-derived password (§9.7.2), so the network's current
+/// one is kept or, without one, a self-signed one is made for a random name.
+pub fn refuse_certificate(
+    cam: &mut wp::Camouflage,
+    current: Option<&wp::Camouflage>,
+) -> Result<RefuseCertificate> {
+    if let Some(cur) = current
+        && cur.certificate.as_ref().is_some_and(|c| !c.is_empty())
+    {
+        cam.domain = cur.domain.clone();
+        cam.certificate = cur.certificate.clone();
+        cam.next_spki = cur.next_spki;
+        return Ok(RefuseCertificate::Kept);
+    }
+    #[cfg(feature = "anytls")]
+    {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let label: String = (0..10)
+            .map(|_| rng.gen_range(b'a'..=b'z') as char)
+            .collect();
+        let domain = format!("www.{label}.com");
+        let (cert, key_pem) = webjet_net::anytls::self_signed(&domain)?;
+        cam.domain = Some(domain);
+        cam.certificate = Some(vec![wp::Blob { data: Some(cert) }]);
+        cam.next_spki = None;
+        Ok(RefuseCertificate::New { key_pem })
+    }
+    #[cfg(not(feature = "anytls"))]
+    bail!("built without AnyTLS: can't make a camouflage certificate")
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -490,28 +558,46 @@ impl TransportFile {
                     "refuse" => wp::CamouflageMode::Refuse,
                     m => bail!("camouflage mode must be website or refuse, got {m}"),
                 };
-                let chain = cert_file(&base.join(&c.certificate), "camouflage.certificate")?;
-                let next_spki = match &c.next_certificate {
-                    #[cfg(feature = "anytls")]
-                    Some(p) => {
-                        let next = cert_file(&base.join(p), "camouflage.next_certificate")?;
-                        Some(crypto::k32(&webjet_net::anytls::spki_pin(&next[0])?))
-                    }
-                    #[cfg(not(feature = "anytls"))]
-                    Some(_) => bail!("built without AnyTLS"),
-                    None => None,
-                };
-                Some(Box::new(wp::Camouflage {
-                    mode,
-                    domain: Some(c.domain.clone()),
-                    certificate: Some(
-                        chain
-                            .into_iter()
-                            .map(|d| wp::Blob { data: Some(d) })
-                            .collect(),
-                    ),
-                    next_spki,
-                }))
+                if c.refuse() {
+                    // Domain and certificate are filled in when applying
+                    // (refuse_certificate), from the network or generated.
+                    Some(Box::new(wp::Camouflage {
+                        mode,
+                        domain: None,
+                        certificate: None,
+                        next_spki: None,
+                    }))
+                } else {
+                    let domain = c
+                        .domain
+                        .clone()
+                        .ok_or_else(|| anyhow!("camouflage.domain is required in website mode"))?;
+                    let cert = c.certificate.as_ref().ok_or_else(|| {
+                        anyhow!("camouflage.certificate is required in website mode")
+                    })?;
+                    let chain = cert_file(&base.join(cert), "camouflage.certificate")?;
+                    let next_spki = match &c.next_certificate {
+                        #[cfg(feature = "anytls")]
+                        Some(p) => {
+                            let next = cert_file(&base.join(p), "camouflage.next_certificate")?;
+                            Some(crypto::k32(&webjet_net::anytls::spki_pin(&next[0])?))
+                        }
+                        #[cfg(not(feature = "anytls"))]
+                        Some(_) => bail!("built without AnyTLS"),
+                        None => None,
+                    };
+                    Some(Box::new(wp::Camouflage {
+                        mode,
+                        domain: Some(domain),
+                        certificate: Some(
+                            chain
+                                .into_iter()
+                                .map(|d| wp::Blob { data: Some(d) })
+                                .collect(),
+                        ),
+                        next_spki,
+                    }))
+                }
             }
         };
         let t = wp::TransportConfig {
@@ -589,29 +675,108 @@ mod tests {
         assert_eq!(a.host.as_deref(), Some("2001:db8::1"));
     }
 
+    fn transport_yaml(camouflage: &str) -> TransportFile {
+        serde_yaml::from_str(&format!("version: 1\ncamouflage:\n{camouflage}")).unwrap()
+    }
+
     #[test]
-    fn transport_file_errors_name_the_certificate() {
+    fn website_mode_reads_the_certificate_and_names_it_in_errors() {
         let dir = std::env::temp_dir().join(format!("webjet-tools-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let f: TransportFile = serde_yaml::from_str(
-            "version: 1\ncamouflage:\n  mode: refuse\n  domain: cdn.example.com\n  certificate: missing.crt\n",
-        )
-        .unwrap();
+        let f = transport_yaml(
+            "  mode: website\n  domain: cdn.example.com\n  certificate: missing.crt\n",
+        );
         let e = format!("{:#}", f.to_wire(&dir).unwrap_err());
         assert!(
             e.contains("camouflage.certificate") && e.contains("missing.crt"),
             "{e}"
         );
         std::fs::write(dir.join("junk.crt"), "not a certificate").unwrap();
-        let f: TransportFile = serde_yaml::from_str(
-            "version: 1\ncamouflage:\n  mode: refuse\n  domain: cdn.example.com\n  certificate: junk.crt\n",
-        )
-        .unwrap();
+        let f =
+            transport_yaml("  mode: website\n  domain: cdn.example.com\n  certificate: junk.crt\n");
         let e = format!("{:#}", f.to_wire(&dir).unwrap_err());
         assert!(
             e.contains("junk.crt") && e.contains("no certificate"),
             "{e}"
         );
+        let f = transport_yaml("  mode: website\n  certificate: junk.crt\n");
+        let e = format!("{:#}", f.to_wire(&dir).unwrap_err());
+        assert!(e.contains("camouflage.domain is required"), "{e}");
+        let f = transport_yaml("  mode: website\n  domain: cdn.example.com\n");
+        let e = format!("{:#}", f.to_wire(&dir).unwrap_err());
+        assert!(e.contains("camouflage.certificate is required"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuse_mode_ignores_domain_and_certificate() {
+        // Files that don't exist are never read in refuse mode.
+        let f = transport_yaml(
+            "  mode: refuse\n  domain: cdn.example.com\n  certificate: missing.crt\n  next_certificate: gone.crt\n",
+        );
+        assert_eq!(
+            f.camouflage.as_ref().unwrap().ignored(),
+            ["domain", "certificate", "next_certificate"]
+        );
+        let cfg = f.to_wire(Path::new("/nonexistent")).unwrap();
+        let cam = cfg.camouflage.unwrap();
+        assert_eq!(cam.mode, wp::CamouflageMode::Refuse);
+        assert!(cam.domain.is_none() && cam.certificate.is_none() && cam.next_spki.is_none());
+        let bare = transport_yaml("  mode: refuse\n");
+        assert!(bare.camouflage.as_ref().unwrap().ignored().is_empty());
+        assert!(bare.to_wire(Path::new("/nonexistent")).is_ok());
+    }
+
+    #[test]
+    fn refuse_mode_keeps_the_networks_certificate() {
+        let current = wp::Camouflage {
+            mode: wp::CamouflageMode::Website,
+            domain: Some("cdn.example.com".into()),
+            certificate: Some(vec![wp::Blob {
+                data: Some(vec![1, 2, 3]),
+            }]),
+            next_spki: None,
+        };
+        let mut cam = wp::Camouflage {
+            mode: wp::CamouflageMode::Refuse,
+            domain: None,
+            certificate: None,
+            next_spki: None,
+        };
+        assert!(matches!(
+            refuse_certificate(&mut cam, Some(&current)).unwrap(),
+            RefuseCertificate::Kept
+        ));
+        assert_eq!(cam.domain.as_deref(), Some("cdn.example.com"));
+        assert_eq!(cam.certificate, current.certificate);
+        assert_eq!(cam.mode, wp::CamouflageMode::Refuse);
+    }
+
+    #[cfg(feature = "anytls")]
+    #[test]
+    fn refuse_mode_without_a_certificate_makes_one() {
+        let mut cam = wp::Camouflage {
+            mode: wp::CamouflageMode::Refuse,
+            domain: None,
+            certificate: None,
+            next_spki: None,
+        };
+        let RefuseCertificate::New { key_pem } = refuse_certificate(&mut cam, None).unwrap() else {
+            panic!("expected a new certificate");
+        };
+        assert!(String::from_utf8_lossy(&key_pem).contains("PRIVATE KEY"));
+        let domain = cam.domain.clone().unwrap();
+        assert!(webjet_core::validate::valid_dns_name(&domain), "{domain}");
+        let leaf = cam.certificate.as_ref().unwrap()[0].data.clone().unwrap();
+        assert!(webjet_net::anytls::spki_pin(&leaf).is_ok());
+        // The result passes the controllers' validation.
+        let t = wp::TransportConfig {
+            version: 1,
+            defaults: Some(vec![]),
+            overrides: Some(vec![]),
+            camouflage: Some(Box::new(cam)),
+            padding: None,
+        };
+        webjet_core::validate::transport(&t).unwrap();
     }
 }

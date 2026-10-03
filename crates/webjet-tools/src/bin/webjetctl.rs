@@ -435,6 +435,64 @@ fn site_bundle(p: &Path) -> Result<Vec<u8>> {
     }
 }
 
+/// Read and validate a transport.yaml. Warns about fields refuse mode
+/// ignores; their files aren't read.
+fn transport_file(file: &Path) -> Result<wp::TransportConfig> {
+    let f: TransportFile = serde_yaml::from_slice(&read(file)?)?;
+    if let Some(c) = &f.camouflage {
+        let ignored = c.ignored();
+        if !ignored.is_empty() {
+            eprintln!(
+                "note: camouflage mode is refuse; ignoring {}",
+                ignored.join(", ")
+            );
+        }
+    }
+    let base = file.parent().map(Path::to_path_buf).unwrap_or_default();
+    f.to_wire(&base)
+}
+
+/// `transport apply`. In refuse mode the network keeps its camouflage
+/// certificate; a network without one gets a self-signed certificate, whose
+/// private key is stored with the controllers first so relays can serve it.
+async fn transport_apply(cli: &Cli, file: &Path) -> Result<()> {
+    let mut cfg = transport_file(file)?;
+    let a = load_account(cli)?;
+    if let Some(cam) = cfg.camouflage.as_mut()
+        && cam.mode == wp::CamouflageMode::Refuse
+    {
+        let t = call(cli, json!({"cmd": "tree"})).await?;
+        let current: Option<wp::TransportConfig> = match &t["transport"] {
+            Value::Null => None,
+            v => Some(serde_json::from_value(v.clone())?),
+        };
+        let cur_cam = current.as_ref().and_then(|c| c.camouflage.as_deref());
+        match refuse_certificate(cam, cur_cam)? {
+            RefuseCertificate::Kept => {
+                println!("refuse mode: keeping the network's camouflage certificate");
+            }
+            RefuseCertificate::New { key_pem } => {
+                let op = wp::SetCamouflageSecret {
+                    private_key: Some(key_pem),
+                    site: Some(Vec::new()),
+                };
+                let r = submit(cli, a.sign(AccountOp::SetCamouflageSecret(Box::new(op)))?).await?;
+                println!(
+                    "refuse mode: made a self-signed camouflage certificate for {} (key stored, entry {})",
+                    cam.domain.as_deref().unwrap_or(""),
+                    r["index"]
+                );
+            }
+        }
+    }
+    let op = AccountOp::SetTransport(Box::new(wp::SetTransport {
+        config: Some(Box::new(cfg)),
+    }));
+    let r = submit(cli, a.sign(op)?).await?;
+    println!("transport applied (entry {})", r["index"]);
+    Ok(())
+}
+
 // ---------------------------------------------------------------- main
 
 #[tokio::main(flavor = "current_thread")]
@@ -840,26 +898,28 @@ async fn main() -> Result<()> {
             )
             .await?
         }
-        Cmd::Transport { cmd } => {
-            let base = match cmd {
-                ApplyCmd::Apply { file } | ApplyCmd::Check { file: Some(file) } => {
-                    file.parent().map(Path::to_path_buf).unwrap_or_default()
+        Cmd::Transport { cmd } => match cmd {
+            ApplyCmd::Apply { file } => transport_apply(&cli, file).await?,
+            ApplyCmd::Check { file: Some(file) } => {
+                let cfg = transport_file(file)?;
+                let refuse = cfg
+                    .camouflage
+                    .as_ref()
+                    .is_some_and(|c| c.mode == wp::CamouflageMode::Refuse);
+                println!("{} is valid", file.display());
+                if refuse {
+                    println!(
+                        "refuse mode: the network's current camouflage certificate is kept, \
+                         or a self-signed one is made when applying"
+                    );
                 }
-                _ => PathBuf::new(),
-            };
-            apply(
-                &cli,
-                cmd,
-                move |b| {
-                    let f: TransportFile = serde_yaml::from_slice(b)?;
-                    Ok(AccountOp::SetTransport(Box::new(wp::SetTransport {
-                        config: Some(Box::new(f.to_wire(&base)?)),
-                    })))
-                },
-                "transport",
-            )
-            .await?
-        }
+            }
+            ApplyCmd::Check { file: None } => bail!("give a file to check"),
+            ApplyCmd::Show => {
+                let t = call(&cli, json!({"cmd": "tree"})).await?;
+                print(&cli, &t["transport"]);
+            }
+        },
         Cmd::Psk {
             cmd: PskCmd::Rotate,
         } => {

@@ -150,8 +150,8 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 7. Apply the first network settings. Each `apply` validates the YAML file and submits it; `check` only validates, and `show` prints what is in force.
    ```
    [admin]    webjetctl psk rotate                      # creates the first PSK epoch
-   [admin]    webjetctl transport apply transport.yaml  # priorities, camouflage mode, domain, certificate
-   [admin]    webjetctl camouflage set-secret --key site.key --site ./site/
+   [admin]    webjetctl transport apply transport.yaml  # priorities and camouflage mode
+   [admin]    webjetctl camouflage set-secret --key site.key --site ./site/   # website mode only
    [admin]    webjetctl dns apply dns.yaml              # suffix, resolver address
    [admin]    webjetctl seeds apply seeds.yaml          # ctl-01 for now
    [admin]    webjetctl policy apply policy.yaml        # default deny, plus the rules you need
@@ -193,15 +193,22 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
        values:
          tls: 40          # datacenter hosts: plain TLS is fine there
    camouflage:
-     mode: website        # or refuse
-     domain: cdn.example.com
-     certificate: site.crt   # PEM chain, leaf first; relative to this file
+     mode: refuse         # or website, see below
    ```
    `defaults` and `overrides` are optional; without them every node uses the built-in priorities, which are the values in `defaults` above. For each transport, a node takes its priority from the first override that selects it and lists that transport, else from `defaults`; a `[transport]` section in the node's own `webjetd.toml` takes precedence over both. `select` takes the same selectors as policy rules (`tag:…`, `role:relay|data|control`, `node:<name>`, `owner:<account>`, `cidr:…`).
 
-   The camouflage certificate is what an outside visitor of a relay's AnyTLS port sees, so in `website` mode it should be a real CA certificate for `domain`, and `camouflage set-secret` supplies its private key and the website relays serve. For a lab without a CA certificate, `webjetctl camouflage selfsign --domain cdn.example.com --cert-out site.crt --key-out site.key` creates a self-signed one; use it with `mode: refuse`, which closes such connections instead of serving a site.
+   The camouflage mode decides what a relay's AnyTLS port shows to a connection that doesn't authenticate (§9.7.2):
+   - **`refuse`** closes the connection. It needs no domain, certificate or website, and `transport apply` ignores those fields in this mode. AnyTLS clients still pin a certificate, so `apply` keeps the network's current one, or on a network without one makes a self-signed certificate for a random domain and stores its key with the controllers first. Use refuse to start with; a probe can tell the port isn't an ordinary website.
+   - **`website`** serves a website, which holds up to active probing. It needs a domain whose public DNS points at the relays and a CA certificate for it:
+     ```yaml
+     camouflage:
+       mode: website
+       domain: cdn.example.com
+       certificate: site.crt   # PEM chain, leaf first; relative to this file
+     ```
+     The certificate file must exist when you apply: it is read from disk and sent with the setting. `camouflage set-secret` supplies the certificate's private key and the website relays serve. `webjetctl camouflage selfsign --domain cdn.example.com --cert-out site.crt --key-out site.key` makes a self-signed certificate for testing website mode in a lab.
 
-   The certificate file must exist when you apply: `certificate:` is read from disk, relative to `transport.yaml`, and sent with the setting. Until you have one, leave the `camouflage:` section out; the priorities work without it, and relays then don't offer AnyTLS. `webjetctl transport check transport.yaml` validates the file, including the certificate, without submitting it.
+   Without a `camouflage:` section the priorities still apply, and relays don't offer AnyTLS. `webjetctl transport check transport.yaml` validates the file without submitting it.
 8. Grow the cluster: add two more controllers and promote them, so there are three voters, then continue to five (runbook 3). Add relays (runbook 2), and update the seed list to at least two entries.
 9. Set up monitoring. Set `[metrics] listen` on the controllers (for example their overlay address and port 9469). Each controller then serves every node's latest report as OpenMetrics text at `/metrics`, so Prometheus can scrape any one of them. There's no authentication on that endpoint, so don't expose it to the internet (§12.5).
 10. Enroll the admin's own device with `webjetup` and an enrollment string, and add a policy rule that lets admin devices reach the controllers. From then on, run `webjetctl` there against the device's own agent; the SSH forward from step 5 is no longer needed.
