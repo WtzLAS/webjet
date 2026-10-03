@@ -351,11 +351,10 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
         .collect();
     let _ = n;
     for srv in servers {
-        let bind: SocketAddr = if srv.is_ipv4() {
-            "0.0.0.0:0".parse().unwrap()
-        } else {
-            "[::]:0".parse().unwrap()
-        };
+        let bind = SocketAddr::new(
+            if srv.is_ipv4() { std::net::Ipv4Addr::UNSPECIFIED.into() } else { std::net::Ipv6Addr::UNSPECIFIED.into() },
+            0,
+        );
         let Ok(sock) = tokio::net::UdpSocket::bind(bind).await else {
             continue;
         };

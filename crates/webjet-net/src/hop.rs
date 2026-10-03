@@ -369,8 +369,10 @@ pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(
     tokio::time::timeout(HANDSHAKE_TIMEOUT, io.read_exact(&mut inb))
         .await
         .map_err(|_| anyhow!("identity exchange timeout"))??;
-    let pk: Bytes32 = inb[..32].try_into().unwrap();
-    let psig: [u8; 64] = inb[32..].try_into().unwrap();
+    let (pk, psig) = inb.split_at(32);
+    let (Ok(pk), Ok(psig)) = (<Bytes32>::try_from(pk), <[u8; 64]>::try_from(psig)) else {
+        bail!("short identity message");
+    };
     if let Some(last) = msg.last_mut() {
         *last = if initiator { b'r' } else { b'i' };
     }

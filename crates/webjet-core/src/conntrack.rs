@@ -223,7 +223,9 @@ impl Conntrack {
                 self.evict_one(now);
             }
         }
-        self.new_rate.get_mut(peer).unwrap().1 += 1;
+        if let Some(r) = self.new_rate.get_mut(peer) {
+            r.1 += 1;
+        }
         let k = Key {
             peer: *peer,
             flow: p.flow,

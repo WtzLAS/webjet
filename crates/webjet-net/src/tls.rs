@@ -367,8 +367,11 @@ pub fn enroll_server_config(kp: &KeyPair) -> anyhow::Result<Arc<rustls::ServerCo
     Ok(Arc::new(c))
 }
 
+/// The fixed name sent in hop and e2e handshakes. Peers are identified by
+/// raw public keys, so the name is never verified; the IP fallback is only
+/// there to avoid a panic path (the constant is a valid DNS name).
 pub fn server_name() -> ServerName<'static> {
-    ServerName::try_from(SERVER_NAME).unwrap()
+    ServerName::try_from(SERVER_NAME).unwrap_or(ServerName::IpAddress(std::net::Ipv4Addr::LOCALHOST.into()))
 }
 
 /// The peer's raw public key after a completed handshake.
@@ -474,5 +477,10 @@ mod tests {
             }
         }
         assert!(failed);
+    }
+
+    #[test]
+    fn server_name_is_the_dns_name() {
+        assert!(matches!(server_name(), ServerName::DnsName(n) if n.as_ref() == SERVER_NAME));
     }
 }

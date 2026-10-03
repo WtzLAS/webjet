@@ -77,7 +77,7 @@ impl KeyPair {
 
     /// PKCS#8 v1 DER for rustls (RFC 8410).
     pub fn pkcs8_der(&self) -> Zeroizing<Vec<u8>> {
-        let mut v = Zeroizing::new(hex::decode("302e020100300506032b657004220420").unwrap());
+        let mut v = Zeroizing::new(PKCS8_ED25519_PREFIX.to_vec());
         v.extend_from_slice(&self.sk.to_bytes());
         v
     }
@@ -101,20 +101,22 @@ impl KeyPair {
     }
 }
 
+/// DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410); the 32-byte key follows.
+const SPKI_ED25519_PREFIX: [u8; 12] = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
+/// DER prefix of an Ed25519 PKCS#8 v1 private key (RFC 8410); the seed follows.
+const PKCS8_ED25519_PREFIX: [u8; 16] = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
+
 /// Ed25519 SubjectPublicKeyInfo DER (RFC 8410), as used for TLS raw public keys.
 pub fn spki_der(pk: &Bytes32) -> Vec<u8> {
-    let mut v = hex::decode("302a300506032b6570032100").unwrap();
+    let mut v = SPKI_ED25519_PREFIX.to_vec();
     v.extend_from_slice(pk);
     v
 }
 
 /// Extract the raw Ed25519 key from an SPKI DER; rejects anything else.
 pub fn spki_to_key(der: &[u8]) -> Option<Bytes32> {
-    let prefix = hex::decode("302a300506032b6570032100").unwrap();
-    if der.len() != 44 || der[..12] != prefix[..] {
-        return None;
-    }
-    der[12..].try_into().ok()
+    let rest = der.strip_prefix(&SPKI_ED25519_PREFIX)?;
+    rest.try_into().ok()
 }
 
 fn sig_input(ty: u16, schema: u16, body: &[u8]) -> Vec<u8> {

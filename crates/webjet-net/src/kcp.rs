@@ -145,11 +145,9 @@ impl UdpEndpoint {
             let Some((gate, inner)) = self.obfs.open(&buf[..n], &self.epochs.read()) else {
                 continue;
             };
-            if inner.len() < 5 {
+            let (Some(&kind), Some(conv)) = (inner.first(), webjet_core::bytes::be_u32(&inner, 1)) else {
                 continue;
-            }
-            let kind = inner[0];
-            let conv = u32::from_be_bytes(inner[1..5].try_into().unwrap());
+            };
             let body = &inner[5..];
             if kind == K_PUNCH {
                 continue;
@@ -163,16 +161,18 @@ impl UdpEndpoint {
                 let _ = tx.try_send(d);
                 continue;
             }
-            if kind != K_OPEN || !self.listening || body.len() < 24 {
+            if kind != K_OPEN || !self.listening {
                 continue;
             }
-            let ts = u64::from_be_bytes(body[..8].try_into().unwrap());
+            let (Some(ts), Some(nonce)) = (webjet_core::bytes::be_u64(body, 0), webjet_core::bytes::array::<16>(body, 8)) else {
+                continue;
+            };
             if ts.abs_diff(now_ms()) > SKEW_PSK_GATE {
                 continue;
             }
             if !self
                 .replay
-                .check_and_insert(body[8..24].try_into().unwrap(), now_ms())
+                .check_and_insert(nonce, now_ms())
             {
                 continue;
             }
@@ -425,8 +425,8 @@ async fn run_session(
                     K_SHARD => body,
                     K_OPEN if body.len() >= 24 => &body[24..],
                     K_STATS if body.len() >= 8 => {
-                        let recv = u32::from_be_bytes(body[..4].try_into().unwrap()) as f64;
-                        let exp = u32::from_be_bytes(body[4..8].try_into().unwrap()) as f64;
+                        let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
+                        let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
                         if exp > 0.0 {
                             enc.adapt(((exp - recv) / exp).clamp(0.0, 1.0));
                             stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
@@ -435,9 +435,8 @@ async fn run_session(
                     }
                     _ => continue,
                 };
-                if shard.len() >= 4 {
+                if let Some(g) = webjet_core::bytes::be_u32(shard, 0) {
                     got_shards += 1;
-                    let g = u32::from_be_bytes(shard[..4].try_into().unwrap());
                     last_group_seen = last_group_seen.max(g);
                 }
                 for pkt in dec.push(shard) {
@@ -511,11 +510,8 @@ async fn run_session(
         tokens = (tokens + now.duration_since(last_tick).as_secs_f64() * rate)
             .min(rate * 0.01 + 16_000.0);
         last_tick = now;
-        while let Some(s) = paced.front() {
-            if tokens < s.len() as f64 {
-                break;
-            }
-            let s = paced.pop_front().unwrap();
+        while paced.front().is_some_and(|s| tokens >= s.len() as f64) {
+            let Some(s) = paced.pop_front() else { break };
             tokens -= s.len() as f64;
             let mut inner = Vec::with_capacity(s.len() + 30);
             if opened {

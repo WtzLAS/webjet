@@ -961,6 +961,7 @@ impl Machine {
         me: &Bytes32,
     ) -> std::result::Result<Vec<wp::RouteGrant>, ApplyError> {
         let mut out = Vec::new();
+        let mut accepted: Vec<Grant> = Vec::new();
         for r in routes {
             let g = Grant::from_wire(r).map_err(|e| ApplyError::Rejected(e.to_string()))?;
             if self.pool.iter().any(|p| overlaps(p, &g.published)) {
@@ -985,12 +986,10 @@ impl Machine {
                     ));
                 }
             }
-            for prev in &out {
-                let pg = Grant::from_wire(prev).unwrap();
-                if overlaps(&pg.published, &g.published) {
-                    return rej("overlapping grants on one node");
-                }
+            if accepted.iter().any(|pg| overlaps(&pg.published, &g.published)) {
+                return rej("overlapping grants on one node");
             }
+            accepted.push(g);
             out.push(*r);
         }
         Ok(sort_dedup(out))
@@ -1640,8 +1639,9 @@ pub mod ops {
         }))
     }
 
-    pub fn ip(s: &str) -> wp::Cidr {
-        types::host_cidr(s.parse().unwrap())
+    /// A host address as a CIDR (`10.7.0.12` → `10.7.0.12/32`).
+    pub fn ip(s: &str) -> Option<wp::Cidr> {
+        s.parse().ok().map(types::host_cidr)
     }
 }
 
@@ -1699,7 +1699,7 @@ mod tests {
                 wp::CreateEnrollment {
                     owner: Some(crypto::k32(&h.net.admin_id)),
                     name: Some(name.into()),
-                    overlay_ips: Some(vec![super::ops::ip(ip)]),
+                    overlay_ips: Some(vec![super::ops::ip(ip).unwrap()]),
                     roles: Some(vec![wp::Role::Data]),
                     tags: Some(vec!["tag:x".into()]),
                     identity_key: Some(crypto::k32(&key.public())),
@@ -1722,7 +1722,7 @@ mod tests {
             wp::CreateEnrollment {
                 owner: Some(crypto::k32(&h.net.admin_id)),
                 name: Some("laptop".into()),
-                overlay_ips: Some(vec![super::ops::ip("10.7.0.11")]),
+                overlay_ips: Some(vec![super::ops::ip("10.7.0.11").unwrap()]),
                 identity_key: Some(crypto::k32(&k2.public())),
                 ..Default::default()
             },
@@ -1732,7 +1732,7 @@ mod tests {
             wp::CreateEnrollment {
                 owner: Some(crypto::k32(&h.net.admin_id)),
                 name: Some("other".into()),
-                overlay_ips: Some(vec![super::ops::ip("10.7.0.10")]),
+                overlay_ips: Some(vec![super::ops::ip("10.7.0.10").unwrap()]),
                 identity_key: Some(crypto::k32(&k2.public())),
                 ..Default::default()
             },
@@ -1743,7 +1743,7 @@ mod tests {
             wp::CreateEnrollment {
                 owner: Some(crypto::k32(&h.net.admin_id)),
                 name: Some("other".into()),
-                overlay_ips: Some(vec![super::ops::ip("192.168.0.1")]),
+                overlay_ips: Some(vec![super::ops::ip("192.168.0.1").unwrap()]),
                 identity_key: Some(crypto::k32(&k2.public())),
                 ..Default::default()
             },
@@ -1761,7 +1761,7 @@ mod tests {
                 wp::CreateEnrollment {
                     owner: Some(crypto::k32(&h.net.admin_id)),
                     name: Some("srv".into()),
-                    overlay_ips: Some(vec![super::ops::ip("10.7.0.20")]),
+                    overlay_ips: Some(vec![super::ops::ip("10.7.0.20").unwrap()]),
                     token_hash: Some(crypto::k32(&th)),
                     expires_at: now_ms() + 3_600_000,
                     ..Default::default()
@@ -2031,7 +2031,7 @@ mod tests {
                 wp::CreateEnrollment {
                     owner: Some(crypto::k32(&bob_id)),
                     name: Some("bobs-laptop".into()),
-                    overlay_ips: Some(vec![super::ops::ip("10.7.0.30")]),
+                    overlay_ips: Some(vec![super::ops::ip("10.7.0.30").unwrap()]),
                     identity_key: Some(crypto::k32(&k.public())),
                     ..Default::default()
                 },

@@ -214,7 +214,7 @@ pub async fn start_listeners(n: &Arc<Node>) -> Result<()> {
         .cfg
         .listen
         .kcp
-        .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+        .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
     let root = n.store.read().root;
     // Always accept: hole-punched hops arrive on the same socket (§11.7).
     let ep = UdpEndpoint::bind(udp_addr, &root, n.epochs.clone(), true).await?;

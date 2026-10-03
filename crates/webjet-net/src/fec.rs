@@ -21,10 +21,14 @@ pub struct Encoder {
     codecs: HashMap<(usize, usize), ReedSolomon>,
 }
 
-fn codec(cache: &mut HashMap<(usize, usize), ReedSolomon>, k: usize, m: usize) -> &ReedSolomon {
-    cache
-        .entry((k, m))
-        .or_insert_with(|| ReedSolomon::new(k, m).expect("rs params"))
+/// A cached Reed–Solomon codec; `None` for parameters it can't handle
+/// (zero shards, or more than 256 in total).
+fn codec(cache: &mut HashMap<(usize, usize), ReedSolomon>, k: usize, m: usize) -> Option<&ReedSolomon> {
+    use std::collections::hash_map::Entry;
+    match cache.entry((k, m)) {
+        Entry::Occupied(e) => Some(e.into_mut()),
+        Entry::Vacant(e) => Some(e.insert(ReedSolomon::new(k, m).ok()?)),
+    }
 }
 
 fn header(group: u32, idx: u8, k: u8, m: u8, len: u16) -> [u8; HDR] {
@@ -103,7 +107,7 @@ impl Encoder {
             })
             .collect();
         shards.extend((0..m).map(|_| vec![0u8; width]));
-        if codec(&mut self.codecs, k, m).encode(&mut shards).is_err() {
+        if !codec(&mut self.codecs, k, m).is_some_and(|c| c.encode(&mut shards).is_ok()) {
             return Vec::new();
         }
         let mut out = Vec::with_capacity(m);
@@ -173,7 +177,9 @@ impl Decoder {
         if shard.len() < HDR {
             return Vec::new();
         }
-        let group = u32::from_be_bytes(shard[..4].try_into().unwrap());
+        let Some(group) = webjet_core::bytes::be_u32(shard, 0) else {
+            return Vec::new();
+        };
         let idx = shard[4];
         let (k, m) = (shard[5], shard[6]);
         let len = u16::from_be_bytes([shard[7], shard[8]]) as usize;
@@ -186,8 +192,7 @@ impl Decoder {
             self.newest = group;
         }
         while self.groups.len() > 64 {
-            let first = *self.groups.keys().next().unwrap();
-            self.groups.remove(&first);
+            self.groups.pop_first();
         }
         let g = self.groups.entry(group).or_insert(Group {
             data: BTreeMap::new(),
@@ -240,11 +245,10 @@ impl Decoder {
             return out;
         }
         let missing: Vec<usize> = (0..kk).filter(|i| slots[*i].is_none()).collect();
-        let ok = codec(&mut self.codecs, kk, mm)
-            .reconstruct_data(&mut slots)
-            .is_ok();
-        let g = self.groups.get_mut(&group).unwrap();
-        g.done = true;
+        let ok = codec(&mut self.codecs, kk, mm).is_some_and(|c| c.reconstruct_data(&mut slots).is_ok());
+        if let Some(g) = self.groups.get_mut(&group) {
+            g.done = true;
+        }
         if ok {
             for i in missing {
                 if let Some(s) = &slots[i] {

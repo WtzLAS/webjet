@@ -202,11 +202,12 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
         .unwrap_or(false);
     if usable {
         let circ = pick_circuit(n, &s, &mut i);
-        if let Some(c) = circ {
-            let k = i.send.as_mut().unwrap();
+        if let (Some(c), Some(k)) = (circ, i.send.as_mut()) {
             let ctr = k.counter;
             k.counter += 1;
-            let f = k.key.seal(ty, k.peer_kid, ctr, payload);
+            let Some(f) = k.key.seal(ty, k.peer_kid, ctr, payload) else {
+                return SendResult::Dropped;
+            };
             let needs_rekey = k.created.elapsed() > REKEY_AFTER;
             drop(i);
             if needs_rekey {
@@ -523,7 +524,9 @@ fn continue_handshake(
     flight: u16,
     data: &[u8],
 ) -> Result<()> {
-    let hs = i.hs.as_mut().unwrap();
+    let Some(hs) = i.hs.as_mut() else {
+        bail!("no handshake in progress");
+    };
     hs.peer_flight = flight;
     hs.circuit = c.label;
     if let Err(e) = feed_tls(&mut hs.conn, data) {
@@ -547,14 +550,12 @@ fn continue_handshake(
                 hs.conn.writer().write_all(&hs.my_kid.to_be_bytes())?;
                 hs.done = true;
             }
-            if app.len() >= 4 {
+            if let Some(resp_kid) = webjet_core::bytes::be_u32(&app, 0) {
                 // Flight 4: the responder's key_id.
-                let resp_kid = u32::from_be_bytes(app[..4].try_into().unwrap());
                 let (i2r, r2i) = derive(&hs.conn, hs.my_kid, resp_kid)?;
                 keys = Some((i2r, r2i, hs.my_kid, resp_kid));
             }
-        } else if app.len() >= 4 {
-            let init_kid = u32::from_be_bytes(app[..4].try_into().unwrap());
+        } else if let Some(init_kid) = webjet_core::bytes::be_u32(&app, 0) {
             hs.conn.writer().write_all(&hs.my_kid.to_be_bytes())?;
             let (i2r, r2i) = derive(&hs.conn, init_kid, hs.my_kid)?;
             keys = Some((r2i, i2r, hs.my_kid, init_kid));
@@ -692,7 +693,7 @@ pub fn send_on(n: &Arc<Node>, s: &Session, c: &LocalCircuit, ty: u8, payload: &[
         k.counter += 1;
         k.key.seal(ty, k.peer_kid, ctr, payload)
     };
-    c.send(n, &f, 0)
+    f.is_some_and(|f| c.send(n, &f, 0))
 }
 
 // ---------------------------------------------------------------- timers

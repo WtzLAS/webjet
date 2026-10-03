@@ -334,7 +334,9 @@ pub mod tpm {
             .spawn()
             .with_context(|| format!("{} (install tpm2-tools)", args[0]))?;
         if let Some(i) = input {
-            child.stdin.take().unwrap().write_all(i)?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(i)?;
+            }
         }
         let o = child.wait_with_output()?;
         if !o.status.success() {

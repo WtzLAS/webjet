@@ -198,7 +198,8 @@ fn default_log() -> String {
 
 impl Default for Config {
     fn default() -> Self {
-        toml::from_str("").expect("defaults")
+        // Every field has a serde default, so an empty document always parses.
+        toml::from_str("").unwrap_or_else(|e| unreachable!("default configuration: {e}"))
     }
 }
 

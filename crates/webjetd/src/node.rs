@@ -249,13 +249,6 @@ impl Node {
         n
     }
 
-    pub fn arc(&self) -> Arc<Node> {
-        self.me_weak
-            .get()
-            .and_then(|w| w.upgrade())
-            .expect("node alive")
-    }
-
     pub fn trust(&self) -> Arc<dyn PeerTrust> {
         Arc::new(HopTrust(self.me_weak.get().cloned().unwrap_or_default()))
     }

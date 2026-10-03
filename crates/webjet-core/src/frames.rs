@@ -44,21 +44,23 @@ impl SessionKey {
         *Nonce::from_slice(&n)
     }
 
-    /// Seal `payload` into a complete frame.
-    pub fn seal(&self, ty: u8, key_id: u32, counter: u64, payload: &[u8]) -> Vec<u8> {
+    /// Seal `payload` into a complete frame. `None` only if the payload is
+    /// beyond what the AEAD can encrypt (~256 GiB).
+    pub fn seal(&self, ty: u8, key_id: u32, counter: u64, payload: &[u8]) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(OVERHEAD + payload.len());
         out.push(ty);
         out.extend_from_slice(&key_id.to_be_bytes());
         out.extend_from_slice(&counter.to_be_bytes());
         let mut body = payload.to_vec();
-        let aad: [u8; HEADER] = out[..HEADER].try_into().unwrap();
+        let mut aad = [0u8; HEADER];
+        aad.copy_from_slice(&out);
         let tag = self
             .cipher
             .encrypt_in_place_detached(&Self::nonce(counter), &aad, &mut body)
-            .expect("encrypt");
+            .ok()?;
         out.extend_from_slice(&body);
         out.extend_from_slice(&tag);
-        out
+        Some(out)
     }
 
     /// Open a frame whose header was already parsed. Does not touch any
@@ -68,7 +70,7 @@ impl SessionKey {
             return None;
         }
         let (hdr, rest) = frame.split_at(HEADER);
-        let counter = u64::from_be_bytes(hdr[5..13].try_into().unwrap());
+        let counter = crate::bytes::be_u64(hdr, 5)?;
         let (ct, tag) = rest.split_at(rest.len() - TAG);
         let mut body = ct.to_vec();
         self.cipher
@@ -102,8 +104,8 @@ pub fn parse_header(frame: &[u8]) -> Option<FrameHeader> {
     }
     Some(FrameHeader {
         ty,
-        key_id: u32::from_be_bytes(frame[1..5].try_into().unwrap()),
-        counter: u64::from_be_bytes(frame[5..13].try_into().unwrap()),
+        key_id: crate::bytes::be_u32(frame, 1)?,
+        counter: crate::bytes::be_u64(frame, 5)?,
     })
 }
 
@@ -231,7 +233,7 @@ pub fn parse_relay(f: &[u8]) -> Option<(u32, u8, u8, &[u8])> {
     if f.len() < RELAY_HEADER {
         return None;
     }
-    let c = u32::from_be_bytes(f[..4].try_into().unwrap());
+    let c = crate::bytes::be_u32(f, 0)?;
     Some((c, f[4] >> 2, f[4] & 3, &f[RELAY_HEADER..]))
 }
 
@@ -254,10 +256,12 @@ pub fn exporter_context(initiator_key_id: u32, responder_key_id: u32) -> [u8; 8]
 pub const E2E_EXPORTER_LABEL: &[u8] = b"webjet-e2e-v1";
 
 pub fn split_keys(material: &[u8; 64]) -> (Bytes32, Bytes32) {
-    (
-        material[..32].try_into().unwrap(),
-        material[32..].try_into().unwrap(),
-    )
+    let (a, b) = material.split_at(32);
+    let mut x = [0u8; 32];
+    let mut y = [0u8; 32];
+    x.copy_from_slice(a);
+    y.copy_from_slice(b);
+    (x, y)
 }
 
 #[cfg(test)]
@@ -267,7 +271,7 @@ mod tests {
     #[test]
     fn seal_open() {
         let k = SessionKey::new([7; 32]);
-        let f = k.seal(ftype::DATA, 42, 9, b"packet");
+        let f = k.seal(ftype::DATA, 42, 9, b"packet").unwrap();
         assert_eq!(f.len(), OVERHEAD + 6);
         let h = parse_header(&f).unwrap();
         assert_eq!((h.ty, h.key_id, h.counter), (ftype::DATA, 42, 9));

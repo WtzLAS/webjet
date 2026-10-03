@@ -164,7 +164,7 @@ impl Graph {
         let mut heap = BinaryHeap::new();
         heap.push(St(0.0, vec![*src]));
         while let Some(St(c, path)) = heap.pop() {
-            let n = *path.last().unwrap();
+            let Some(&n) = path.last() else { continue };
             if n == *dst {
                 return Some(path);
             }
@@ -210,7 +210,7 @@ impl Graph {
         };
         a.push(first);
         while a.len() < k {
-            let last = a.last().unwrap().clone();
+            let Some(last) = a.last().cloned() else { break };
             for i in 0..last.len() - 1 {
                 let spur = last[i];
                 let root = &last[..=i];
@@ -239,7 +239,7 @@ impl Graph {
             if b.is_empty() {
                 break;
             }
-            b.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+            b.sort_by(|x, y| x.0.total_cmp(&y.0));
             a.push(b.remove(0).1);
         }
         let mut out: Vec<Path> = a
@@ -253,7 +253,7 @@ impl Graph {
                 })
             })
             .collect();
-        out.sort_by(|x, y| x.cost.partial_cmp(&y.cost).unwrap());
+        out.sort_by(|x, y| x.cost.total_cmp(&y.cost));
         out
     }
 
@@ -276,11 +276,11 @@ impl Graph {
         while let Some(idx) = frontier
             .iter()
             .enumerate()
-            .min_by(|a, b| a.1 .0.partial_cmp(&b.1 .0).unwrap())
+            .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
             .map(|(i, _)| i)
         {
             let (c, path) = frontier.swap_remove(idx);
-            let n = *path.last().unwrap();
+            let Some(&n) = path.last() else { continue };
             if n == *dst {
                 found = Some((c, path));
                 break;
@@ -564,8 +564,9 @@ impl LinkStats {
         self.sent.insert(seq, at_us);
         // Anything older than 16 outstanding probes counts as lost.
         while self.sent.len() > 16 {
-            let (&k, _) = self.sent.iter().next().unwrap();
-            self.sent.remove(&k);
+            if self.sent.pop_first().is_none() {
+                break;
+            }
             self.lost_one(now_ms);
         }
     }

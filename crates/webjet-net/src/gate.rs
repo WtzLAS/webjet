@@ -144,12 +144,12 @@ pub fn check_tcp_preamble(
     if !ct_eq(&mac, &p[26..]) {
         return None;
     }
-    let ts = u64::from_be_bytes(p[2..10].try_into().unwrap());
+    let ts = webjet_core::bytes::be_u64(p, 2)?;
     let now = now_ms();
     if ts.abs_diff(now) > SKEW_PSK_GATE {
         return None;
     }
-    if !replay.check_and_insert(p[10..26].try_into().unwrap(), now) {
+    if !replay.check_and_insert(webjet_core::bytes::array(p, 10)?, now) {
         return None;
     }
     Some(res)

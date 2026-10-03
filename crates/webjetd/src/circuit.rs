@@ -57,7 +57,7 @@ impl LocalCircuit {
     }
 
     fn flow(&self) -> u64 {
-        u64::from_be_bytes(self.route_id[..8].try_into().unwrap())
+        webjet_core::bytes::prefix_u64(&self.route_id)
     }
 
     /// Send an end-to-end frame on this circuit.
@@ -794,7 +794,7 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
             f.extend_from_slice(body);
             let flow = route
                 .as_ref()
-                .map(|r| u64::from_be_bytes(r.src[..8].try_into().unwrap()))
+                .map(|r| webjet_core::bytes::prefix_u64(&r.src))
                 .unwrap_or(label as u64);
             if !h.send_relay(flow, f) {
                 if let Some(r) = &route {

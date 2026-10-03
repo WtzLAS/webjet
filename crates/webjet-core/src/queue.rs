@@ -163,16 +163,19 @@ impl HopQueue {
     /// Dequeue the next frame to send. Control goes first but is limited to
     /// roughly a quarter of the bytes while data is waiting (§17.3).
     pub fn pop(&mut self, now: Instant) -> Option<Vec<u8>> {
-        if !self.control.is_empty() && (self.active.is_empty() || self.control_budget < 3 * QUANTUM)
-        {
-            let c = self.control.pop_front().unwrap();
-            self.control_budget += c.len();
-            return Some(c);
+        if self.active.is_empty() || self.control_budget < 3 * QUANTUM {
+            if let Some(c) = self.control.pop_front() {
+                self.control_budget += c.len();
+                return Some(c);
+            }
         }
         self.control_budget = 0;
         loop {
             let flow = *self.active.front()?;
-            let f = self.flows.get_mut(&flow).unwrap();
+            let Some(f) = self.flows.get_mut(&flow) else {
+                self.active.pop_front();
+                continue;
+            };
             if f.deficit <= 0 {
                 f.deficit += QUANTUM as isize;
                 self.active.rotate_left(1);

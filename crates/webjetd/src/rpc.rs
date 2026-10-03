@@ -65,11 +65,9 @@ pub fn send_oneway(n: &Arc<Node>, peer: &Bytes32, body: RpcBody) {
 }
 
 pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
-    if payload.len() < 9 {
+    let (Some(id), Some(&kind)) = (webjet_core::bytes::be_u64(payload, 0), payload.get(8)) else {
         return;
-    }
-    let id = u64::from_be_bytes(payload[..8].try_into().unwrap());
-    let kind = payload[8];
+    };
     let Ok(rpc) = wp::Rpc::decode_bytes(&payload[9..]) else {
         return;
     };

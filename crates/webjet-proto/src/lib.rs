@@ -119,8 +119,9 @@ fn words_to_bytes<const N: usize, const W: usize>(w: [u64; W]) -> [u8; N] {
 
 fn bytes_to_words<const N: usize, const W: usize>(b: &[u8; N]) -> [u64; W] {
     let mut out = [0u64; W];
-    for (i, x) in out.iter_mut().enumerate() {
-        *x = u64::from_le_bytes(b[i * 8..i * 8 + 8].try_into().unwrap());
+    let (words, _) = b.as_chunks::<8>();
+    for (x, w) in out.iter_mut().zip(words) {
+        *x = u64::from_le_bytes(*w);
     }
     out
 }

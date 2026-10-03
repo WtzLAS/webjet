@@ -56,7 +56,7 @@ impl Scheme {
         ];
         Scheme {
             stop: 8,
-            lines: lines.iter().map(|l| parse_line(l).unwrap()).collect(),
+            lines: lines.iter().filter_map(|l| parse_line(l).ok()).collect(),
         }
     }
 

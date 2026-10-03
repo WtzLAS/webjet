@@ -179,21 +179,14 @@ impl Storage {
         (Storage::Mem(m.clone()), m)
     }
 
-    fn path(&self, name: &str) -> Option<PathBuf> {
-        match self {
-            Storage::Disk(d) => Some(d.join(name)),
-            Storage::Mem(_) => None,
-        }
-    }
-
     fn save_meta(&self, term: u64, vote: Option<Bytes32>) {
         match self {
-            Storage::Disk(_) => {
+            Storage::Disk(d) => {
                 let m = Meta {
                     term,
                     voted_for: vote.map(hex::encode),
                 };
-                if let Err(e) = crate::state::save_json(&self.path("meta.json").unwrap(), &m) {
+                if let Err(e) = crate::state::save_json(&d.join("meta.json"), &m) {
                     tracing::error!("raft meta: {e}");
                 }
             }
@@ -207,8 +200,8 @@ impl Storage {
 
     fn load_meta(&self) -> (u64, Option<Bytes32>) {
         match self {
-            Storage::Disk(_) => {
-                match crate::state::load_json::<Meta>(&self.path("meta.json").unwrap()) {
+            Storage::Disk(d) => {
+                match crate::state::load_json::<Meta>(&d.join("meta.json")) {
                     Ok(Some(m)) => (m.term, m.voted_for.and_then(|s| crypto::parse_hex32(&s))),
                     _ => (0, None),
                 }
@@ -222,12 +215,12 @@ impl Storage {
 
     fn append(&self, entries: &[Entry]) {
         match self {
-            Storage::Disk(_) => {
+            Storage::Disk(d) => {
                 let buf = encode_entries(entries);
                 let r = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(self.path("log.bin").unwrap())
+                    .open(d.join("log.bin"))
                     .and_then(|mut f| {
                         f.write_all(&buf)?;
                         f.sync_data()
@@ -242,9 +235,9 @@ impl Storage {
 
     fn rewrite(&self, entries: &[Entry]) {
         match self {
-            Storage::Disk(_) => {
+            Storage::Disk(d) => {
                 if let Err(e) = crate::state::write_private(
-                    &self.path("log.bin").unwrap(),
+                    &d.join("log.bin"),
                     &encode_entries(entries),
                 ) {
                     tracing::error!("raft log rewrite: {e}");
@@ -256,14 +249,14 @@ impl Storage {
 
     fn load_log(&self) -> Vec<Entry> {
         match self {
-            Storage::Disk(_) => {
-                let Ok(b) = std::fs::read(self.path("log.bin").unwrap()) else {
+            Storage::Disk(d) => {
+                let Ok(b) = std::fs::read(d.join("log.bin")) else {
                     return Vec::new();
                 };
                 let mut out = Vec::new();
                 let mut i = 0;
-                while i + 4 <= b.len() {
-                    let len = u32::from_be_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+                while let Some(len) = webjet_core::bytes::be_u32(&b, i) {
+                    let len = len as usize;
                     if i + 4 + len > b.len() {
                         tracing::warn!("raft log: truncated tail ignored");
                         break;
@@ -286,9 +279,7 @@ impl Storage {
 
     pub fn save_snapshot(&self, data: &[u8]) -> Result<()> {
         match self {
-            Storage::Disk(_) => {
-                crate::state::write_private(&self.path("snapshot.wj").unwrap(), data)
-            }
+            Storage::Disk(d) => crate::state::write_private(&d.join("snapshot.wj"), data),
             Storage::Mem(m) => {
                 m.lock().snapshot = Some(data.to_vec());
                 Ok(())
@@ -298,7 +289,7 @@ impl Storage {
 
     pub fn load_snapshot(&self) -> Option<Vec<u8>> {
         match self {
-            Storage::Disk(_) => std::fs::read(self.path("snapshot.wj").unwrap()).ok(),
+            Storage::Disk(d) => std::fs::read(d.join("snapshot.wj")).ok(),
             Storage::Mem(m) => m.lock().snapshot.clone(),
         }
     }
@@ -491,8 +482,11 @@ impl Raft {
 
     // ------------------------------------------------------------ membership
 
+    /// The configuration in force: the latest one in the log.
     pub fn config(&self) -> &Membership {
-        &self.configs.last().expect("base configuration").1
+        static NONE: Membership = Membership { voters: BTreeSet::new(), learners: BTreeSet::new() };
+        // There is always at least the base configuration.
+        self.configs.last().map(|c| &c.1).unwrap_or(&NONE)
     }
 
     pub fn voters(&self) -> &BTreeSet<Bytes32> {
