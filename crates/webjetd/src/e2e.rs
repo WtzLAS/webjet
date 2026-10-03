@@ -320,9 +320,12 @@ fn maybe_rekey(n: &Arc<Node>, s: &Arc<Session>) {
         .map(|k| k.created.elapsed())
         .unwrap_or_default();
     let mine = n.me < s.peer || age > REKEY_AFTER + Duration::from_secs(20);
-    if mine
-        && !s.handshaking()
-        && let Some(c) = n.circuits.lock().local_circuits(&s.peer).into_iter().next()
+    if !mine || s.handshaking() {
+        return;
+    }
+    // Take the circuit out first: sending on it locks the circuit table.
+    let circ = n.circuits.lock().local_circuits(&s.peer).into_iter().next();
+    if let Some(c) = circ
         && let Err(e) = start_handshake(n, s, &c)
     {
         tracing::debug!("rekey: {e}");
@@ -782,7 +785,8 @@ pub async fn run(n: Arc<Node>) {
 /// Tear down a session explicitly, telling the peer.
 pub fn close(n: &Arc<Node>, peer: &Bytes32) {
     if let Some(s) = n.e2e.get(peer) {
-        if let Some(c) = n.circuits.lock().local_circuits(peer).into_iter().next() {
+        let circ = n.circuits.lock().local_circuits(peer).into_iter().next();
+        if let Some(c) = circ {
             send_on(n, &s, &c, ftype::CLOSE, &[]);
         }
         n.e2e.remove(peer);

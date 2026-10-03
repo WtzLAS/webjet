@@ -10,7 +10,21 @@ set -eu
 BIN=${BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/debug}
 if [ "${1:-}" = "stop" ]; then
   W=${2:-/tmp/webjet-local}
-  for p in "$W"/*/webjetd.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null || true; done
+  pids=""
+  for p in "$W"/*/webjetd.pid; do
+    [ -f "$p" ] || continue
+    pid=$(cat "$p")
+    kill "$pid" 2>/dev/null && pids="$pids $pid"
+  done
+  # Wait up to 10 s for a clean exit; a hung agent is killed.
+  i=0
+  for pid in $pids; do
+    while kill -0 "$pid" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "agent $pid did not stop; killing it" >&2
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
   exit 0
 fi
 N=${1:-3}
