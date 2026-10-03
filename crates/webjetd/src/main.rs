@@ -44,7 +44,10 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let cfg_path = cli.config.clone().unwrap_or_else(webjetd::config::default_config_path);
+    let cfg_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(webjetd::config::default_config_path);
     #[cfg(windows)]
     match cli.cmd {
         Cmd::Service => return webjetd::service::windows::run_dispatcher(cfg_path),
@@ -56,14 +59,22 @@ fn main() -> Result<()> {
     if let Some(d) = cli.data_dir {
         cfg.data_dir = d;
         if !cfg_path.exists() {
-            cfg.control_socket = if cfg!(windows) { webjetd::ipc::default_control() } else { cfg.data_dir.join("control.sock") };
+            cfg.control_socket = if cfg!(windows) {
+                webjetd::ipc::default_control()
+            } else {
+                cfg.data_dir.join("control.sock")
+            };
         }
     }
     webjetd::logging::init(&cfg);
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     rt.block_on(async move {
         match cli.cmd {
-            Cmd::Init { genesis, bootstrap } => webjetd::agent::init(&cfg, &std::fs::read(&genesis)?, bootstrap),
+            Cmd::Init { genesis, bootstrap } => {
+                webjetd::agent::init(&cfg, &std::fs::read(&genesis)?, bootstrap)
+            }
             Cmd::Enroll { ticket } => webjetd::agent::enroll(&cfg, &ticket).await,
             Cmd::Run => webjetd::agent::run(cfg).await,
             #[cfg(windows)]

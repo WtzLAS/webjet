@@ -1678,9 +1678,8 @@ mod tests {
         }
         fn run(&mut self, p: EntryPayload) -> std::result::Result<Outcome, ApplyError> {
             self.idx += 1;
-            let e = self.m.prepare(1, self.idx, now_ms(), p).map_err(|e| {
+            let e = self.m.prepare(1, self.idx, now_ms(), p).inspect_err(|_| {
                 self.idx -= 1;
-                e
             })?;
             // Replicate through bytes, like the log does.
             let bytes = e.encode_bytes();
@@ -1764,7 +1763,7 @@ mod tests {
                     name: Some("srv".into()),
                     overlay_ips: Some(vec![super::ops::ip("10.7.0.20")]),
                     token_hash: Some(crypto::k32(&th)),
-                    expires_at: now_ms() + 3600_000,
+                    expires_at: now_ms() + 3_600_000,
                     ..Default::default()
                 },
             )))
@@ -1791,7 +1790,7 @@ mod tests {
         h.admin_op(AccountOp::RekeyNode(Box::new(wp::RekeyNode {
             node_id: Some(crypto::k32(&nid)),
             token_hash: Some(crypto::k32(&th2)),
-            expires_at: now_ms() + 3600_000,
+            expires_at: now_ms() + 3_600_000,
             revoke_old_now: true,
         })))
         .unwrap();
@@ -1957,7 +1956,7 @@ mod tests {
             root: Some(crypto::k32(&h.m.root())),
             state_version: 1,
             issued_at: now_ms(),
-            expires_at: now_ms() + 3600_000,
+            expires_at: now_ms() + 3_600_000,
         };
         let head_raw = ctl.sign_obj(mt::SIGNED_TREE_HEAD, &head);
         assert_eq!(

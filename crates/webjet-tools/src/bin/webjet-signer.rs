@@ -7,7 +7,11 @@ use std::path::PathBuf;
 use webjet_core::crypto::KeyPair;
 
 #[derive(Parser)]
-#[command(name = "webjet-signer", version, about = "Webjet controller signing service")]
+#[command(
+    name = "webjet-signer",
+    version,
+    about = "Webjet controller signing service"
+)]
 struct Cli {
     /// The signing key file (created when missing).
     #[arg(long, default_value = default_key())]
@@ -34,7 +38,11 @@ fn default_socket() -> &'static str {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
     let cli = Cli::parse();
     if !cli.key.exists() {
         let kp = KeyPair::generate();
@@ -42,6 +50,8 @@ fn main() -> Result<()> {
         tracing::info!("generated a new signing key at {}", cli.key.display());
     }
     let kp = webjet_tools::keypair_from(&std::fs::read(&cli.key)?)?;
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     rt.block_on(webjetd::controller::signer::serve(&cli.socket, kp))
 }

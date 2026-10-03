@@ -39,7 +39,8 @@ impl Listener {
             std::fs::create_dir_all(d)?;
         }
         let _ = std::fs::remove_file(path);
-        let inner = tokio::net::UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))?;
+        let inner = tokio::net::UnixListener::bind(path)
+            .with_context(|| format!("bind {}", path.display()))?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Listener { inner })
     }
@@ -75,13 +76,17 @@ mod win {
         let mut sa = crate::winsec::SecurityAttributes::from_sddl(SDDL)?;
         let mut o = ServerOptions::new();
         o.first_pipe_instance(first).reject_remote_clients(true);
-        let s = unsafe { o.create_with_security_attributes_raw(path, sa.as_mut_ptr()) }.with_context(|| format!("create pipe {}", path.display()))?;
+        let s = unsafe { o.create_with_security_attributes_raw(path, sa.as_mut_ptr()) }
+            .with_context(|| format!("create pipe {}", path.display()))?;
         Ok(s)
     }
 
     impl Listener {
         pub fn bind(path: &Path) -> Result<Listener> {
-            Ok(Listener { path: path.to_path_buf(), next: create(path, true)? })
+            Ok(Listener {
+                path: path.to_path_buf(),
+                next: create(path, true)?,
+            })
         }
 
         pub async fn accept(&mut self) -> Result<Box<dyn Stream>> {
@@ -97,11 +102,16 @@ mod win {
         for _ in 0..50 {
             match ClientOptions::new().open(path) {
                 Ok(c) => return Ok(Box::new(c)),
-                Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+                Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await
+                }
                 Err(e) => return Err(e),
             }
         }
-        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "pipe busy"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "pipe busy",
+        ))
     }
 }
 
@@ -113,9 +123,15 @@ mod tests {
     #[tokio::test]
     async fn roundtrip() {
         let path = if cfg!(windows) {
-            PathBuf::from(format!(r"\\.\pipe\webjet-test-{}", hex::encode(webjet_core::crypto::random16())))
+            PathBuf::from(format!(
+                r"\\.\pipe\webjet-test-{}",
+                hex::encode(webjet_core::crypto::random16())
+            ))
         } else {
-            std::env::temp_dir().join(format!("wj-ipc-{}.sock", hex::encode(&webjet_core::crypto::random16()[..6])))
+            std::env::temp_dir().join(format!(
+                "wj-ipc-{}.sock",
+                hex::encode(&webjet_core::crypto::random16()[..6])
+            ))
         };
         let mut l = Listener::bind(&path).unwrap();
         let srv = tokio::spawn(async move {
@@ -137,7 +153,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::metadata(&path).map(|m| assert_eq!(m.permissions().mode() & 0o777, 0o600));
+            let _ =
+                std::fs::metadata(&path).map(|m| assert_eq!(m.permissions().mode() & 0o777, 0o600));
             let _ = std::fs::remove_file(&path);
         }
     }

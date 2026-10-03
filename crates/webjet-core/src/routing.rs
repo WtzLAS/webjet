@@ -596,10 +596,19 @@ impl LinkStats {
             Some((b, m)) if *b == bucket => *m = m.min(rtt),
             _ => self.min_buckets.push_back((bucket, rtt)),
         }
-        while self.min_buckets.front().map(|(b, _)| bucket.saturating_sub(*b) >= MIN_BUCKETS as u64).unwrap_or(false) {
+        while self
+            .min_buckets
+            .front()
+            .map(|(b, _)| bucket.saturating_sub(*b) >= MIN_BUCKETS as u64)
+            .unwrap_or(false)
+        {
             self.min_buckets.pop_front();
         }
-        self.min_rtt_ms = self.min_buckets.iter().map(|x| x.1).fold(f64::INFINITY, f64::min);
+        self.min_rtt_ms = self
+            .min_buckets
+            .iter()
+            .map(|x| x.1)
+            .fold(f64::INFINITY, f64::min);
         self.loss *= 0.9;
         self.record(true);
         self.samples += 1;
@@ -632,7 +641,10 @@ impl LinkStats {
             // Blend from history toward the fresh session.
             let w = self.samples as f64 / WARMUP as f64;
             let hr = h.rtt_ms + JITTER_WEIGHT * h.jitter_ms;
-            (w * short_rtt + (1.0 - w) * hr, (w * short_loss + (1.0 - w) * h.loss).max(short_loss))
+            (
+                w * short_rtt + (1.0 - w) * hr,
+                (w * short_loss + (1.0 - w) * h.loss).max(short_loss),
+            )
         } else {
             (short_rtt, short_loss.max(0.5 * h.loss))
         };
@@ -642,7 +654,9 @@ impl LinkStats {
 
     pub fn cost(&self) -> f64 {
         match self.effective() {
-            Some((rtt, loss)) if self.samples > 0 || self.history.samples > 0 => link_cost(rtt, loss),
+            Some((rtt, loss)) if self.samples > 0 || self.history.samples > 0 => {
+                link_cost(rtt, loss)
+            }
             _ => f64::INFINITY,
         }
     }
@@ -650,8 +664,15 @@ impl LinkStats {
     /// Quantized values for adverts (so small changes don't trigger updates).
     pub fn quantized(&self) -> (u16, u8) {
         let (rtt, loss) = self.effective().unwrap_or((0.0, 0.0));
-        let rtt = if rtt < 10.0 { rtt.ceil() } else { (rtt / 5.0).round() * 5.0 };
-        (rtt.min(65535.0) as u16, (loss * 100.0).round().min(100.0) as u8)
+        let rtt = if rtt < 10.0 {
+            rtt.ceil()
+        } else {
+            (rtt / 5.0).round() * 5.0
+        };
+        (
+            rtt.min(65535.0) as u16,
+            (loss * 100.0).round().min(100.0) as u8,
+        )
     }
 }
 
@@ -783,7 +804,13 @@ mod tests {
     fn rtt_variance_and_min() {
         let mut st = LinkStats::default();
         for i in 0..50 {
-            probe(&mut st, i, if i % 2 == 0 { 20 } else { 40 }, i * 2000, false);
+            probe(
+                &mut st,
+                i,
+                if i % 2 == 0 { 20 } else { 40 },
+                i * 2000,
+                false,
+            );
         }
         assert!(st.srtt_ms > 25.0 && st.srtt_ms < 35.0);
         assert!(st.rttvar_ms > 5.0, "jitter is tracked");
@@ -795,7 +822,10 @@ mod tests {
             }
             s2.cost()
         };
-        assert!(st.cost() > steady, "a jittery link costs more than a steady one with the same mean");
+        assert!(
+            st.cost() > steady,
+            "a jittery link costs more than a steady one with the same mean"
+        );
     }
 
     #[test]
@@ -806,7 +836,11 @@ mod tests {
         }
         // Make the last loss resolve.
         probe(&mut st, 64, 10, 64 * 2000, false);
-        assert!((st.window_loss() - 16.0 / 64.0).abs() < 0.03, "{}", st.window_loss());
+        assert!(
+            (st.window_loss() - 16.0 / 64.0).abs() < 0.03,
+            "{}",
+            st.window_loss()
+        );
     }
 
     #[test]
@@ -835,7 +869,10 @@ mod tests {
             }
             c.cost()
         };
-        assert!(st2.cost() > clean, "a historically lossy link stays more expensive for a while");
+        assert!(
+            st2.cost() > clean,
+            "a historically lossy link stays more expensive for a while"
+        );
         assert!(st2.cost() < fresh.cost());
     }
 
@@ -850,7 +887,10 @@ mod tests {
         assert!(h.cost() > base * 1.5);
         assert!(h.cost() <= base * MAX_FLAP_FACTOR + 1e-9);
         h.age(2_000 + 6 * 3_600_000);
-        assert!(h.cost() < base * 1.1, "flaps are forgotten after a few hours");
+        assert!(
+            h.cost() < base * 1.1,
+            "flaps are forgotten after a few hours"
+        );
     }
 
     #[test]
@@ -861,6 +901,9 @@ mod tests {
         }
         let (r, l) = st.quantized();
         let c = link_cost(r as f64, l as f64 / 100.0);
-        assert!((c - st.cost()).abs() / st.cost() < 0.15, "adverts let others compute about the same cost");
+        assert!(
+            (c - st.cost()).abs() / st.cost() < 0.15,
+            "adverts let others compute about the same cost"
+        );
     }
 }

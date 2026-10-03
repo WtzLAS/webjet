@@ -340,10 +340,11 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     tokio::spawn(crate::metrics::run(n.clone()));
     if let Some(addr) = n.cfg.metrics.listen {
         let n2 = n.clone();
-        let body: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || match n2.controller.get() {
-            Some(c) => c.openmetrics(),
-            None => crate::metrics::local_openmetrics(&n2),
-        });
+        let body: Arc<dyn Fn() -> String + Send + Sync> =
+            Arc::new(move || match n2.controller.get() {
+                Some(c) => c.openmetrics(),
+                None => crate::metrics::local_openmetrics(&n2),
+            });
         tokio::spawn(async move {
             if let Err(e) = crate::exposition::serve(addr, body).await {
                 tracing::error!("metrics endpoint on {addr}: {e}");

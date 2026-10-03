@@ -234,18 +234,31 @@ pub enum AnyAccepted {
     Camouflaged,
 }
 
+/// What a listener needs to accept AnyTLS connections.
+pub struct AcceptCtx<'a> {
+    pub acceptor: &'a SslAcceptor,
+    pub secret: &'a CamouflageSecret,
+    /// Serve the camouflage website to failed authentications (else close).
+    pub website: bool,
+    pub kp: &'a KeyPair,
+    pub trust: Arc<dyn PeerTrust>,
+    pub epochs: &'a SharedEpochs,
+    /// Token hashes of pending enrollments (controllers only).
+    pub enroll_keys: &'a [Bytes32],
+}
+
 /// Accept an AnyTLS connection (§9.7.2).
-pub async fn accept(
-    s: TcpStream,
-    remote: SocketAddr,
-    acc: &SslAcceptor,
-    secret: &CamouflageSecret,
-    website: bool,
-    kp: &KeyPair,
-    trust: Arc<dyn PeerTrust>,
-    epochs: &SharedEpochs,
-    enroll_keys: &[Bytes32],
-) -> Result<AnyAccepted> {
+pub async fn accept(s: TcpStream, remote: SocketAddr, ctx: &AcceptCtx<'_>) -> Result<AnyAccepted> {
+    let AcceptCtx {
+        acceptor: acc,
+        secret,
+        website,
+        kp,
+        trust,
+        epochs,
+        enroll_keys,
+    } = ctx;
+    let website = *website;
     let _ = s.set_nodelay(true);
     let mut tls = tokio::time::timeout(Duration::from_secs(10), tokio_boring::accept(acc, s))
         .await
@@ -401,24 +414,18 @@ mod tests {
                 let (sec3, ep3, acc3, skp3) =
                     (sec2.clone(), ep2.clone(), acc2.clone(), skp.clone());
                 tokio::spawn(async move {
-                    match accept(
-                        s,
-                        r,
-                        &acc3,
-                        &sec3,
-                        true,
-                        &skp3,
-                        Arc::new(TrustAll),
-                        &ep3,
-                        &[],
-                    )
-                    .await
-                    {
-                        Ok(AnyAccepted::Hop(mut h)) => {
-                            let (t, p) = crate::hop::read_record(&mut h.io).await.unwrap();
-                            crate::hop::write_record(&mut h.io, t, &p).await.unwrap();
-                        }
-                        _ => {}
+                    let ctx = AcceptCtx {
+                        acceptor: &acc3,
+                        secret: &sec3,
+                        website: true,
+                        kp: &skp3,
+                        trust: Arc::new(TrustAll),
+                        epochs: &ep3,
+                        enroll_keys: &[],
+                    };
+                    if let Ok(AnyAccepted::Hop(mut h)) = accept(s, r, &ctx).await {
+                        let (t, p) = crate::hop::read_record(&mut h.io).await.unwrap();
+                        crate::hop::write_record(&mut h.io, t, &p).await.unwrap();
                     }
                 });
             }

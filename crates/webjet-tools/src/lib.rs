@@ -40,9 +40,13 @@ pub fn seal(pass: &str, plain: &[u8]) -> Result<Vec<u8>> {
     let salt: [u8; 16] = rand::random();
     let nonce: [u8; 12] = rand::random();
     let mut key = Zeroizing::new([0u8; 32]);
-    argon2::Argon2::default().hash_password_into(pass.as_bytes(), &salt, &mut key[..]).map_err(|e| anyhow!("argon2: {e}"))?;
+    argon2::Argon2::default()
+        .hash_password_into(pass.as_bytes(), &salt, &mut key[..])
+        .map_err(|e| anyhow!("argon2: {e}"))?;
     let c = chacha20poly1305::ChaCha20Poly1305::new((&*key).into());
-    let ct = c.encrypt((&nonce).into(), plain).map_err(|_| anyhow!("encrypt"))?;
+    let ct = c
+        .encrypt((&nonce).into(), plain)
+        .map_err(|_| anyhow!("encrypt"))?;
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&salt);
     out.extend_from_slice(&nonce);
@@ -57,9 +61,13 @@ pub fn unseal(pass: &str, data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     }
     let (salt, nonce, ct) = (&data[4..20], &data[20..32], &data[32..]);
     let mut key = Zeroizing::new([0u8; 32]);
-    argon2::Argon2::default().hash_password_into(pass.as_bytes(), salt, &mut key[..]).map_err(|e| anyhow!("argon2: {e}"))?;
+    argon2::Argon2::default()
+        .hash_password_into(pass.as_bytes(), salt, &mut key[..])
+        .map_err(|e| anyhow!("argon2: {e}"))?;
     let c = chacha20poly1305::ChaCha20Poly1305::new((&*key).into());
-    let pt = c.decrypt(nonce.into(), ct).map_err(|_| anyhow!("wrong passphrase or damaged file"))?;
+    let pt = c
+        .decrypt(nonce.into(), ct)
+        .map_err(|_| anyhow!("wrong passphrase or damaged file"))?;
     Ok(Zeroizing::new(pt))
 }
 
@@ -105,7 +113,11 @@ impl AccountPub {
     }
 }
 
-pub fn account_record(p: &AccountPub, admin: bool, issuer: Option<Bytes32>) -> Result<wp::AccountRecord> {
+pub fn account_record(
+    p: &AccountPub,
+    admin: bool,
+    issuer: Option<Bytes32>,
+) -> Result<wp::AccountRecord> {
     if !webjet_core::types::valid_name(&p.name) {
         bail!("invalid account name {:?}", p.name);
     }
@@ -124,7 +136,11 @@ pub fn account_record(p: &AccountPub, admin: bool, issuer: Option<Bytes32>) -> R
 /// Describe a signed file for the user.
 pub fn describe(raw: &[u8]) -> String {
     match crypto::open_envelope(raw) {
-        Ok(v) => format!("{} signed by {}", wp::msg_type::name(v.ty), crypto::key_b64(&v.signer)),
+        Ok(v) => format!(
+            "{} signed by {}",
+            wp::msg_type::name(v.ty),
+            crypto::key_b64(&v.signer)
+        ),
         Err(e) => format!("invalid: {e}"),
     }
 }
@@ -167,7 +183,12 @@ impl DnsFile {
         Ok(wp::DnsConfig {
             version: self.version,
             suffix: self.suffix.clone(),
-            resolver_ip: Some(self.resolver_ip.iter().map(|s| Ok(wp::IpAddress::from_ip(s.parse()?))).collect::<Result<Vec<_>>>()?),
+            resolver_ip: Some(
+                self.resolver_ip
+                    .iter()
+                    .map(|s| Ok(wp::IpAddress::from_ip(s.parse()?)))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
             records: Some(
                 self.records
                     .iter()
@@ -180,7 +201,12 @@ impl DnsFile {
                             "SRV" => wp::DnsType::Srv,
                             t => bail!("unsupported record type {t}"),
                         };
-                        Ok(wp::DnsRecord { name: Some(r.name.clone()), rtype, value: Some(r.value.clone()), ttl: r.ttl })
+                        Ok(wp::DnsRecord {
+                            name: Some(r.name.clone()),
+                            rtype,
+                            value: Some(r.value.clone()),
+                            ttl: r.ttl,
+                        })
                     })
                     .collect::<Result<Vec<_>>>()?,
             ),
@@ -190,8 +216,18 @@ impl DnsFile {
                     .map(|f| {
                         Ok(wp::ForwardZone {
                             zone: Some(f.zone.clone()),
-                            servers: Some(f.servers.iter().map(|s| Ok(wp::IpAddress::from_ip(s.parse()?))).collect::<Result<Vec<_>>>()?),
-                            rewrite: Some(f.rewrite.iter().map(|g| Ok(Grant::parse(g)?.to_wire())).collect::<Result<Vec<_>>>()?),
+                            servers: Some(
+                                f.servers
+                                    .iter()
+                                    .map(|s| Ok(wp::IpAddress::from_ip(s.parse()?)))
+                                    .collect::<Result<Vec<_>>>()?,
+                            ),
+                            rewrite: Some(
+                                f.rewrite
+                                    .iter()
+                                    .map(|g| Ok(Grant::parse(g)?.to_wire()))
+                                    .collect::<Result<Vec<_>>>()?,
+                            ),
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -214,11 +250,19 @@ pub struct SeedFile {
 
 /// `transport:host:port`, for example `tls:203.0.113.5:443`.
 pub fn parse_seed_addr(s: &str) -> Result<wp::SeedAddr> {
-    let (t, rest) = s.split_once(':').ok_or_else(|| anyhow!("seed address {s:?} must be transport:host:port"))?;
+    let (t, rest) = s
+        .split_once(':')
+        .ok_or_else(|| anyhow!("seed address {s:?} must be transport:host:port"))?;
     let transport = Transport::parse(t).ok_or_else(|| anyhow!("unknown transport {t}"))?;
-    let (host, port) = rest.rsplit_once(':').ok_or_else(|| anyhow!("seed address {s:?} without port"))?;
+    let (host, port) = rest
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("seed address {s:?} without port"))?;
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    Ok(wp::SeedAddr { host: Some(host.to_string()), port: port.parse()?, transport })
+    Ok(wp::SeedAddr {
+        host: Some(host.to_string()),
+        port: port.parse()?,
+        transport,
+    })
 }
 
 impl SeedsFile {
@@ -228,7 +272,17 @@ impl SeedsFile {
             entries: Some(
                 self.seeds
                     .iter()
-                    .map(|e| Ok(wp::SeedEntry { node: Some(e.node.clone()), addrs: Some(e.addrs.iter().map(|a| parse_seed_addr(a)).collect::<Result<Vec<_>>>()?) }))
+                    .map(|e| {
+                        Ok(wp::SeedEntry {
+                            node: Some(e.node.clone()),
+                            addrs: Some(
+                                e.addrs
+                                    .iter()
+                                    .map(|a| parse_seed_addr(a))
+                                    .collect::<Result<Vec<_>>>()?,
+                            ),
+                        })
+                    })
                     .collect::<Result<Vec<_>>>()?,
             ),
         })
@@ -251,7 +305,12 @@ pub struct LimitOverrideFile {
 }
 
 fn limit_values(m: &BTreeMap<String, u64>) -> Vec<wp::LimitValue> {
-    m.iter().map(|(k, v)| wp::LimitValue { name: Some(k.clone()), value: *v }).collect()
+    m.iter()
+        .map(|(k, v)| wp::LimitValue {
+            name: Some(k.clone()),
+            value: *v,
+        })
+        .collect()
 }
 
 impl LimitsFile {
@@ -259,7 +318,15 @@ impl LimitsFile {
         let l = wp::Limits {
             version: self.version,
             defaults: Some(limit_values(&self.defaults)),
-            overrides: Some(self.overrides.iter().map(|o| wp::LimitOverride { select: Some(o.select.clone()), values: Some(limit_values(&o.values)) }).collect()),
+            overrides: Some(
+                self.overrides
+                    .iter()
+                    .map(|o| wp::LimitOverride {
+                        select: Some(o.select.clone()),
+                        values: Some(limit_values(&o.values)),
+                    })
+                    .collect(),
+            ),
         };
         webjet_core::validate::limits(&l)?;
         Ok(l)
@@ -304,7 +371,14 @@ pub struct PaddingFile {
 }
 
 fn priorities(m: &BTreeMap<String, u8>) -> Result<Vec<wp::TransportPriority>> {
-    m.iter().map(|(k, v)| Ok(wp::TransportPriority { transport: Transport::parse(k).ok_or_else(|| anyhow!("unknown transport {k}"))?, priority: *v })).collect()
+    m.iter()
+        .map(|(k, v)| {
+            Ok(wp::TransportPriority {
+                transport: Transport::parse(k).ok_or_else(|| anyhow!("unknown transport {k}"))?,
+                priority: *v,
+            })
+        })
+        .collect()
 }
 
 /// DER certificates from a PEM file.
@@ -352,7 +426,12 @@ impl TransportFile {
                 Some(Box::new(wp::Camouflage {
                     mode,
                     domain: Some(c.domain.clone()),
-                    certificate: Some(chain.into_iter().map(|d| wp::Blob { data: Some(d) }).collect()),
+                    certificate: Some(
+                        chain
+                            .into_iter()
+                            .map(|d| wp::Blob { data: Some(d) })
+                            .collect(),
+                    ),
                     next_spki,
                 }))
             }
@@ -360,9 +439,24 @@ impl TransportFile {
         let t = wp::TransportConfig {
             version: self.version,
             defaults: Some(priorities(&self.defaults)?),
-            overrides: Some(self.overrides.iter().map(|o| Ok(wp::PriorityOverride { select: Some(o.select.clone()), values: Some(priorities(&o.values)?) })).collect::<Result<Vec<_>>>()?),
+            overrides: Some(
+                self.overrides
+                    .iter()
+                    .map(|o| {
+                        Ok(wp::PriorityOverride {
+                            select: Some(o.select.clone()),
+                            values: Some(priorities(&o.values)?),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ),
             camouflage,
-            padding: self.padding.as_ref().map(|p| Box::new(wp::PaddingScheme { stop: p.stop, lines: Some(p.lines.clone()) })),
+            padding: self.padding.as_ref().map(|p| {
+                Box::new(wp::PaddingScheme {
+                    stop: p.stop,
+                    lines: Some(p.lines.clone()),
+                })
+            }),
         };
         webjet_core::validate::transport(&t)?;
         Ok(t)
@@ -381,7 +475,10 @@ pub fn overlay_ips(v: &[String]) -> Result<Vec<wp::Cidr>> {
 }
 
 pub fn grants(v: &[String]) -> Result<Vec<wp::RouteGrant>> {
-    let mut out: Vec<wp::RouteGrant> = v.iter().map(|s| Ok(Grant::parse(s)?.to_wire())).collect::<Result<_>>()?;
+    let mut out: Vec<wp::RouteGrant> = v
+        .iter()
+        .map(|s| Ok(Grant::parse(s)?.to_wire()))
+        .collect::<Result<_>>()?;
     out.sort();
     out.dedup();
     Ok(out)

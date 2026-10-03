@@ -8,9 +8,16 @@ pub fn init(cfg: &Config) {
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log.clone());
     let f = tracing_subscriber::EnvFilter::new(filter);
     let r = if cfg.log_format.as_deref() == Some("json") {
-        tracing_subscriber::fmt().with_env_filter(f).with_target(false).json().try_init()
+        tracing_subscriber::fmt()
+            .with_env_filter(f)
+            .with_target(false)
+            .json()
+            .try_init()
     } else {
-        tracing_subscriber::fmt().with_env_filter(f).with_target(false).try_init()
+        tracing_subscriber::fmt()
+            .with_env_filter(f)
+            .with_target(false)
+            .try_init()
     };
     let _ = r;
 }

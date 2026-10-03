@@ -45,7 +45,9 @@ pub mod windows {
     use std::ffi::OsString;
     use std::time::Duration;
     use windows_service::service::{
-        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceDependency, ServiceErrorControl, ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
+        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceDependency,
+        ServiceErrorControl, ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState,
+        ServiceStatus, ServiceType,
     };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
@@ -62,7 +64,12 @@ pub mod windows {
         Ok(())
     }
 
-    fn status(state: ServiceState, accept: ServiceControlAccept, code: u32, wait: Duration) -> ServiceStatus {
+    fn status(
+        state: ServiceState,
+        accept: ServiceControlAccept,
+        code: u32,
+        wait: Duration,
+    ) -> ServiceStatus {
         ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: state,
@@ -89,17 +96,37 @@ pub mod windows {
                 _ => ServiceControlHandlerResult::NotImplemented,
             }
         };
-        let Ok(h) = service_control_handler::register(SERVICE_NAME, handler) else { return };
-        let _ = h.set_service_status(status(ServiceState::StartPending, ServiceControlAccept::empty(), 0, Duration::from_secs(30)));
-        let cfg_path = CONFIG.get().cloned().unwrap_or_else(crate::config::default_config_path);
+        let Ok(h) = service_control_handler::register(SERVICE_NAME, handler) else {
+            return;
+        };
+        let _ = h.set_service_status(status(
+            ServiceState::StartPending,
+            ServiceControlAccept::empty(),
+            0,
+            Duration::from_secs(30),
+        ));
+        let cfg_path = CONFIG
+            .get()
+            .cloned()
+            .unwrap_or_else(crate::config::default_config_path);
         let result = (|| -> Result<()> {
             let cfg = Config::load(Some(&cfg_path))?;
             crate::logging::init(&cfg);
-            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-            let _ = h.set_service_status(status(ServiceState::Running, ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN, 0, Duration::ZERO));
-            rt.block_on(crate::agent::run_until(cfg, Box::pin(async move {
-                let _ = rx.await;
-            })))
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let _ = h.set_service_status(status(
+                ServiceState::Running,
+                ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+                0,
+                Duration::ZERO,
+            ));
+            rt.block_on(crate::agent::run_until(
+                cfg,
+                Box::pin(async move {
+                    let _ = rx.await;
+                }),
+            ))
         })();
         let code = match &result {
             Ok(()) => 0,
@@ -108,13 +135,21 @@ pub mod windows {
                 1
             }
         };
-        let _ = h.set_service_status(status(ServiceState::Stopped, ServiceControlAccept::empty(), code, Duration::ZERO));
+        let _ = h.set_service_status(status(
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            code,
+            Duration::ZERO,
+        ));
     }
 
     /// Register webjetd as an automatic LocalSystem service that starts
     /// after the Windows Time service (§18.6).
     pub fn install(config: &std::path::Path) -> Result<()> {
-        let m = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE)?;
+        let m = ServiceManager::local_computer(
+            None::<&str>,
+            ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
+        )?;
         let exe = std::env::current_exe()?;
         let info = ServiceInfo {
             name: OsString::from(SERVICE_NAME),
@@ -123,8 +158,15 @@ pub mod windows {
             start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
             executable_path: exe,
-            launch_arguments: vec![OsString::from("--config"), config.as_os_str().to_owned(), OsString::from("service")],
-            dependencies: vec![ServiceDependency::Service(OsString::from("W32Time")), ServiceDependency::Service(OsString::from("Dnscache"))],
+            launch_arguments: vec![
+                OsString::from("--config"),
+                config.as_os_str().to_owned(),
+                OsString::from("service"),
+            ],
+            dependencies: vec![
+                ServiceDependency::Service(OsString::from("W32Time")),
+                ServiceDependency::Service(OsString::from("Dnscache")),
+            ],
             account_name: None, // LocalSystem
             account_password: None,
         };
@@ -138,7 +180,10 @@ pub mod windows {
     /// Stop and remove the service and everything the agent configured.
     pub fn uninstall() -> Result<()> {
         let m = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-        let s = m.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE)?;
+        let s = m.open_service(
+            SERVICE_NAME,
+            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
+        )?;
         if s.query_status()?.current_state != ServiceState::Stopped {
             let _ = s.stop();
             for _ in 0..60 {

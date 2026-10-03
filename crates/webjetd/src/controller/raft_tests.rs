@@ -557,16 +557,16 @@ impl Sim {
         while self.t < end {
             self.t += 1;
             self.deliver();
-            if self.t % 10 == 0 {
+            if self.t.is_multiple_of(10) {
                 self.tick();
             }
-            if propose_every > 0 && self.t % propose_every == 0 {
+            if propose_every > 0 && self.t.is_multiple_of(propose_every) {
                 self.propose_value();
             }
             if let Some(f) = faults {
                 self.faults(f);
             }
-            if self.t % 100 == 0 {
+            if self.t.is_multiple_of(100) {
                 self.check_log_matching();
             }
         }

@@ -293,7 +293,7 @@ impl Dataplane {
                 }
                 // No record yet (edge nodes learn other nodes' records by
                 // lookup): treat a grant holder as serving until we know.
-                let known = recs.endpoints.get(id).is_some();
+                let known = recs.endpoints.contains_key(id);
                 if !known && info.routes.iter().any(|g| g.published.contains(dst)) {
                     unknown.push(*id);
                 }
@@ -679,7 +679,9 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         #[cfg(windows)]
         {
             // wintun.dll ships next to webjetd.exe (§19.1).
-            let dll = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("wintun.dll")));
+            let dll = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("wintun.dll")));
             if let Some(d) = dll.filter(|d| d.exists()) {
                 b = b.wintun_file(d.to_string_lossy().into_owned());
             }

@@ -20,7 +20,7 @@ pub fn unb64(s: &str) -> Result<Vec<u8>> {
 
 mod b64v {
     use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&super::b64(v))
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
@@ -141,8 +141,17 @@ pub fn load_identity(p: &Paths, cfg: &crate::keystore::KeyCfg) -> Result<Option<
 }
 
 /// Store the identity key; returns the backend used.
-pub fn save_identity(p: &Paths, cfg: &crate::keystore::KeyCfg, kp: &KeyPair) -> Result<crate::keystore::Backend> {
-    crate::keystore::save(&p.identity(), cfg, &crate::keystore::account_for(&p.dir), &kp.seed())
+pub fn save_identity(
+    p: &Paths,
+    cfg: &crate::keystore::KeyCfg,
+    kp: &KeyPair,
+) -> Result<crate::keystore::Backend> {
+    crate::keystore::save(
+        &p.identity(),
+        cfg,
+        &crate::keystore::account_for(&p.dir),
+        &kp.seed(),
+    )
 }
 
 // ---------------------------------------------------------------- node info
@@ -312,15 +321,39 @@ struct LinkEntry {
     history: webjet_core::routing::LinkHistory,
 }
 
-pub fn load_links(p: &Paths) -> std::collections::HashMap<(Bytes32, webjet_proto::Transport), webjet_core::routing::LinkHistory> {
+pub fn load_links(
+    p: &Paths,
+) -> std::collections::HashMap<(Bytes32, webjet_proto::Transport), webjet_core::routing::LinkHistory>
+{
     let v: Vec<LinkEntry> = load_json(&p.links()).ok().flatten().unwrap_or_default();
     v.into_iter()
-        .filter_map(|e| Some(((webjet_core::crypto::parse_hex32(&e.peer)?, webjet_proto::Transport::parse(&e.transport)?), e.history)))
+        .filter_map(|e| {
+            Some((
+                (
+                    webjet_core::crypto::parse_hex32(&e.peer)?,
+                    webjet_proto::Transport::parse(&e.transport)?,
+                ),
+                e.history,
+            ))
+        })
         .collect()
 }
 
-pub fn save_links(p: &Paths, m: &std::collections::HashMap<(Bytes32, webjet_proto::Transport), webjet_core::routing::LinkHistory>) -> Result<()> {
-    let mut v: Vec<LinkEntry> = m.iter().map(|((peer, t), h)| LinkEntry { peer: hex::encode(peer), transport: t.name().into(), history: h.clone() }).collect();
+pub fn save_links(
+    p: &Paths,
+    m: &std::collections::HashMap<
+        (Bytes32, webjet_proto::Transport),
+        webjet_core::routing::LinkHistory,
+    >,
+) -> Result<()> {
+    let mut v: Vec<LinkEntry> = m
+        .iter()
+        .map(|((peer, t), h)| LinkEntry {
+            peer: hex::encode(peer),
+            transport: t.name().into(),
+            history: h.clone(),
+        })
+        .collect();
     v.sort_by(|a, b| (&a.peer, &a.transport).cmp(&(&b.peer, &b.transport)));
     save_json(&p.links(), &v)
 }

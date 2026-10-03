@@ -117,7 +117,13 @@ pub fn account_for(data_dir: &Path) -> String {
     format!("identity-{}", hex::encode(&h[..8]))
 }
 
-fn save_with(path: &Path, cfg: &KeyCfg, backend: Backend, account: &str, seed: &Bytes32) -> Result<Backend> {
+fn save_with(
+    path: &Path,
+    cfg: &KeyCfg,
+    backend: Backend,
+    account: &str,
+    seed: &Bytes32,
+) -> Result<Backend> {
     // A previous key held in the keychain is removed when replaced.
     discard(path, cfg);
     let payload: Vec<u8> = match backend {
@@ -146,7 +152,8 @@ pub fn load(path: &Path, cfg: &KeyCfg) -> Result<Option<(KeyPair, Backend)>> {
     if !path.exists() {
         return Ok(None);
     }
-    let raw = Zeroizing::new(std::fs::read(path).with_context(|| format!("read {}", path.display()))?);
+    let raw =
+        Zeroizing::new(std::fs::read(path).with_context(|| format!("read {}", path.display()))?);
     let (seed, backend) = unseal(&raw, cfg).map_err(|e| anyhow!("{e:#}\nThe identity key can't be used on this machine. If it was copied or restored from another machine, re-key this node (§8.1): ask an admin for `webjetctl node rekey` and run `webjetd enroll` with the new string."))?;
     Ok(Some((KeyPair::from_seed(&seed), backend)))
 }
@@ -164,7 +171,10 @@ fn unseal(raw: &[u8], cfg: &KeyCfg) -> Result<(Zeroizing<Bytes32>, Backend)> {
     let (seed, b) = match raw[4] {
         TAG_FILE => (Zeroizing::new(payload.to_vec()), Backend::File),
         TAG_TPM => (tpm::unseal(payload)?, Backend::Tpm),
-        TAG_KEYCHAIN => (keychain::load(cfg.keychain.as_deref(), payload)?, Backend::Keychain),
+        TAG_KEYCHAIN => (
+            keychain::load(cfg.keychain.as_deref(), payload)?,
+            Backend::Keychain,
+        ),
         TAG_DPAPI => (dpapi::unprotect(payload)?, Backend::Dpapi),
         t => bail!("unknown key storage {t}"),
     };
@@ -191,7 +201,10 @@ pub fn discard(path: &Path, cfg: &KeyCfg) {
 pub fn harden_process() {
     #[cfg(unix)]
     unsafe {
-        let r = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let r = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         libc::setrlimit(libc::RLIMIT_CORE, &r);
     }
     #[cfg(target_os = "linux")]
@@ -203,7 +216,10 @@ pub fn harden_process() {
 /// Lock the key's memory so it is never swapped out. The key must not
 /// move afterwards (it lives inside the agent's `Arc<Node>`).
 pub fn lock_in_place(kp: &KeyPair) {
-    lock_memory(kp as *const KeyPair as *const u8, std::mem::size_of::<KeyPair>());
+    lock_memory(
+        kp as *const KeyPair as *const u8,
+        std::mem::size_of::<KeyPair>(),
+    );
 }
 
 fn lock_memory(p: *const u8, len: usize) {
@@ -247,15 +263,26 @@ pub mod tpm {
     use std::process::{Command, Stdio};
 
     pub fn available() -> bool {
-        let dev = std::path::Path::new("/dev/tpmrm0").exists() || std::env::var_os("TPM2TOOLS_TCTI").is_some();
-        dev && Command::new("tpm2_getcap").arg("properties-fixed").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+        let dev = std::path::Path::new("/dev/tpmrm0").exists()
+            || std::env::var_os("TPM2TOOLS_TCTI").is_some();
+        dev && Command::new("tpm2_getcap")
+            .arg("properties-fixed")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
 
     /// Unload transient objects. The kernel resource manager (/dev/tpmrm0)
     /// does this when a client closes, but a TPM reached directly (or a
     /// software TPM) keeps them until flushed and runs out of slots.
     fn flush_transient() {
-        let _ = Command::new("tpm2_flushcontext").arg("-t").stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = Command::new("tpm2_flushcontext")
+            .arg("-t")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 
     /// Flushes transient objects when an operation ends, even on error.
@@ -275,7 +302,10 @@ pub mod tpm {
     struct TempDir(PathBuf);
     impl TempDir {
         fn new() -> Result<TempDir> {
-            let d = std::env::temp_dir().join(format!("webjet-tpm-{}", hex::encode(webjet_core::crypto::random16())));
+            let d = std::env::temp_dir().join(format!(
+                "webjet-tpm-{}",
+                hex::encode(webjet_core::crypto::random16())
+            ));
             std::fs::create_dir(&d)?;
             #[cfg(unix)]
             {
@@ -293,24 +323,48 @@ pub mod tpm {
 
     fn run(args: &[&str], dir: &Path, input: Option<&[u8]>) -> Result<Vec<u8>> {
         let mut c = Command::new(args[0]);
-        c.args(&args[1..]).current_dir(dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.args(&args[1..])
+            .current_dir(dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if input.is_some() {
             c.stdin(Stdio::piped());
         }
-        let mut child = c.spawn().with_context(|| format!("{} (install tpm2-tools)", args[0]))?;
+        let mut child = c
+            .spawn()
+            .with_context(|| format!("{} (install tpm2-tools)", args[0]))?;
         if let Some(i) = input {
             child.stdin.take().unwrap().write_all(i)?;
         }
         let o = child.wait_with_output()?;
         if !o.status.success() {
-            bail!("{} failed: {}", args[0], String::from_utf8_lossy(&o.stderr).trim());
+            bail!(
+                "{} failed: {}",
+                args[0],
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
         }
         Ok(o.stdout)
     }
 
     fn primary(dir: &Path) -> Result<()> {
         // Same template every time: the TPM re-derives the same primary key.
-        run(&["tpm2_createprimary", "-Q", "-C", "o", "-g", "sha256", "-G", "ecc256:aes128cfb", "-c", "primary.ctx"], dir, None)?;
+        run(
+            &[
+                "tpm2_createprimary",
+                "-Q",
+                "-C",
+                "o",
+                "-g",
+                "sha256",
+                "-G",
+                "ecc256:aes128cfb",
+                "-c",
+                "primary.ctx",
+            ],
+            dir,
+            None,
+        )?;
         // Each tool saves its objects as context files; without a resource
         // manager they also stay loaded, and the TPM has only a few slots.
         flush_transient();
@@ -321,7 +375,26 @@ pub mod tpm {
         let _s = Session::begin();
         let t = TempDir::new()?;
         primary(&t.0)?;
-        run(&["tpm2_create", "-Q", "-C", "primary.ctx", "-g", "sha256", "-a", "fixedtpm|fixedparent|userwithauth|noda", "-i", "-", "-u", "seal.pub", "-r", "seal.priv"], &t.0, Some(&seed[..]))?;
+        run(
+            &[
+                "tpm2_create",
+                "-Q",
+                "-C",
+                "primary.ctx",
+                "-g",
+                "sha256",
+                "-a",
+                "fixedtpm|fixedparent|userwithauth|noda",
+                "-i",
+                "-",
+                "-u",
+                "seal.pub",
+                "-r",
+                "seal.priv",
+            ],
+            &t.0,
+            Some(&seed[..]),
+        )?;
         let pubb = std::fs::read(t.0.join("seal.pub"))?;
         let privb = std::fs::read(t.0.join("seal.priv"))?;
         let mut out = Vec::new();
@@ -343,7 +416,23 @@ pub mod tpm {
         std::fs::write(t.0.join("seal.pub"), pubb)?;
         std::fs::write(t.0.join("seal.priv"), privb)?;
         primary(&t.0)?;
-        run(&["tpm2_load", "-Q", "-C", "primary.ctx", "-u", "seal.pub", "-r", "seal.priv", "-c", "seal.ctx"], &t.0, None).context("this key was sealed by a different TPM")?;
+        run(
+            &[
+                "tpm2_load",
+                "-Q",
+                "-C",
+                "primary.ctx",
+                "-u",
+                "seal.pub",
+                "-r",
+                "seal.priv",
+                "-c",
+                "seal.ctx",
+            ],
+            &t.0,
+            None,
+        )
+        .context("this key was sealed by a different TPM")?;
         flush_transient();
         let out = Zeroizing::new(run(&["tpm2_unseal", "-c", "seal.ctx"], &t.0, None)?);
         Ok(out)
@@ -360,8 +449,11 @@ pub mod keychain {
 
     #[cfg(target_os = "macos")]
     fn open(path: Option<&Path>) -> Result<security_framework::os::macos::keychain::SecKeychain> {
-        let p = path.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(SYSTEM));
-        security_framework::os::macos::keychain::SecKeychain::open(&p).map_err(|e| anyhow!("open keychain {}: {e}", p.display()))
+        let p = path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(SYSTEM));
+        security_framework::os::macos::keychain::SecKeychain::open(&p)
+            .map_err(|e| anyhow!("open keychain {}: {e}", p.display()))
     }
 
     /// Store the seed as a generic password; the payload is the account name.
@@ -371,7 +463,8 @@ pub mod keychain {
         if let Ok((_, item)) = kc.find_generic_password(SERVICE, account) {
             item.delete();
         }
-        kc.set_generic_password(SERVICE, account, &seed[..]).map_err(|e| anyhow!("store identity key in the keychain: {e}"))?;
+        kc.set_generic_password(SERVICE, account, &seed[..])
+            .map_err(|e| anyhow!("store identity key in the keychain: {e}"))?;
         Ok(account.as_bytes().to_vec())
     }
 
@@ -379,7 +472,9 @@ pub mod keychain {
     pub fn load(path: Option<&Path>, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         let account = std::str::from_utf8(payload)?;
         let kc = open(path)?;
-        let (pw, _) = kc.find_generic_password(SERVICE, account).map_err(|e| anyhow!("identity key not in this machine's keychain: {e}"))?;
+        let (pw, _) = kc
+            .find_generic_password(SERVICE, account)
+            .map_err(|e| anyhow!("identity key not in this machine's keychain: {e}"))?;
         Ok(Zeroizing::new(pw.as_ref().to_vec()))
     }
 
@@ -413,10 +508,16 @@ pub mod dpapi {
     mod imp {
         use super::*;
         use windows_sys::Win32::Foundation::LocalFree;
-        use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB};
+        use windows_sys::Win32::Security::Cryptography::{
+            CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE,
+            CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        };
 
         fn blob(b: &[u8]) -> CRYPT_INTEGER_BLOB {
-            CRYPT_INTEGER_BLOB { cbData: b.len() as u32, pbData: b.as_ptr() as *mut u8 }
+            CRYPT_INTEGER_BLOB {
+                cbData: b.len() as u32,
+                pbData: b.as_ptr() as *mut u8,
+            }
         }
 
         fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
@@ -428,11 +529,32 @@ pub mod dpapi {
         pub fn protect(data: &[u8], machine: bool) -> Result<Vec<u8>> {
             let input = blob(data);
             let entropy = blob(CONTEXT);
-            let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
-            let flags = CRYPTPROTECT_UI_FORBIDDEN | if machine { CRYPTPROTECT_LOCAL_MACHINE } else { 0 };
-            let ok = unsafe { CryptProtectData(&input, std::ptr::null(), &entropy, std::ptr::null(), std::ptr::null(), flags, &mut out) };
+            let mut out = CRYPT_INTEGER_BLOB {
+                cbData: 0,
+                pbData: std::ptr::null_mut(),
+            };
+            let flags = CRYPTPROTECT_UI_FORBIDDEN
+                | if machine {
+                    CRYPTPROTECT_LOCAL_MACHINE
+                } else {
+                    0
+                };
+            let ok = unsafe {
+                CryptProtectData(
+                    &input,
+                    std::ptr::null(),
+                    &entropy,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    flags,
+                    &mut out,
+                )
+            };
             if ok == 0 {
-                bail!("CryptProtectData failed: {}", std::io::Error::last_os_error());
+                bail!(
+                    "CryptProtectData failed: {}",
+                    std::io::Error::last_os_error()
+                );
             }
             Ok(take(out))
         }
@@ -440,10 +562,26 @@ pub mod dpapi {
         pub fn unprotect(data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
             let input = blob(data);
             let entropy = blob(CONTEXT);
-            let mut out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
-            let ok = unsafe { CryptUnprotectData(&input, std::ptr::null_mut(), &entropy, std::ptr::null(), std::ptr::null(), CRYPTPROTECT_UI_FORBIDDEN, &mut out) };
+            let mut out = CRYPT_INTEGER_BLOB {
+                cbData: 0,
+                pbData: std::ptr::null_mut(),
+            };
+            let ok = unsafe {
+                CryptUnprotectData(
+                    &input,
+                    std::ptr::null_mut(),
+                    &entropy,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut out,
+                )
+            };
             if ok == 0 {
-                bail!("CryptUnprotectData failed (sealed on another machine?): {}", std::io::Error::last_os_error());
+                bail!(
+                    "CryptUnprotectData failed (sealed on another machine?): {}",
+                    std::io::Error::last_os_error()
+                );
             }
             let v = take(out);
             Ok(Zeroizing::new(v))
@@ -475,7 +613,10 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        std::env::temp_dir().join(format!("webjet-ks-{}", hex::encode(webjet_core::crypto::random16())))
+        std::env::temp_dir().join(format!(
+            "webjet-ks-{}",
+            hex::encode(webjet_core::crypto::random16())
+        ))
     }
 
     #[test]
@@ -483,7 +624,10 @@ mod tests {
         let d = tmp();
         let p = d.join("identity.key");
         let kp = KeyPair::generate();
-        let cfg = KeyCfg { storage: Backend::File, keychain: None };
+        let cfg = KeyCfg {
+            storage: Backend::File,
+            keychain: None,
+        };
         assert_eq!(save(&p, &cfg, "n", &kp.seed()).unwrap(), Backend::File);
         let (k2, b) = load(&p, &cfg).unwrap().unwrap();
         assert_eq!((k2.public(), b), (kp.public(), Backend::File));
@@ -532,7 +676,10 @@ mod tests {
         let kcp = d.join("test.keychain");
         let mut kc = CreateOptions::new().password("pw").create(&kcp).unwrap();
         kc.unlock(Some("pw")).unwrap();
-        let cfg = KeyCfg { storage: Backend::Keychain, keychain: Some(kcp.clone()) };
+        let cfg = KeyCfg {
+            storage: Backend::Keychain,
+            keychain: Some(kcp.clone()),
+        };
         let p = d.join("identity.key");
         let kp = KeyPair::generate();
         save(&p, &cfg, "node-under-test", &kp.seed()).unwrap();
@@ -561,10 +708,16 @@ mod tests {
         let d = tmp();
         let p = d.join("identity.key");
         let kp = KeyPair::generate();
-        let cfg = KeyCfg { storage: Backend::Auto, keychain: None };
+        let cfg = KeyCfg {
+            storage: Backend::Auto,
+            keychain: None,
+        };
         assert_eq!(save(&p, &cfg, "n", &kp.seed()).unwrap(), Backend::Tpm);
         let raw = std::fs::read(&p).unwrap();
-        assert!(!raw.windows(32).any(|w| w == &kp.seed()[..]), "seed must not appear in the file");
+        assert!(
+            !raw.windows(32).any(|w| w == &kp.seed()[..]),
+            "seed must not appear in the file"
+        );
         let (k2, b) = load(&p, &cfg).unwrap().unwrap();
         assert_eq!((k2.public(), b), (kp.public(), Backend::Tpm));
         let _ = std::fs::remove_dir_all(d);
@@ -576,7 +729,10 @@ mod tests {
         let d = tmp();
         let p = d.join("identity.key");
         let kp = KeyPair::generate();
-        let cfg = KeyCfg { storage: Backend::Dpapi, keychain: None };
+        let cfg = KeyCfg {
+            storage: Backend::Dpapi,
+            keychain: None,
+        };
         save(&p, &cfg, "n", &kp.seed()).unwrap();
         let raw = std::fs::read(&p).unwrap();
         assert!(!raw.windows(32).any(|w| w == &kp.seed()[..]));

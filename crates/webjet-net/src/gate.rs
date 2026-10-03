@@ -68,16 +68,25 @@ pub type SharedEpochs = Arc<parking_lot::RwLock<Epochs>>;
 
 // ---------------------------------------------------------------- replay cache
 
+type Nonce = [u8; 16];
+
+/// Nonces with the time they were seen, by value and in arrival order.
+#[derive(Default)]
+struct Seen {
+    map: HashMap<Nonce, u64>,
+    order: VecDeque<(Nonce, u64)>,
+}
+
 /// Remembers nonces seen within the timestamp tolerance, bounded in size.
 pub struct ReplayCache {
-    seen: Mutex<(HashMap<[u8; 16], u64>, VecDeque<([u8; 16], u64)>)>,
+    seen: Mutex<Seen>,
     cap: usize,
 }
 
 impl ReplayCache {
     pub fn new(cap: usize) -> Self {
         ReplayCache {
-            seen: Mutex::new((HashMap::new(), VecDeque::new())),
+            seen: Mutex::new(Seen::default()),
             cap,
         }
     }
@@ -85,7 +94,7 @@ impl ReplayCache {
     /// Returns false if the nonce was already seen.
     pub fn check_and_insert(&self, nonce: [u8; 16], now: u64) -> bool {
         let mut g = self.seen.lock();
-        let (map, order) = &mut *g;
+        let Seen { map, order } = &mut *g;
         while let Some((n, t)) = order.front().copied() {
             if t + 2 * SKEW_PSK_GATE < now || order.len() > self.cap {
                 order.pop_front();

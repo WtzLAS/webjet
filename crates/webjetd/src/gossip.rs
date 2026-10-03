@@ -31,6 +31,9 @@ struct Walk {
     started: Instant,
 }
 
+/// A neighbor as advertised: (node, quantized RTT ms, loss %).
+pub type LinkSummary = (Bytes32, u16, u8);
+
 #[derive(Default)]
 pub struct SyncState {
     walk: Mutex<Option<Walk>>,
@@ -41,7 +44,8 @@ pub struct SyncState {
     lookup_rate: Mutex<HashMap<u64, (Instant, u32)>>,
     /// Last published own records, to republish on change.
     pub last_endpoint: Mutex<Option<(Vec<wp::EndpointAddr>, u64)>>,
-    pub last_lsa: Mutex<Option<(Vec<(Bytes32, u16, u8)>, u64)>>,
+    /// The links (neighbor, rtt, loss) last advertised, and when.
+    pub last_lsa: Mutex<Option<(Vec<LinkSummary>, u64)>>,
     pub last_load_step: Mutex<u8>,
     pub last_attach: Mutex<Option<(Vec<Bytes32>, u64)>>,
     pub lookups_pending: Mutex<HashMap<Bytes32, Instant>>,
@@ -841,9 +845,14 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
     }
     let links = my_links(n, true);
     let now = now_ms();
-    let summary: Vec<(Bytes32, u16, u8)> = links.iter().map(|l| (l.0, l.2, l.3)).collect();
+    let summary: Vec<LinkSummary> = links.iter().map(|l| (l.0, l.2, l.3)).collect();
     let load = crate::metrics::relay_load(n);
-    let step = webjet_core::routing::relay_load(load.util_pct, load.cpu_pct, load.circuits_pct, load.queue_pct);
+    let step = webjet_core::routing::relay_load(
+        load.util_pct,
+        load.cpu_pct,
+        load.circuits_pct,
+        load.queue_pct,
+    );
     {
         let last = n.sync.last_lsa.lock();
         if let Some((prev, t)) = last.as_ref() {
@@ -972,7 +981,9 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
         let load = l
             .load
             .as_ref()
-            .map(|x| webjet_core::routing::relay_load(x.util_pct, x.cpu_pct, x.circuits_pct, x.queue_pct))
+            .map(|x| {
+                webjet_core::routing::relay_load(x.util_pct, x.cpu_pct, x.circuits_pct, x.queue_pct)
+            })
             .unwrap_or(0);
         let links = l
             .links

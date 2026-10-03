@@ -445,8 +445,7 @@ async fn run_session(
                 }
                 stats.fec_recovered.store(dec.recovered, Ordering::Relaxed);
                 // Deliver received bytes to the user.
-                loop {
-                    let n = match kcp.peeksize() { Ok(n) => n, Err(_) => break };
+                while let Ok(n) = kcp.peeksize() {
                     let mut b = vec![0u8; n];
                     if kcp.recv(&mut b).is_err() { break; }
                     if user.write_all(&b).await.is_err() { user_open = false; break; }

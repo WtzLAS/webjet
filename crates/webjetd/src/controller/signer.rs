@@ -76,14 +76,23 @@ impl SocketSigner {
             l
         };
         let resp = std::thread::spawn(move || -> Result<String> {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
             rt.block_on(async move {
                 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-                let s = crate::ipc::connect(&path).await.with_context(|| format!("webjet-signer at {}", path.display()))?;
+                let s = crate::ipc::connect(&path)
+                    .await
+                    .with_context(|| format!("webjet-signer at {}", path.display()))?;
                 let (r, mut w) = tokio::io::split(s);
                 w.write_all(&line).await?;
                 let mut resp = String::new();
-                tokio::time::timeout(std::time::Duration::from_secs(5), BufReader::new(r).read_line(&mut resp)).await.map_err(|_| anyhow!("webjet-signer timed out"))??;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    BufReader::new(r).read_line(&mut resp),
+                )
+                .await
+                .map_err(|_| anyhow!("webjet-signer timed out"))??;
                 Ok(resp)
             })
         })
@@ -132,7 +141,8 @@ pub async fn serve(path: &std::path::Path, kp: KeyPair) -> Result<()> {
             if BufReader::new(r).read_line(&mut line).await.is_err() {
                 return;
             }
-            let reply = handle_request(&kp, &line).unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}));
+            let reply = handle_request(&kp, &line)
+                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}));
             let mut out = serde_json::to_vec(&reply).unwrap_or_default();
             out.push(b'\n');
             let _ = w.write_all(&out).await;
@@ -145,7 +155,10 @@ fn handle_request(kp: &KeyPair, line: &str) -> Result<serde_json::Value> {
     match v.get("op").and_then(|o| o.as_str()) {
         Some("pubkey") => Ok(serde_json::json!({"pubkey": hex::encode(kp.public())})),
         Some("sign") => {
-            let ty = v.get("type").and_then(|t| t.as_u64()).ok_or_else(|| anyhow!("missing type"))? as u16;
+            let ty = v
+                .get("type")
+                .and_then(|t| t.as_u64())
+                .ok_or_else(|| anyhow!("missing type"))? as u16;
             let body = crate::state::unb64(v.get("body").and_then(|b| b.as_str()).unwrap_or(""))?;
             if !allowed(ty) {
                 bail!("refusing to sign message type {}", mt::name(ty));
@@ -159,7 +172,9 @@ fn handle_request(kp: &KeyPair, line: &str) -> Result<serde_json::Value> {
                     <webjet_proto::SigningKeyCert as webjet_proto::Decodable>::decode_bytes(&body)?;
                 }
             }
-            Ok(serde_json::json!({"envelope": crate::state::b64(&kp.sign_envelope(ty, body).encode_bytes())}))
+            Ok(
+                serde_json::json!({"envelope": crate::state::b64(&kp.sign_envelope(ty, body).encode_bytes())}),
+            )
         }
         _ => bail!("unknown op"),
     }
@@ -172,7 +187,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn signer_over_ipc() {
         let path = if cfg!(windows) {
-            PathBuf::from(format!(r"\\.\pipe\webjet-signer-test-{}", std::process::id()))
+            PathBuf::from(format!(
+                r"\\.\pipe\webjet-signer-test-{}",
+                std::process::id()
+            ))
         } else {
             std::env::temp_dir().join(format!("wj-signer-{}.sock", std::process::id()))
         };
@@ -182,7 +200,14 @@ mod tests {
         tokio::spawn(async move { serve(&p2, kp).await });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let s = SocketSigner::new(path);
-        let (pubkey, refused) = tokio::task::spawn_blocking(move || (s.public().unwrap(), s.sign(mt::SIGNED_OP, vec![1, 2]).is_err())).await.unwrap();
+        let (pubkey, refused) = tokio::task::spawn_blocking(move || {
+            (
+                s.public().unwrap(),
+                s.sign(mt::SIGNED_OP, vec![1, 2]).is_err(),
+            )
+        })
+        .await
+        .unwrap();
         assert_eq!(pubkey, pk);
         assert!(refused, "the signer refuses other message types");
     }

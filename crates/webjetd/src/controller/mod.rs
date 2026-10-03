@@ -43,7 +43,10 @@ pub fn classify_entry(bytes: &[u8]) -> Option<raft::ConfChange> {
     match e.payload? {
         EntryPayload::GenesisEntry(_) => {
             let first = opt_k32(&e.random?.node_id);
-            Some(ConfChange::Set(Membership { voters: BTreeSet::from([first]), learners: BTreeSet::new() }))
+            Some(ConfChange::Set(Membership {
+                voters: BTreeSet::from([first]),
+                learners: BTreeSet::new(),
+            }))
         }
         EntryPayload::OpEntry(o) => {
             let v = crypto::open_envelope(&o.signed_op?).ok()?;
@@ -129,11 +132,21 @@ impl Controller {
         let base = if machine.genesis.is_some() {
             machine.members.clone()
         } else if bootstrap {
-            Membership { voters: BTreeSet::from([n.me]), learners: BTreeSet::new() }
+            Membership {
+                voters: BTreeSet::from([n.me]),
+                learners: BTreeSet::new(),
+            }
         } else {
             Membership::default()
         };
-        let r = Raft::open(n.me, dir, machine.last_index, machine.last_term, base, Box::new(classify_entry))?;
+        let r = Raft::open(
+            n.me,
+            dir,
+            machine.last_index,
+            machine.last_term,
+            base,
+            Box::new(classify_entry),
+        )?;
         let signer: Box<dyn Signer> = match &n.cfg.controller.signer_socket {
             Some(p) => Box::new(signer::SocketSigner::new(p.clone())),
             None => Box::new(signer::FileSigner::open(&n.paths.dir.join("signing.key"))?),
@@ -524,7 +537,9 @@ impl Controller {
             }
             drop(m);
             let bytes = entry.encode_bytes();
-            let (i, out) = r.propose(Instant::now(), &entry).map_err(|e| anyhow!("{e}"))?;
+            let (i, out) = r
+                .propose(Instant::now(), &entry)
+                .map_err(|e| anyhow!("{e}"))?;
             debug_assert_eq!(i, idx);
             let (tx, rx) = oneshot::channel();
             self.waiters.lock().insert(
@@ -720,7 +735,10 @@ impl Controller {
         match rb {
             RaftBody::RaftSnapshot(s) => {
                 let _g = self.apply_lock.lock();
-                let offer = self.raft.lock().offer_snapshot(Instant::now(), from, s.term, s.last_index);
+                let offer =
+                    self.raft
+                        .lock()
+                        .offer_snapshot(Instant::now(), from, s.term, s.last_index);
                 let out = match offer {
                     raft::SnapshotOffer::Reply(out) => out,
                     raft::SnapshotOffer::Install => {
@@ -950,17 +968,24 @@ impl Controller {
     /// every controller can serve the whole network to Prometheus.
     pub fn ingest_metrics(&self, from: Bytes32, raw: &[u8]) {
         let Some(n) = self.node() else { return };
-        let Ok(v) = crypto::open_envelope(raw) else { return };
+        let Ok(v) = crypto::open_envelope(raw) else {
+            return;
+        };
         if v.ty != mt::METRIC_REPORT {
             return;
         }
-        let Ok(rep) = v.decode::<wp::MetricReport>() else { return };
+        let Ok(rep) = v.decode::<wp::MetricReport>() else {
+            return;
+        };
         let origin = opt_k32(&rep.node_id);
         if n.store.read().view().nodes.get(&origin).map(|x| x.key) != Some(v.signer) {
             return;
         }
         let from_controller = from != origin;
-        if from_controller && !self.raft.lock().voters().contains(&from) && !self.raft.lock().learners().contains(&from) {
+        if from_controller
+            && !self.raft.lock().voters().contains(&from)
+            && !self.raft.lock().learners().contains(&from)
+        {
             return;
         }
         {
@@ -971,15 +996,32 @@ impl Controller {
                     return;
                 }
             }
-            r.insert(origin, StoredReport { received: now_ms(), report: rep });
+            r.insert(
+                origin,
+                StoredReport {
+                    received: now_ms(),
+                    report: rep,
+                },
+            );
         }
         if !from_controller {
             let peers: Vec<Bytes32> = {
                 let r = self.raft.lock();
-                r.voters().iter().chain(r.learners().iter()).copied().filter(|p| *p != n.me).collect()
+                r.voters()
+                    .iter()
+                    .chain(r.learners().iter())
+                    .copied()
+                    .filter(|p| *p != n.me)
+                    .collect()
             };
             for p in peers {
-                rpc::send_oneway(&n, &p, RpcBody::MetricUpload(Box::new(wp::MetricUpload { report: Some(raw.to_vec()) })));
+                rpc::send_oneway(
+                    &n,
+                    &p,
+                    RpcBody::MetricUpload(Box::new(wp::MetricUpload {
+                        report: Some(raw.to_vec()),
+                    })),
+                );
             }
         }
     }
@@ -987,7 +1029,9 @@ impl Controller {
     /// Every node's latest report as OpenMetrics text (the scrape target).
     /// Reports older than 15 minutes are left out (§12.5: one per minute).
     pub fn openmetrics(&self) -> String {
-        let Some(n) = self.node() else { return "# EOF\n".into() };
+        let Some(n) = self.node() else {
+            return "# EOF\n".into();
+        };
         let now = now_ms();
         let s = n.store.read();
         let names = crate::exposition::ViewNames(s.view());
@@ -1067,4 +1111,3 @@ fn submit_result(res: Result<(u64, Outcome)>) -> RpcBody {
         })),
     }
 }
-

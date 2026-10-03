@@ -271,7 +271,7 @@ mod tests {
         }
         let mut now = t0 + Duration::from_millis(50);
         let mut out = 0;
-        while let Some(_) = q.pop(now) {
+        while q.pop(now).is_some() {
             out += 1;
             now += Duration::from_millis(10);
         }

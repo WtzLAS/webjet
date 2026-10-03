@@ -43,24 +43,45 @@ impl Counters {
 /// otherwise auto-estimated from the highest sustained throughput and the
 /// KCP bandwidth estimates, never below 100 Mbit/s.
 fn capacity_mbps(n: &Node) -> u32 {
-    let configured = n.cfg.limits.relay_capacity_mbps.map(|v| v as u64).or_else(|| {
-        let s = n.store.read();
-        let v = s.view();
-        let has_override = v.limits.as_ref().map(|l| {
-            l.defaults.clone().unwrap_or_default().iter().any(|x| x.name.as_deref() == Some("relay_capacity_mbps"))
-                || l.overrides.clone().unwrap_or_default().iter().any(|o| o.values.clone().unwrap_or_default().iter().any(|x| x.name.as_deref() == Some("relay_capacity_mbps")))
+    let configured = n
+        .cfg
+        .limits
+        .relay_capacity_mbps
+        .map(|v| v as u64)
+        .or_else(|| {
+            let s = n.store.read();
+            let v = s.view();
+            let has_override = v.limits.as_ref().map(|l| {
+                l.defaults
+                    .clone()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|x| x.name.as_deref() == Some("relay_capacity_mbps"))
+                    || l.overrides.clone().unwrap_or_default().iter().any(|o| {
+                        o.values
+                            .clone()
+                            .unwrap_or_default()
+                            .iter()
+                            .any(|x| x.name.as_deref() == Some("relay_capacity_mbps"))
+                    })
+            });
+            if has_override == Some(true) {
+                Some(limit(n, "relay_capacity_mbps", 1000))
+            } else {
+                None
+            }
         });
-        if has_override == Some(true) {
-            Some(limit(n, "relay_capacity_mbps", 1000))
-        } else {
-            None
-        }
-    });
     if let Some(c) = configured {
         return c.max(1) as u32;
     }
     let peak = n.metrics.load.lock().peak_mbps;
-    let kcp_bw: f64 = n.hops.lock().values().filter_map(|h| h.kcp_stats.as_ref()).map(|k| k.bw_estimate_kbps.load(Ordering::Relaxed) as f64 / 1000.0).fold(0.0, f64::max);
+    let kcp_bw: f64 = n
+        .hops
+        .lock()
+        .values()
+        .filter_map(|h| h.kcp_stats.as_ref())
+        .map(|k| k.bw_estimate_kbps.load(Ordering::Relaxed) as f64 / 1000.0)
+        .fold(0.0, f64::max);
     peak.max(kcp_bw).max(100.0) as u32
 }
 
@@ -70,11 +91,22 @@ pub fn sample_load(n: &Node) {
     let (bytes, queue_us) = {
         let hops = n.hops.lock();
         (
-            hops.values().map(|h| h.tx_bytes.load(Ordering::Relaxed)).sum::<u64>() + n.metrics.retired_tx.load(Ordering::Relaxed),
-            hops.values().map(|h| h.queue_delay_us.load(Ordering::Relaxed)).max().unwrap_or(0),
+            hops.values()
+                .map(|h| h.tx_bytes.load(Ordering::Relaxed))
+                .sum::<u64>()
+                + n.metrics.retired_tx.load(Ordering::Relaxed),
+            hops.values()
+                .map(|h| h.queue_delay_us.load(Ordering::Relaxed))
+                .max()
+                .unwrap_or(0),
         )
     };
-    n.metrics.load.lock().record(std::time::Instant::now(), cpu, bytes, queue_us as f64 / 1000.0);
+    n.metrics.load.lock().record(
+        std::time::Instant::now(),
+        cpu,
+        bytes,
+        queue_us as f64 / 1000.0,
+    );
 }
 
 /// Self-reported relay load (§11.8.1), each part a 30-second average:
@@ -86,7 +118,11 @@ pub fn relay_load(n: &Node) -> wp::RelayLoad {
     let util = ((avg.tx_bps * 8.0 / 1e6) / cap as f64 * 100.0).clamp(0.0, 100.0) as u8;
     let circuits_cap = limit(n, "circuits_global", 50_000).max(1);
     let transit = n.circuits.lock().transit_count() as u64;
-    let queue = webjet_core::routing::queue_load_pct(avg.queue_ms, webjet_core::queue::TARGET.as_secs_f64() * 1000.0, 100.0);
+    let queue = webjet_core::routing::queue_load_pct(
+        avg.queue_ms,
+        webjet_core::queue::TARGET.as_secs_f64() * 1000.0,
+        100.0,
+    );
     wp::RelayLoad {
         util_pct: util,
         cpu_pct: avg.cpu_pct.round() as u8,
@@ -170,7 +206,10 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                     .map(|k| (k.bw_estimate_kbps.load(Ordering::Relaxed) / 1000) as u32),
                 queue_delay_ms: (h.queue_delay_us.load(Ordering::Relaxed) / 1000) as u32,
                 rtt_ms: st.effective().map(|e| e.0.ceil() as u32).unwrap_or(0),
-                loss_pct: st.effective().map(|e| (e.1 * 100.0).round() as u8).unwrap_or(0),
+                loss_pct: st
+                    .effective()
+                    .map(|e| (e.1 * 100.0).round() as u8)
+                    .unwrap_or(0),
             }
         })
         .collect();
@@ -282,8 +321,12 @@ pub async fn run(n: Arc<Node>) {
 /// metrics`). Relays leave out per-route series locally (§12.5).
 pub fn local_openmetrics(n: &Arc<Node>) -> String {
     let raw = build_report(n);
-    let Ok(v) = webjet_core::crypto::open_envelope(&raw) else { return "# EOF\n".into() };
-    let Ok(rep) = v.decode::<wp::MetricReport>() else { return "# EOF\n".into() };
+    let Ok(v) = webjet_core::crypto::open_envelope(&raw) else {
+        return "# EOF\n".into();
+    };
+    let Ok(rep) = v.decode::<wp::MetricReport>() else {
+        return "# EOF\n".into();
+    };
     let s = n.store.read();
     let mut e = crate::exposition::Exposition::default();
     e.report(&rep, &crate::exposition::ViewNames(s.view()), !n.is_relay());

@@ -422,10 +422,15 @@ impl Node {
             closed: AtomicBool::new(false),
             intentional: AtomicBool::new(false),
             stats: Mutex::new(LinkStats::with_history(
-                self.link_history.lock().get(&(peer, est.transport)).cloned().map(|mut h| {
-                    h.age(now_ms());
-                    h
-                }).unwrap_or_default(),
+                self.link_history
+                    .lock()
+                    .get(&(peer, est.transport))
+                    .cloned()
+                    .map(|mut h| {
+                        h.age(now_ms());
+                        h
+                    })
+                    .unwrap_or_default(),
             )),
             last_rx: Mutex::new(Instant::now()),
             kcp_stats: est.kcp_stats.clone(),
@@ -456,7 +461,8 @@ impl Node {
     }
 
     pub fn hop_down(self: &Arc<Self>, hop: &Arc<Hop>) {
-        let failed = !hop.intentional.load(Ordering::Relaxed) && !hop.closed.load(Ordering::Relaxed);
+        let failed =
+            !hop.intentional.load(Ordering::Relaxed) && !hop.closed.load(Ordering::Relaxed);
         hop.close();
         if self.hops.lock().remove(&hop.id).is_some() {
             // Fold this session into the link's long-term record.
@@ -464,8 +470,12 @@ impl Node {
             if failed && h.samples > 0 {
                 h.flap(now_ms());
             }
-            self.link_history.lock().insert((hop.peer, hop.transport), h);
-            self.metrics.retired_tx.fetch_add(hop.tx_bytes.load(Ordering::Relaxed), Ordering::Relaxed);
+            self.link_history
+                .lock()
+                .insert((hop.peer, hop.transport), h);
+            self.metrics
+                .retired_tx
+                .fetch_add(hop.tx_bytes.load(Ordering::Relaxed), Ordering::Relaxed);
             tracing::info!(peer = %self.name_of(&hop.peer), transport = hop.transport.name(), "hop down");
             crate::circuit::on_hop_down(self, hop);
             self.emit(Event::HopDown(hop.peer));

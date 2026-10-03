@@ -279,19 +279,16 @@ async fn start_anytls(n: &Arc<Node>, addr: std::net::SocketAddr) -> Result<()> {
                     .get()
                     .map(|c| c.pending_token_hashes())
                     .unwrap_or_default();
-                match webjet_net::anytls::accept(
-                    s,
-                    remote,
-                    &acc,
-                    &secret,
+                let ctx = webjet_net::anytls::AcceptCtx {
+                    acceptor: &acc,
+                    secret: &secret,
                     website,
-                    &n3.kp,
-                    n3.trust(),
-                    &n3.epochs,
-                    &enroll,
-                )
-                .await
-                {
+                    kp: &n3.kp,
+                    trust: n3.trust(),
+                    epochs: &n3.epochs,
+                    enroll_keys: &enroll,
+                };
+                match webjet_net::anytls::accept(s, remote, &ctx).await {
                     Ok(webjet_net::anytls::AnyAccepted::Hop(est)) => {
                         if let Err(e) = n3.register_hop(est, false) {
                             tracing::debug!("inbound AnyTLS hop from {remote}: {e}");
