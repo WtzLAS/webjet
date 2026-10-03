@@ -33,10 +33,20 @@ pub fn load_penalty(load_pct: u8) -> Option<f64> {
     Some(1.0 + 3.0 * x * x)
 }
 
-/// Relay load L = max(util, cpu, circuits), quantized to 10% steps (§11.8.1).
-pub fn relay_load(util: u8, cpu: u8, circuits: u8) -> u8 {
-    let l = util.max(cpu).max(circuits).min(100);
+/// Relay load L = the highest of utilization, CPU, circuits and queue delay
+/// (whichever runs out first matters), quantized to 10% steps (§11.8.1).
+pub fn relay_load(util: u8, cpu: u8, circuits: u8, queue: u8) -> u8 {
+    let l = util.max(cpu).max(circuits).max(queue).min(100);
     (l / 10) * 10
+}
+
+/// Queue delay as a load percentage: 0 at or below the CoDel target, 100
+/// at `budget_ms` (where the hop queue starts dropping).
+pub fn queue_load_pct(delay_ms: f64, target_ms: f64, budget_ms: f64) -> u8 {
+    if delay_ms <= target_ms {
+        return 0;
+    }
+    (((delay_ms - target_ms) / (budget_ms - target_ms)) * 100.0).clamp(0.0, 100.0) as u8
 }
 
 #[derive(Clone, Debug, Default)]
@@ -403,71 +413,245 @@ pub fn choose_transport(cands: &[TransportCand]) -> Option<Transport> {
     near.first().map(|c| c.transport)
 }
 
-/// Exponentially weighted RTT/loss estimate per link (§11.2).
-#[derive(Clone, Debug)]
-pub struct LinkStats {
-    pub srtt_ms: f64,
+/// Long-term memory of a link (one per neighbor and transport), kept across
+/// hop reconnects and agent restarts. It makes a link that keeps failing,
+/// or that is lossy now and then, cost more than its last few probes
+/// suggest, and lets a link earn trust back gradually (§11.2, §11.8.3).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LinkHistory {
+    /// Slow EWMAs (time constant [`LONG_TAU_MS`]).
+    pub rtt_ms: f64,
     pub loss: f64,
+    pub jitter_ms: f64,
+    /// Decaying count of session failures (half-life [`FLAP_HALF_LIFE_MS`]).
+    pub flaps: f64,
     pub samples: u64,
-    sent: BTreeMap<u64, u64>,
+    /// Wall clock of the last update, ms.
+    pub updated_ms: u64,
 }
 
-impl Default for LinkStats {
-    fn default() -> Self {
-        LinkStats {
-            srtt_ms: 0.0,
-            loss: 0.0,
-            samples: 0,
-            sent: BTreeMap::new(),
+pub const LONG_TAU_MS: f64 = 15.0 * 60_000.0;
+pub const FLAP_HALF_LIFE_MS: f64 = 60.0 * 60_000.0;
+/// Each recent failure adds this much to the cost, up to `MAX_FLAP_FACTOR`.
+const FLAP_WEIGHT: f64 = 0.15;
+const MAX_FLAP_FACTOR: f64 = 2.0;
+/// Jitter counts at half weight: it hurts tunnelled TCP less than delay.
+const JITTER_WEIGHT: f64 = 0.5;
+/// Probe outcomes kept for the exact recent loss rate.
+const LOSS_WINDOW: usize = 64;
+
+impl LinkHistory {
+    fn decay(&mut self, now_ms: u64) -> f64 {
+        let dt = now_ms.saturating_sub(self.updated_ms) as f64;
+        if self.updated_ms != 0 {
+            self.flaps *= 0.5f64.powf(dt / FLAP_HALF_LIFE_MS);
+        }
+        self.updated_ms = now_ms;
+        if self.samples == 0 {
+            1.0
+        } else {
+            1.0 - (-dt.max(1.0) / LONG_TAU_MS).exp()
+        }
+    }
+
+    /// One probe answered after `rtt_ms`.
+    pub fn observe(&mut self, rtt_ms: f64, jitter_ms: f64, now_ms: u64) {
+        let a = self.decay(now_ms);
+        self.rtt_ms += a * (rtt_ms - self.rtt_ms);
+        self.jitter_ms += a * (jitter_ms - self.jitter_ms);
+        self.loss += a * (0.0 - self.loss);
+        self.samples += 1;
+    }
+
+    /// One probe lost.
+    pub fn observe_loss(&mut self, now_ms: u64) {
+        let a = self.decay(now_ms);
+        if self.samples > 0 {
+            self.loss += a * (1.0 - self.loss);
+        }
+    }
+
+    /// The hop session died (timeout or error, not an orderly close).
+    pub fn flap(&mut self, now_ms: u64) {
+        self.decay(now_ms);
+        self.flaps += 1.0;
+    }
+
+    /// Cost multiplier for instability.
+    pub fn stability_factor(&self) -> f64 {
+        (1.0 + FLAP_WEIGHT * self.flaps).min(MAX_FLAP_FACTOR)
+    }
+
+    pub fn cost(&self) -> f64 {
+        if self.samples == 0 {
+            return f64::INFINITY;
+        }
+        link_cost(self.rtt_ms + JITTER_WEIGHT * self.jitter_ms, self.loss) * self.stability_factor()
+    }
+
+    /// Bring the history forward to `now_ms` (flaps decay while idle).
+    pub fn age(&mut self, now_ms: u64) {
+        if self.updated_ms != 0 && now_ms > self.updated_ms {
+            let dt = (now_ms - self.updated_ms) as f64;
+            self.flaps *= 0.5f64.powf(dt / FLAP_HALF_LIFE_MS);
+            self.updated_ms = now_ms;
         }
     }
 }
 
+/// RTT/loss estimate for one link (§11.2): RFC 6298-style smoothed RTT and
+/// variance, a windowed minimum RTT, a short EWMA and an exact windowed loss
+/// rate, combined with the link's long-term [`LinkHistory`].
+#[derive(Clone, Debug)]
+pub struct LinkStats {
+    pub srtt_ms: f64,
+    pub rttvar_ms: f64,
+    /// Lowest RTT over the last ten minutes (the path's base delay).
+    pub min_rtt_ms: f64,
+    /// Short-term loss EWMA (~10 probes).
+    pub loss: f64,
+    pub samples: u64,
+    pub history: LinkHistory,
+    sent: BTreeMap<u64, u64>,
+    outcomes: std::collections::VecDeque<bool>,
+    min_buckets: std::collections::VecDeque<(u64, f64)>,
+}
+
+impl Default for LinkStats {
+    fn default() -> Self {
+        LinkStats::with_history(LinkHistory::default())
+    }
+}
+
+const MIN_BUCKET_US: u64 = 60_000_000;
+const MIN_BUCKETS: usize = 10;
+/// Probes before the session's own measurements fully replace history.
+const WARMUP: u64 = 8;
+
 impl LinkStats {
+    pub fn with_history(history: LinkHistory) -> Self {
+        LinkStats {
+            srtt_ms: 0.0,
+            rttvar_ms: 0.0,
+            min_rtt_ms: f64::INFINITY,
+            loss: 0.0,
+            samples: 0,
+            history,
+            sent: BTreeMap::new(),
+            outcomes: std::collections::VecDeque::new(),
+            min_buckets: std::collections::VecDeque::new(),
+        }
+    }
+
+    fn record(&mut self, ok: bool) {
+        self.outcomes.push_back(ok);
+        while self.outcomes.len() > LOSS_WINDOW {
+            self.outcomes.pop_front();
+        }
+    }
+
+    fn lost_one(&mut self, now_ms: u64) {
+        self.loss = self.loss * 0.9 + 0.1;
+        self.record(false);
+        self.history.observe_loss(now_ms);
+    }
+
     pub fn on_sent(&mut self, seq: u64, at_us: u64) {
+        self.on_sent_at(seq, at_us, crate::types::now_ms());
+    }
+
+    pub fn on_sent_at(&mut self, seq: u64, at_us: u64, now_ms: u64) {
         self.sent.insert(seq, at_us);
         // Anything older than 16 outstanding probes counts as lost.
         while self.sent.len() > 16 {
             let (&k, _) = self.sent.iter().next().unwrap();
             self.sent.remove(&k);
-            self.loss = self.loss * 0.9 + 0.1;
+            self.lost_one(now_ms);
         }
     }
+
     pub fn on_ack(&mut self, seq: u64, now_us: u64) -> Option<f64> {
+        self.on_ack_at(seq, now_us, crate::types::now_ms())
+    }
+
+    pub fn on_ack_at(&mut self, seq: u64, now_us: u64, now_ms: u64) -> Option<f64> {
         let at = self.sent.remove(&seq)?;
         // Earlier unacked probes are lost.
         let lost: Vec<u64> = self.sent.range(..seq).map(|(k, _)| *k).collect();
         for k in lost {
             self.sent.remove(&k);
-            self.loss = self.loss * 0.9 + 0.1;
+            self.lost_one(now_ms);
         }
         let rtt = (now_us.saturating_sub(at)) as f64 / 1000.0;
-        self.srtt_ms = if self.samples == 0 {
-            rtt
+        if self.samples == 0 {
+            self.srtt_ms = rtt;
+            self.rttvar_ms = rtt / 2.0;
         } else {
-            self.srtt_ms * 0.875 + rtt * 0.125
-        };
+            self.rttvar_ms = 0.75 * self.rttvar_ms + 0.25 * (self.srtt_ms - rtt).abs();
+            self.srtt_ms = 0.875 * self.srtt_ms + 0.125 * rtt;
+        }
+        // Windowed minimum in one-minute buckets.
+        let bucket = now_us / MIN_BUCKET_US;
+        match self.min_buckets.back_mut() {
+            Some((b, m)) if *b == bucket => *m = m.min(rtt),
+            _ => self.min_buckets.push_back((bucket, rtt)),
+        }
+        while self.min_buckets.front().map(|(b, _)| bucket.saturating_sub(*b) >= MIN_BUCKETS as u64).unwrap_or(false) {
+            self.min_buckets.pop_front();
+        }
+        self.min_rtt_ms = self.min_buckets.iter().map(|x| x.1).fold(f64::INFINITY, f64::min);
         self.loss *= 0.9;
+        self.record(true);
         self.samples += 1;
+        self.history.observe(rtt, self.rttvar_ms, now_ms);
         Some(rtt)
     }
-    pub fn cost(&self) -> f64 {
-        if self.samples == 0 {
-            return f64::INFINITY;
+
+    /// Exact loss over the recent probe window.
+    pub fn window_loss(&self) -> f64 {
+        if self.outcomes.is_empty() {
+            return 0.0;
         }
-        link_cost(self.srtt_ms, self.loss)
+        self.outcomes.iter().filter(|o| !**o).count() as f64 / self.outcomes.len() as f64
     }
+
+    /// Effective RTT and loss: what the cost is computed from, and what is
+    /// advertised (§11.2). Short-term measurements dominate, but a link that
+    /// has been lossy keeps part of that loss, recent session failures raise
+    /// the cost, and a new session starts from the link's history.
+    pub fn effective(&self) -> Option<(f64, f64)> {
+        let h = &self.history;
+        if self.samples == 0 && h.samples == 0 {
+            return None;
+        }
+        let short_rtt = self.srtt_ms + JITTER_WEIGHT * self.rttvar_ms;
+        let short_loss = self.loss.max(self.window_loss());
+        let (rtt, loss) = if self.samples == 0 {
+            (h.rtt_ms + JITTER_WEIGHT * h.jitter_ms, h.loss)
+        } else if self.samples < WARMUP && h.samples > 0 {
+            // Blend from history toward the fresh session.
+            let w = self.samples as f64 / WARMUP as f64;
+            let hr = h.rtt_ms + JITTER_WEIGHT * h.jitter_ms;
+            (w * short_rtt + (1.0 - w) * hr, (w * short_loss + (1.0 - w) * h.loss).max(short_loss))
+        } else {
+            (short_rtt, short_loss.max(0.5 * h.loss))
+        };
+        // Instability shows up as extra delay, so remote cost computations agree.
+        Some((rtt * h.stability_factor(), loss.clamp(0.0, 1.0)))
+    }
+
+    pub fn cost(&self) -> f64 {
+        match self.effective() {
+            Some((rtt, loss)) if self.samples > 0 || self.history.samples > 0 => link_cost(rtt, loss),
+            _ => f64::INFINITY,
+        }
+    }
+
     /// Quantized values for adverts (so small changes don't trigger updates).
     pub fn quantized(&self) -> (u16, u8) {
-        let rtt = if self.srtt_ms < 10.0 {
-            self.srtt_ms.ceil()
-        } else {
-            (self.srtt_ms / 5.0).round() * 5.0
-        };
-        (
-            rtt.min(65535.0) as u16,
-            (self.loss * 100.0).round().min(100.0) as u8,
-        )
+        let (rtt, loss) = self.effective().unwrap_or((0.0, 0.0));
+        let rtt = if rtt < 10.0 { rtt.ceil() } else { (rtt / 5.0).round() * 5.0 };
+        (rtt.min(65535.0) as u16, (loss * 100.0).round().min(100.0) as u8)
     }
 }
 
@@ -586,5 +770,97 @@ mod tests {
         assert!(!h.should_switch(100.0, 1, 50.0, 2000, 3000));
         assert!(h.should_switch(100.0, 1, 50.0, 3000, 3000));
         assert!(!h.should_switch(100.0, 2, 95.0, 4000, 0));
+    }
+
+    fn probe(st: &mut LinkStats, seq: u64, rtt_ms: u64, t_ms: u64, lost: bool) {
+        st.on_sent_at(seq, t_ms * 1000, t_ms);
+        if !lost {
+            st.on_ack_at(seq, (t_ms + rtt_ms) * 1000, t_ms + rtt_ms);
+        }
+    }
+
+    #[test]
+    fn rtt_variance_and_min() {
+        let mut st = LinkStats::default();
+        for i in 0..50 {
+            probe(&mut st, i, if i % 2 == 0 { 20 } else { 40 }, i * 2000, false);
+        }
+        assert!(st.srtt_ms > 25.0 && st.srtt_ms < 35.0);
+        assert!(st.rttvar_ms > 5.0, "jitter is tracked");
+        assert_eq!(st.min_rtt_ms, 20.0);
+        let steady = {
+            let mut s2 = LinkStats::default();
+            for i in 0..50 {
+                probe(&mut s2, i, 30, i * 2000, false);
+            }
+            s2.cost()
+        };
+        assert!(st.cost() > steady, "a jittery link costs more than a steady one with the same mean");
+    }
+
+    #[test]
+    fn window_loss_is_exact() {
+        let mut st = LinkStats::default();
+        for i in 0..64 {
+            probe(&mut st, i, 10, i * 2000, i % 4 == 0);
+        }
+        // Make the last loss resolve.
+        probe(&mut st, 64, 10, 64 * 2000, false);
+        assert!((st.window_loss() - 16.0 / 64.0).abs() < 0.03, "{}", st.window_loss());
+    }
+
+    #[test]
+    fn history_survives_reconnect_and_remembers_loss() {
+        let mut st = LinkStats::default();
+        // A long lossy period.
+        for i in 0..900 {
+            probe(&mut st, i, 30, i * 2000, i % 5 == 0);
+        }
+        let mut h = st.history.clone();
+        assert!(h.loss > 0.1, "long-term loss {}", h.loss);
+        h.flap(900 * 2000);
+        // A new session on the same link starts from history, not from zero.
+        let fresh = LinkStats::with_history(h.clone());
+        assert!(fresh.cost().is_finite());
+        assert!(fresh.cost() > link_cost(30.0, 0.0) * 1.5);
+        // Clean probes bring the cost down, but some long-term loss remains.
+        let mut st2 = LinkStats::with_history(h);
+        for i in 0..30 {
+            probe(&mut st2, 1000 + i, 30, 2_000_000 + i * 2000, false);
+        }
+        let clean = {
+            let mut c = LinkStats::default();
+            for i in 0..30 {
+                probe(&mut c, i, 30, i * 2000, false);
+            }
+            c.cost()
+        };
+        assert!(st2.cost() > clean, "a historically lossy link stays more expensive for a while");
+        assert!(st2.cost() < fresh.cost());
+    }
+
+    #[test]
+    fn flaps_raise_cost_and_decay() {
+        let mut h = LinkHistory::default();
+        h.observe(20.0, 1.0, 1_000);
+        let base = h.cost();
+        for k in 0..5 {
+            h.flap(2_000 + k);
+        }
+        assert!(h.cost() > base * 1.5);
+        assert!(h.cost() <= base * MAX_FLAP_FACTOR + 1e-9);
+        h.age(2_000 + 6 * 3_600_000);
+        assert!(h.cost() < base * 1.1, "flaps are forgotten after a few hours");
+    }
+
+    #[test]
+    fn quantized_matches_cost() {
+        let mut st = LinkStats::default();
+        for i in 0..20 {
+            probe(&mut st, i, 47, i * 2000, i == 7);
+        }
+        let (r, l) = st.quantized();
+        let c = link_cost(r as f64, l as f64 / 100.0);
+        assert!((c - st.cost()).abs() / st.cost() < 0.15, "adverts let others compute about the same cost");
     }
 }

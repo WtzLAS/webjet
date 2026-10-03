@@ -21,10 +21,12 @@ pub struct Counters {
     pub tun_rx: AtomicU64,
     pub tun_tx: AtomicU64,
     pub report_seq: AtomicU64,
+    /// Bytes sent on hops that have since closed (keeps totals monotonic).
+    pub retired_tx: AtomicU64,
     pub rule_hits: parking_lot::Mutex<BTreeMap<(String, bool), u64>>,
     pub last_report: parking_lot::Mutex<Option<serde_json::Value>>,
     /// For relay utilization: transit bytes at the last sample.
-    pub transit_sample: parking_lot::Mutex<Option<(u64, std::time::Instant, u8)>>,
+    pub load: parking_lot::Mutex<crate::load::LoadSampler>,
 }
 
 impl Counters {
@@ -37,52 +39,60 @@ impl Counters {
     }
 }
 
+/// Relay capacity (§11.8.1): local config or the Limits leaf when set,
+/// otherwise auto-estimated from the highest sustained throughput and the
+/// KCP bandwidth estimates, never below 100 Mbit/s.
 fn capacity_mbps(n: &Node) -> u32 {
-    limit(n, "relay_capacity_mbps", 1000) as u32
+    let configured = n.cfg.limits.relay_capacity_mbps.map(|v| v as u64).or_else(|| {
+        let s = n.store.read();
+        let v = s.view();
+        let has_override = v.limits.as_ref().map(|l| {
+            l.defaults.clone().unwrap_or_default().iter().any(|x| x.name.as_deref() == Some("relay_capacity_mbps"))
+                || l.overrides.clone().unwrap_or_default().iter().any(|o| o.values.clone().unwrap_or_default().iter().any(|x| x.name.as_deref() == Some("relay_capacity_mbps")))
+        });
+        if has_override == Some(true) {
+            Some(limit(n, "relay_capacity_mbps", 1000))
+        } else {
+            None
+        }
+    });
+    if let Some(c) = configured {
+        return c.max(1) as u32;
+    }
+    let peak = n.metrics.load.lock().peak_mbps;
+    let kcp_bw: f64 = n.hops.lock().values().filter_map(|h| h.kcp_stats.as_ref()).map(|k| k.bw_estimate_kbps.load(Ordering::Relaxed) as f64 / 1000.0).fold(0.0, f64::max);
+    peak.max(kcp_bw).max(100.0) as u32
 }
 
-/// Self-reported relay load (§11.8.1): utilization against capacity, CPU
-/// proxy (queue pressure), and circuits against the cap.
+/// Take one load sample (every 2 s from the gossip loop).
+pub fn sample_load(n: &Node) {
+    let cpu = crate::load::process_cpu_time().unwrap_or_default();
+    let (bytes, queue_us) = {
+        let hops = n.hops.lock();
+        (
+            hops.values().map(|h| h.tx_bytes.load(Ordering::Relaxed)).sum::<u64>() + n.metrics.retired_tx.load(Ordering::Relaxed),
+            hops.values().map(|h| h.queue_delay_us.load(Ordering::Relaxed)).max().unwrap_or(0),
+        )
+    };
+    n.metrics.load.lock().record(std::time::Instant::now(), cpu, bytes, queue_us as f64 / 1000.0);
+}
+
+/// Self-reported relay load (§11.8.1), each part a 30-second average:
+/// forwarding utilization against capacity, the agent's CPU, circuits
+/// against the cap, and hop queue delay against its budget.
 pub fn relay_load(n: &Node) -> wp::RelayLoad {
     let cap = capacity_mbps(n).max(1);
-    let total: u64 = n
-        .hops
-        .lock()
-        .values()
-        .map(|h| h.tx_bytes.load(Ordering::Relaxed))
-        .sum();
-    let util = {
-        let mut g = n.metrics.transit_sample.lock();
-        let now = std::time::Instant::now();
-        match *g {
-            Some((_, at, pct)) if now.duration_since(at) < Duration::from_secs(5) => pct,
-            Some((prev, at, _)) => {
-                let bits = total.saturating_sub(prev) as f64 * 8.0;
-                let mbps = bits / now.duration_since(at).as_secs_f64().max(0.001) / 1e6;
-                let pct = ((mbps / cap as f64) * 100.0).clamp(0.0, 100.0) as u8;
-                *g = Some((total, now, pct));
-                pct
-            }
-            None => {
-                *g = Some((total, now, 0));
-                0
-            }
-        }
-    };
+    let avg = n.metrics.load.lock().averages().unwrap_or_default();
+    let util = ((avg.tx_bps * 8.0 / 1e6) / cap as f64 * 100.0).clamp(0.0, 100.0) as u8;
     let circuits_cap = limit(n, "circuits_global", 50_000).max(1);
     let transit = n.circuits.lock().transit_count() as u64;
-    let queue = n
-        .hops
-        .lock()
-        .values()
-        .map(|h| h.queue_delay_us.load(Ordering::Relaxed))
-        .max()
-        .unwrap_or(0);
+    let queue = webjet_core::routing::queue_load_pct(avg.queue_ms, webjet_core::queue::TARGET.as_secs_f64() * 1000.0, 100.0);
     wp::RelayLoad {
         util_pct: util,
-        cpu_pct: ((queue as f64 / 1000.0).min(100.0)) as u8,
+        cpu_pct: avg.cpu_pct.round() as u8,
         circuits_pct: ((transit * 100 / circuits_cap).min(100)) as u8,
         capacity_mbps: cap,
+        queue_pct: queue,
     }
 }
 
@@ -159,8 +169,8 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                 bw_estimate_mbps: k
                     .map(|k| (k.bw_estimate_kbps.load(Ordering::Relaxed) / 1000) as u32),
                 queue_delay_ms: (h.queue_delay_us.load(Ordering::Relaxed) / 1000) as u32,
-                rtt_ms: st.srtt_ms as u32,
-                loss_pct: (st.loss * 100.0) as u8,
+                rtt_ms: st.effective().map(|e| e.0.ceil() as u32).unwrap_or(0),
+                loss_pct: st.effective().map(|e| (e.1 * 100.0).round() as u8).unwrap_or(0),
             }
         })
         .collect();
@@ -220,6 +230,7 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             counter("ecn_marked", m.ecn_marked.load(Ordering::Relaxed)),
         ]),
         alarms: Some(alarms),
+        load: Some(Box::new(relay_load(n))),
     };
     n.kp.sign_obj(mt::METRIC_REPORT, &rep)
 }
@@ -267,60 +278,16 @@ pub async fn run(n: Arc<Node>) {
     }
 }
 
-/// Render a report as OpenMetrics text (controllers' remote write and the
-/// local debug endpoint).
-pub fn openmetrics(node: &str, rep: &wp::MetricReport) -> String {
-    let mut out = String::new();
-    let node_id = rep
-        .node_id
-        .map(|k| hex::encode(&k.to_bytes()[..6]))
-        .unwrap_or_default();
-    for r in rep.routes.clone().unwrap_or_default() {
-        let rid = r
-            .route_id
-            .map(|k| hex::encode(&k.to_bytes()[..8]))
-            .unwrap_or_default();
-        let role = format!("{:?}", r.role).to_lowercase();
-        for (dir, d) in [("fwd", r.fwd), ("rev", r.rev)] {
-            if let Some(d) = d {
-                out.push_str(&format!("webjet_route_bytes_total{{node=\"{node}\",node_id=\"{node_id}\",route=\"{rid}\",role=\"{role}\",dir=\"{dir}\"}} {}\n", d.bytes));
-                out.push_str(&format!("webjet_route_frames_total{{node=\"{node}\",node_id=\"{node_id}\",route=\"{rid}\",role=\"{role}\",dir=\"{dir}\"}} {}\n", d.frames));
-            }
-        }
-    }
-    for l in rep.links.clone().unwrap_or_default() {
-        let peer = l
-            .peer
-            .map(|k| hex::encode(&k.to_bytes()[..6]))
-            .unwrap_or_default();
-        let t = l.transport.name();
-        out.push_str(&format!(
-            "webjet_link_rtt_ms{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n",
-            l.rtt_ms
-        ));
-        out.push_str(&format!(
-            "webjet_link_loss_pct{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n",
-            l.loss_pct
-        ));
-        out.push_str(&format!("webjet_link_wire_tx_bytes_total{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n", l.wire_tx));
-        out.push_str(&format!("webjet_link_wire_rx_bytes_total{{node=\"{node}\",peer=\"{peer}\",transport=\"{t}\"}} {}\n", l.wire_rx));
-    }
-    for c in rep.limit_hits.clone().unwrap_or_default() {
-        out.push_str(&format!(
-            "webjet_{}_total{{node=\"{node}\"}} {}\n",
-            c.name.unwrap_or_default(),
-            c.value
-        ));
-    }
-    for h in rep.rule_hits.clone().unwrap_or_default() {
-        out.push_str(&format!(
-            "webjet_rule_flows_total{{node=\"{node}\",rule=\"{}\",decision=\"{:?}\"}} {}\n",
-            h.rule_id.unwrap_or_default(),
-            h.decision,
-            h.flows
-        ));
-    }
-    out
+/// This node's own metrics as OpenMetrics text (local endpoint, `webjetctl
+/// metrics`). Relays leave out per-route series locally (§12.5).
+pub fn local_openmetrics(n: &Arc<Node>) -> String {
+    let raw = build_report(n);
+    let Ok(v) = webjet_core::crypto::open_envelope(&raw) else { return "# EOF\n".into() };
+    let Ok(rep) = v.decode::<wp::MetricReport>() else { return "# EOF\n".into() };
+    let s = n.store.read();
+    let mut e = crate::exposition::Exposition::default();
+    e.report(&rep, &crate::exposition::ViewNames(s.view()), !n.is_relay());
+    e.render()
 }
 
 /// The effective value of a limit for this node (§16.4): local config,

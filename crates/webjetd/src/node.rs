@@ -57,6 +57,7 @@ pub struct Hop {
     tx: mpsc::Sender<Out>,
     ctl_tx: mpsc::UnboundedSender<Vec<u8>>,
     pub closed: AtomicBool,
+    pub intentional: AtomicBool,
     pub stats: Mutex<LinkStats>,
     pub last_rx: Mutex<Instant>,
     pub kcp_stats: Option<Arc<KcpStats>>,
@@ -99,6 +100,12 @@ impl Hop {
 
     pub fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
+    }
+
+    /// Close on purpose (duplicate, revocation, shutdown): not a link failure.
+    pub fn retire(&self) {
+        self.intentional.store(true, Ordering::Relaxed);
+        self.close();
     }
 
     pub fn cost(&self) -> f64 {
@@ -161,6 +168,8 @@ pub struct Node {
     pub controller: OnceLock<Arc<crate::controller::Controller>>,
     pub sync: crate::gossip::SyncState,
     pub alarms: Mutex<HashMap<String, (String, u64)>>,
+    /// Long-term link memory per (neighbor, transport), persisted (§11.2).
+    pub link_history: Mutex<HashMap<(Bytes32, Transport), webjet_core::routing::LinkHistory>>,
     pub metrics: crate::metrics::Counters,
     pub seq: AtomicU64,
     #[cfg(feature = "anytls")]
@@ -228,6 +237,7 @@ impl Node {
             controller: OnceLock::new(),
             sync: crate::gossip::SyncState::default(),
             alarms: Mutex::new(HashMap::new()),
+            link_history: Mutex::new(crate::state::load_links(&Paths::new(&cfg.data_dir))),
             metrics: crate::metrics::Counters::default(),
             seq: AtomicU64::new(now_ms()),
             #[cfg(feature = "anytls")]
@@ -393,7 +403,7 @@ impl Node {
                 if !keep_new {
                     bail!("duplicate hop to {}", crypto::short(&peer));
                 }
-                dup.close();
+                dup.retire();
             }
         }
         let (tx, rx) = mpsc::channel::<Out>(8192);
@@ -410,7 +420,13 @@ impl Node {
             tx,
             ctl_tx,
             closed: AtomicBool::new(false),
-            stats: Mutex::new(LinkStats::default()),
+            intentional: AtomicBool::new(false),
+            stats: Mutex::new(LinkStats::with_history(
+                self.link_history.lock().get(&(peer, est.transport)).cloned().map(|mut h| {
+                    h.age(now_ms());
+                    h
+                }).unwrap_or_default(),
+            )),
             last_rx: Mutex::new(Instant::now()),
             kcp_stats: est.kcp_stats.clone(),
             tx_bytes: AtomicU64::new(0),
@@ -440,8 +456,16 @@ impl Node {
     }
 
     pub fn hop_down(self: &Arc<Self>, hop: &Arc<Hop>) {
+        let failed = !hop.intentional.load(Ordering::Relaxed) && !hop.closed.load(Ordering::Relaxed);
         hop.close();
         if self.hops.lock().remove(&hop.id).is_some() {
+            // Fold this session into the link's long-term record.
+            let mut h = hop.stats.lock().history.clone();
+            if failed && h.samples > 0 {
+                h.flap(now_ms());
+            }
+            self.link_history.lock().insert((hop.peer, hop.transport), h);
+            self.metrics.retired_tx.fetch_add(hop.tx_bytes.load(Ordering::Relaxed), Ordering::Relaxed);
             tracing::info!(peer = %self.name_of(&hop.peer), transport = hop.transport.name(), "hop down");
             crate::circuit::on_hop_down(self, hop);
             self.emit(Event::HopDown(hop.peer));
@@ -472,6 +496,7 @@ impl Node {
         };
         for h in dead {
             tracing::info!(peer = %crypto::short(&h.peer), "closing hop to a revoked or re-keyed node");
+            h.retire();
             self.hop_down(&h);
         }
         crate::circuit::sweep(self);
@@ -617,6 +642,21 @@ impl Node {
         let s = self.store.read();
         if let Err(e) = state::save_store(&self.paths, &s) {
             tracing::error!("saving state: {e}");
+        }
+    }
+
+    /// Save long-term link history (live hops included).
+    pub fn persist_links(&self) {
+        let mut book = self.link_history.lock().clone();
+        for h in self.hops.lock().values() {
+            book.insert((h.peer, h.transport), h.stats.lock().history.clone());
+        }
+        let now = now_ms();
+        // Forget links not seen for 30 days.
+        book.retain(|_, h| now.saturating_sub(h.updated_ms) < 30 * 24 * 3_600_000);
+        *self.link_history.lock() = book.clone();
+        if let Err(e) = crate::state::save_links(&self.paths, &book) {
+            tracing::debug!("saving link history: {e}");
         }
     }
 

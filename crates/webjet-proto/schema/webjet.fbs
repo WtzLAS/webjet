@@ -282,9 +282,10 @@ table LinkEntry {
 
 table RelayLoad {
     util_pct: ubyte;
-    cpu_pct: ubyte;
+    cpu_pct: ubyte;            // agent process CPU, % of the machine's cores
     circuits_pct: ubyte;
     capacity_mbps: uint32;
+    queue_pct: ubyte;          // hop queue delay against its budget (§17.2)
 }
 
 table LinkStateAdvert {
@@ -392,6 +393,7 @@ table MetricReport {
     circuits_refused: [Counter];
     limit_hits: [Counter];
     alarms: [Alarm];
+    load: RelayLoad;          // this node's load figures (§11.8.1)
 }
 
 // ---------------------------------------------------------------- operations (§7.2, §13.3)

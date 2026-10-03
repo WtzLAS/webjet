@@ -91,8 +91,13 @@ pub fn check_clock(n: &Arc<Node>) {
 /// Periodic checks: head expiry (soft mode), validity horizon, own record.
 pub async fn run(n: Arc<Node>) {
     let mut tick = tokio::time::interval(Duration::from_secs(10));
+    let mut i: u64 = 0;
     loop {
         tick.tick().await;
+        i += 1;
+        if i.is_multiple_of(6) {
+            n.persist_links();
+        }
         if let Err(e) = check_floor(&n) {
             let _ = CLOCK_FATAL.set(e);
         }

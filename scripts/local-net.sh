@@ -31,6 +31,8 @@ kcp = "127.0.0.1:$2"
 enabled = $TUN
 [dns]
 configure_system = false
+[metrics]
+listen = "127.0.0.1:$(($2 + 1000))"
 [controller]
 enabled = $3
 head_lifetime_hours = 24

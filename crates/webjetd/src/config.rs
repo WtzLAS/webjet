@@ -27,6 +27,9 @@ pub struct Config {
     pub gateway: Gateway,
     #[serde(default)]
     pub limits: LocalLimits,
+    /// OpenMetrics endpoint for Prometheus (§12.5).
+    #[serde(default)]
+    pub metrics: MetricsCfg,
     /// Local transport priorities (§9.6); override the tree's.
     #[serde(default)]
     pub transport: HashMap<String, u8>,
@@ -125,17 +128,21 @@ impl LocalLimits {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MetricsCfg {
+    /// `host:port` to serve `/metrics` on. On a controller it serves every
+    /// node's latest report (the network-wide scrape target); elsewhere this
+    /// node's own metrics. Keep it on localhost or the overlay IP (§4.1).
+    pub listen: Option<SocketAddr>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ControllerCfg {
     /// Run the controller role (requires a SigningKeyCert for this node).
     #[serde(default)]
     pub enabled: bool,
     /// `webjet-signer` socket; when absent an in-process key file is used.
     pub signer_socket: Option<PathBuf>,
-    /// Prometheus remote-write / OpenMetrics push URL (§12.5.1). Only
-    /// http:// to a local collector is supported directly.
-    pub metrics_push: Option<String>,
-    /// Write received metric reports as OpenMetrics text to this directory.
-    pub metrics_dir: Option<PathBuf>,
     /// Tree head lifetime in hours (§7.3, §24: 24–72 h).
     #[serde(default = "default_head_hours")]
     pub head_lifetime_hours: u64,

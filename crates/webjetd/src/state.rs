@@ -106,6 +106,9 @@ impl Paths {
     pub fn camouflage(&self) -> PathBuf {
         self.dir.join("camouflage.json")
     }
+    pub fn links(&self) -> PathBuf {
+        self.dir.join("links.json")
+    }
     pub fn metrics_ring(&self) -> PathBuf {
         self.dir.join("metrics-ring")
     }
@@ -337,4 +340,25 @@ pub fn load_psk(p: &Paths) -> Result<webjet_net::gate::Epochs> {
         }
     }
     Ok(e)
+}
+
+#[derive(Serialize, Deserialize)]
+struct LinkEntry {
+    peer: String,
+    transport: String,
+    #[serde(flatten)]
+    history: webjet_core::routing::LinkHistory,
+}
+
+pub fn load_links(p: &Paths) -> std::collections::HashMap<(Bytes32, webjet_proto::Transport), webjet_core::routing::LinkHistory> {
+    let v: Vec<LinkEntry> = load_json(&p.links()).ok().flatten().unwrap_or_default();
+    v.into_iter()
+        .filter_map(|e| Some(((webjet_core::crypto::parse_hex32(&e.peer)?, webjet_proto::Transport::parse(&e.transport)?), e.history)))
+        .collect()
+}
+
+pub fn save_links(p: &Paths, m: &std::collections::HashMap<(Bytes32, webjet_proto::Transport), webjet_core::routing::LinkHistory>) -> Result<()> {
+    let mut v: Vec<LinkEntry> = m.iter().map(|((peer, t), h)| LinkEntry { peer: hex::encode(peer), transport: t.name().into(), history: h.clone() }).collect();
+    v.sort_by(|a, b| (&a.peer, &a.transport).cmp(&(&b.peer, &b.transport)));
+    save_json(&p.links(), &v)
 }

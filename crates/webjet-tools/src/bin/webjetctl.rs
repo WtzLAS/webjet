@@ -45,8 +45,12 @@ enum Cmd {
     Peers,
     /// End-to-end sessions and circuits.
     Sessions,
-    /// This node's metrics in OpenMetrics text.
-    Metrics,
+    /// This node's metrics in OpenMetrics text (`--all` on a controller:
+    /// every node's latest report, as Prometheus scrapes it).
+    Metrics {
+        #[arg(long)]
+        all: bool,
+    },
     /// Ping a node (by name or overlay address) through the overlay.
     Ping {
         target: String,
@@ -553,8 +557,8 @@ async fn main() -> Result<()> {
                 bail!("no reply from {target}");
             }
         }
-        Cmd::Metrics => {
-            let v = call(&cli, json!({"cmd": "metrics"})).await?;
+        Cmd::Metrics { all } => {
+            let v = call(&cli, json!({"cmd": "metrics", "all": all})).await?;
             print!("{}", v["openmetrics"].as_str().unwrap_or(""));
         }
         Cmd::Account { cmd } => match cmd {

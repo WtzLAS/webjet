@@ -33,7 +33,7 @@ pub struct Pending {
     pub create: Option<wp::CreateEnrollment>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Membership {
     pub voters: BTreeSet<Bytes32>,
     pub learners: BTreeSet<Bytes32>,

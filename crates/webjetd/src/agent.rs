@@ -329,6 +329,18 @@ pub async fn run(cfg: Config) -> Result<()> {
     tokio::spawn(crate::e2e::run(n.clone()));
     tokio::spawn(crate::paths::run(n.clone()));
     tokio::spawn(crate::metrics::run(n.clone()));
+    if let Some(addr) = n.cfg.metrics.listen {
+        let n2 = n.clone();
+        let body: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || match n2.controller.get() {
+            Some(c) => c.openmetrics(),
+            None => crate::metrics::local_openmetrics(&n2),
+        });
+        tokio::spawn(async move {
+            if let Err(e) = crate::exposition::serve(addr, body).await {
+                tracing::error!("metrics endpoint on {addr}: {e}");
+            }
+        });
+    }
     tokio::spawn(crate::health::run(n.clone()));
     tokio::spawn(crate::punch::run(n.clone()));
     tokio::spawn(connections(n.clone()));
@@ -352,6 +364,7 @@ pub async fn run(cfg: Config) -> Result<()> {
         }
     }
     n.persist_store();
+    n.persist_links();
     Ok(())
 }
 

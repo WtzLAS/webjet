@@ -114,7 +114,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                         "transport": h.transport.name(),
                         "remote": h.remote.to_string(),
                         "outbound": h.outbound,
-                        "rtt_ms": st.srtt_ms,
+                        "rtt_ms": st.srtt_ms, "min_rtt_ms": if st.min_rtt_ms.is_finite() { st.min_rtt_ms } else { 0.0 }, "jitter_ms": st.rttvar_ms, "long_term_loss": st.history.loss, "flaps": st.history.flaps,
                         "loss": st.loss,
                         "cost": st.cost(),
                         "age_s": h.created.elapsed().as_secs(),
@@ -272,10 +272,13 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             Ok(json!({"node_id": hex::encode(id)}))
         }
         "metrics" => {
-            let raw = crate::metrics::build_report(n);
-            let v = crypto::open_envelope(&raw)?;
-            let rep: wp::MetricReport = v.decode()?;
-            Ok(json!({"openmetrics": crate::metrics::openmetrics(&n.name_of(&n.me), &rep)}))
+            let all = req.get("all").and_then(|a| a.as_bool()).unwrap_or(false);
+            let text = match (all, n.controller.get()) {
+                (true, Some(c)) => c.openmetrics(),
+                (true, None) => bail!("only controllers hold every node's report"),
+                _ => crate::metrics::local_openmetrics(n),
+            };
+            Ok(json!({"openmetrics": text}))
         }
         "reports" => {
             let c = n
@@ -285,7 +288,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             let r = c.reports.lock();
             Ok(json!(r
                 .iter()
-                .map(|(k, (t, v))| (n.name_of(k), json!({"received": t, "report": v})))
+                .map(|(k, sr)| (n.name_of(k), json!({"received": sr.received, "report": serde_json::to_value(&sr.report).unwrap_or_default()})))
                 .collect::<serde_json::Map<_, _>>()))
         }
         "head" => {

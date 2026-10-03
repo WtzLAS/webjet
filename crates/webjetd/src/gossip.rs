@@ -42,6 +42,7 @@ pub struct SyncState {
     /// Last published own records, to republish on change.
     pub last_endpoint: Mutex<Option<(Vec<wp::EndpointAddr>, u64)>>,
     pub last_lsa: Mutex<Option<(Vec<(Bytes32, u16, u8)>, u64)>>,
+    pub last_load_step: Mutex<u8>,
     pub last_attach: Mutex<Option<(Vec<Bytes32>, u64)>>,
     pub lookups_pending: Mutex<HashMap<Bytes32, Instant>>,
 }
@@ -841,6 +842,8 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
     let links = my_links(n, true);
     let now = now_ms();
     let summary: Vec<(Bytes32, u16, u8)> = links.iter().map(|l| (l.0, l.2, l.3)).collect();
+    let load = crate::metrics::relay_load(n);
+    let step = webjet_core::routing::relay_load(load.util_pct, load.cpu_pct, load.circuits_pct, load.queue_pct);
     {
         let last = n.sync.last_lsa.lock();
         if let Some((prev, t)) = last.as_ref() {
@@ -854,12 +857,14 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
                         || (a.1 as f64 - b.1 as f64).abs() > a.1 as f64 * 0.2 + 1.0
                         || a.2.abs_diff(b.2) > 2
                 });
-            if !force && !changed && since < LSA_REFRESH {
+            // A load step change is advertised at most every 10 s (§11.8.1).
+            let load_changed = *n.sync.last_load_step.lock() != step && since >= 10 * SECOND;
+            if !force && !changed && !load_changed && since < LSA_REFRESH {
                 return;
             }
         }
     }
-    let load = crate::metrics::relay_load(n);
+    *n.sync.last_load_step.lock() = step;
     let lsa = wp::LinkStateAdvert {
         origin: Some(crypto::k32(&n.me)),
         seq: n.next_seq(),
@@ -967,7 +972,7 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
         let load = l
             .load
             .as_ref()
-            .map(|x| webjet_core::routing::relay_load(x.util_pct, x.cpu_pct, x.circuits_pct))
+            .map(|x| webjet_core::routing::relay_load(x.util_pct, x.cpu_pct, x.circuits_pct, x.queue_pct))
             .unwrap_or(0);
         let links = l
             .links
@@ -1087,6 +1092,9 @@ pub async fn run(n: Arc<Node>) {
             {
                 *w = None;
             }
+        }
+        if i.is_multiple_of(2) {
+            crate::metrics::sample_load(&n);
         }
         if i % 5 == 1 {
             publish_endpoint(&n, false);

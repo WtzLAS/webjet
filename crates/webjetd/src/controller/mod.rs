@@ -18,7 +18,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use webjet_core::crypto::{self, opt_k32, Bytes32};
-use webjet_core::statemachine::{ApplyError, Machine, Outcome};
+use webjet_core::statemachine::{ApplyError, Machine, Membership, Outcome};
 use webjet_core::store::HeadOutcome;
 use webjet_core::types::{now_ms, HOUR, VALIDITY_PERIOD};
 use webjet_net::hop::{self, rec, BoxIo};
@@ -27,6 +27,43 @@ use webjet_proto::{
 };
 
 const PROPOSE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The latest verified metric report of a node.
+pub struct StoredReport {
+    pub received: u64,
+    pub report: wp::MetricReport,
+}
+
+/// The membership change carried by a log entry (genesis, or a signed
+/// ChangeMembership operation). Raft uses it to track the configuration
+/// straight from the log (§7.1); the state machine applies the same change.
+pub fn classify_entry(bytes: &[u8]) -> Option<raft::ConfChange> {
+    use raft::ConfChange;
+    let e = wp::LogEntry::decode_bytes(bytes).ok()?;
+    match e.payload? {
+        EntryPayload::GenesisEntry(_) => {
+            let first = opt_k32(&e.random?.node_id);
+            Some(ConfChange::Set(Membership { voters: BTreeSet::from([first]), learners: BTreeSet::new() }))
+        }
+        EntryPayload::OpEntry(o) => {
+            let v = crypto::open_envelope(&o.signed_op?).ok()?;
+            let op: wp::SignedOp = v.decode().ok()?;
+            match op.op? {
+                wp::AccountOp::ChangeMembership(c) => {
+                    let id = opt_k32(&c.node_id);
+                    Some(match c.change {
+                        wp::MembershipChange::AddLearner => ConfChange::AddLearner(id),
+                        wp::MembershipChange::Promote => ConfChange::Promote(id),
+                        wp::MembershipChange::Demote => ConfChange::Demote(id),
+                        wp::MembershipChange::Remove => ConfChange::Remove(id),
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
 const HEAD_RESIGN: u64 = HOUR;
 
 struct Waiter {
@@ -47,7 +84,7 @@ pub struct Controller {
     propose_lock: tokio::sync::Mutex<()>,
     last_signed: Mutex<(u64, u64)>,
     pub halted: Mutex<Option<String>>,
-    pub reports: Mutex<HashMap<Bytes32, (u64, serde_json::Value)>>,
+    pub reports: Mutex<HashMap<Bytes32, StoredReport>>,
     bootstrap: bool,
 }
 
@@ -83,20 +120,20 @@ impl Controller {
 
     pub fn start(n: &Arc<Node>, bootstrap: bool) -> Result<Arc<Controller>> {
         let dir = n.paths.raft();
-        let storage = raft::Storage::new(dir.clone())?;
+        let storage = raft::Storage::disk(dir.clone())?;
         let machine = match storage.load_snapshot() {
             Some(b) => Machine::restore_bytes(&b)?,
             None => Machine::new(),
         };
-        let mut r = Raft::open(n.me, dir, machine.last_index, machine.last_term)?;
-        if machine.genesis.is_some() {
-            r.set_members(
-                machine.members.voters.clone(),
-                machine.members.learners.clone(),
-            );
+        // The configuration at the snapshot; later changes come from the log.
+        let base = if machine.genesis.is_some() {
+            machine.members.clone()
         } else if bootstrap {
-            r.set_members(BTreeSet::from([n.me]), BTreeSet::new());
-        }
+            Membership { voters: BTreeSet::from([n.me]), learners: BTreeSet::new() }
+        } else {
+            Membership::default()
+        };
+        let r = Raft::open(n.me, dir, machine.last_index, machine.last_term, base, Box::new(classify_entry))?;
         let signer: Box<dyn Signer> = match &n.cfg.controller.signer_socket {
             Some(p) => Box::new(signer::SocketSigner::new(p.clone())),
             None => Box::new(signer::FileSigner::open(&n.paths.dir.join("signing.key"))?),
@@ -134,7 +171,7 @@ impl Controller {
             if self.halted.lock().is_some() {
                 continue;
             }
-            let out = self.raft.lock().tick();
+            let out = self.raft.lock().tick(Instant::now());
             self.send_raft(&n, out);
             self.apply_committed(&n);
             self.send_snapshots(&n);
@@ -211,11 +248,14 @@ impl Controller {
                     if outcome.membership_changed
                         || matches!(entry.payload, Some(EntryPayload::GenesisEntry(_)))
                     {
-                        let (v, l) = {
-                            let m = self.machine.lock();
-                            (m.members.voters.clone(), m.members.learners.clone())
-                        };
-                        self.raft.lock().set_members(v, l);
+                        // Raft tracked the change from the log already; the
+                        // state machine must agree with it.
+                        let sm = self.machine.lock().members.clone();
+                        let rf = self.raft.lock().config_at(next);
+                        if rf.as_ref() != Some(&sm) {
+                            self.halt(n, format!("membership mismatch at {next}: Raft {rf:?}, state machine {sm:?}"));
+                            return;
+                        }
                     }
                     if outcome.psk_rotated
                         || matches!(entry.payload, Some(EntryPayload::GenesisEntry(_)))
@@ -484,9 +524,7 @@ impl Controller {
             }
             drop(m);
             let bytes = entry.encode_bytes();
-            let Some((i, out)) = r.propose(&entry) else {
-                bail!("not the leader")
-            };
+            let (i, out) = r.propose(Instant::now(), &entry).map_err(|e| anyhow!("{e}"))?;
             debug_assert_eq!(i, idx);
             let (tx, rx) = oneshot::channel();
             self.waiters.lock().insert(
@@ -559,7 +597,7 @@ impl Controller {
         };
         let member = {
             let r = self.raft.lock();
-            r.voters.contains(&from) || r.learners.contains(&from)
+            r.voters().contains(&from) || r.learners().contains(&from)
         };
         let trusted = member || n.store.read().node_trusted(&from);
         if !trusted {
@@ -681,46 +719,42 @@ impl Controller {
     fn on_raft(&self, n: &Arc<Node>, from: Bytes32, rb: RaftBody) {
         match rb {
             RaftBody::RaftSnapshot(s) => {
-                let data = s.data.clone().unwrap_or_default();
-                let res = Machine::restore_bytes(&data);
                 let _g = self.apply_lock.lock();
-                let mut r = self.raft.lock();
-                if s.term < r.term {
-                    return;
-                }
-                match res {
-                    Ok(m) if m.last_index == s.last_index => {
-                        let (v, l) = (m.members.voters.clone(), m.members.learners.clone());
-                        let _ = r.storage().save_snapshot(&data);
-                        r.install_snapshot(s.last_index, s.last_term);
-                        r.set_members(v, l);
-                        r.leader = Some(from);
-                        r.last_leader_contact = Instant::now();
-                        *self.machine.lock() = m;
-                        self.applied.store(s.last_index, Ordering::SeqCst);
-                        let term = r.term;
-                        drop(r);
-                        tracing::info!(index = s.last_index, "installed Raft snapshot");
-                        self.sync_psk(n);
-                        self.send_raft(
-                            n,
-                            vec![(
-                                from,
-                                RaftBody::RaftSnapshotResponse(Box::new(
-                                    wp::RaftSnapshotResponse {
-                                        term,
-                                        last_index: s.last_index,
-                                    },
-                                )),
-                            )],
-                        );
-                        self.maybe_sign_head(n);
+                let offer = self.raft.lock().offer_snapshot(Instant::now(), from, s.term, s.last_index);
+                let out = match offer {
+                    raft::SnapshotOffer::Reply(out) => out,
+                    raft::SnapshotOffer::Install => {
+                        let data = s.data.clone().unwrap_or_default();
+                        match Machine::restore_bytes(&data) {
+                            Ok(m) if m.last_index == s.last_index && m.last_term == s.last_term => {
+                                let members = m.members.clone();
+                                let mut r = self.raft.lock();
+                                if let Err(e) = r.storage().save_snapshot(&data) {
+                                    tracing::error!("saving Raft snapshot: {e}");
+                                    return;
+                                }
+                                *self.machine.lock() = m;
+                                self.applied.store(s.last_index, Ordering::SeqCst);
+                                let out = r.install_snapshot(s.last_index, s.last_term, members);
+                                drop(r);
+                                tracing::info!(index = s.last_index, "installed Raft snapshot");
+                                self.sync_psk(n);
+                                out
+                            }
+                            _ => {
+                                tracing::warn!("bad Raft snapshot from {}", n.name_of(&from));
+                                Vec::new()
+                            }
+                        }
                     }
-                    Ok(_) | Err(_) => tracing::warn!("bad Raft snapshot from {}", n.name_of(&from)),
-                }
+                };
+                drop(_g);
+                self.send_raft(n, out);
+                self.apply_committed(n);
+                self.maybe_sign_head(n);
             }
             other => {
-                let out = self.raft.lock().handle(from, other);
+                let out = self.raft.lock().handle(Instant::now(), from, other);
                 self.send_raft(n, out);
                 self.apply_committed(n);
             }
@@ -911,37 +945,63 @@ impl Controller {
 
     // ------------------------------------------------------------ metrics (§12.5)
 
+    /// Verify and keep a node's metric report (§12.5). Reports that come
+    /// straight from their node are passed on to the other controllers, so
+    /// every controller can serve the whole network to Prometheus.
     pub fn ingest_metrics(&self, from: Bytes32, raw: &[u8]) {
         let Some(n) = self.node() else { return };
-        let Ok(v) = crypto::open_envelope(raw) else {
+        let Ok(v) = crypto::open_envelope(raw) else { return };
+        if v.ty != mt::METRIC_REPORT {
             return;
-        };
-        if v.ty != mt::METRIC_REPORT
-            || n.store.read().view().nodes.get(&from).map(|x| x.key) != Some(v.signer)
+        }
+        let Ok(rep) = v.decode::<wp::MetricReport>() else { return };
+        let origin = opt_k32(&rep.node_id);
+        if n.store.read().view().nodes.get(&origin).map(|x| x.key) != Some(v.signer) {
+            return;
+        }
+        let from_controller = from != origin;
+        if from_controller && !self.raft.lock().voters().contains(&from) && !self.raft.lock().learners().contains(&from) {
+            return;
+        }
         {
-            return;
-        }
-        let Ok(rep) = v.decode::<wp::MetricReport>() else {
-            return;
-        };
-        let name = n.name_of(&from);
-        if let Some(dir) = &n.cfg.controller.metrics_dir {
-            let _ = std::fs::create_dir_all(dir);
-            let _ = std::fs::write(
-                dir.join(format!("{name}.prom")),
-                crate::metrics::openmetrics(&name, &rep),
-            );
-        }
-        if let Some(url) = n.cfg.controller.metrics_push.clone() {
-            let body = crate::metrics::openmetrics(&name, &rep);
-            tokio::spawn(async move {
-                if let Err(e) = push_http(&url, &body).await {
-                    tracing::debug!("metrics push: {e}");
+            let mut r = self.reports.lock();
+            if let Some(old) = r.get(&origin) {
+                // Keep the newest; a restarted node's seq starts over, so compare time first.
+                if (old.report.taken_at, old.report.report_seq) >= (rep.taken_at, rep.report_seq) {
+                    return;
                 }
-            });
+            }
+            r.insert(origin, StoredReport { received: now_ms(), report: rep });
         }
-        let json = serde_json::to_value(&rep).unwrap_or_default();
-        self.reports.lock().insert(from, (now_ms(), json));
+        if !from_controller {
+            let peers: Vec<Bytes32> = {
+                let r = self.raft.lock();
+                r.voters().iter().chain(r.learners().iter()).copied().filter(|p| *p != n.me).collect()
+            };
+            for p in peers {
+                rpc::send_oneway(&n, &p, RpcBody::MetricUpload(Box::new(wp::MetricUpload { report: Some(raw.to_vec()) })));
+            }
+        }
+    }
+
+    /// Every node's latest report as OpenMetrics text (the scrape target).
+    /// Reports older than 15 minutes are left out (§12.5: one per minute).
+    pub fn openmetrics(&self) -> String {
+        let Some(n) = self.node() else { return "# EOF\n".into() };
+        let now = now_ms();
+        let s = n.store.read();
+        let names = crate::exposition::ViewNames(s.view());
+        let mut e = crate::exposition::Exposition::default();
+        let r = self.reports.lock();
+        let mut ids: Vec<&Bytes32> = r.keys().collect();
+        ids.sort();
+        for id in ids {
+            let sr = &r[id];
+            if now.saturating_sub(sr.received) < 15 * 60_000 {
+                e.report(&sr.report, &names, true);
+            }
+        }
+        e.render()
     }
 
     fn status_wire(&self, n: &Node) -> wp::ControllerStatus {
@@ -954,8 +1014,8 @@ impl Controller {
             term: r.term,
             commit_index: r.commit,
             applied_index: self.applied.load(Ordering::SeqCst),
-            voters: Some(r.voters.iter().map(crypto::k32).collect()),
-            learners: Some(r.learners.iter().map(crypto::k32).collect()),
+            voters: Some(r.voters().iter().map(crypto::k32).collect()),
+            learners: Some(r.learners().iter().map(crypto::k32).collect()),
             signed_version: s.head().map(|h| h.head.version).unwrap_or(0),
         }
     }
@@ -1008,28 +1068,3 @@ fn submit_result(res: Result<(u64, Outcome)>) -> RpcBody {
     }
 }
 
-/// POST OpenMetrics text to an http:// URL (a local collector or agent).
-async fn push_http(url: &str, body: &str) -> Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| anyhow!("only http:// push URLs are supported"))?;
-    let (hostport, path) = rest
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap_or((rest, "/".into()));
-    let mut s = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::TcpStream::connect(hostport),
-    )
-    .await??;
-    let req = format!("POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/openmetrics-text; version=1.0.0\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-    s.write_all(req.as_bytes()).await?;
-    let mut buf = [0u8; 64];
-    let n = s.read(&mut buf).await?;
-    let line = String::from_utf8_lossy(&buf[..n]);
-    if !line.contains(" 2") {
-        bail!("push rejected: {}", line.lines().next().unwrap_or(""));
-    }
-    Ok(())
-}
