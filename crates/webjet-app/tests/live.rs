@@ -4,6 +4,7 @@
 //! Needs the local test network (`scripts/local-net.sh 2`); skipped when it
 //! isn't running. `WEBJET_LOCAL_NET` points at another work directory.
 
+#![cfg(unix)] // the local test network uses Unix control sockets
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
@@ -15,9 +16,11 @@ fn net() -> Option<(Client, PathBuf)> {
         std::env::var("WEBJET_LOCAL_NET").unwrap_or_else(|_| "/tmp/webjet-local".into()),
     );
     let socket = dir.join("node-02").join("control.sock");
-    if !socket.exists() {
+    // A socket file left by a stopped network doesn't count: an agent must answer.
+    let alive = std::os::unix::net::UnixStream::connect(&socket).is_ok();
+    if !alive {
         eprintln!(
-            "skipped: no local test network at {} (scripts/local-net.sh 2)",
+            "skipped: no local test network running at {} (scripts/local-net.sh 2)",
             dir.display()
         );
         return None;
@@ -30,12 +33,9 @@ const PASS: &str = "acct-pass";
 #[tokio::test]
 async fn admin_and_member_against_a_live_network() {
     let Some((c, keys)) = net() else { return };
-    let snap = c.snapshot().await.expect("snapshot");
-    assert!(
-        snap.nodes.len() >= 3,
-        "nodes: {:?}",
-        snap.nodes.iter().map(|n| &n.name).collect::<Vec<_>>()
-    );
+    // A network that was just started may not have every node's record at
+    // this agent yet.
+    let snap = wait_for(&c, |s| s.nodes.len() >= 3).await;
     assert!(snap.status.tree_version.is_some());
     assert!(
         snap.nodes.iter().all(|n| !n.owner_id.is_empty()),

@@ -38,9 +38,9 @@ ENV CARGO_PROFILE_RELEASE_STRIP=symbols \
 RUN --mount=type=cache,id=webjet-release-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=webjet-release-target-${TARGETPLATFORM},target=/src/target \
     set -eu; \
-    cargo build --release --locked -p webjetd -p webjet-tools; \
+    cargo build --release --locked -p webjetd -p webjet-tools -p webjetup; \
     mkdir -p /out; \
-    for b in webjetd webjetctl webjet-root webjet-signer; do cp "target/release/$b" /out/; done; \
+    for b in webjetd webjetctl webjet-root webjet-signer webjetup; do cp "target/release/$b" /out/; done; \
     ldd --version | head -1 > /out/.glibc
 
 FROM scratch

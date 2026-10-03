@@ -198,8 +198,16 @@ backslashes or newlines. Everything an operator needs is in docs/docker.md.
    `--publish` it only builds and packages.
 3. Check the published release the way hosts install it:
    `WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download docker/release-test.sh vX.Y.Z`
-   runs `scripts/upgrade.sh` in fresh Debian 11, Ubuntu 20.04 and Debian 12
-   containers on amd64 and arm64.
+   runs `install.sh` and `webjetup` in fresh Debian 11, Ubuntu 20.04 and
+   Debian 12 containers on amd64 and arm64.
+
+Before tagging, `docker/webjetup-test.sh` tests webjetup and `install.sh`
+from the working tree end to end: it builds the Linux release files, serves
+them from a stand-in for the Forgejo release pages, starts a controller, and
+on a container that boots systemd runs `curl … install.sh | sh` with an
+enrollment string, checks the agent runs as `webjet` and pings the
+controller, then reinstall, `remove` (identity kept), install again and
+`nuke`.
 
 The Windows build needs `cargo install cargo-xwin` and Homebrew's `llvm` and
 `lld`. Without Homebrew's `lld-link` on `PATH`, cargo-xwin links rustup's

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Build, package and publish a Webjet release for scripts/upgrade.sh and
-# scripts/upgrade.ps1 (§19.8).
+# Build, package and publish a Webjet release for webjetup and install.sh
+# (§19.8).
 #
 #   scripts/release.sh v0.1.0             # build and package into dist/v0.1.0
 #   scripts/release.sh v0.1.0 --publish   # also create the Forgejo release
@@ -18,10 +18,16 @@
 #   webjet-<tag>-x86_64-pc-windows-msvc.zip       (.exe files, plus wintun.dll
 #   webjet-<tag>-x86_64-pc-windows-msvc.zip.sha256  and its license)
 #
+# plus the installation manager for every target and the script that fetches
+# it, each with a `.sha256`:
+#
+#   webjetup-<tag>-<target>          (Windows: webjetup-<tag>-<target>.exe)
+#   install.sh
+#
 # Publishing needs WEBJET_FORGEJO_TOKEN (a token with write access to the
 # repository) and uses WEBJET_FORGEJO_API (default: the origin's Forgejo).
 # Hosts then install with
-#   WEBJET_RELEASE_URL=<forge>/<owner>/<repo>/releases/download scripts/upgrade.sh <tag>
+#   curl -fsSL <forge>/<owner>/<repo>/releases/download/<tag>/install.sh | sudo sh
 set -eu
 cd "$(dirname "$0")/.."
 TAG=${1:?usage: scripts/release.sh <tag> [--publish]}
@@ -43,6 +49,17 @@ rm -rf "$DIST"
 mkdir -p "$DIST"
 export CARGO_PROFILE_RELEASE_STRIP=symbols CARGO_PROFILE_RELEASE_LTO=thin
 
+# webjetup for a target, as a plain executable next to the archives.
+add_webjetup() { # target path-to-binary
+    suffix=""
+    case $1 in *windows*) suffix=.exe ;; esac
+    f=webjetup-$TAG-$1$suffix
+    [ -x "$2" ] || die "$2 missing"
+    cp "$2" "$DIST/$f"
+    (cd "$DIST" && shasum -a 256 "$f" > "$f.sha256")
+    echo "packaged $DIST/$f"
+}
+
 package() { # target directory-with-binaries
     stage=$(mktemp -d)
     for b in $BINS; do
@@ -59,8 +76,9 @@ package() { # target directory-with-binaries
 
 for t in aarch64-apple-darwin x86_64-apple-darwin; do
     rustup target add "$t" >/dev/null 2>&1 || true
-    cargo build --release --locked --target "$t" -p webjetd -p webjet-tools
+    cargo build --release --locked --target "$t" -p webjetd -p webjet-tools -p webjetup
     package "$t" "target/$t/release"
+    add_webjetup "$t" "target/$t/release/webjetup"
 done
 
 for p in arm64:aarch64 amd64:x86_64; do
@@ -69,16 +87,17 @@ for p in arm64:aarch64 amd64:x86_64; do
     out=$(mktemp -d)
     docker buildx build --platform "linux/$plat" -f docker/release.Dockerfile --output "type=local,dest=$out" .
     package "$arch-unknown-linux-gnu" "$out"
+    add_webjetup "$arch-unknown-linux-gnu" "$out/webjetup"
     rm -rf "$out"
 done
 
-# Windows (scripts/upgrade.ps1 expects a zip with wintun.dll next to the
-# programs). Wintun is WireGuard LLC's prebuilt driver, redistributable with
-# software that uses it through its API, with its license alongside.
+# Windows: webjetup expects a zip with wintun.dll next to the programs.
+# Wintun is WireGuard LLC's prebuilt driver, redistributable with software
+# that uses it through its API, with its license alongside.
 WINTUN_VERSION=0.14.1
 WINTUN_SHA256=07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
 win=x86_64-pc-windows-msvc
-PATH="/opt/homebrew/opt/lld/bin:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --locked --target "$win" -p webjetd -p webjet-tools
+PATH="/opt/homebrew/opt/lld/bin:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --locked --target "$win" -p webjetd -p webjet-tools -p webjetup
 stage=$(mktemp -d)
 curl -fsSL "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip" -o "$stage/wintun.zip"
 echo "$WINTUN_SHA256  $stage/wintun.zip" | shasum -a 256 -c - >/dev/null || die "wintun-$WINTUN_VERSION.zip checksum mismatch"
@@ -93,10 +112,16 @@ mv "$stage/$f" "$DIST/"
 (cd "$DIST" && shasum -a 256 "$f" > "$f.sha256")
 rm -rf "$stage"
 echo "packaged $DIST/$f"
+add_webjetup "$win" "target/$win/release/webjetup.exe"
+
+cp scripts/install.sh "$DIST/install.sh"
+(cd "$DIST" && shasum -a 256 install.sh > install.sh.sha256)
 
 # A built binary must report the tag's version.
 case "$(uname -m)" in arm64) native=aarch64-apple-darwin ;; *) native=x86_64-apple-darwin ;; esac
-"target/$native/release/webjetd" --version | grep -q " $VERSION\$" || die "webjetd doesn't report $VERSION"
+for b in webjetd webjetup; do
+    "target/$native/release/$b" --version | grep -q " $VERSION\$" || die "$b doesn't report $VERSION"
+done
 (cd "$DIST" && cat ./*.sha256)
 
 [ $PUBLISH = 1 ] || exit 0
@@ -123,4 +148,4 @@ for f in "$DIST"/*; do
     echo "uploaded $name"
 done
 echo "published: https://$host/$repo/releases/tag/$TAG"
-echo "install:   WEBJET_RELEASE_URL=https://$host/$repo/releases/download scripts/upgrade.sh $TAG"
+echo "install:   curl -fsSL https://$host/$repo/releases/download/$TAG/install.sh | sudo sh"

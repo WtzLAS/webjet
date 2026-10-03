@@ -1,0 +1,646 @@
+//! Changes to the machine: files, the service manager and system settings.
+//! Every change goes through [`Sys`], which prints it and, with
+//! `--dry-run`, only prints it.
+
+use crate::layout::{self, LAUNCHD_LABEL, LINUX_USER, Layout, SERVICE};
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+pub struct Sys {
+    pub dry: bool,
+}
+
+/// Whether `prog` is on `PATH`.
+pub fn have(prog: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|d| {
+        let p = d.join(prog);
+        p.is_file() || (cfg!(windows) && d.join(format!("{prog}.exe")).is_file())
+    })
+}
+
+/// Run a read-only query; `None` if it can't run or fails.
+pub fn query(prog: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(prog)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+impl Sys {
+    fn say(&self, what: &str) {
+        if self.dry {
+            println!("    would {what}");
+        } else {
+            println!("    {what}");
+        }
+    }
+
+    /// Run a command that must succeed.
+    pub fn run(&self, prog: &str, args: &[&str]) -> Result<()> {
+        self.say(&format!("run {prog} {}", args.join(" ")));
+        if self.dry {
+            return Ok(());
+        }
+        let st = Command::new(prog)
+            .args(args)
+            .stdin(Stdio::null())
+            .status()
+            .with_context(|| format!("run {prog}"))?;
+        if !st.success() {
+            bail!("{prog} {} failed ({st})", args.join(" "));
+        }
+        Ok(())
+    }
+
+    /// Run a command whose failure doesn't matter (stopping a stopped service).
+    pub fn try_run(&self, prog: &str, args: &[&str]) -> bool {
+        if self.dry {
+            self.say(&format!("run {prog} {}", args.join(" ")));
+            return true;
+        }
+        Command::new(prog)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    pub fn mkdir(&self, p: &Path, private: bool) -> Result<()> {
+        if p.is_dir() {
+            return Ok(());
+        }
+        self.say(&format!("create {}", p.display()));
+        if self.dry {
+            return Ok(());
+        }
+        std::fs::create_dir_all(p).with_context(|| format!("create {}", p.display()))?;
+        set_mode(p, if private { 0o700 } else { 0o755 })
+    }
+
+    pub fn write(&self, p: &Path, contents: &str, mode: u32) -> Result<()> {
+        self.say(&format!("write {}", p.display()));
+        if self.dry {
+            return Ok(());
+        }
+        std::fs::write(p, contents).with_context(|| format!("write {}", p.display()))?;
+        set_mode(p, mode)
+    }
+
+    /// Put `src` at `dest`, replacing it even while it runs: copy next to it,
+    /// then rename over it (on Windows, move a running file aside first).
+    pub fn install_file(&self, src: &Path, dest: &Path, mode: u32) -> Result<()> {
+        self.say(&format!("install {}", dest.display()));
+        if self.dry {
+            return Ok(());
+        }
+        let tmp = dest.with_extension("webjetup-new");
+        std::fs::copy(src, &tmp).with_context(|| format!("copy to {}", tmp.display()))?;
+        set_mode(&tmp, mode)?;
+        if cfg!(windows) && dest.exists() {
+            let old = dest.with_extension("webjetup-old");
+            let _ = std::fs::remove_file(&old);
+            std::fs::rename(dest, &old)
+                .with_context(|| format!("move {} aside", dest.display()))?;
+        }
+        std::fs::rename(&tmp, dest).with_context(|| format!("replace {}", dest.display()))
+    }
+
+    pub fn remove_file(&self, p: &Path) -> Result<()> {
+        if !p.exists() && p.symlink_metadata().is_err() {
+            return Ok(());
+        }
+        self.say(&format!("remove {}", p.display()));
+        if self.dry {
+            return Ok(());
+        }
+        std::fs::remove_file(p).with_context(|| format!("remove {}", p.display()))
+    }
+
+    pub fn remove_dir_all(&self, p: &Path) -> Result<()> {
+        if !p.exists() {
+            return Ok(());
+        }
+        // A last line of defence against a broken layout.
+        if p.parent().is_none() || p.components().count() < 3 {
+            bail!("refusing to remove {}", p.display());
+        }
+        self.say(&format!("remove {} and everything in it", p.display()));
+        if self.dry {
+            return Ok(());
+        }
+        std::fs::remove_dir_all(p).with_context(|| format!("remove {}", p.display()))
+    }
+}
+
+#[cfg(unix)]
+fn set_mode(p: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
+        .with_context(|| format!("chmod {}", p.display()))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) -> Result<()> {
+    Ok(())
+}
+
+/// Installing needs root (Unix) or an elevated Administrator (Windows).
+pub fn privileged() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid has no preconditions and can't fail.
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(windows)]
+    {
+        // `net session` works only in an elevated prompt.
+        Command::new("net")
+            .args(["session"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+pub fn require_privileges(dry: bool) -> Result<()> {
+    if dry || privileged() {
+        return Ok(());
+    }
+    if cfg!(windows) {
+        bail!("run webjetup from an Administrator prompt");
+    }
+    bail!("run webjetup as root (sudo webjetup …)");
+}
+
+// ---------------------------------------------------------------- the service
+
+/// What the service manager says about webjetd.
+pub fn service_state(l: &Layout) -> String {
+    if cfg!(target_os = "macos") {
+        if !l.service_file.as_deref().is_some_and(Path::exists) {
+            return "not installed".into();
+        }
+        match query("launchctl", &["print", &format!("system/{LAUNCHD_LABEL}")]) {
+            Some(out) => out
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("state = ").map(str::to_string))
+                .unwrap_or_else(|| "loaded".into()),
+            None => "not loaded".into(),
+        }
+    } else if cfg!(windows) {
+        match query("sc.exe", &["query", SERVICE]) {
+            Some(out) if out.contains("RUNNING") => "running".into(),
+            Some(out) if out.contains("STOPPED") => "stopped".into(),
+            Some(_) => "changing".into(),
+            None => "not installed".into(),
+        }
+    } else {
+        if !l.service_file.as_deref().is_some_and(Path::exists) {
+            return "not installed".into();
+        }
+        if !have("systemctl") {
+            return "installed (no systemd here)".into();
+        }
+        // is-active prints the state but exits non-zero when not active.
+        Command::new("systemctl")
+            .args(["is-active", SERVICE])
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".into())
+    }
+}
+
+fn windows_service_exists() -> bool {
+    query("sc.exe", &["query", SERVICE]).is_some()
+}
+
+/// Stop the agent if it runs.
+pub fn stop(sys: &Sys, l: &Layout) {
+    if cfg!(target_os = "macos") {
+        if let Some(p) = &l.service_file
+            && p.exists()
+        {
+            sys.try_run("launchctl", &["bootout", "system", &p.to_string_lossy()]);
+        }
+    } else if cfg!(windows) {
+        if !windows_service_exists() {
+            return;
+        }
+        sys.try_run("sc.exe", &["stop", SERVICE]);
+        if sys.dry {
+            return;
+        }
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(60) {
+            if query("sc.exe", &["query", SERVICE]).is_none_or(|o| o.contains("STOPPED")) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        println!("    webjetd did not stop within 60 s");
+    } else if l.service_file.as_deref().is_some_and(Path::exists) && have("systemctl") {
+        sys.try_run("systemctl", &["stop", SERVICE]);
+    }
+}
+
+/// `tss` owns /dev/tpmrm0; an identity key sealed in the TPM (§8.3) needs it.
+fn systemd_unit(l: &Layout, tss_group: bool) -> String {
+    let groups = if tss_group {
+        "SupplementaryGroups=tss\n"
+    } else {
+        ""
+    };
+    format!(
+        "[Unit]
+Description=Webjet agent
+Documentation=https://forgejo.wolf109909.top/webj8/webjet
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+ExecStart={bin} run
+Restart=on-failure
+RestartSec=5
+User={LINUX_USER}
+{groups}AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+StateDirectory=webjet
+StateDirectoryMode=0700
+RuntimeDirectory=webjet
+RuntimeDirectoryMode=0750
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+LimitCORE=0
+LimitMEMLOCK=1M
+
+[Install]
+WantedBy=multi-user.target
+",
+        bin = l.program("webjetd").display()
+    )
+}
+
+fn launchd_plist(l: &Layout) -> String {
+    let log = l
+        .log
+        .as_deref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "/var/log/webjetd.log".into());
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key><array><string>{bin}</string><string>run</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict></plist>
+"#,
+        bin = l.program("webjetd").display()
+    )
+}
+
+/// The Linux system user exists.
+pub fn ensure_linux_user(sys: &Sys) -> Result<()> {
+    if query("id", &["-u", LINUX_USER]).is_some() {
+        return Ok(());
+    }
+    let nologin = ["/usr/sbin/nologin", "/sbin/nologin"]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+        .unwrap_or("/bin/false");
+    sys.run(
+        "useradd",
+        &[
+            "--system",
+            "--no-create-home",
+            "--shell",
+            nologin,
+            LINUX_USER,
+        ],
+    )
+}
+
+/// The state directory belongs to the agent's user (enrollment ran as root).
+pub fn fix_linux_ownership(sys: &Sys, l: &Layout) -> Result<()> {
+    if l.data_dir.exists() || sys.dry {
+        sys.run(
+            "chown",
+            &[
+                "-R",
+                &format!("{LINUX_USER}:"),
+                &l.data_dir.to_string_lossy(),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Register the service (if it isn't yet) and, when `start`, (re)start it.
+pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        let plist = l
+            .service_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/Library/LaunchDaemons/net.webjet.webjetd.plist"));
+        if !plist.exists() {
+            sys.write(&plist, &launchd_plist(l), 0o644)?;
+        }
+        if start {
+            sys.try_run(
+                "launchctl",
+                &["bootout", "system", &plist.to_string_lossy()],
+            );
+            sys.run(
+                "launchctl",
+                &["bootstrap", "system", &plist.to_string_lossy()],
+            )?;
+        }
+    } else if cfg!(windows) {
+        if windows_service_exists() {
+            if start {
+                sys.run("sc.exe", &["start", SERVICE])?;
+            }
+        } else {
+            // webjetd registers the LocalSystem service itself and starts it.
+            let exe = l.program("webjetd");
+            sys.run(
+                &exe.to_string_lossy(),
+                &["--config", &l.config.to_string_lossy(), "install"],
+            )?;
+            if !start {
+                sys.try_run("sc.exe", &["stop", SERVICE]);
+            }
+        }
+    } else {
+        let unit = l
+            .service_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/etc/systemd/system/webjetd.service"));
+        if !unit.exists() {
+            let tss = query("getent", &["group", "tss"]).is_some();
+            sys.write(&unit, &systemd_unit(l, tss), 0o644)?;
+        }
+        if !have("systemctl") {
+            println!(
+                "    systemd isn't running here: start the agent yourself (webjetd run as user {LINUX_USER})"
+            );
+            return Ok(());
+        }
+        sys.run("systemctl", &["daemon-reload"])?;
+        sys.run("systemctl", &["enable", SERVICE])?;
+        if start {
+            sys.run("systemctl", &["restart", SERVICE])?;
+        }
+    }
+    Ok(())
+}
+
+/// Stop the agent and unregister the service. webjetd cleans up its routes
+/// and DNS settings when it stops.
+pub fn remove_service(sys: &Sys, l: &Layout) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        stop(sys, l);
+        if let Some(p) = &l.service_file {
+            sys.remove_file(p)?;
+        }
+    } else if cfg!(windows) {
+        if !windows_service_exists() {
+            return Ok(());
+        }
+        let exe = l.program("webjetd");
+        if exe.exists() {
+            // Also removes the NRPT rules and routes it set up.
+            if !sys.try_run(&exe.to_string_lossy(), &["uninstall"]) {
+                println!("    webjetd uninstall failed; removing the service directly");
+                stop(sys, l);
+                sys.run("sc.exe", &["delete", SERVICE])?;
+            }
+        } else {
+            stop(sys, l);
+            sys.run("sc.exe", &["delete", SERVICE])?;
+        }
+    } else if let Some(unit) = &l.service_file
+        && unit.exists()
+    {
+        if have("systemctl") {
+            sys.try_run("systemctl", &["disable", "--now", SERVICE]);
+        }
+        sys.remove_file(unit)?;
+        if have("systemctl") {
+            sys.try_run("systemctl", &["daemon-reload"]);
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- Windows PATH
+
+/// PowerShell to add or drop `dir` in the machine-wide PATH.
+fn windows_path_script(dir: &Path, add: bool) -> String {
+    let d = dir.to_string_lossy().replace('\'', "''");
+    if add {
+        format!(
+            "$p=[Environment]::GetEnvironmentVariable('Path','Machine'); if (($p -split ';') -notcontains '{d}') {{ [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';{d}'), 'Machine') }}"
+        )
+    } else {
+        format!(
+            "$p=[Environment]::GetEnvironmentVariable('Path','Machine'); [Environment]::SetEnvironmentVariable('Path', ((($p -split ';') | Where-Object {{ $_ -and $_ -ne '{d}' }}) -join ';'), 'Machine')"
+        )
+    }
+}
+
+pub fn windows_path(sys: &Sys, dir: &Path, add: bool) -> Result<()> {
+    sys.run(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &windows_path_script(dir, add),
+        ],
+    )
+}
+
+/// Restrict a directory to SYSTEM and Administrators (§19.1).
+pub fn windows_restrict(sys: &Sys, dir: &Path) -> Result<()> {
+    sys.run(
+        "icacls",
+        &[
+            &dir.to_string_lossy(),
+            "/inheritance:r",
+            "/grant:r",
+            "*S-1-5-18:(OI)(CI)F",
+            "*S-1-5-32-544:(OI)(CI)F",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------- leftovers for nuke
+
+/// Delete identity keys webjetd put in the System keychain (macOS).
+pub fn delete_keychain_items(sys: &Sys) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let args = [
+        "delete-generic-password",
+        "-s",
+        layout::KEYCHAIN_SERVICE,
+        "/Library/Keychains/System.keychain",
+    ];
+    if sys.dry {
+        sys.say(&format!("run security {}", args.join(" ")));
+        return;
+    }
+    let mut n = 0;
+    // Each call deletes one matching item.
+    while n < 32 && sys.try_run("security", &args) {
+        n += 1;
+    }
+    if n > 0 {
+        println!("    removed {n} identity key(s) from the System keychain");
+    }
+}
+
+/// Split-DNS files webjetd left in /etc/resolver after an unclean stop.
+pub fn macos_resolver_files() -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir("/etc/resolver") else {
+        return Vec::new();
+    };
+    rd.flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|s| s.lines().any(|l| l.trim_start().starts_with("# webjet")))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Remove this executable. Windows can't delete a running program, so a
+/// helper deletes it a moment after webjetup exits.
+pub fn remove_self(sys: &Sys, path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let running = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok());
+    let is_self = running.as_deref() == path.canonicalize().ok().as_deref();
+    if cfg!(windows) && is_self {
+        sys.say(&format!("remove {} after webjetup exits", path.display()));
+        if sys.dry {
+            return Ok(());
+        }
+        let cmd = format!(
+            "ping -n 3 127.0.0.1 >nul & del /f /q \"{}\" & rmdir \"{}\"",
+            path.display(),
+            path.parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        Command::new("cmd.exe")
+            .args(["/C", &cmd])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("schedule removal")?;
+        return Ok(());
+    }
+    sys.remove_file(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_files_point_at_the_installed_agent() {
+        let l = Layout::system();
+        let unit = systemd_unit(&l, false);
+        assert!(unit.contains(&format!("ExecStart={} run", l.program("webjetd").display())));
+        assert!(unit.contains("User=webjet\nAmbientCapabilities=CAP_NET_ADMIN"));
+        assert!(systemd_unit(&l, true).contains("User=webjet\nSupplementaryGroups=tss\n"));
+        let plist = launchd_plist(&l);
+        assert!(plist.contains("<string>net.webjet.webjetd</string>"));
+        assert!(plist.contains(&format!(
+            "<string>{}</string><string>run</string>",
+            l.program("webjetd").display()
+        )));
+    }
+
+    #[test]
+    fn windows_path_scripts_quote_the_directory() {
+        let s = windows_path_script(Path::new(r"C:\Program Files\Web'jet"), true);
+        assert!(s.contains(r"C:\Program Files\Web''jet"));
+        assert!(windows_path_script(Path::new(r"C:\X"), false).contains("-ne 'C:\\X'"));
+    }
+
+    #[test]
+    fn dry_run_changes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let sys = Sys { dry: true };
+        let f = d.path().join("a/b/file");
+        sys.mkdir(f.parent().unwrap(), false).unwrap();
+        assert!(!f.parent().unwrap().exists());
+        let real = d.path().join("keep");
+        std::fs::write(&real, "x").unwrap();
+        sys.remove_file(&real).unwrap();
+        assert!(real.exists());
+        assert!(sys.run("definitely-not-a-program", &[]).is_ok());
+    }
+
+    #[test]
+    fn install_file_replaces_atomically() {
+        let d = tempfile::tempdir().unwrap();
+        let sys = Sys { dry: false };
+        let (src, dest) = (d.path().join("new"), d.path().join("prog"));
+        std::fs::write(&src, "v2").unwrap();
+        std::fs::write(&dest, "v1").unwrap();
+        sys.install_file(&src, &dest, 0o755).unwrap();
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "v2");
+        assert!(!dest.with_extension("webjetup-new").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_to_remove_shallow_paths() {
+        let sys = Sys { dry: false };
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/usr")
+        };
+        assert!(sys.remove_dir_all(&root).is_err());
+    }
+}

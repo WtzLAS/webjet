@@ -362,9 +362,9 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 
 1. Read the release notes: which StateVersion the release introduces, and which older versions it still reads.
 2. Rehearse the whole rollout, including activation, in a test network.
-3. Upgrade the controllers one at a time with the repository's upgrade script, run from the release's tag: learners first, then voters, the leader last. After each, confirm it has rejoined and caught up.
+3. Upgrade the controllers one at a time with `webjetup`: learners first, then voters, the leader last. After each, confirm it has rejoined and caught up.
    ```
-   [node]     ./scripts/upgrade.sh v2.4.0          # upgrade.ps1 on Windows
+   [node]     sudo webjetup upgrade v2.4.0         # Windows: webjetup upgrade v2.4.0 as Administrator
    ```
 4. Upgrade relays, then other nodes, the same way, in stages by tag. Watch software versions and alarms in Grafana between stages.
 5. Decide what to do about nodes that are offline. After activation, a node on the old release raises "upgrade required" and eventually drops off.

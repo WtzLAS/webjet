@@ -118,46 +118,58 @@ is described in [docs/configuration.md](docs/configuration.md).
 Releases are published at
 <https://forgejo.wolf109909.top/webj8/webjet/releases> with binaries for
 Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+),
-macOS (x86_64 and aarch64) and Windows (x86_64). Install or upgrade a Linux
-or macOS host as root from a
-checkout of the release tag:
+macOS (x86_64 and aarch64) and Windows (x86_64).
+
+`webjetup` installs, upgrades and removes Webjet. On Linux and macOS, as
+root:
 
 ```sh
-git clone https://forgejo.wolf109909.top/webj8/webjet.git && cd webjet
-git checkout v0.1.0
-WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download \
-  ./scripts/upgrade.sh v0.1.0
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.2.0/install.sh | sudo sh
+sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl node enroll`
 ```
 
-`upgrade.sh` downloads `webjet-<tag>-<target>.tar.gz`, checks it against the
-`.sha256` next to it, installs the four binaries into `/usr/local/bin` and
-sets up the systemd unit (Linux) or launchd daemon (macOS).
-`./scripts/upgrade.sh --uninstall` removes them again.
+Any release's `install.sh` works: it installs the latest release unless told
+otherwise (Forgejo has no "latest" download link, so the URL names a tag).
+It downloads `webjetup` for the machine, checks it against its `.sha256` and
+runs `webjetup install`. Arguments go to `webjetup install`, so
+`… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
+`… | sudo sh -s -- v0.2.0` picks a version.
 
-On Windows, in PowerShell as Administrator from the same checkout:
+On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
+release page and, in an Administrator prompt:
 
 ```powershell
-$env:WEBJET_RELEASE_URL = "https://forgejo.wolf109909.top/webj8/webjet/releases/download"
-.\scripts\upgrade.ps1 v0.1.0
+.\webjetup-v0.2.0-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
 ```
 
-It installs the programs and `wintun.dll` into `%ProgramFiles%\Webjet` and
-registers the `webjetd` service. The zip includes Wintun from wintun.net
-with its license (`wintun-LICENSE.txt`).
+Then, on any platform:
+
+| Command | What it does |
+| --- | --- |
+| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS) or the service, PATH and folder ACLs (Windows). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. |
+| `webjetup enroll <STRING>` | Enroll this node (or re-key it, runbook 8) and start the agent. |
+| `webjetup status` | Installed version, service state, enrollment, this node's name and addresses. |
+| `webjetup list` | Published releases. |
+| `webjetup remove` (alias `uninstall`) | Stop the agent and remove the programs and service. The node's identity and state stay, so `webjetup install` brings it back as the same node. |
+| `webjetup nuke` | Also delete the identity key (including Keychain items), network state, configuration, logs, leftover DNS settings, the `webjet` user and webjetup itself. The node must be enrolled again; an admin should revoke its old record. Account keys in home directories are not touched. |
+
+`--dry-run` shows what any command would change. `remove` and `nuke` ask for
+confirmation; `--yes` skips it. `WEBJETUP_REPO` points webjetup at another
+repository.
 
 ## Platform notes
 
 | Platform | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Install / upgrade | `scripts/upgrade.sh` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `scripts/upgrade.sh` (launchd daemon) | `scripts/upgrade.ps1` (LocalSystem service via `webjetd install`) |
+| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service via `webjetd install`) |
 | Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) |
 | Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` |
 | Control channel | Unix socket, 0600 | Unix socket, 0600 | named pipe `\\.\pipe\webjet`, SYSTEM + Administrators |
 | Key storage (`[key] storage`) | `tpm` (tpm2-tools) when a TPM is usable, else `file` | `keychain` (System keychain) | `dpapi` (machine scope) |
 | Roles | all | DATA | DATA |
 
-Routes and split DNS are removed when the agent stops; `upgrade.sh
---uninstall` / `upgrade.ps1 -Uninstall` remove the service as well.
+Routes and split DNS are removed when the agent stops; `webjetup remove`
+removes the service as well.
 
 ### Identity key storage (§8.3)
 
