@@ -9,6 +9,7 @@ A Rust implementation of the Webjet overlay VPN described in
 | [docs/webjet-operations-guide.md](docs/webjet-operations-guide.md) | Runbooks: bootstrap, add relays and controllers, revoke, re-key, upgrades |
 | [docs/configuration.md](docs/configuration.md) | Every `webjetd.toml` setting |
 | [docs/docker.md](docs/docker.md) | Running nodes and controllers in containers |
+| [docs/app.md](docs/app.md) | The desktop app (`webjet-app`) |
 | [docs/development.md](docs/development.md) | Building, testing, conventions and pitfalls for contributors |
 
 ## Layout
@@ -20,6 +21,7 @@ A Rust implementation of the Webjet overlay VPN described in
 | `crates/webjet-net` | Transports: PSK gate and UDP obfuscation, raw-public-key TLS 1.3 with X25519MLKEM768 only, KCP + adaptive Reed–Solomon FEC with BBR-style pacing, AnyTLS (BoringSSL, Chrome-like ClientHello, camouflage website) |
 | `crates/webjetd` | The agent: hop sessions, gossip and Merkle anti-entropy, circuits (label switching), end-to-end sessions, path probing, hole punching, tun data plane, gateway, magic DNS, metrics, controller role (Raft, signing, enrollment), local control socket |
 | `crates/webjet-tools` | `webjetctl` (admin/node CLI), `webjet-root` (offline root key), `webjet-signer` (controller signing-key service) |
+| `crates/webjet-app` | `webjet-app`, a GPUI desktop app: network overview, nodes, accounts; admin or read-only by account |
 
 ## Build
 

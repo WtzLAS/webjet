@@ -91,6 +91,87 @@ pub fn keypair_from(bytes: &[u8]) -> Result<KeyPair> {
     Ok(KeyPair::from_seed(&seed))
 }
 
+// ---------------------------------------------------------------- account keys
+
+/// The default directory for account keys (`~/.config/webjet/accounts` and
+/// the platform equivalents).
+pub fn default_key_dir() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("webjet")
+        .join("accounts")
+}
+
+/// Account names with a key in `dir` (from `<name>.key` files), sorted.
+pub fn account_names(dir: &Path) -> Result<Vec<String>> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .with_context(|| {
+            format!(
+                "no account keys in {} (webjetctl account keygen)",
+                dir.display()
+            )
+        })?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|s| s.strip_suffix(".key"))
+                .map(String::from)
+        })
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// An unlocked account key, ready to sign operations.
+pub struct Account {
+    pub name: String,
+    pub id: Bytes32,
+    pub kp: KeyPair,
+    pub dir: std::path::PathBuf,
+}
+
+impl Account {
+    /// Unlock `<dir>/<name>.key` with `pass` and check it against `<name>.pub`.
+    pub fn unlock(dir: &Path, name: &str, pass: &str) -> Result<Account> {
+        let p = AccountPub::load(&dir.join(format!("{name}.pub")))?;
+        let kp = keypair_from(&unseal(pass, &read(&dir.join(format!("{name}.key")))?)?)?;
+        if crypto::key_b64(&kp.public()) != p.key {
+            bail!("account key file doesn't match {name}.pub");
+        }
+        Ok(Account {
+            name: name.to_string(),
+            id: p.id()?,
+            kp,
+            dir: dir.to_path_buf(),
+        })
+    }
+
+    /// Monotonic op_seq (§13.3): milliseconds, never repeating, persisted
+    /// next to the key so restarts and other tools don't reuse a value.
+    pub fn next_seq(&self) -> Result<u64> {
+        let path = self.dir.join(format!("{}.seq", self.name));
+        let last: u64 = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let seq = now_ms().max(last + 1);
+        std::fs::write(&path, seq.to_string())?;
+        Ok(seq)
+    }
+
+    /// Sign an operation as this account.
+    pub fn sign(&self, op: wp::AccountOp) -> Result<Vec<u8>> {
+        Ok(webjet_core::statemachine::ops::sign_op(
+            &self.kp,
+            &self.id,
+            self.next_seq()?,
+            now_ms(),
+            op,
+        ))
+    }
+}
+
 // ---------------------------------------------------------------- account public files
 
 /// `alice.pub`: what an admin hands to the root key holder or another admin.

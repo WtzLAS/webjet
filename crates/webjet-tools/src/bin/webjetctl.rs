@@ -2,12 +2,11 @@
 //! operations with an account key kept on this machine and submits them
 //! through the local webjetd's control channel.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use webjet_core::crypto::{self, Bytes32, KeyPair};
-use webjet_core::statemachine::ops::sign_op;
 use webjet_core::types::{now_ms, parse_roles};
 use webjet_proto::{self as wp, AccountOp};
 use webjet_tools::*;
@@ -256,19 +255,7 @@ enum ControllerCmd {
 // ---------------------------------------------------------------- account keys
 
 fn key_dir(cli: &Cli) -> PathBuf {
-    cli.keys.clone().unwrap_or_else(|| {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("webjet")
-            .join("accounts")
-    })
-}
-
-struct Account {
-    name: String,
-    id: Bytes32,
-    kp: KeyPair,
-    dir: PathBuf,
+    cli.keys.clone().unwrap_or_else(default_key_dir)
 }
 
 fn load_account(cli: &Cli) -> Result<Account> {
@@ -276,22 +263,7 @@ fn load_account(cli: &Cli) -> Result<Account> {
     let name = match &cli.account {
         Some(n) => n.clone(),
         None => {
-            let mut names: Vec<String> = std::fs::read_dir(&dir)
-                .with_context(|| {
-                    format!(
-                        "no account keys in {} (webjetctl account keygen)",
-                        dir.display()
-                    )
-                })?
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    e.file_name()
-                        .to_str()
-                        .and_then(|s| s.strip_suffix(".key"))
-                        .map(String::from)
-                })
-                .collect();
-            names.sort();
+            let mut names = account_names(&dir)?;
             match names.len() {
                 1 => names.remove(0),
                 0 => bail!("no account keys in {}", dir.display()),
@@ -302,39 +274,11 @@ fn load_account(cli: &Cli) -> Result<Account> {
             }
         }
     };
-    let p: AccountPub = serde_json::from_slice(&read(&dir.join(format!("{name}.pub")))?)?;
     let pass = passphrase(
         "WEBJET_ACCOUNT_PASSPHRASE",
         &format!("passphrase for account {name}"),
     )?;
-    let kp = keypair_from(&unseal(&pass, &read(&dir.join(format!("{name}.key")))?)?)?;
-    if crypto::key_b64(&kp.public()) != p.key {
-        bail!("account key file doesn't match {name}.pub");
-    }
-    Ok(Account {
-        name,
-        id: p.id()?,
-        kp,
-        dir,
-    })
-}
-
-impl Account {
-    /// Monotonic op_seq (§13.3): milliseconds, never repeating.
-    fn next_seq(&self) -> Result<u64> {
-        let path = self.dir.join(format!("{}.seq", self.name));
-        let last: u64 = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
-        let seq = now_ms().max(last + 1);
-        std::fs::write(&path, seq.to_string())?;
-        Ok(seq)
-    }
-
-    fn sign(&self, op: AccountOp) -> Result<Vec<u8>> {
-        Ok(sign_op(&self.kp, &self.id, self.next_seq()?, now_ms(), op))
-    }
+    Account::unlock(&dir, &name, &pass)
 }
 
 // ---------------------------------------------------------------- talking to webjetd

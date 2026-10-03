@@ -13,7 +13,8 @@ comments refer to it.
 | `webjet-core` | proto | Pure, deterministic logic: no I/O, no clocks except where passed in. |
 | `webjet-net` | core, proto | Transports. Feature `anytls` (default) pulls in BoringSSL. |
 | `webjetd` | core, net, proto | The agent (library + binary). Feature `anytls` forwards to `webjet-net`. |
-| `webjet-tools` | webjetd, core, net, proto | `webjetctl`, `webjet-root`, `webjet-signer`. |
+| `webjet-tools` | webjetd, core, net, proto | `webjetctl`, `webjet-root`, `webjet-signer`; also the shared account-key code (`Account::unlock`, `sign`). |
+| `webjet-app` | webjetd, tools, core, proto | GPUI desktop app. `model` and `client` are GUI-free and unit-tested; `ui` is the GPUI front end. |
 
 Edition 2024, `rust-version = "1.88"`.
 
@@ -49,7 +50,7 @@ tests.
 - Some code is compiled only on one OS (`cfg(target_os = "linux")`,
   `cfg(windows)`). Clippy on macOS doesn't see it, so check the other targets
   too when you touch platform code:
-  - Linux: `docker run --rm -v "$PWD":/src -w /src rust:1-bookworm cargo clippy --workspace --all-targets` (or build the Docker image).
+  - Linux: `docker run --rm -v "$PWD":/src -w /src rust:1-bookworm cargo clippy --workspace --exclude webjet-app --all-targets` (or build the Docker image). `webjet-app` is left out because GPUI needs X11/Wayland and Vulkan development packages that the plain Rust image doesn't have.
   - Windows: `cargo xwin clippy --target x86_64-pc-windows-msvc -p webjetd -p webjet-tools --no-default-features`.
 
 ## Wire formats
@@ -130,6 +131,11 @@ common bug. Rules:
 - Helpers that iterate over all sessions or hops (e.g. counting handshakes in
   progress) must not run while the caller holds one of them; take the count
   first.
+- In edition 2024 a temporary in an `if let` or a let-chain lives until the
+  end of the whole `if`, *including its body*. So
+  `if let Some(c) = n.circuits.lock().first() && send(c)` holds the circuit
+  lock while `send` runs. Bind the value with `let` first, then test it.
+  This deadlocked the e2e re-key (found by `scripts/soak-test.sh`).
 
 `sample <pid>` (macOS) or `gdb -p <pid> -batch -ex 'thread apply all bt'`
 (Linux) on a hung agent shows which locks the threads wait on.
@@ -140,6 +146,8 @@ common bug. Rules:
 | --- | --- | --- |
 | `scripts/local-net.sh [N]` | nothing (no root) | A full network on 127.0.0.1 by runbook 1, tun disabled. `scripts/local-net.sh stop` ends it. |
 | `scripts/cluster-test.sh` | nothing | Three controllers, leader failover, writes still commit. |
+| `scripts/soak-test.sh [s]` | nothing | Runs the local network past the e2e re-key interval (120 s) and checks every agent still answers. Catches timer-driven deadlocks. |
+| `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account). Skipped without a network. |
 | `docker/e2e.sh` | Docker, image `webjet:test` | Real tun interfaces: kernel ping, magic DNS, policy, subnet gateway. |
 | `docker/deploy-test.sh` | Docker | The deployment image as documented in docs/docker.md. |
 | `docker/tpm-test.sh` | Docker | TPM key sealing against a software TPM (swtpm), refusal by another TPM. |

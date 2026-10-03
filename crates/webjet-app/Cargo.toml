@@ -1,0 +1,31 @@
+[package]
+name = "webjet-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop app showing a Webjet network through the local agent"
+
+[[bin]]
+name = "webjet-app"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+webjet-core = { path = "../webjet-core" }
+webjet-proto = { path = "../webjet-proto" }
+webjetd = { path = "../webjetd", default-features = false }
+webjet-tools = { path = "../webjet-tools", default-features = false }
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+tokio.workspace = true
+# runtime_shaders: compile Metal shaders at run time, so building on macOS
+# needs only the Command Line Tools, not full Xcode.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+
+[lints]
+workspace = true

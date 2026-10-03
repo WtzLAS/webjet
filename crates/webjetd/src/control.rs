@@ -72,6 +72,7 @@ fn node_json(v: &webjet_core::store::View, id: &Bytes32) -> Value {
         "ips": info.ips.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
         "tags": info.tags,
         "owner": v.accounts.get(&info.owner).map(|a| a.name.clone()).unwrap_or_else(|| hex::encode(info.owner)),
+        "owner_id": hex::encode(info.owner),
         "relay": info.relay,
         "data": info.data,
         "control": info.control,
