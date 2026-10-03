@@ -150,6 +150,9 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 "seeds": v.seeds.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "limits": v.limits.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "transport": v.transport.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
+                "policy": v.policy_wire.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
+                "resolver": v.resolver_ips(&s.overlay_pool).iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+                "suffix": v.suffix(),
                 "valid_until": v.valid_until,
                 "overlay_pool": s.overlay_pool.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
             }))
@@ -430,7 +433,7 @@ fn enroll_info(n: &Arc<Node>) -> Value {
         "camouflage_pin": pin,
         "overlay_pool": s.overlay_pool.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
         "used_ips": v.nodes.values().filter(|x| !v.tombstoned_nodes.contains(&x.id)).flat_map(|x| x.ips.iter().map(|i| i.addr().to_string())).collect::<Vec<_>>(),
-        "resolver": v.dns.as_ref().map(|d| d.resolver_ip.clone().unwrap_or_default().iter().filter_map(|i| i.to_ip()).map(|i| i.to_string()).collect::<Vec<_>>()),
+        "resolver": v.resolver_ips(&s.overlay_pool).iter().map(|i| i.to_string()).collect::<Vec<_>>(),
     })
 }
 

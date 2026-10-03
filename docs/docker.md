@@ -178,7 +178,9 @@ on another machine: moving the volume to a new host means re-keying the node.
 ## DNS
 
 The agent answers DNS for the overlay's names on the network's resolver
-address (`resolver_ip` in the DNS configuration), through its tun interface.
+address, through its tun interface: `resolver_ip` in the DNS configuration,
+or by default the top address of the overlay pool (`webjetctl dns show`
+prints the one in force). The examples below use 10.7.255.53.
 It can't install split DNS from inside a container: that needs
 systemd-resolved, which the image doesn't include. So `WEBJET_CONFIGURE_DNS`
 is off by default, and the names are resolvable where the tun interface is:

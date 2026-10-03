@@ -89,14 +89,30 @@ prefix.
 
 ## `[limits]`
 
-Local overrides of the network's limits (§16.4). Any limit name from the
-network's Limits configuration can be set here; these two are the common
-ones:
+Local overrides of the network's limits (§16.4): a value here takes
+precedence over the network's Limits configuration (`webjetctl limits apply`)
+for this node. `webjetctl limits show` prints the values in force. Every
+limit has a built-in default:
 
-| Key | Meaning |
-| --- | --- |
-| `relay_capacity_mbps` | The relay's forwarding capacity for its load figure (§11.8.1). Without it the agent estimates capacity from observed throughput, never below 100 Mbit/s. |
-| `rate_ceiling_mbps` | Upper bound for the UDP transport's sending rate. |
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `conntrack_per_peer` | 4096 | Tracked flows per peer |
+| `conntrack_new_per_sec` | 500 | New flows per second per peer |
+| `conntrack_global` | 262144 | Tracked flows in total |
+| `snat_ports_per_source` | 2048 | Gateway: flows to served LANs per source node |
+| `snat_global` | 65536 | Gateway: flows to served LANs in total |
+| `circuits_per_source` | 64 | Relay: circuits per source node |
+| `circuit_setups_per_sec` | 10 | Relay: circuit setups per second per source node |
+| `circuits_global` | 50000 | Relay: circuits in total |
+| `e2e_handshakes_per_sec` | 10 | End-to-end handshakes accepted per second per peer |
+| `e2e_handshakes_in_progress` | 4 | End-to-end handshakes in progress per peer (the agent runs at most one per peer, so any value is met) |
+| `e2e_handshakes_global` | 1000 | End-to-end handshakes in progress in total |
+| `handshake_queue` | 64 | Packets queued per session while its handshake runs |
+| `hop_handshakes_per_ip` | 5 | Hop TLS handshakes in progress per source IP |
+| `lookups_per_sec` | 20 | Relay: record lookups per second per peer |
+| `subscriptions_per_peer` | 256 | Relay: nodes one peer may subscribe to |
+| `relay_capacity_mbps` | estimated | The relay's forwarding capacity for its load figure (§11.8.1); without it the agent estimates capacity from observed throughput, never below 100 Mbit/s |
+| `rate_ceiling_mbps` | none | Upper bound for the UDP transport's sending rate |
 
 ## `[key]`
 

@@ -172,6 +172,8 @@ pub struct Node {
     pub link_history: Mutex<HashMap<(Bytes32, Transport), webjet_core::routing::LinkHistory>>,
     pub metrics: crate::metrics::Counters,
     pub seq: AtomicU64,
+    /// Hop handshakes in progress per source IP (§16.2).
+    pub hop_handshakes: crate::transport::HandshakeGate,
     #[cfg(feature = "anytls")]
     pub anytls_acceptor: Mutex<
         Option<(
@@ -240,6 +242,7 @@ impl Node {
             link_history: Mutex::new(crate::state::load_links(&Paths::new(&cfg.data_dir))),
             metrics: crate::metrics::Counters::default(),
             seq: AtomicU64::new(now_ms()),
+            hop_handshakes: crate::transport::HandshakeGate::default(),
             #[cfg(feature = "anytls")]
             anytls_acceptor: Mutex::new(None),
             me_weak: OnceLock::new(),
@@ -703,7 +706,16 @@ async fn writer(
     mut ctl_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 ) {
     let mut q = HopQueue::new(4 << 20);
-    let mut pad_budget = webjet_core::padding::Scheme::default_scheme();
+    // The TransportConfig's padding scheme, else the built-in one (§9.7.4).
+    let mut pad_budget = n
+        .store
+        .read()
+        .view()
+        .transport
+        .as_ref()
+        .and_then(|t| t.padding.as_deref())
+        .and_then(|p| webjet_core::padding::Scheme::from_wire(p).ok())
+        .unwrap_or_else(webjet_core::padding::Scheme::default_scheme);
     let mut pkt_no: u32 = 0;
     let mut tune_at = Instant::now();
     loop {

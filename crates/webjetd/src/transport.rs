@@ -3,6 +3,8 @@
 use crate::node::Node;
 use crate::state;
 use anyhow::Result;
+use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::Arc;
 use webjet_core::crypto::Bytes32;
 use webjet_core::policy::{Dest, Selector};
@@ -10,7 +12,8 @@ use webjet_net::hop::{self, Accepted, EnrollGate};
 use webjet_net::kcp::UdpEndpoint;
 use webjet_proto::{self as wp, Transport};
 
-const BUILTIN: [(Transport, u8); 3] = [
+/// Built-in transport priorities (§9.6).
+pub const BUILTIN: [(Transport, u8); 3] = [
     (Transport::KcpFecTls, 30),
     (Transport::AnyTls, 20),
     (Transport::TcpTls, 10),
@@ -172,6 +175,54 @@ impl EnrollGate for ControllerEnrollGate {
 
 // ---------------------------------------------------------------- listeners
 
+/// Hop TLS handshakes in progress per source IP (§16.2), for the TCP
+/// listeners; KCP counts its own.
+#[derive(Default)]
+pub struct HandshakeGate(Mutex<HashMap<std::net::IpAddr, u32>>);
+
+/// One admitted handshake; frees its slot when dropped.
+pub struct HandshakeSlot<'a>(&'a HandshakeGate, std::net::IpAddr);
+
+impl HandshakeGate {
+    pub fn admit(&self, ip: std::net::IpAddr, limit: u64) -> Option<HandshakeSlot<'_>> {
+        let mut m = self.0.lock();
+        let c = m.entry(ip).or_insert(0);
+        if u64::from(*c) >= limit {
+            return None;
+        }
+        *c += 1;
+        Some(HandshakeSlot(self, ip))
+    }
+}
+
+impl Drop for HandshakeSlot<'_> {
+    fn drop(&mut self) {
+        let mut m = self.0.0.lock();
+        if let Some(c) = m.get_mut(&self.1) {
+            *c = c.saturating_sub(1);
+            if *c == 0 {
+                m.remove(&self.1);
+            }
+        }
+    }
+}
+
+/// Re-read the limits that live in the transport layer (after a tree change).
+pub fn apply_limits(n: &Node) {
+    if let Some(ep) = n.udp.get() {
+        let ceiling = crate::metrics::limit_opt(n, "rate_ceiling_mbps").unwrap_or(0);
+        ep.rate_ceiling_bps.store(
+            ceiling.saturating_mul(1_000_000),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let per_ip = crate::metrics::limit(n, "hop_handshakes_per_ip");
+        ep.per_ip_limit.store(
+            u32::try_from(per_ip).unwrap_or(u32::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
 pub async fn start_listeners(n: &Arc<Node>) -> Result<()> {
     if let Some(addr) = n.cfg.listen.tls {
         let l = hop::TlsListener::bind(addr).await?;
@@ -186,6 +237,10 @@ pub async fn start_listeners(n: &Arc<Node>) -> Result<()> {
                 let n3 = n2.clone();
                 let l2 = l.clone();
                 tokio::spawn(async move {
+                    let limit = crate::metrics::limit(&n3, "hop_handshakes_per_ip");
+                    let Some(_slot) = n3.hop_handshakes.admit(remote.ip(), limit) else {
+                        return; // silently drop (§16.2)
+                    };
                     let gate = ControllerEnrollGate(n3.clone());
                     let eg: Option<&dyn EnrollGate> = if n3.is_controller() {
                         Some(&gate)
@@ -220,14 +275,11 @@ pub async fn start_listeners(n: &Arc<Node>) -> Result<()> {
     let root = n.store.read().root;
     // Always accept: hole-punched hops arrive on the same socket (§11.7).
     let ep = UdpEndpoint::bind(udp_addr, &root, n.epochs.clone(), true).await?;
-    if let Some(c) = n.cfg.limits.rate_ceiling_mbps {
-        ep.rate_ceiling_bps
-            .store(c as u64 * 1_000_000, std::sync::atomic::Ordering::Relaxed);
-    }
+    let _ = n.udp.set(ep.clone());
+    apply_limits(n);
     if n.cfg.listen.kcp.is_some() {
         tracing::info!("UDP+KCP listening on {}", ep.local_addr()?);
     }
-    let _ = n.udp.set(ep.clone());
     let n2 = n.clone();
     tokio::spawn(async move {
         loop {
@@ -276,6 +328,10 @@ async fn start_anytls(n: &Arc<Node>, addr: std::net::SocketAddr) -> Result<()> {
             };
             let n3 = n2.clone();
             tokio::spawn(async move {
+                let limit = crate::metrics::limit(&n3, "hop_handshakes_per_ip");
+                let Some(_slot) = n3.hop_handshakes.admit(remote.ip(), limit) else {
+                    return;
+                };
                 let enroll: Vec<Bytes32> = n3
                     .controller
                     .get()

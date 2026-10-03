@@ -507,7 +507,10 @@ async fn connections(n: Arc<Node>) {
             _ = tick.tick() => {}
             e = ev.recv() => {
                 match e {
-                    Ok(Event::HeadChanged) => n.enforce_revocations(),
+                    Ok(Event::HeadChanged) => {
+                        n.enforce_revocations();
+                        crate::transport::apply_limits(&n);
+                    }
                     Ok(Event::HopDown(_)) => {}
                     _ => continue,
                 }

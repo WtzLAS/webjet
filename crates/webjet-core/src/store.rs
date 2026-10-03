@@ -80,6 +80,8 @@ pub struct View {
     pub tombstoned_accounts: HashSet<Bytes32>,
     pub policy: Policy,
     pub policy_version: u64,
+    /// The policy as committed (for `policy show`).
+    pub policy_wire: Option<wp::Policy>,
     pub dns: Option<wp::DnsConfig>,
     pub seeds: Option<wp::Seeds>,
     pub limits: Option<wp::Limits>,
@@ -141,6 +143,25 @@ impl View {
             .unwrap_or(false)
     }
 
+    /// The local resolver's addresses (§11.10.1): the DnsConfig's
+    /// `resolver_ip`, or by default the highest address of each family's
+    /// first overlay pool that no node holds.
+    pub fn resolver_ips(&self, pool: &[IpNet]) -> Vec<IpAddr> {
+        if let Some(d) = &self.dns {
+            let set: Vec<IpAddr> = d
+                .resolver_ip
+                .clone()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|i| i.to_ip())
+                .collect();
+            if !set.is_empty() {
+                return set;
+            }
+        }
+        default_resolver_ips(pool, |ip| self.node_by_ip(ip).is_some())
+    }
+
     pub fn suffix(&self) -> String {
         self.dns
             .as_ref()
@@ -149,16 +170,18 @@ impl View {
             .unwrap_or_else(|| "internal".into())
     }
 
-    /// Effective value of a limit for a node (§16.4): built-in default,
-    /// then tree defaults, then the highest matching override.
-    pub fn limit(&self, me: Option<&Subject>, name: &str, builtin: u64) -> u64 {
+    /// Effective value of a limit for a node (§16.4): built-in default
+    /// (`validate::LIMITS`), then tree defaults, then the highest matching
+    /// override. `None` for a limit that is unset by default and not set.
+    pub fn limit(&self, me: Option<&Subject>, name: &str) -> Option<u64> {
+        let builtin = crate::validate::limit_default(name);
         let Some(l) = &self.limits else {
             return builtin;
         };
         let mut v = builtin;
         for d in l.defaults.clone().unwrap_or_default() {
             if d.name.as_deref() == Some(name) {
-                v = d.value;
+                v = Some(d.value);
             }
         }
         if let Some(me) = me {
@@ -196,7 +219,7 @@ impl View {
                 }
             }
             if let Some(b) = best {
-                v = b;
+                v = Some(b);
             }
         }
         v
@@ -856,6 +879,7 @@ pub fn build_view(
                 Ok(pol) => {
                     v.policy_version = p.version;
                     v.policy = pol;
+                    v.policy_wire = Some(p);
                 }
                 Err(e) => tracing::error!("policy in the tree does not parse: {e}"),
             },
@@ -883,6 +907,22 @@ pub fn build_view(
         n.control = v.controllers.contains_key(&n.id);
     }
     v
+}
+
+/// The default resolver addresses: per address family, the highest host
+/// address of the first overlay pool of that family that `taken` doesn't
+/// claim (a node may hold the top address in older networks).
+pub fn default_resolver_ips(pool: &[IpNet], taken: impl Fn(&IpAddr) -> bool) -> Vec<IpAddr> {
+    let mut out = Vec::new();
+    for v6 in [false, true] {
+        let Some(net) = pool.iter().find(|p| p.addr().is_ipv6() == v6) else {
+            continue;
+        };
+        if let Some(ip) = net.hosts().rev().take(256).find(|ip| !taken(ip)) {
+            out.push(ip);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

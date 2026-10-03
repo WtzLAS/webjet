@@ -41,22 +41,28 @@ pub fn parse_line(s: &str) -> Result<(u32, Vec<Seg>)> {
     Ok((n, segs))
 }
 
+/// The built-in padding scheme, like AnyTLS's: `stop` and its lines.
+pub const DEFAULT_STOP: u32 = 8;
+pub const DEFAULT_LINES: [&str; 8] = [
+    "0=30-30",
+    "1=100-400",
+    "2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000",
+    "3=9-9,500-1000",
+    "4=500-1000",
+    "5=500-1000",
+    "6=500-1000",
+    "7=500-1000",
+];
+
 impl Scheme {
-    /// The built-in default, like AnyTLS's.
+    /// The built-in default (`DEFAULT_LINES`).
     pub fn default_scheme() -> Scheme {
-        let lines = [
-            "0=30-30",
-            "1=100-400",
-            "2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000",
-            "3=9-9,500-1000",
-            "4=500-1000",
-            "5=500-1000",
-            "6=500-1000",
-            "7=500-1000",
-        ];
         Scheme {
-            stop: 8,
-            lines: lines.iter().filter_map(|l| parse_line(l).ok()).collect(),
+            stop: DEFAULT_STOP,
+            lines: DEFAULT_LINES
+                .iter()
+                .filter_map(|l| parse_line(l).ok())
+                .collect(),
         }
     }
 

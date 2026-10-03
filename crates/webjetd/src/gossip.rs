@@ -706,6 +706,8 @@ fn flood(n: &Arc<Node>, except: Option<u64>, origin: Bytes32, ty: u16, raw: &[u8
 }
 
 fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
+    let per_sec = crate::metrics::limit(n, "lookups_per_sec");
+    let max_subs = crate::metrics::limit(n, "subscriptions_per_peer") as usize;
     {
         let mut r = n.sync.lookup_rate.lock();
         let e = r.entry(hop.id).or_insert((Instant::now(), 0));
@@ -713,7 +715,7 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
             *e = (Instant::now(), 0);
         }
         e.1 += 1;
-        if e.1 > 20 {
+        if u64::from(e.1) > per_sec {
             bail!("lookup rate exceeded");
         }
     }
@@ -739,8 +741,21 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
     if l.subscribe_ttl_s > 0 {
         let until = Instant::now() + Duration::from_secs(l.subscribe_ttl_s.min(600) as u64);
         let mut s = n.sync.subs.lock();
+        let now = Instant::now();
+        // Subscriptions this peer holds, renewals of which don't count again.
+        let mut held = s
+            .values()
+            .filter(|v| v.iter().any(|(h, u)| *h == hop.id && *u > now))
+            .count();
         for id in ids {
             let v = s.entry(id).or_default();
+            let renewing = v.iter().any(|(h, u)| *h == hop.id && *u > now);
+            if !renewing {
+                if held >= max_subs {
+                    continue; // over subscriptions_per_peer: answer, don't subscribe
+                }
+                held += 1;
+            }
             v.retain(|(h, _)| *h != hop.id);
             v.push((hop.id, until));
         }

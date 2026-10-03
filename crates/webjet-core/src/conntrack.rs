@@ -57,6 +57,9 @@ pub struct Entry {
     pub saw_reply: bool,
     /// The rule that admitted it, for re-evaluation on policy change.
     pub rule: Option<String>,
+    /// A flow through this node as a gateway, counted against the SNAT
+    /// limits (§11.9.4, §16.2).
+    pub gateway: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,15 +78,25 @@ pub enum Verdict {
 pub enum InsertError {
     PeerQuota,
     RateLimited,
+    /// The source's gateway (SNAT) quota is used up.
+    SnatPeerQuota,
+    /// The gateway's SNAT table is full.
+    SnatGlobal,
 }
 
 pub struct Conntrack {
     entries: HashMap<Key, Entry>,
     per_peer: HashMap<Bytes32, usize>,
+    gateway_per_peer: HashMap<Bytes32, usize>,
+    gateway_total: usize,
     new_rate: HashMap<Bytes32, (Instant, u32)>,
     pub per_peer_quota: usize,
     pub new_per_sec: u32,
     pub global_cap: usize,
+    /// Gateway flows per source node (`snat_ports_per_source`).
+    pub gateway_per_peer_quota: usize,
+    /// Gateway flows in total (`snat_global`).
+    pub gateway_cap: usize,
     pub evictions: u64,
 }
 
@@ -92,10 +105,14 @@ impl Conntrack {
         Conntrack {
             entries: HashMap::new(),
             per_peer: HashMap::new(),
+            gateway_per_peer: HashMap::new(),
+            gateway_total: 0,
             new_rate: HashMap::new(),
             per_peer_quota,
             new_per_sec,
             global_cap,
+            gateway_per_peer_quota: usize::MAX,
+            gateway_cap: usize::MAX,
             evictions: 0,
         }
     }
@@ -189,13 +206,20 @@ impl Conntrack {
         }
     }
 
-    /// Track a new flow after the policy allowed it.
+    /// Gateway flows being tracked.
+    pub fn gateway_len(&self) -> usize {
+        self.gateway_total
+    }
+
+    /// Track a new flow after the policy allowed it. `gateway`: the flow
+    /// goes through this node to a LAN it serves (counts against SNAT limits).
     pub fn insert(
         &mut self,
         peer: &Bytes32,
         p: &Parsed,
         outbound: bool,
         rule: Option<String>,
+        gateway: bool,
         now: Instant,
     ) -> Result<(), InsertError> {
         let Some(state) = Self::initial_state(p) else {
@@ -214,6 +238,23 @@ impl Conntrack {
             self.expire_peer(peer, now);
             if self.per_peer.get(peer).copied().unwrap_or(0) >= self.per_peer_quota {
                 return Err(InsertError::PeerQuota);
+            }
+        }
+        if gateway {
+            if self.gateway_per_peer.get(peer).copied().unwrap_or(0) >= self.gateway_per_peer_quota
+            {
+                self.expire_peer(peer, now);
+                if self.gateway_per_peer.get(peer).copied().unwrap_or(0)
+                    >= self.gateway_per_peer_quota
+                {
+                    return Err(InsertError::SnatPeerQuota);
+                }
+            }
+            if self.gateway_total >= self.gateway_cap {
+                self.expire(now);
+                if self.gateway_total >= self.gateway_cap {
+                    return Err(InsertError::SnatGlobal);
+                }
             }
         }
         if self.entries.len() >= self.global_cap {
@@ -239,22 +280,37 @@ impl Conntrack {
                     outbound,
                     saw_reply: false,
                     rule,
+                    gateway,
                 },
             )
             .is_none()
         {
             *self.per_peer.entry(*peer).or_insert(0) += 1;
+            if gateway {
+                *self.gateway_per_peer.entry(*peer).or_insert(0) += 1;
+                self.gateway_total += 1;
+            }
         }
         Ok(())
     }
 
     fn remove(&mut self, k: &Key) {
-        if self.entries.remove(k).is_some()
-            && let Some(c) = self.per_peer.get_mut(&k.peer)
-        {
+        let Some(e) = self.entries.remove(k) else {
+            return;
+        };
+        if let Some(c) = self.per_peer.get_mut(&k.peer) {
             *c = c.saturating_sub(1);
             if *c == 0 {
                 self.per_peer.remove(&k.peer);
+            }
+        }
+        if e.gateway {
+            self.gateway_total = self.gateway_total.saturating_sub(1);
+            if let Some(c) = self.gateway_per_peer.get_mut(&k.peer) {
+                *c = c.saturating_sub(1);
+                if *c == 0 {
+                    self.gateway_per_peer.remove(&k.peer);
+                }
             }
         }
     }
@@ -349,7 +405,7 @@ mod tests {
         let now = Instant::now();
         let syn = parse(&tcp4([10, 7, 0, 1], [10, 7, 0, 2], 1000, 22, tcpf::SYN)).unwrap();
         assert_eq!(ct.classify(&peer, &syn, false, now), Verdict::New);
-        ct.insert(&peer, &syn, false, None, now).unwrap();
+        ct.insert(&peer, &syn, false, None, false, now).unwrap();
         let synack = parse(&tcp4(
             [10, 7, 0, 2],
             [10, 7, 0, 1],
@@ -376,24 +432,53 @@ mod tests {
         let a = [1; 32];
         for p in 0..3u16 {
             let u = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 2], 1000 + p, 53, b"")).unwrap();
-            ct.insert(&a, &u, false, None, now).unwrap();
+            ct.insert(&a, &u, false, None, false, now).unwrap();
         }
         let u = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 2], 2000, 53, b"")).unwrap();
         assert_eq!(
-            ct.insert(&a, &u, false, None, now),
+            ct.insert(&a, &u, false, None, false, now),
             Err(InsertError::PeerQuota)
         );
         // Another peer: an established UDP flow plus the global cap.
         let b = [2; 32];
         let u2 = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 3], 3000, 53, b"")).unwrap();
-        ct.insert(&b, &u2, false, None, now).unwrap();
+        ct.insert(&b, &u2, false, None, false, now).unwrap();
         let rep = parse(&udp4([10, 7, 0, 3], [10, 7, 0, 1], 53, 3000, b"")).unwrap();
         assert_eq!(ct.classify(&b, &rep, true, now), Verdict::Tracked);
         let u3 = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 3], 3001, 53, b"")).unwrap();
-        ct.insert(&b, &u3, false, None, now).unwrap();
+        ct.insert(&b, &u3, false, None, false, now).unwrap();
         // The established two-way flow survived; a one-way one was evicted.
         assert_eq!(ct.classify(&b, &rep, true, now), Verdict::Tracked);
         assert_eq!(ct.len(), 4);
         assert_eq!(ct.evictions, 1);
+    }
+
+    #[test]
+    fn gateway_flows_have_their_own_quotas() {
+        let mut ct = Conntrack::new(100, 100, 100);
+        ct.gateway_per_peer_quota = 2;
+        ct.gateway_cap = 3;
+        let now = Instant::now();
+        let (a, b) = ([1; 32], [2; 32]);
+        let flow =
+            |sport: u16| parse(&udp4([10, 7, 0, 1], [192, 168, 1, 5], sport, 53, b"")).unwrap();
+        ct.insert(&a, &flow(1), false, None, true, now).unwrap();
+        ct.insert(&a, &flow(2), false, None, true, now).unwrap();
+        assert_eq!(
+            ct.insert(&a, &flow(3), false, None, true, now),
+            Err(InsertError::SnatPeerQuota)
+        );
+        // Flows to the node itself don't count against the gateway quota.
+        ct.insert(&a, &flow(4), false, None, false, now).unwrap();
+        ct.insert(&b, &flow(5), false, None, true, now).unwrap();
+        assert_eq!(
+            ct.insert(&b, &flow(6), false, None, true, now),
+            Err(InsertError::SnatGlobal)
+        );
+        assert_eq!(ct.gateway_len(), 3);
+        // Dropping a peer frees its gateway flows.
+        ct.drop_peer(&a);
+        assert_eq!(ct.gateway_len(), 1);
+        ct.insert(&b, &flow(7), false, None, true, now).unwrap();
     }
 }

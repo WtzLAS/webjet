@@ -146,7 +146,8 @@ pub struct Table {
     /// Keyed by (next neighbor, the label we sent in CircuitOpen).
     pending: HashMap<(Bytes32, u32), PendingOpen>,
     nonces: HashMap<[u8; 16], Instant>,
-    setup_rate: (Option<Instant>, u32),
+    /// Circuit setups per source node in the current second.
+    setup_rate: HashMap<Bytes32, (Instant, u32)>,
 }
 
 impl Table {
@@ -242,8 +243,8 @@ pub fn may_talk(n: &Node, a: &Bytes32, b: &Bytes32) -> bool {
     )
 }
 
-fn limit(n: &Node, name: &str, builtin: u64) -> u64 {
-    crate::metrics::limit(n, name, builtin)
+fn limit(n: &Node, name: &str) -> u64 {
+    crate::metrics::limit(n, name)
 }
 
 // ---------------------------------------------------------------- opening (source)
@@ -432,25 +433,23 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         }
     }
     {
-        let per_src = limit(n, "circuits_per_source", 256) as usize;
-        let global = limit(n, "circuits_global", 50_000) as usize;
-        let rate = limit(n, "circuit_setups_per_sec", 200) as u32;
+        let per_src = limit(n, "circuits_per_source") as usize;
+        let global = limit(n, "circuits_global") as usize;
+        let rate = limit(n, "circuit_setups_per_sec") as u32;
         let mut t = n.circuits.lock();
         let now = Instant::now();
-        if t.setup_rate
-            .0
-            .map(|x| now.duration_since(x) >= Duration::from_secs(1))
-            .unwrap_or(true)
-        {
-            t.setup_rate = (Some(now), 0);
-        }
-        t.setup_rate.1 += 1;
+        // Setups per second per source node (§16.2).
+        t.setup_rate
+            .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(1));
+        let r = t.setup_rate.entry(src).or_insert((now, 0));
+        r.1 += 1;
+        let over_rate = r.1 > rate;
         let count_src = t
             .entries
             .values()
             .filter(|e| matches!(&e.kind, Kind::Transit(x) if x.forward && x.src == src))
             .count();
-        let why = if t.setup_rate.1 > rate {
+        let why = if over_rate {
             Some("rate")
         } else if count_src >= per_src {
             Some("per_source")

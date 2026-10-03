@@ -43,35 +43,7 @@ impl Counters {
 /// otherwise auto-estimated from the highest sustained throughput and the
 /// KCP bandwidth estimates, never below 100 Mbit/s.
 fn capacity_mbps(n: &Node) -> u32 {
-    let configured = n
-        .cfg
-        .limits
-        .relay_capacity_mbps
-        .map(|v| v as u64)
-        .or_else(|| {
-            let s = n.store.read();
-            let v = s.view();
-            let has_override = v.limits.as_ref().map(|l| {
-                l.defaults
-                    .clone()
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|x| x.name.as_deref() == Some("relay_capacity_mbps"))
-                    || l.overrides.clone().unwrap_or_default().iter().any(|o| {
-                        o.values
-                            .clone()
-                            .unwrap_or_default()
-                            .iter()
-                            .any(|x| x.name.as_deref() == Some("relay_capacity_mbps"))
-                    })
-            });
-            if has_override == Some(true) {
-                Some(limit(n, "relay_capacity_mbps", 1000))
-            } else {
-                None
-            }
-        });
-    if let Some(c) = configured {
+    if let Some(c) = limit_opt(n, "relay_capacity_mbps") {
         return c.max(1) as u32;
     }
     let peak = n.metrics.load.lock().peak_mbps;
@@ -116,7 +88,7 @@ pub fn relay_load(n: &Node) -> wp::RelayLoad {
     let cap = capacity_mbps(n).max(1);
     let avg = n.metrics.load.lock().averages().unwrap_or_default();
     let util = ((avg.tx_bps * 8.0 / 1e6) / cap as f64 * 100.0).clamp(0.0, 100.0) as u8;
-    let circuits_cap = limit(n, "circuits_global", 50_000).max(1);
+    let circuits_cap = limit(n, "circuits_global");
     let transit = n.circuits.lock().transit_count() as u64;
     let queue = webjet_core::routing::queue_load_pct(
         avg.queue_ms,
@@ -334,13 +306,20 @@ pub fn local_openmetrics(n: &Arc<Node>) -> String {
 }
 
 /// The effective value of a limit for this node (§16.4): local config,
-/// then the tree's defaults and overrides, then the built-in.
-pub fn limit(n: &Node, name: &str, builtin: u64) -> u64 {
+/// then the tree's defaults and overrides, then the built-in default
+/// (`webjet_core::validate::LIMITS`). `None` for a limit that is unset by
+/// default (relay capacity, rate ceiling) and set nowhere.
+pub fn limit_opt(n: &Node, name: &str) -> Option<u64> {
     if let Some(v) = n.cfg.limits.get(name) {
-        return v;
+        return Some(v);
     }
     let s = n.store.read();
     let v = s.view();
     let me = v.nodes.get(&n.me).map(|x| v.subject(x));
-    v.limit(me.as_ref(), name, builtin)
+    v.limit(me.as_ref(), name)
+}
+
+/// A limit with a built-in default; never below 1.
+pub fn limit(n: &Node, name: &str) -> u64 {
+    limit_opt(n, name).unwrap_or(1).max(1)
 }

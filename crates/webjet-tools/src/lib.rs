@@ -12,6 +12,7 @@ use webjet_proto::{self as wp, Transport};
 use zeroize::Zeroizing;
 
 pub mod prompt;
+pub mod show;
 
 pub use prompt::{new_passphrase, passphrase};
 pub use webjetd::state::write_private;

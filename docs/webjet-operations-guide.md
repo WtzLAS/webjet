@@ -147,21 +147,21 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    [admin]       webjetctl submit ctl-01.cert
    ```
    From now on, nodes accept this controller's tree heads.
-7. Apply the first network settings. Each `apply` validates the YAML file and submits it; `check` only validates, and `show` prints what is in force.
+7. Apply the first network settings. Each `apply` validates the YAML file and submits it; `check` only validates. `show` prints the setting in force in the same YAML form, and on a new network the built-in defaults (with `version: 0`), so `webjetctl dns show > dns.yaml` is a good starting point: edit it, raise `version`, and apply.
    ```
    [admin]    webjetctl psk rotate                      # creates the first PSK epoch
    [admin]    webjetctl transport apply transport.yaml  # priorities and camouflage mode
    [admin]    webjetctl camouflage set-secret --key site.key --site ./site/   # website mode only
-   [admin]    webjetctl dns apply dns.yaml              # suffix, resolver address
+   [admin]    webjetctl dns apply dns.yaml              # suffix, resolver address, records
    [admin]    webjetctl seeds apply seeds.yaml          # ctl-01 for now
    [admin]    webjetctl policy apply policy.yaml        # default deny, plus the rules you need
    ```
-   A minimal start:
+   Every setting has a built-in default, so these are only needed to change something. Without a policy nothing is allowed (default deny), and without seeds nodes find the network through the controllers in their enrollment strings. DNS works without `dns.yaml`: the suffix is `internal` and the resolver is the top address of the overlay pool (10.7.255.254 for 10.7.0.0/16), which is never given to a node. A minimal start:
    ```yaml
    # dns.yaml
    version: 1
    suffix: internal
-   resolver_ip: [10.7.255.53]
+   resolver_ip: [10.7.255.53]   # optional; leave out to keep the default
    ```
    ```yaml
    # seeds.yaml

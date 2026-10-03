@@ -68,31 +68,109 @@ pub fn valid_dns_name(s: &str) -> bool {
         })
 }
 
-pub const LIMIT_NAMES: &[&str] = &[
-    "conntrack_per_peer",
-    "conntrack_new_per_sec",
-    "conntrack_global",
-    "snat_ports_per_source",
-    "snat_global",
-    "circuits_per_source",
-    "circuit_setups_per_sec",
-    "circuits_global",
-    "relay_capacity_mbps",
-    "rate_ceiling_mbps",
-    "e2e_handshakes_per_sec",
-    "e2e_handshakes_in_progress",
-    "e2e_handshakes_global",
-    "handshake_queue",
-    "hop_handshakes_per_ip",
-    "lookups_per_sec",
-    "subscriptions_per_peer",
+/// A resource limit (§16.2) and its built-in default. `None` means the
+/// default is "not set": relay capacity is estimated, the send rate has no
+/// ceiling.
+pub struct LimitSpec {
+    pub name: &'static str,
+    pub default: Option<u64>,
+    pub about: &'static str,
+}
+
+const fn lim(name: &'static str, default: u64, about: &'static str) -> LimitSpec {
+    LimitSpec {
+        name,
+        default: Some(default),
+        about,
+    }
+}
+
+/// Every limit the Limits leaf may set, with the built-in defaults (§16.2).
+pub const LIMITS: &[LimitSpec] = &[
+    lim("conntrack_per_peer", 4096, "tracked flows per peer"),
+    lim(
+        "conntrack_new_per_sec",
+        500,
+        "new flows per second per peer",
+    ),
+    lim(
+        "conntrack_global",
+        262_144,
+        "tracked flows in total (clamped to memory)",
+    ),
+    lim(
+        "snat_ports_per_source",
+        2048,
+        "gateway: translated flows per source node",
+    ),
+    lim("snat_global", 65_536, "gateway: translated flows in total"),
+    lim("circuits_per_source", 64, "relay: circuits per source node"),
+    lim(
+        "circuit_setups_per_sec",
+        10,
+        "relay: circuit setups per second per source node",
+    ),
+    lim("circuits_global", 50_000, "relay: circuits in total"),
+    LimitSpec {
+        name: "relay_capacity_mbps",
+        default: None,
+        about: "relay: capacity for the load figure; estimated when unset",
+    },
+    LimitSpec {
+        name: "rate_ceiling_mbps",
+        default: None,
+        about: "highest send rate; no ceiling when unset",
+    },
+    lim(
+        "e2e_handshakes_per_sec",
+        10,
+        "end-to-end handshakes per second per peer",
+    ),
+    lim(
+        "e2e_handshakes_in_progress",
+        4,
+        "end-to-end handshakes in progress per peer (one session runs at most one)",
+    ),
+    lim(
+        "e2e_handshakes_global",
+        1000,
+        "end-to-end handshakes in progress in total",
+    ),
+    lim(
+        "handshake_queue",
+        64,
+        "packets queued per session before its handshake",
+    ),
+    lim(
+        "hop_handshakes_per_ip",
+        5,
+        "hop TLS handshakes in progress per source IP",
+    ),
+    lim("lookups_per_sec", 20, "relay: lookups per second per peer"),
+    lim(
+        "subscriptions_per_peer",
+        256,
+        "relay: nodes a peer may subscribe to",
+    ),
 ];
+
+/// The built-in default of a limit (`None`: not set by default, or unknown).
+pub fn limit_default(name: &str) -> Option<u64> {
+    LIMITS
+        .iter()
+        .find(|l| l.name == name)
+        .and_then(|l| l.default)
+}
+
+pub fn known_limit(name: &str) -> bool {
+    LIMITS.iter().any(|l| l.name == name)
+}
 
 pub fn limits(l: &wp::Limits) -> Result<()> {
     let check = |v: &[wp::LimitValue]| -> Result<()> {
         for x in v {
             let n = x.name.as_deref().unwrap_or("");
-            if !LIMIT_NAMES.contains(&n) {
+            if !known_limit(n) {
                 bail!("unknown limit {n:?}");
             }
             if x.value == 0 {

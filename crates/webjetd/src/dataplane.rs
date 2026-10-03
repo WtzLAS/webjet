@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 use tokio::sync::mpsc;
-use webjet_core::conntrack::{Conntrack, Verdict as Ct};
+use webjet_core::conntrack::{Conntrack, InsertError as CtError, Verdict as Ct};
 use webjet_core::crypto::Bytes32;
 use webjet_core::frames::ftype;
 use webjet_core::packet::{self, Bucket, Parsed, Unreach};
@@ -258,7 +258,7 @@ impl Dataplane {
                     && self
                         .conntrack
                         .lock()
-                        .insert(&peer, &parsed, true, verdict.rule.clone(), now)
+                        .insert(&peer, &parsed, true, verdict.rule.clone(), false, now)
                         .is_err()
                 {
                     n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
@@ -460,13 +460,20 @@ impl Dataplane {
                     n.metrics.acl_denied.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-                if let Err(e) =
-                    self.conntrack
-                        .lock()
-                        .insert(peer, &parsed, false, verdict.rule.clone(), now)
-                {
+                if let Err(e) = self.conntrack.lock().insert(
+                    peer,
+                    &parsed,
+                    false,
+                    verdict.rule.clone(),
+                    gw.is_some(),
+                    now,
+                ) {
                     tracing::trace!("conntrack: {e:?}");
-                    n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
+                    let counter = match e {
+                        CtError::SnatPeerQuota | CtError::SnatGlobal => &n.metrics.snat_exhausted,
+                        _ => &n.metrics.conntrack_limit,
+                    };
+                    counter.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
             }
@@ -504,22 +511,13 @@ impl Dataplane {
         if self.applied_gen.swap(generation, Ordering::SeqCst) == generation {
             return;
         }
+        // Limits may have changed with the tree.
+        apply_limits(&n, &mut self.conntrack.lock());
         let (my_ips, grants, pool, resolver, suffix, zones) = {
             let s = n.store.read();
             let v = s.view();
             let me = v.nodes.get(&n.me);
-            let resolver: Vec<IpAddr> = v
-                .dns
-                .as_ref()
-                .map(|d| {
-                    d.resolver_ip
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .filter_map(|i| i.to_ip())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let resolver: Vec<IpAddr> = v.resolver_ips(&s.overlay_pool);
             let zones: Vec<String> = v
                 .dns
                 .as_ref()
@@ -647,6 +645,16 @@ impl Dataplane {
 }
 
 /// Create the data plane: the tun device (if enabled) and its tasks.
+/// Connection tracking limits from the effective Limits (§16.2, §16.4).
+fn apply_limits(n: &Node, ct: &mut Conntrack) {
+    use crate::metrics::limit;
+    ct.per_peer_quota = limit(n, "conntrack_per_peer") as usize;
+    ct.new_per_sec = limit(n, "conntrack_new_per_sec") as u32;
+    ct.global_cap = limit(n, "conntrack_global") as usize;
+    ct.gateway_per_peer_quota = limit(n, "snat_ports_per_source") as usize;
+    ct.gateway_cap = limit(n, "snat_global") as usize;
+}
+
 pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     let (my_ips, pool) = {
         let s = n.store.read();
@@ -659,11 +667,8 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
             s.overlay_pool.clone(),
         )
     };
-    let ct = Conntrack::new(
-        crate::metrics::limit(n, "conntrack_per_peer", 4096) as usize,
-        crate::metrics::limit(n, "conntrack_new_per_sec", 500) as u32,
-        crate::metrics::limit(n, "conntrack_global", 262_144) as usize,
-    );
+    let mut ct = Conntrack::new(0, 0, 0);
+    apply_limits(n, &mut ct);
     let mut dev_name = n.cfg.tun.name.clone().unwrap_or_else(|| {
         if cfg!(target_os = "macos") {
             "utun".into()

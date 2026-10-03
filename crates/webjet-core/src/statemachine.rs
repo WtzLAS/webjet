@@ -877,19 +877,10 @@ impl Machine {
         Ok(())
     }
 
+    /// The resolver addresses, which no node may hold: the DnsConfig's, or
+    /// the default from the overlay pool (§11.10.1).
     fn resolver_ips(&self) -> Vec<std::net::IpAddr> {
-        self.view
-            .dns
-            .as_ref()
-            .map(|d| {
-                d.resolver_ip
-                    .clone()
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|i| i.to_ip())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.view.resolver_ips(&self.pool)
     }
 
     fn check_ips(
@@ -1711,6 +1702,43 @@ mod tests {
             )))
             .unwrap();
         o.node_id.unwrap()
+    }
+
+    #[test]
+    fn default_resolver_is_reserved() {
+        let mut h = H::new();
+        // The pool is 10.7.0.0/16: the default resolver is its top host.
+        assert_eq!(
+            h.m.view().resolver_ips(&h.m.pool),
+            vec!["10.7.255.254".parse::<std::net::IpAddr>().unwrap()]
+        );
+        let k = KeyPair::generate();
+        let r = h.admin_op(AccountOp::CreateEnrollment(Box::new(
+            wp::CreateEnrollment {
+                owner: Some(crypto::k32(&h.net.admin_id)),
+                name: Some("dns-thief".into()),
+                overlay_ips: Some(vec![super::ops::ip("10.7.255.254").unwrap()]),
+                identity_key: Some(crypto::k32(&k.public())),
+                ..Default::default()
+            },
+        )));
+        assert!(matches!(r, Err(ApplyError::Rejected(_))), "{r:?}");
+        enroll(&mut h, "fine", "10.7.255.253", &k);
+    }
+
+    #[test]
+    fn default_resolver_skips_taken_addresses() {
+        let pool: Vec<ipnet::IpNet> =
+            vec!["10.7.0.0/16".parse().unwrap(), "fd7a::/64".parse().unwrap()];
+        let top: std::net::IpAddr = "10.7.255.254".parse().unwrap();
+        let ips = crate::store::default_resolver_ips(&pool, |ip| *ip == top);
+        assert_eq!(ips[0], "10.7.255.253".parse::<std::net::IpAddr>().unwrap());
+        assert_eq!(
+            ips[1],
+            "fd7a::ffff:ffff:ffff:ffff"
+                .parse::<std::net::IpAddr>()
+                .unwrap()
+        );
     }
 
     #[test]

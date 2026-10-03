@@ -20,9 +20,7 @@ pub const REKEY_AFTER: Duration = Duration::from_secs(120);
 pub const REJECT_AFTER: Duration = Duration::from_secs(180);
 pub const OLD_KEY_GRACE: Duration = Duration::from_secs(10);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(180);
-pub const MAX_QUEUED: usize = 64;
 const HS_GIVE_UP: Duration = Duration::from_secs(30);
-const MAX_HS_IN_PROGRESS: usize = 1000;
 
 struct SendKey {
     key: SessionKey,
@@ -221,7 +219,7 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
             };
         }
     }
-    if i.queue.len() >= MAX_QUEUED {
+    if i.queue.len() >= crate::metrics::limit(n, "handshake_queue") as usize {
         return SendResult::Dropped;
     }
     i.queue.push_back((ty, payload.to_vec()));
@@ -351,7 +349,7 @@ pub fn inner_ecn(p: &[u8]) -> u8 {
 // ---------------------------------------------------------------- the handshake
 
 fn start_handshake(n: &Arc<Node>, s: &Arc<Session>, c: &Arc<LocalCircuit>) -> Result<()> {
-    if n.e2e.in_progress() >= MAX_HS_IN_PROGRESS {
+    if n.e2e.in_progress() >= crate::metrics::limit(n, "e2e_handshakes_global") as usize {
         bail!("too many handshakes in progress");
     }
     if !crate::circuit::may_talk(n, &n.me, &s.peer) {
@@ -453,7 +451,8 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
         .ok_or_else(|| anyhow!("handshake from an untrusted peer"))?;
     *s.last_used.lock() = Instant::now();
     // Count before taking our own lock: in_progress() locks every session.
-    let busy = n.e2e.in_progress() >= MAX_HS_IN_PROGRESS;
+    let busy = n.e2e.in_progress() >= crate::metrics::limit(n, "e2e_handshakes_global") as usize;
+    let per_sec = crate::metrics::limit(n, "e2e_handshakes_per_sec") as usize;
     let mut i = s.inner.lock();
     // A frame for the handshake in progress?
     if let Some(hs) = i.hs.as_mut() {
@@ -487,7 +486,7 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
         let now = Instant::now();
         i.hs_times
             .retain(|t| now.duration_since(*t) < Duration::from_secs(1));
-        if i.hs_times.len() >= 10 {
+        if i.hs_times.len() >= per_sec {
             bail!("handshake rate limit");
         }
         i.hs_times.push_back(now);

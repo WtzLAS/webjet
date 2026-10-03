@@ -77,6 +77,8 @@ pub struct UdpEndpoint {
     per_ip: Mutex<HashMap<std::net::IpAddr, (Instant, u32)>>,
     pub listening: bool,
     pub rate_ceiling_bps: AtomicU64,
+    /// Handshakes per source IP per 10 s (`hop_handshakes_per_ip`).
+    pub per_ip_limit: std::sync::atomic::AtomicU32,
 }
 
 impl UdpEndpoint {
@@ -101,6 +103,7 @@ impl UdpEndpoint {
             per_ip: Mutex::new(HashMap::new()),
             listening,
             rate_ceiling_bps: AtomicU64::new(0),
+            per_ip_limit: std::sync::atomic::AtomicU32::new(5),
         });
         let e2 = ep.clone();
         tokio::spawn(async move { e2.recv_loop().await });
@@ -204,7 +207,7 @@ impl UdpEndpoint {
         let now = Instant::now();
         m.retain(|_, (t, _)| now.duration_since(*t) < Duration::from_secs(10));
         let e = m.entry(ip).or_insert((now, 0));
-        if e.1 >= 5 {
+        if e.1 >= self.per_ip_limit.load(Ordering::Relaxed) {
             return false;
         }
         e.1 += 1;

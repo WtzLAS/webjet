@@ -390,6 +390,25 @@ async fn ticket(cli: &Cli, token: &[u8], controllers: &[String]) -> Result<Strin
     Ok(webjetd::agent::encode_ticket(&t))
 }
 
+/// `<setting> show`: the setting in force as an apply file, defaults filled in.
+async fn show_setting(cli: &Cli, what: &str) -> Result<()> {
+    let t = call(cli, json!({"cmd": "tree"})).await?;
+    let text = match what {
+        "transport" => webjet_tools::show::transport(&t)?,
+        "dns" => webjet_tools::show::dns(&t)?,
+        "seeds" => webjet_tools::show::seeds(&t)?,
+        "limits" => webjet_tools::show::limits(&t)?,
+        "policy" => webjet_tools::show::policy(&t)?,
+        other => bail!("nothing to show for {other}"),
+    };
+    if cli.json {
+        print(cli, &webjet_tools::show::as_json(&text)?);
+    } else {
+        print!("{text}");
+    }
+    Ok(())
+}
+
 fn print(cli: &Cli, v: &Value) {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
@@ -854,7 +873,7 @@ async fn main() -> Result<()> {
                 println!("policy applied (entry {})", r["index"]);
             }
             ApplyCmd::Check { file: None } => bail!("give a policy file to check"),
-            ApplyCmd::Show => print(&cli, &call(&cli, json!({"cmd": "tree"})).await?),
+            ApplyCmd::Show => show_setting(&cli, "policy").await?,
         },
         Cmd::Dns { cmd } => {
             apply(
@@ -915,10 +934,7 @@ async fn main() -> Result<()> {
                 }
             }
             ApplyCmd::Check { file: None } => bail!("give a file to check"),
-            ApplyCmd::Show => {
-                let t = call(&cli, json!({"cmd": "tree"})).await?;
-                print(&cli, &t["transport"]);
-            }
+            ApplyCmd::Show => show_setting(&cli, "transport").await?,
         },
         Cmd::Psk {
             cmd: PskCmd::Rotate,
@@ -1042,10 +1058,7 @@ where
             println!("{} is valid", file.display());
         }
         ApplyCmd::Check { file: None } => bail!("give a file to check"),
-        ApplyCmd::Show => {
-            let t = call(cli, json!({"cmd": "tree"})).await?;
-            print(cli, &t[what]);
-        }
+        ApplyCmd::Show => show_setting(cli, what).await?,
     }
     Ok(())
 }
