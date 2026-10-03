@@ -486,6 +486,18 @@ impl Dataplane {
 
     // ------------------------------------------------------------ state changes
 
+    /// Undo system changes (routes, split DNS) at shutdown (§20.8). The tun
+    /// interface itself disappears with the process.
+    pub fn shutdown(&self) {
+        if self.tun_tx.is_none() {
+            return;
+        }
+        for r in self.routes.lock().drain(..) {
+            crate::platform::del_route(&r, &self.dev_name);
+        }
+        crate::platform::cleanup(&self.dev_name);
+    }
+
     /// Re-apply routes, gateway serving and policy after the tree changed.
     pub fn refresh(&self) {
         let Some(n) = self.node() else { return };
@@ -664,6 +676,15 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     let mut dev_handle = None;
     if n.cfg.tun.enabled {
         let mut b = tun_rs::DeviceBuilder::new().mtu(n.cfg.tun.mtu);
+        #[cfg(windows)]
+        {
+            // wintun.dll ships next to webjetd.exe (§19.1).
+            let dll = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("wintun.dll")));
+            if let Some(d) = dll.filter(|d| d.exists()) {
+                b = b.wintun_file(d.to_string_lossy().into_owned());
+            }
+            b = b.description("Webjet");
+        }
         if !cfg!(target_os = "macos") || dev_name.starts_with("utun") && dev_name.len() > 4 {
             b = b.name(dev_name.clone());
         }

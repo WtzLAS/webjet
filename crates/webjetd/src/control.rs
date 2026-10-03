@@ -15,46 +15,30 @@ use webjet_core::crypto::{self, Bytes32};
 use webjet_proto::{self as wp, RpcBody};
 
 pub async fn serve(n: Arc<Node>) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let path = n.cfg.control_socket.clone();
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        let _ = std::fs::remove_file(&path);
-        let l = tokio::net::UnixListener::bind(&path)?;
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        tracing::info!("control socket at {}", path.display());
-        loop {
-            let (s, _) = l.accept().await?;
-            let n2 = n.clone();
-            tokio::spawn(async move {
-                let (r, mut w) = s.into_split();
-                let mut lines = BufReader::new(r).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let reply = match serde_json::from_str::<Value>(&line) {
-                        Ok(req) => match handle(&n2, req).await {
-                            Ok(v) => json!({"ok": true, "result": v}),
-                            Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
-                        },
-                        Err(e) => json!({"ok": false, "error": format!("bad request: {e}")}),
-                    };
-                    let mut out = serde_json::to_vec(&reply).unwrap_or_default();
-                    out.push(b'\n');
-                    if w.write_all(&out).await.is_err() {
-                        break;
-                    }
+    let path = n.cfg.control_socket.clone();
+    let mut l = crate::ipc::Listener::bind(&path)?;
+    tracing::info!("control channel at {}", path.display());
+    loop {
+        let s = l.accept().await?;
+        let n2 = n.clone();
+        tokio::spawn(async move {
+            let (r, mut w) = tokio::io::split(s);
+            let mut lines = BufReader::new(r).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let reply = match serde_json::from_str::<Value>(&line) {
+                    Ok(req) => match handle(&n2, req).await {
+                        Ok(v) => json!({"ok": true, "result": v}),
+                        Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
+                    },
+                    Err(e) => json!({"ok": false, "error": format!("bad request: {e}")}),
+                };
+                let mut out = serde_json::to_vec(&reply).unwrap_or_default();
+                out.push(b'\n');
+                if w.write_all(&out).await.is_err() {
+                    break;
                 }
-            });
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = n;
-        bail!("the control channel needs Unix sockets on this platform")
+            }
+        });
     }
 }
 
@@ -479,37 +463,27 @@ pub mod client {
     use super::*;
 
     pub async fn call(path: &std::path::Path, req: Value) -> Result<Value> {
-        #[cfg(unix)]
-        {
-            let s = tokio::net::UnixStream::connect(path).await.map_err(|e| {
-                anyhow!(
-                    "connect to {}: {e} (is webjetd running? are you root?)",
-                    path.display()
-                )
-            })?;
-            let (r, mut w) = s.into_split();
-            let mut line = serde_json::to_vec(&req)?;
-            line.push(b'\n');
-            w.write_all(&line).await?;
-            let mut lines = BufReader::new(r).lines();
-            let resp = tokio::time::timeout(Duration::from_secs(60), lines.next_line())
-                .await
-                .map_err(|_| anyhow!("timeout"))??
-                .ok_or_else(|| anyhow!("no reply"))?;
-            let v: Value = serde_json::from_str(&resp)?;
-            if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
-                Ok(v.get("result").cloned().unwrap_or(Value::Null))
-            } else {
-                bail!(
-                    "{}",
-                    v.get("error").and_then(|e| e.as_str()).unwrap_or("error")
-                )
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (path, req);
-            bail!("unsupported platform")
+        let s = crate::ipc::connect(path).await.map_err(|e| {
+            anyhow!(
+                "connect to {}: {e} (is webjetd running? are you {}?)",
+                path.display(),
+                if cfg!(windows) { "an administrator" } else { "root" }
+            )
+        })?;
+        let (r, mut w) = tokio::io::split(s);
+        let mut line = serde_json::to_vec(&req)?;
+        line.push(b'\n');
+        w.write_all(&line).await?;
+        let mut lines = BufReader::new(r).lines();
+        let resp = tokio::time::timeout(Duration::from_secs(60), lines.next_line())
+            .await
+            .map_err(|_| anyhow!("timeout"))??
+            .ok_or_else(|| anyhow!("no reply"))?;
+        let v: Value = serde_json::from_str(&resp)?;
+        if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
+            Ok(v.get("result").cloned().unwrap_or(Value::Null))
+        } else {
+            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or("error"))
         }
     }
 }

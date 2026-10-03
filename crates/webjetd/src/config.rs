@@ -27,6 +27,9 @@ pub struct Config {
     pub gateway: Gateway,
     #[serde(default)]
     pub limits: LocalLimits,
+    /// Where the identity key is stored at rest (§8.3).
+    #[serde(default)]
+    pub key: crate::keystore::KeyCfg,
     /// OpenMetrics endpoint for Prometheus (§12.5).
     #[serde(default)]
     pub metrics: MetricsCfg,
@@ -40,6 +43,9 @@ pub struct Config {
     pub control_socket: PathBuf,
     #[serde(default = "default_log")]
     pub log: String,
+    /// `json` for structured JSON lines (§19.6), otherwise text.
+    #[serde(default)]
+    pub log_format: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -159,18 +165,29 @@ fn default_head_hours() -> u64 {
 }
 fn default_data_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
-        PathBuf::from("/Library/Application Support/webjet")
+        PathBuf::from("/Library/Application Support/Webjet/state")
     } else if cfg!(windows) {
-        PathBuf::from(r"C:\ProgramData\webjet")
+        program_data().join("Webjet").join("state")
     } else {
         PathBuf::from("/var/lib/webjet")
     }
 }
 fn default_control() -> PathBuf {
-    if cfg!(windows) {
-        PathBuf::from(r"\\.\pipe\webjet")
+    crate::ipc::default_control()
+}
+
+fn program_data() -> PathBuf {
+    std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+}
+
+/// Where webjetd.toml lives by default (§19.1).
+pub fn default_config_path() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/Library/Application Support/Webjet/webjetd.toml")
+    } else if cfg!(windows) {
+        program_data().join("Webjet").join("webjetd.toml")
     } else {
-        PathBuf::from("/run/webjet/control.sock")
+        PathBuf::from("/etc/webjet/webjetd.toml")
     }
 }
 fn default_log() -> String {

@@ -3,13 +3,12 @@
 //! cached relay endpoints and unsent metric reports. Every write is atomic
 //! (temp file + rename) and readable only by the agent's user.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use webjet_core::crypto::{Bytes32, KeyPair};
-use zeroize::Zeroizing;
 
 pub fn b64(b: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(b)
@@ -46,14 +45,28 @@ mod b64vv {
     }
 }
 
+/// Make a directory private to the agent: 0700 on Unix; on Windows an
+/// ACL for SYSTEM and Administrators only, which files inside inherit.
+pub fn restrict_dir(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(windows)]
+    {
+        if let Err(e) = crate::winsec::restrict(dir) {
+            tracing::debug!("restricting {}: {e}", dir.display());
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = dir;
+}
+
 pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-        }
+        restrict_dir(dir);
     }
     let tmp = path.with_extension("tmp");
     {
@@ -119,68 +132,17 @@ impl Paths {
 
 // ---------------------------------------------------------------- identity key (§8.3)
 
-/// Load the node identity key, decrypting it with the platform key when one
-/// is configured. On Linux servers the file is readable only by the agent's
-/// user; device-bound sealing (TPM, Keychain, DPAPI) wraps the same 32 bytes.
-pub fn load_identity(p: &Paths) -> Result<Option<KeyPair>> {
-    let path = p.identity();
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = Zeroizing::new(std::fs::read(&path)?);
-    let seed = platform_unseal(&raw)?;
-    Ok(Some(KeyPair::from_seed(&seed)))
+/// Load the node identity key from its platform store (§8.3).
+pub fn load_identity(p: &Paths, cfg: &crate::keystore::KeyCfg) -> Result<Option<KeyPair>> {
+    Ok(crate::keystore::load(&p.identity(), cfg)?.map(|(k, b)| {
+        tracing::info!("identity key loaded from {} storage", b.name());
+        k
+    }))
 }
 
-pub fn save_identity(p: &Paths, kp: &KeyPair) -> Result<()> {
-    let sealed = platform_seal(&kp.seed())?;
-    write_private(&p.identity(), &sealed)
-}
-
-/// Device-bound wrapping hook. The default is the plain 32-byte seed in a
-/// 0600 file; `WEBJET_KEY_WRAP=machine-id` binds it to the machine id on
-/// Linux so a copied file is useless elsewhere.
-fn platform_seal(seed: &Bytes32) -> Result<Vec<u8>> {
-    match machine_wrap_key() {
-        Some(k) => {
-            let mut out = b"WJK1".to_vec();
-            let pad = webjet_core::crypto::derive("webjet key wrap v1", &k);
-            out.extend(seed.iter().zip(pad.iter()).map(|(a, b)| a ^ b));
-            out.extend_from_slice(&webjet_core::crypto::keyed(&pad, seed)[..16]);
-            Ok(out)
-        }
-        None => Ok(seed.to_vec()),
-    }
-}
-
-fn platform_unseal(raw: &[u8]) -> Result<Zeroizing<Bytes32>> {
-    if raw.len() == 32 {
-        let mut s = Zeroizing::new([0u8; 32]);
-        s.copy_from_slice(raw);
-        return Ok(s);
-    }
-    if raw.len() == 52 && &raw[..4] == b"WJK1" {
-        let k = machine_wrap_key().ok_or_else(|| {
-            anyhow!("identity key is device-bound but the device key is unavailable")
-        })?;
-        let pad = webjet_core::crypto::derive("webjet key wrap v1", &k);
-        let mut s = Zeroizing::new([0u8; 32]);
-        for i in 0..32 {
-            s[i] = raw[4 + i] ^ pad[i];
-        }
-        if webjet_core::crypto::keyed(&pad, &s[..])[..16] != raw[36..52] {
-            anyhow::bail!("identity key is bound to another machine; re-key this node (§8.1)");
-        }
-        return Ok(s);
-    }
-    anyhow::bail!("unrecognized identity key file")
-}
-
-fn machine_wrap_key() -> Option<Vec<u8>> {
-    if std::env::var("WEBJET_KEY_WRAP").ok().as_deref() != Some("machine-id") {
-        return None;
-    }
-    std::fs::read("/etc/machine-id").ok()
+/// Store the identity key; returns the backend used.
+pub fn save_identity(p: &Paths, cfg: &crate::keystore::KeyCfg, kp: &KeyPair) -> Result<crate::keystore::Backend> {
+    crate::keystore::save(&p.identity(), cfg, &crate::keystore::account_for(&p.dir), &kp.seed())
 }
 
 // ---------------------------------------------------------------- node info

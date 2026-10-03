@@ -63,7 +63,8 @@ pub fn init(cfg: &Config, genesis: &[u8], bootstrap: bool) -> Result<()> {
     }
     state::write_private(&paths.genesis(), genesis)?;
     let kp = KeyPair::generate();
-    state::save_identity(&paths, &kp)?;
+    let backend = state::save_identity(&paths, &cfg.key, &kp)?;
+    println!("identity key stored with {} storage", backend.name());
     let nf = NodeFile {
         node_id: hex::encode(crypto::random32()),
         bootstrap,
@@ -244,7 +245,8 @@ fn finish_enrollment(
     let ips: Vec<String> = info.ips.iter().map(|i| i.to_string()).collect();
     std::fs::create_dir_all(&cfg.data_dir)?;
     state::write_private(&paths.genesis(), &genesis)?;
-    state::save_identity(paths, kp)?;
+    let backend = state::save_identity(paths, &cfg.key, kp)?;
+    println!("identity key stored with {} storage", backend.name());
     state::save_store(paths, &store)?;
     let mut e = webjet_net::gate::Epochs::default();
     for p in resp.psk_epochs.clone().unwrap_or_default() {
@@ -275,8 +277,14 @@ fn finish_enrollment(
 // ---------------------------------------------------------------- running
 
 pub async fn run(cfg: Config) -> Result<()> {
+    run_until(cfg, crate::service::signals()).await
+}
+
+/// Run until `shutdown` resolves (a signal, or the Windows service manager).
+pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Result<()> {
     let paths = Paths::new(&cfg.data_dir);
-    let kp = state::load_identity(&paths)?.ok_or_else(|| {
+    crate::keystore::harden_process();
+    let kp = state::load_identity(&paths, &cfg.key)?.ok_or_else(|| {
         anyhow!(
             "no identity key in {}; run `webjetd init` or `webjetd enroll` first",
             cfg.data_dir.display()
@@ -294,6 +302,7 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
     let bootstrap = nf.bootstrap;
     let n = Node::new(cfg, kp, me, store, epochs, nf);
+    crate::keystore::lock_in_place(&n.kp);
     // Relays cached from the last run (§10.7.1 step 1).
     if let Ok(Some(rc)) = state::load_json::<state::RelayCache>(&n.paths.relays()) {
         for r in rc.endpoints {
@@ -348,10 +357,11 @@ pub async fn run(cfg: Config) -> Result<()> {
     tokio::spawn(start_dataplane_when_ready(n.clone()));
     crate::transport::refresh_anytls(&n);
     tracing::info!(node = %crypto::short(&me), "webjetd running");
-    // Exit on a fatal clock error (§18.6) or a signal.
+    // Exit on a fatal clock error (§18.6) or a stop request.
+    let mut shutdown = shutdown;
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = &mut shutdown => {
                 tracing::info!("shutting down");
                 break;
             }
@@ -365,6 +375,9 @@ pub async fn run(cfg: Config) -> Result<()> {
     }
     n.persist_store();
     n.persist_links();
+    if let Some(dp) = n.dataplane.get() {
+        dp.shutdown();
+    }
     Ok(())
 }
 

@@ -66,28 +66,34 @@ impl SocketSigner {
         SocketSigner { path }
     }
 
-    #[cfg(unix)]
     fn call(&self, req: serde_json::Value) -> Result<serde_json::Value> {
-        use std::io::{BufRead, BufReader, Write};
-        let mut s = std::os::unix::net::UnixStream::connect(&self.path)
-            .with_context(|| format!("webjet-signer at {}", self.path.display()))?;
-        s.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-        let mut line = serde_json::to_vec(&req)?;
-        line.push(b'\n');
-        s.write_all(&line)?;
-        let mut r = BufReader::new(s);
-        let mut resp = String::new();
-        r.read_line(&mut resp)?;
+        // Called from synchronous code (head signing); run the exchange on a
+        // small dedicated runtime so it works inside and outside tokio.
+        let path = self.path.clone();
+        let line = {
+            let mut l = serde_json::to_vec(&req)?;
+            l.push(b'\n');
+            l
+        };
+        let resp = std::thread::spawn(move || -> Result<String> {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            rt.block_on(async move {
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+                let s = crate::ipc::connect(&path).await.with_context(|| format!("webjet-signer at {}", path.display()))?;
+                let (r, mut w) = tokio::io::split(s);
+                w.write_all(&line).await?;
+                let mut resp = String::new();
+                tokio::time::timeout(std::time::Duration::from_secs(5), BufReader::new(r).read_line(&mut resp)).await.map_err(|_| anyhow!("webjet-signer timed out"))??;
+                Ok(resp)
+            })
+        })
+        .join()
+        .map_err(|_| anyhow!("signer thread panicked"))??;
         let v: serde_json::Value = serde_json::from_str(&resp)?;
         if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
             bail!("webjet-signer: {e}");
         }
         Ok(v)
-    }
-
-    #[cfg(not(unix))]
-    fn call(&self, _: serde_json::Value) -> Result<serde_json::Value> {
-        bail!("webjet-signer sockets need Unix")
     }
 }
 
@@ -112,50 +118,72 @@ impl Signer for SocketSigner {
 }
 
 /// Serve the signer protocol for `kp` (used by the `webjet-signer` binary).
-#[cfg(unix)]
-pub fn serve(path: &std::path::Path, kp: KeyPair) -> Result<()> {
-    use std::io::{BufRead, BufReader, Write};
-    let _ = std::fs::remove_file(path);
-    let l = std::os::unix::net::UnixListener::bind(path)?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
+pub async fn serve(path: &std::path::Path, kp: KeyPair) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut l = crate::ipc::Listener::bind(path)?;
     tracing::info!("webjet-signer listening on {}", path.display());
-    for conn in l.incoming() {
-        let Ok(mut s) = conn else { continue };
-        let mut line = String::new();
-        if BufReader::new(&s).read_line(&mut line).is_err() {
-            continue;
-        }
-        let reply = (|| -> Result<serde_json::Value> {
-            let v: serde_json::Value = serde_json::from_str(&line)?;
-            match v.get("op").and_then(|o| o.as_str()) {
-                Some("pubkey") => Ok(serde_json::json!({"pubkey": hex::encode(kp.public())})),
-                Some("sign") => {
-                    let ty = v.get("type").and_then(|t| t.as_u64()).ok_or_else(|| anyhow!("missing type"))? as u16;
-                    let body = crate::state::unb64(v.get("body").and_then(|b| b.as_str()).unwrap_or(""))?;
-                    if !allowed(ty) {
-                        bail!("refusing to sign message type {}", mt::name(ty));
-                    }
-                    // Only well-formed objects of the allowed types.
-                    match ty {
-                        mt::SIGNED_TREE_HEAD => {
-                            <webjet_proto::SignedTreeHead as webjet_proto::Decodable>::decode_bytes(&body)?;
-                        }
-                        _ => {
-                            <webjet_proto::SigningKeyCert as webjet_proto::Decodable>::decode_bytes(&body)?;
-                        }
-                    }
-                    Ok(serde_json::json!({"envelope": crate::state::b64(&kp.sign_envelope(ty, body).encode_bytes())}))
-                }
-                _ => bail!("unknown op"),
+    let kp = std::sync::Arc::new(kp);
+    loop {
+        let s = l.accept().await?;
+        let kp = kp.clone();
+        tokio::spawn(async move {
+            let (r, mut w) = tokio::io::split(s);
+            let mut line = String::new();
+            if BufReader::new(r).read_line(&mut line).await.is_err() {
+                return;
             }
-        })()
-        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}));
-        let mut out = serde_json::to_vec(&reply).unwrap_or_default();
-        out.push(b'\n');
-        let _ = s.write_all(&out);
+            let reply = handle_request(&kp, &line).unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}));
+            let mut out = serde_json::to_vec(&reply).unwrap_or_default();
+            out.push(b'\n');
+            let _ = w.write_all(&out).await;
+        });
     }
-    Ok(())
+}
+
+fn handle_request(kp: &KeyPair, line: &str) -> Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(line)?;
+    match v.get("op").and_then(|o| o.as_str()) {
+        Some("pubkey") => Ok(serde_json::json!({"pubkey": hex::encode(kp.public())})),
+        Some("sign") => {
+            let ty = v.get("type").and_then(|t| t.as_u64()).ok_or_else(|| anyhow!("missing type"))? as u16;
+            let body = crate::state::unb64(v.get("body").and_then(|b| b.as_str()).unwrap_or(""))?;
+            if !allowed(ty) {
+                bail!("refusing to sign message type {}", mt::name(ty));
+            }
+            // Only well-formed objects of the allowed types.
+            match ty {
+                mt::SIGNED_TREE_HEAD => {
+                    <webjet_proto::SignedTreeHead as webjet_proto::Decodable>::decode_bytes(&body)?;
+                }
+                _ => {
+                    <webjet_proto::SigningKeyCert as webjet_proto::Decodable>::decode_bytes(&body)?;
+                }
+            }
+            Ok(serde_json::json!({"envelope": crate::state::b64(&kp.sign_envelope(ty, body).encode_bytes())}))
+        }
+        _ => bail!("unknown op"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn signer_over_ipc() {
+        let path = if cfg!(windows) {
+            PathBuf::from(format!(r"\\.\pipe\webjet-signer-test-{}", std::process::id()))
+        } else {
+            std::env::temp_dir().join(format!("wj-signer-{}.sock", std::process::id()))
+        };
+        let kp = KeyPair::generate();
+        let pk = kp.public();
+        let p2 = path.clone();
+        tokio::spawn(async move { serve(&p2, kp).await });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let s = SocketSigner::new(path);
+        let (pubkey, refused) = tokio::task::spawn_blocking(move || (s.public().unwrap(), s.sign(mt::SIGNED_OP, vec![1, 2]).is_err())).await.unwrap();
+        assert_eq!(pubkey, pk);
+        assert!(refused, "the signer refuses other message types");
+    }
 }

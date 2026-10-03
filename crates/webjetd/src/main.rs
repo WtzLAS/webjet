@@ -6,9 +6,10 @@ use webjetd::config::Config;
 #[derive(Parser)]
 #[command(name = "webjetd", version, about = "The Webjet agent")]
 struct Cli {
-    /// Path to webjetd.toml.
-    #[arg(short, long, global = true, default_value = "/etc/webjet/webjetd.toml")]
-    config: PathBuf,
+    /// Path to webjetd.toml (default: /etc/webjet, /Library/Application
+    /// Support/Webjet or %ProgramData%\Webjet).
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
     /// Override the data directory.
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
@@ -28,27 +29,45 @@ enum Cmd {
     },
     /// Enroll (or re-key) this node with an enrollment string.
     Enroll { ticket: String },
-    /// Run the agent.
+    /// Run the agent in the foreground.
     Run,
+    /// Run under the Windows service manager (used by the installed service).
+    #[cfg(windows)]
+    Service,
+    /// Install webjetd as a Windows service (LocalSystem, automatic start).
+    #[cfg(windows)]
+    Install,
+    /// Stop and remove the Windows service and the agent's system settings.
+    #[cfg(windows)]
+    Uninstall,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut cfg = Config::load(Some(&cli.config))?;
+    let cfg_path = cli.config.clone().unwrap_or_else(webjetd::config::default_config_path);
+    #[cfg(windows)]
+    match cli.cmd {
+        Cmd::Service => return webjetd::service::windows::run_dispatcher(cfg_path),
+        Cmd::Install => return webjetd::service::windows::install(&cfg_path),
+        Cmd::Uninstall => return webjetd::service::windows::uninstall(),
+        _ => {}
+    }
+    let mut cfg = Config::load(Some(&cfg_path))?;
     if let Some(d) = cli.data_dir {
         cfg.data_dir = d;
-        if !cli.config.exists() {
-            cfg.control_socket = cfg.data_dir.join("control.sock");
+        if !cfg_path.exists() {
+            cfg.control_socket = if cfg!(windows) { webjetd::ipc::default_control() } else { cfg.data_dir.join("control.sock") };
         }
     }
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log.clone());
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::new(filter)).with_target(false).init();
+    webjetd::logging::init(&cfg);
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
         match cli.cmd {
             Cmd::Init { genesis, bootstrap } => webjetd::agent::init(&cfg, &std::fs::read(&genesis)?, bootstrap),
             Cmd::Enroll { ticket } => webjetd::agent::enroll(&cfg, &ticket).await,
             Cmd::Run => webjetd::agent::run(cfg).await,
+            #[cfg(windows)]
+            _ => unreachable!(),
         }
     })
 }

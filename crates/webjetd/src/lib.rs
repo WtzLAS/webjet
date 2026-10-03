@@ -12,12 +12,18 @@ pub mod e2e;
 pub mod exposition;
 pub mod gossip;
 pub mod health;
+pub mod ipc;
+pub mod keystore;
 pub mod load;
+pub mod logging;
 pub mod metrics;
 pub mod node;
 pub mod paths;
 pub mod platform;
 pub mod punch;
 pub mod rpc;
+pub mod service;
 pub mod state;
 pub mod transport;
+#[cfg(windows)]
+pub mod winsec;
