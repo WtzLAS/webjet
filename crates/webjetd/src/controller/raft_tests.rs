@@ -529,22 +529,26 @@ impl Sim {
             tries += 1;
             assert!(tries < 400, "could not propose after healing");
         }
-        let (v, _) = last.unwrap();
+        let (mut v, _) = last.unwrap();
         let mut waited = 0;
+        let mut since_propose = 0;
         loop {
             self.run(100, None, 0);
             waited += 100;
+            since_propose += 100;
             let Some(li) = self.leader() else { continue };
             let cfg = self.nodes[li].raft.as_ref().unwrap().config().clone();
             let done = self.nodes.iter().filter(|n| cfg.voters.contains(&n.id) || cfg.learners.contains(&n.id)).all(|n| n.sm.values.contains(&v));
             if done {
                 break;
             }
-            if waited > 30_000 {
-                // The value may have been lost with a deposed leader: try again.
-                assert!(waited < 120_000, "entries don't commit after healing: {:?}", self.roles());
-                if let Some(x) = self.propose_value() {
-                    let _ = x;
+            assert!(waited < 120_000, "entries don't commit after healing: {:?}", self.roles());
+            // A value proposed to a leader that was then deposed is lost
+            // (legitimately); propose a fresh one and wait for that instead.
+            if since_propose >= 5_000 {
+                if let Some((nv, _)) = self.propose_value() {
+                    v = nv;
+                    since_propose = 0;
                 }
             }
         }
@@ -933,6 +937,9 @@ fn removed_voter_does_not_disrupt() {
 // ---------------------------------------------------------------- randomized
 
 fn randomized(seed: u64, n: u8, faults: Faults, ms: u64, lossy: bool) {
+    if std::env::var("WEBJET_RAFT_TRACE").is_ok() {
+        eprintln!("== seed {seed}");
+    }
     let initial: Vec<u8> = (1..=n.min(3)).collect();
     let mut s = Sim::new(seed, n, members(&initial, &[]));
     if lossy {
@@ -975,4 +982,113 @@ fn randomized_heavy_churn() {
     for seed in 0..seeds(6) {
         randomized(4000 + seed, 7, Faults { crash: 0.002, restart: 0.004, partition: 0.001, conf: 0.003, max_voters: 7 }, 25_000, true);
     }
+}
+
+#[test]
+fn deposed_leader_with_uncommitted_self_demotion_can_finish_it() {
+    // Two voters. The leader appends its own demotion, is cut off before the
+    // other voter sees it, and steps down. Its log is now the longest, and in
+    // its latest configuration it is no longer a voter. The other voter can't
+    // win without its vote, so the deposed leader must be able to campaign
+    // (it is still a voter of the committed configuration).
+    let mut s = Sim::new(11, 2, members(&[1, 2], &[]));
+    s.run(2000, None, 0);
+    let l = s.leader().unwrap();
+    let other = 1 - l;
+    for _ in 0..5 {
+        s.propose_value();
+    }
+    s.run(500, None, 0);
+    let mut g = vec![0u8; 2];
+    g[l] = 1;
+    s.group = Some(g);
+    let lid = nid(l as u8 + 1);
+    let mut m = members(&[1, 2], &[]);
+    m.voters.remove(&lid);
+    m.learners.insert(lid);
+    let now = s.now();
+    let r = s.nodes[l].raft.as_mut().unwrap();
+    let e = conf_entry(r.term, r.last_index() + 1, &m);
+    r.propose(now, &e).unwrap();
+    for _ in 0..3 {
+        s.propose_value();
+    }
+    s.run(T.election_max.as_millis() as u64 * 3, None, 0);
+    assert_ne!(s.nodes[l].raft.as_ref().unwrap().role, Role::Leader, "check-quorum deposes the cut-off leader");
+    s.group = None;
+    s.settle_and_check_liveness();
+    // The demotion finished: only the other node is a voter now.
+    let nl = s.leader().unwrap();
+    assert_eq!(nl, other);
+    assert_eq!(s.nodes[nl].raft.as_ref().unwrap().voters(), &BTreeSet::from([nid(other as u8 + 1)]));
+}
+
+/// A node whose storage already holds `log` (term, value) entries and `term`.
+fn preloaded(id: u8, term: u64, log: &[(u64, u64)], voters: &[u8]) -> Raft {
+    let (st, mem) = Storage::mem();
+    {
+        let mut m = mem.lock();
+        m.term = term;
+        m.log = log.iter().enumerate().map(|(i, (t, v))| value_entry(*t, i as u64 + 1, *v).encode_bytes()).collect();
+    }
+    Raft::new(nid(id), st, 0, 0, members(voters, &[]), Box::new(classify), T, Instant::now(), Some(id as u64)).unwrap()
+}
+
+/// Drive `r` (a voter of 1..=5) to leadership with votes from `from`.
+fn elect(r: &mut Raft, from: &[u8]) -> Instant {
+    let mut now = Instant::now() + T.election_max * 2;
+    r.tick(now);
+    assert_eq!(r.role, Role::PreCandidate);
+    let pre_term = r.term + 1;
+    for f in from {
+        r.handle(now, nid(*f), RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse { term: pre_term, granted: true, pre_vote: true })));
+    }
+    assert_eq!(r.role, Role::Candidate);
+    for f in from {
+        r.handle(now, nid(*f), RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse { term: r.term, granted: true, pre_vote: false })));
+    }
+    assert_eq!(r.role, Role::Leader);
+    now += Duration::from_millis(1);
+    now
+}
+
+#[test]
+fn figure8_old_term_entry_is_not_committed_by_counting() {
+    // Raft paper, Figure 8 (c): S1 leads again in term 4 with an entry from
+    // term 2 at index 2 that is now on a majority. It must not be committed
+    // by counting replicas, since S5 (term 3 entry at index 2) could still
+    // win an election and overwrite it. Only an entry of the leader's own
+    // term commits, and with it everything before.
+    let mut s1 = preloaded(1, 3, &[(1, 1), (2, 2)], &[1, 2, 3, 4, 5]);
+    let now = elect(&mut s1, &[2, 3]);
+    assert_eq!(s1.term, 4);
+    assert_eq!(s1.last_index(), 3, "the new leader appended its no-op");
+    let before = s1.commit;
+    for f in [2, 3] {
+        s1.handle(now, nid(f), RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse { term: 4, success: true, match_index: 2, hint_index: 0 })));
+    }
+    assert_eq!(s1.commit, before, "an old-term entry was committed by counting replicas");
+    // The term-4 no-op on a majority commits it, and index 2 with it.
+    for f in [2, 3] {
+        s1.handle(now, nid(f), RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse { term: 4, success: true, match_index: 3, hint_index: 0 })));
+    }
+    assert_eq!(s1.commit, 3);
+}
+
+#[test]
+fn votes_require_an_up_to_date_log() {
+    let mut f = preloaded(2, 1, &[(1, 1), (1, 2), (1, 3)], &[1, 2, 3]);
+    let now = Instant::now();
+    // Shorter log, same last term: refused.
+    let out = f.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 2, last_log_index: 2, last_log_term: 1, pre_vote: false })));
+    assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted), "voted for a candidate with a shorter log");
+    // Longer log but an older last term: refused.
+    let out = f.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 3, last_log_index: 9, last_log_term: 0, pre_vote: false })));
+    assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted), "voted for a candidate with an older last term");
+    // The same rules apply to pre-votes.
+    let out = f.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 4, last_log_index: 2, last_log_term: 1, pre_vote: true })));
+    assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted));
+    // An up-to-date candidate gets the vote.
+    let out = f.handle(now, nid(1), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 4, last_log_index: 3, last_log_term: 1, pre_vote: false })));
+    assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if v.granted));
 }

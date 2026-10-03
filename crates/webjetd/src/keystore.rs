@@ -251,6 +251,27 @@ pub mod tpm {
         dev && Command::new("tpm2_getcap").arg("properties-fixed").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
     }
 
+    /// Unload transient objects. The kernel resource manager (/dev/tpmrm0)
+    /// does this when a client closes, but a TPM reached directly (or a
+    /// software TPM) keeps them until flushed and runs out of slots.
+    fn flush_transient() {
+        let _ = Command::new("tpm2_flushcontext").arg("-t").stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+
+    /// Flushes transient objects when an operation ends, even on error.
+    struct Session;
+    impl Session {
+        fn begin() -> Session {
+            flush_transient();
+            Session
+        }
+    }
+    impl Drop for Session {
+        fn drop(&mut self) {
+            flush_transient();
+        }
+    }
+
     struct TempDir(PathBuf);
     impl TempDir {
         fn new() -> Result<TempDir> {
@@ -294,6 +315,7 @@ pub mod tpm {
     }
 
     pub fn seal(seed: &Bytes32) -> Result<Vec<u8>> {
+        let _s = Session::begin();
         let t = TempDir::new()?;
         primary(&t.0)?;
         run(&["tpm2_create", "-Q", "-C", "primary.ctx", "-g", "sha256", "-a", "fixedtpm|fixedparent|userwithauth|noda", "-i", "-", "-u", "seal.pub", "-r", "seal.priv"], &t.0, Some(&seed[..]))?;
@@ -313,6 +335,7 @@ pub mod tpm {
         let n = u16::from_be_bytes([blob[0], blob[1]]) as usize;
         let pubb = blob.get(2..2 + n).ok_or_else(|| anyhow!("bad TPM blob"))?;
         let privb = &blob[2 + n..];
+        let _s = Session::begin();
         let t = TempDir::new()?;
         std::fs::write(t.0.join("seal.pub"), pubb)?;
         std::fs::write(t.0.join("seal.priv"), privb)?;

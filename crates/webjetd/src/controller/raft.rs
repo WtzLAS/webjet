@@ -462,6 +462,20 @@ impl Raft {
         self.voters().contains(&self.id)
     }
 
+    /// May this server start an election? A voter of its latest
+    /// configuration, or of the last committed one: a leader that appended
+    /// its own demotion and then lost leadership may hold the only complete
+    /// log, and must be able to finish the change (votes are still counted
+    /// against the latest configuration).
+    pub fn can_campaign(&self) -> bool {
+        self.is_voter() || self.config_at(self.commit).map(|c| c.voters.contains(&self.id)).unwrap_or(false)
+    }
+
+    /// Votes received that count in the latest configuration.
+    fn counted_votes(&self) -> usize {
+        self.votes.iter().filter(|v| self.voters().contains(*v)).count()
+    }
+
     fn quorum(&self) -> usize {
         self.voters().len() / 2 + 1
     }
@@ -478,7 +492,10 @@ impl Raft {
                 self.role = Role::Follower;
                 self.reset_deadline();
             }
-            Role::Follower | Role::PreCandidate | Role::Candidate if !self.is_voter() => {
+            Role::Follower if !self.is_voter() => {
+                self.role = Role::Learner;
+            }
+            Role::PreCandidate | Role::Candidate if !self.can_campaign() => {
                 self.role = Role::Learner;
             }
             _ => {}
@@ -545,7 +562,7 @@ impl Raft {
     }
 
     fn start_prevote(&mut self) -> Out {
-        if !self.is_voter() {
+        if !self.can_campaign() {
             self.reset_deadline();
             return Vec::new();
         }
@@ -554,7 +571,7 @@ impl Raft {
         self.last_leader_contact = None;
         self.votes = HashSet::from([self.id]);
         self.reset_deadline();
-        if self.votes.len() >= self.quorum() {
+        if self.counted_votes() >= self.quorum() {
             return self.start_election();
         }
         let msg = RaftBody::RaftVote(Box::new(wp::RaftVote { term: self.term + 1, last_log_index: self.last_index(), last_log_term: self.last_term(), pre_vote: true }));
@@ -569,7 +586,7 @@ impl Raft {
         self.votes = HashSet::from([self.id]);
         self.leader = None;
         self.reset_deadline();
-        if self.votes.len() >= self.quorum() {
+        if self.counted_votes() >= self.quorum() {
             return self.become_leader();
         }
         let msg = RaftBody::RaftVote(Box::new(wp::RaftVote { term: self.term, last_log_index: self.last_index(), last_log_term: self.last_term(), pre_vote: false }));
@@ -675,7 +692,7 @@ impl Raft {
                 self.next_index.retain(|p, _| peers.contains(p));
                 self.match_index.retain(|p, _| peers.contains(p));
                 // Check quorum: a leader cut off from a majority steps down.
-                if self.is_voter() && now.duration_since(self.leader_since) >= self.timing.election_max {
+                if now.duration_since(self.leader_since) >= self.timing.election_max {
                     let live = self
                         .voters()
                         .iter()
@@ -693,7 +710,7 @@ impl Raft {
                 }
                 self.broadcast(false)
             }
-            Role::Learner => Vec::new(),
+            Role::Learner if !self.can_campaign() => Vec::new(),
             _ => {
                 if now >= self.election_deadline {
                     self.start_prevote()
@@ -743,7 +760,7 @@ impl Raft {
                     }
                     if r.granted && r.term == self.term + 1 {
                         self.votes.insert(from);
-                        let n = self.votes.iter().filter(|v| self.voters().contains(*v)).count();
+                        let n = self.counted_votes();
                         if n >= self.quorum() {
                             out.extend(self.start_election());
                         }
@@ -756,7 +773,7 @@ impl Raft {
                     self.become_follower(r.term, None);
                 } else if self.role == Role::Candidate && r.term == self.term && r.granted {
                     self.votes.insert(from);
-                    let n = self.votes.iter().filter(|v| self.voters().contains(*v)).count();
+                    let n = self.counted_votes();
                     if n >= self.quorum() {
                         out.extend(self.become_leader());
                     }
@@ -813,7 +830,7 @@ impl Raft {
                 }
             }
             RaftBody::RaftTimeoutNow(t)
-                if t.term == self.term && self.is_voter() && self.role != Role::Leader => {
+                if t.term == self.term && self.can_campaign() && self.role != Role::Leader => {
                     out.extend(self.start_election());
                 }
             _ => {}
