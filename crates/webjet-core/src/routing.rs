@@ -104,10 +104,10 @@ impl Graph {
                 }
             }
             // Last hop to a DATA destination attached to this relay.
-            if !self.relays.contains_key(dst) {
-                if let Some(c) = self.attachments.get(dst).and_then(|a| a.get(n)) {
-                    out.push((*dst, *c));
-                }
+            if !self.relays.contains_key(dst)
+                && let Some(c) = self.attachments.get(dst).and_then(|a| a.get(n))
+            {
+                out.push((*dst, *c));
             }
         }
         out
@@ -229,10 +229,11 @@ impl Graph {
                     if total.len() - 2 > MAX_RELAYS {
                         continue;
                     }
-                    if !a.contains(&total) && !b.iter().any(|(_, p)| *p == total) {
-                        if let Some((c, _)) = self.path_cost(&total, src, dst) {
-                            b.push((c, total));
-                        }
+                    if !a.contains(&total)
+                        && !b.iter().any(|(_, p)| *p == total)
+                        && let Some((c, _)) = self.path_cost(&total, src, dst)
+                    {
+                        b.push((c, total));
                     }
                 }
             }
@@ -276,7 +277,7 @@ impl Graph {
         while let Some(idx) = frontier
             .iter()
             .enumerate()
-            .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
+            .min_by(|a, b| a.1.0.total_cmp(&b.1.0))
             .map(|(i, _)| i)
         {
             let (c, path) = frontier.swap_remove(idx);

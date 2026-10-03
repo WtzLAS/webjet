@@ -59,12 +59,12 @@ impl Codel {
                 self.dropping = false;
                 return false;
             }
-            if let Some(dn) = self.drop_next {
-                if now >= dn {
-                    self.count += 1;
-                    self.drop_next = Some(dn + interval.div_f64((self.count as f64).sqrt()));
-                    return true;
-                }
+            if let Some(dn) = self.drop_next
+                && now >= dn
+            {
+                self.count += 1;
+                self.drop_next = Some(dn + interval.div_f64((self.count as f64).sqrt()));
+                return true;
             }
             false
         } else if ok_to_drop {
@@ -163,11 +163,11 @@ impl HopQueue {
     /// Dequeue the next frame to send. Control goes first but is limited to
     /// roughly a quarter of the bytes while data is waiting (§17.3).
     pub fn pop(&mut self, now: Instant) -> Option<Vec<u8>> {
-        if self.active.is_empty() || self.control_budget < 3 * QUANTUM {
-            if let Some(c) = self.control.pop_front() {
-                self.control_budget += c.len();
-                return Some(c);
-            }
+        if (self.active.is_empty() || self.control_budget < 3 * QUANTUM)
+            && let Some(c) = self.control.pop_front()
+        {
+            self.control_budget += c.len();
+            return Some(c);
         }
         self.control_budget = 0;
         loop {
@@ -202,14 +202,13 @@ impl HopQueue {
             }
             if drop {
                 // Mark ECN-capable frames, drop the rest (§17.7).
-                if let Some(off) = it.ecn_offset {
-                    if let Some(b) = it.data.get_mut(off) {
-                        if *b & 3 != crate::frames::ecn::NOT_ECT {
-                            *b |= crate::frames::ecn::CE;
-                            self.stats.marked += 1;
-                            return Some(it.data);
-                        }
-                    }
+                if let Some(off) = it.ecn_offset
+                    && let Some(b) = it.data.get_mut(off)
+                    && *b & 3 != crate::frames::ecn::NOT_ECT
+                {
+                    *b |= crate::frames::ecn::CE;
+                    self.stats.marked += 1;
+                    return Some(it.data);
                 }
                 self.stats.dropped_aqm += 1;
                 continue;
@@ -287,14 +286,15 @@ mod tests {
     fn hard_cap() {
         let mut q = HopQueue::new(1000);
         let t = Instant::now();
-        assert!(q
-            .push(Item {
+        assert!(
+            q.push(Item {
                 flow: 1,
                 data: vec![0; 900],
                 at: t,
                 ecn_offset: None
             })
-            .is_ok());
+            .is_ok()
+        );
         assert_eq!(
             q.push(Item {
                 flow: 1,

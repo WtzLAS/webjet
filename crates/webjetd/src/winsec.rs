@@ -3,16 +3,16 @@
 
 #![cfg(windows)]
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW, SDDL_REVISION_1,
-    SE_FILE_OBJECT,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
+    SetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::{
-    GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, PROTECTED_DACL_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
 };
 

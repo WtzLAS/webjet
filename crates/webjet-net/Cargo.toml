@@ -28,3 +28,6 @@ subtle.workspace = true
 futures.workspace = true
 boring = { version = "5", optional = true }
 tokio-boring = { version = "5", optional = true }
+
+[lints]
+workspace = true

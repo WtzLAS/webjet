@@ -2,7 +2,7 @@
 //! Used for PSK fetch, operations, metric uploads, status and Raft.
 
 use crate::node::Node;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,10 +89,10 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
                         error: Some("not a controller".into()),
                     }))),
                 };
-                if kind == REQUEST {
-                    if let Some(r) = reply {
-                        crate::e2e::send(&n, &from, ftype::RPC, &encode(id, RESPONSE, r), 0);
-                    }
+                if kind == REQUEST
+                    && let Some(r) = reply
+                {
+                    crate::e2e::send(&n, &from, ftype::RPC, &encode(id, RESPONSE, r), 0);
                 }
             });
         }

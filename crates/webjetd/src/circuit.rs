@@ -6,18 +6,18 @@
 //! `CircuitAccept.peer_label` is the acceptor's label for frames toward it.
 
 use crate::node::{Hop, Node};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use webjet_core::crypto::{self, opt_k32, Bytes32};
+use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::frames::{self, DEFAULT_HOP_LIMIT};
 use webjet_core::routing::LinkStats;
-use webjet_core::types::{now_ms, SKEW_SHORT_RECORD};
-use webjet_proto::{self as wp, msg_type as mt, HopMsg};
+use webjet_core::types::{SKEW_SHORT_RECORD, now_ms};
+use webjet_proto::{self as wp, HopMsg, msg_type as mt};
 
 const OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 const TRANSIT_IDLE: Duration = Duration::from_secs(300);
@@ -212,13 +212,12 @@ impl Table {
             Kind::Transit(t) if t.forward => Some(t.route_id),
             _ => None,
         };
-        if let Some(rid) = rid {
-            if let Some(r) = self.routes.get(&rid) {
-                if r.circuits.fetch_sub(1, Ordering::Relaxed) <= 1 {
-                    // Keep the counters around for the next report; dropped in sweep.
-                    r.active_since.store(0, Ordering::Relaxed);
-                }
-            }
+        if let Some(rid) = rid
+            && let Some(r) = self.routes.get(&rid)
+            && r.circuits.fetch_sub(1, Ordering::Relaxed) <= 1
+        {
+            // Keep the counters around for the next report; dropped in sweep.
+            r.active_since.store(0, Ordering::Relaxed);
         }
         Some(e)
     }
@@ -469,11 +468,11 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         return fail("policy");
     }
     // Reach the next hop.
-    if n.best_hop(&next).is_none() {
-        if let Err(e) = n.dial_node(next).await {
-            tracing::debug!("circuit next hop {}: {e}", n.name_of(&next));
-            return fail("next_unreachable");
-        }
+    if n.best_hop(&next).is_none()
+        && let Err(e) = n.dial_node(next).await
+    {
+        tracing::debug!("circuit next hop {}: {e}", n.name_of(&next));
+        return fail("next_unreachable");
     }
     let Some(next_hop) = n.best_hop(&next) else {
         return fail("next_unreachable");
@@ -719,10 +718,10 @@ pub fn on_hop_down(n: &Arc<Node>, hop: &Hop) {
         .copied()
         .collect();
     for k in dead {
-        if let Some(p) = t.pending.remove(&k) {
-            if let Some(w) = p.waiter {
-                let _ = w.send(Err("hop down".into()));
-            }
+        if let Some(p) = t.pending.remove(&k)
+            && let Some(w) = p.waiter
+        {
+            let _ = w.send(Err("hop down".into()));
         }
     }
 }
@@ -761,10 +760,10 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
             if let Some(r) = n.circuits.lock().routes.get(&c.route_id) {
                 r.rev.add(body.len());
             }
-            if ecn == frames::ecn::CE {
-                if let Some(r) = n.circuits.lock().routes.get(&c.route_id) {
-                    r.ecn_marked.fetch_add(1, Ordering::Relaxed);
-                }
+            if ecn == frames::ecn::CE
+                && let Some(r) = n.circuits.lock().routes.get(&c.route_id)
+            {
+                r.ecn_marked.fetch_add(1, Ordering::Relaxed);
             }
             crate::e2e::on_frame(n, &c, body, ecn);
         }
@@ -796,10 +795,10 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
                 .as_ref()
                 .map(|r| webjet_core::bytes::prefix_u64(&r.src))
                 .unwrap_or(label as u64);
-            if !h.send_relay(flow, f) {
-                if let Some(r) = &route {
-                    r.dropped_queue.fetch_add(1, Ordering::Relaxed);
-                }
+            if !h.send_relay(flow, f)
+                && let Some(r) = &route
+            {
+                r.dropped_queue.fetch_add(1, Ordering::Relaxed);
             }
         }
     }

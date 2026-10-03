@@ -16,7 +16,7 @@ use webjet_core::crypto::Bytes32;
 use webjet_core::frames::ftype;
 use webjet_core::packet::{self, Bucket, Parsed, Unreach};
 use webjet_core::policy::{Decision, Dest};
-use webjet_core::types::{map_prefix, Grant};
+use webjet_core::types::{Grant, map_prefix};
 
 pub struct Dataplane {
     node: Weak<Node>,
@@ -56,16 +56,15 @@ impl Dataplane {
     }
 
     fn write_tun(&self, p: Vec<u8>) {
-        if let Some(pp) = packet::parse(&p) {
-            if pp.icmp == Some(packet::IcmpKind::Echo { request: false })
-                && p.len() >= pp.l4_offset + 8
-            {
-                let id = u16::from_be_bytes([p[pp.l4_offset + 4], p[pp.l4_offset + 5]]);
-                let seq = u16::from_be_bytes([p[pp.l4_offset + 6], p[pp.l4_offset + 7]]);
-                if let Some(tx) = self.pings.lock().get(&id) {
-                    let _ = tx.send(seq);
-                    return;
-                }
+        if let Some(pp) = packet::parse(&p)
+            && pp.icmp == Some(packet::IcmpKind::Echo { request: false })
+            && p.len() >= pp.l4_offset + 8
+        {
+            let id = u16::from_be_bytes([p[pp.l4_offset + 4], p[pp.l4_offset + 5]]);
+            let seq = u16::from_be_bytes([p[pp.l4_offset + 6], p[pp.l4_offset + 7]]);
+            if let Some(tx) = self.pings.lock().get(&id) {
+                let _ = tx.send(seq);
+                return;
             }
         }
         if let Some(n) = self.node() {
@@ -78,15 +77,15 @@ impl Dataplane {
             None => {
                 // No tun interface: answer pings ourselves, like a host stack
                 // would, so connectivity can be checked without root.
-                if let Some(reply) = packet::echo_reply(&p) {
-                    if let Some(n) = self.node() {
-                        let n2 = n.clone();
-                        tokio::spawn(async move {
-                            if let Some(dp) = n2.dataplane.get() {
-                                dp.outbound(reply);
-                            }
-                        });
-                    }
+                if let Some(reply) = packet::echo_reply(&p)
+                    && let Some(n) = self.node()
+                {
+                    let n2 = n.clone();
+                    tokio::spawn(async move {
+                        if let Some(dp) = n2.dataplane.get() {
+                            dp.outbound(reply);
+                        }
+                    });
                 }
                 if let Some(s) = self.sink.lock().as_ref() {
                     let _ = s.send(p);
@@ -169,10 +168,10 @@ impl Dataplane {
         if self.resolver.read().contains(&dst) {
             let n2 = n.clone();
             tokio::spawn(async move {
-                if let Some(reply) = crate::dns::handle(&n2, &p).await {
-                    if let Some(dp) = n2.dataplane.get() {
-                        dp.write_tun(reply);
-                    }
+                if let Some(reply) = crate::dns::handle(&n2, &p).await
+                    && let Some(dp) = n2.dataplane.get()
+                {
+                    dp.write_tun(reply);
                 }
             });
             return;
@@ -339,10 +338,10 @@ impl Dataplane {
             return None;
         }
         let mut choice = self.gw_choice.lock();
-        if let Some(c) = choice.get(&prefix) {
-            if gws.contains(c) {
-                return Some((*c, false));
-            }
+        if let Some(c) = choice.get(&prefix)
+            && gws.contains(c)
+        {
+            return Some((*c, false));
         }
         let pick = gws
             .iter()
@@ -501,8 +500,8 @@ impl Dataplane {
     /// Re-apply routes, gateway serving and policy after the tree changed.
     pub fn refresh(&self) {
         let Some(n) = self.node() else { return };
-        let gen = n.store.read().generation;
-        if self.applied_gen.swap(gen, Ordering::SeqCst) == gen {
+        let generation = n.store.read().generation;
+        if self.applied_gen.swap(generation, Ordering::SeqCst) == generation {
             return;
         }
         let (my_ips, grants, pool, resolver, suffix, zones) = {
@@ -560,15 +559,15 @@ impl Dataplane {
             let Ok(pubnet) = webjet_core::types::parse_net(&r.published) else {
                 continue;
             };
-            if let Some(g) = grants.iter().find(|g| g.published == pubnet) {
-                if crate::platform::iface_up(&r.interface) {
-                    serving.push((*g, r.interface.clone()));
-                    let mut done = self.nat_done.lock();
-                    if !done.contains(&r.interface)
-                        && crate::platform::setup_gateway_nat(&pool, &self.dev_name, &r.interface)
-                    {
-                        done.push(r.interface.clone());
-                    }
+            if let Some(g) = grants.iter().find(|g| g.published == pubnet)
+                && crate::platform::iface_up(&r.interface)
+            {
+                serving.push((*g, r.interface.clone()));
+                let mut done = self.nat_done.lock();
+                if !done.contains(&r.interface)
+                    && crate::platform::setup_gateway_nat(&pool, &self.dev_name, &r.interface)
+                {
+                    done.push(r.interface.clone());
                 }
             }
         }

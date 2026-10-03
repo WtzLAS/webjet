@@ -26,7 +26,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use webjet_core::crypto::{self, opt_k32, Bytes32};
+use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::statemachine::Membership;
 use webjet_proto::{self as wp, Decodable, Encodable, RaftBody};
 
@@ -200,12 +200,10 @@ impl Storage {
 
     fn load_meta(&self) -> (u64, Option<Bytes32>) {
         match self {
-            Storage::Disk(d) => {
-                match crate::state::load_json::<Meta>(&d.join("meta.json")) {
-                    Ok(Some(m)) => (m.term, m.voted_for.and_then(|s| crypto::parse_hex32(&s))),
-                    _ => (0, None),
-                }
-            }
+            Storage::Disk(d) => match crate::state::load_json::<Meta>(&d.join("meta.json")) {
+                Ok(Some(m)) => (m.term, m.voted_for.and_then(|s| crypto::parse_hex32(&s))),
+                _ => (0, None),
+            },
             Storage::Mem(m) => {
                 let m = m.lock();
                 (m.term, m.vote)
@@ -236,10 +234,9 @@ impl Storage {
     fn rewrite(&self, entries: &[Entry]) {
         match self {
             Storage::Disk(d) => {
-                if let Err(e) = crate::state::write_private(
-                    &d.join("log.bin"),
-                    &encode_entries(entries),
-                ) {
+                if let Err(e) =
+                    crate::state::write_private(&d.join("log.bin"), &encode_entries(entries))
+                {
                     tracing::error!("raft log rewrite: {e}");
                 }
             }
@@ -484,7 +481,10 @@ impl Raft {
 
     /// The configuration in force: the latest one in the log.
     pub fn config(&self) -> &Membership {
-        static NONE: Membership = Membership { voters: BTreeSet::new(), learners: BTreeSet::new() };
+        static NONE: Membership = Membership {
+            voters: BTreeSet::new(),
+            learners: BTreeSet::new(),
+        };
         // There is always at least the base configuration.
         self.configs.last().map(|c| &c.1).unwrap_or(&NONE)
     }
@@ -978,11 +978,12 @@ impl Raft {
                     self.match_index.insert(from, m);
                     self.next_index.insert(from, m + 1);
                     self.advance_commit();
-                    if self.role == Role::Leader && m < self.last_index() {
-                        if let Some(msg) = self.append_msg(&from) {
-                            self.last_sent.insert(from, now);
-                            out.push((from, msg));
-                        }
+                    if self.role == Role::Leader
+                        && m < self.last_index()
+                        && let Some(msg) = self.append_msg(&from)
+                    {
+                        self.last_sent.insert(from, now);
+                        out.push((from, msg));
                     }
                 } else {
                     let next = r.hint_index.max(matched + 1).min(self.last_index() + 1);

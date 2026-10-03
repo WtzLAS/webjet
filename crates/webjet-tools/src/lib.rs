@@ -1,13 +1,13 @@
 //! Shared code for the command-line tools: key files, signed files, and the
 //! YAML forms of the network settings (operations guide).
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 use webjet_core::crypto::{self, Bytes32, KeyPair};
-use webjet_core::types::{net_to_cidr, now_ms, parse_net, Grant};
+use webjet_core::types::{Grant, net_to_cidr, now_ms, parse_net};
 use webjet_proto::{self as wp, Transport};
 use zeroize::Zeroizing;
 
@@ -22,10 +22,10 @@ pub fn read(path: &Path) -> Result<Vec<u8>> {
 }
 
 pub fn write_public(path: &Path, data: &[u8]) -> Result<()> {
-    if let Some(d) = path.parent() {
-        if !d.as_os_str().is_empty() {
-            std::fs::create_dir_all(d)?;
-        }
+    if let Some(d) = path.parent()
+        && !d.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(d)?;
     }
     std::fs::write(path, data).with_context(|| format!("write {}", path.display()))
 }

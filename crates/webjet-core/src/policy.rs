@@ -1,9 +1,9 @@
 //! Tag-based access control (§14): selectors, port specs, deny-overrides
 //! evaluation, per-node compiled tables and pair reachability.
 
-use crate::crypto::{parse_key_b64, Bytes32};
+use crate::crypto::{Bytes32, parse_key_b64};
 use crate::types::{parse_net, valid_name, valid_tag};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -31,11 +31,11 @@ fn norm(mut v: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
     v.sort();
     let mut out: Vec<(u16, u16)> = Vec::new();
     for (lo, hi) in v {
-        if let Some(last) = out.last_mut() {
-            if lo as u32 <= last.1 as u32 + 1 {
-                last.1 = last.1.max(hi);
-                continue;
-            }
+        if let Some(last) = out.last_mut()
+            && lo as u32 <= last.1 as u32 + 1
+        {
+            last.1 = last.1.max(hi);
+            continue;
         }
         out.push((lo, hi));
     }
@@ -382,7 +382,7 @@ impl Policy {
                     return Verdict {
                         decision: Decision::Deny,
                         rule: Some(r.id.clone()),
-                    }
+                    };
                 }
                 Decision::Allow => {
                     if allow.is_none() {
@@ -839,19 +839,21 @@ tests:
 
     #[test]
     fn cidr_only_in_dst() {
-        assert!(Policy::from_wire(&wp::Policy {
-            version: 1,
-            default_action: wp::Action::Deny,
-            rules: Some(vec![wp::Rule {
-                id: Some("x".into()),
-                action: wp::Action::Allow,
-                src: Some(vec!["cidr:10.0.0.0/8".into()]),
-                dst: Some(vec!["*".into()]),
-                ports: Some(vec!["*".into()])
-            }]),
-            tests: None,
-        })
-        .is_err());
+        assert!(
+            Policy::from_wire(&wp::Policy {
+                version: 1,
+                default_action: wp::Action::Deny,
+                rules: Some(vec![wp::Rule {
+                    id: Some("x".into()),
+                    action: wp::Action::Allow,
+                    src: Some(vec!["cidr:10.0.0.0/8".into()]),
+                    dst: Some(vec!["*".into()]),
+                    ports: Some(vec!["*".into()])
+                }]),
+                tests: None,
+            })
+            .is_err()
+        );
     }
 
     #[test]

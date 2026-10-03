@@ -6,10 +6,10 @@
 //! `{"op":"sign","type":u16,"body":b64}` → `{"envelope": b64}`.
 //! The signer only signs SignedTreeHeads and its own certificate requests.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
 use webjet_core::crypto::{Bytes32, KeyPair};
-use webjet_proto::{msg_type as mt, Encodable};
+use webjet_proto::{Encodable, msg_type as mt};
 
 pub trait Signer: Send + Sync {
     fn public(&self) -> Result<Bytes32>;

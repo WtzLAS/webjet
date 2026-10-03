@@ -5,10 +5,10 @@
 //! Account leaves keep their own signature: their bytes are the `Signed`
 //! envelope of the AccountRecord or AccountTombstone (§6.10).
 
-use crate::crypto::{open_envelope, Bytes32, Verified};
+use crate::crypto::{Bytes32, Verified, open_envelope};
 use crate::merkle::kind;
-use anyhow::{anyhow, bail, Result};
-use webjet_proto::{self as wp, msg_type as mt, Decodable, Encodable};
+use anyhow::{Result, anyhow, bail};
+use webjet_proto::{self as wp, Decodable, Encodable, msg_type as mt};
 
 pub const SINGLETON: Bytes32 = [0u8; 32];
 

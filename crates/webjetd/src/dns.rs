@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use webjet_core::packet;
 use webjet_core::policy::PROTO_UDP;
-use webjet_core::types::{map_prefix, Grant};
+use webjet_core::types::{Grant, map_prefix};
 use webjet_proto as wp;
 
 const TTL: u32 = 60;
@@ -79,21 +79,20 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
         }
     }
     let mut answered = false;
-    if qtype == RecordType::PTR {
-        if let Some(ip) = ptr_to_ip(&name) {
-            let s = n.store.read();
-            if let Some(id) = s.view().node_by_ip(&ip) {
-                if let Some(info) = s.view().nodes.get(&id) {
-                    if let Ok(target) = Name::from_ascii(format!("{}.{suffix}.", info.name)) {
-                        r.add_answer(Record::from_rdata(
-                            query.name().clone(),
-                            TTL,
-                            RData::PTR(PTR(target)),
-                        ));
-                        answered = true;
-                    }
-                }
-            }
+    if qtype == RecordType::PTR
+        && let Some(ip) = ptr_to_ip(&name)
+    {
+        let s = n.store.read();
+        if let Some(id) = s.view().node_by_ip(&ip)
+            && let Some(info) = s.view().nodes.get(&id)
+            && let Ok(target) = Name::from_ascii(format!("{}.{suffix}.", info.name))
+        {
+            r.add_answer(Record::from_rdata(
+                query.name().clone(),
+                TTL,
+                RData::PTR(PTR(target)),
+            ));
+            answered = true;
         }
     }
     let records = cfg
@@ -244,20 +243,20 @@ fn resolve(
             }
             wp::DnsType::Srv if matches!(qtype, RecordType::SRV | RecordType::ANY) => {
                 let f: Vec<&str> = value.split_whitespace().collect();
-                if f.len() == 4 {
-                    if let (Ok(pr), Ok(w), Ok(port), Ok(t)) = (
+                if f.len() == 4
+                    && let (Ok(pr), Ok(w), Ok(port), Ok(t)) = (
                         f[0].parse(),
                         f[1].parse(),
                         f[2].parse(),
                         Name::from_ascii(format!("{}.", lower(f[3]))),
-                    ) {
-                        r.add_answer(Record::from_rdata(
-                            owner.clone(),
-                            ttl,
-                            RData::SRV(SRV::new(pr, w, port, t)),
-                        ));
-                        answered = true;
-                    }
+                    )
+                {
+                    r.add_answer(Record::from_rdata(
+                        owner.clone(),
+                        ttl,
+                        RData::SRV(SRV::new(pr, w, port, t)),
+                    ));
+                    answered = true;
                 }
             }
             _ => answered = true,
@@ -326,20 +325,18 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
     let mut out = q.clone();
     // Reverse lookups for a published address go out as the LAN address.
     let mut ptr_orig: Option<Name> = None;
-    if let Some(query) = q.queries().first() {
-        if query.query_type() == RecordType::PTR {
-            if let Some(ip) = ptr_to_ip(&query.name().to_ascii()) {
-                if let Some(g) = gs.iter().find(|g| g.published.contains(&ip)) {
-                    let lan = map_prefix(ip, &g.published, &g.lan)?;
-                    let mut nq = query.clone();
-                    nq.set_name(Name::from_ascii(format!("{}.", ip_to_ptr(lan))).ok()?);
-                    ptr_orig = Some(query.name().clone());
-                    out = q.clone();
-                    out.take_queries();
-                    out.add_query(nq);
-                }
-            }
-        }
+    if let Some(query) = q.queries().first()
+        && query.query_type() == RecordType::PTR
+        && let Some(ip) = ptr_to_ip(&query.name().to_ascii())
+        && let Some(g) = gs.iter().find(|g| g.published.contains(&ip))
+    {
+        let lan = map_prefix(ip, &g.published, &g.lan)?;
+        let mut nq = query.clone();
+        nq.set_name(Name::from_ascii(format!("{}.", ip_to_ptr(lan))).ok()?);
+        ptr_orig = Some(query.name().clone());
+        out = q.clone();
+        out.take_queries();
+        out.add_query(nq);
     }
     let bytes = out.to_vec().ok()?;
     let servers: Vec<IpAddr> = f
@@ -352,7 +349,11 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
     let _ = n;
     for srv in servers {
         let bind = SocketAddr::new(
-            if srv.is_ipv4() { std::net::Ipv4Addr::UNSPECIFIED.into() } else { std::net::Ipv6Addr::UNSPECIFIED.into() },
+            if srv.is_ipv4() {
+                std::net::Ipv4Addr::UNSPECIFIED.into()
+            } else {
+                std::net::Ipv6Addr::UNSPECIFIED.into()
+            },
             0,
         );
         let Ok(sock) = tokio::net::UdpSocket::bind(bind).await else {

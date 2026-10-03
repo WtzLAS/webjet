@@ -8,3 +8,6 @@ license.workspace = true
 planus.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

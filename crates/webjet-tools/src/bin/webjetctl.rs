@@ -2,9 +2,9 @@
 //! operations with an account key kept on this machine and submits them
 //! through the local webjetd's control channel.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use webjet_core::crypto::{self, Bytes32, KeyPair};
 use webjet_core::statemachine::ops::sign_op;
@@ -654,179 +654,179 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Cmd::Node { cmd } => {
-            match cmd {
-                NodeCmd::Enroll {
-                    owner,
-                    name,
-                    ip,
-                    roles,
-                    tags: tg,
-                    route,
-                    expires_hours,
-                    controller,
-                } => {
-                    let a = load_account(&cli)?;
-                    let owner_id = account_id(&cli, owner).await?;
-                    let ips = if ip.is_empty() {
-                        vec![pick_ip(&call(&cli, json!({"cmd": "enroll_info"})).await?)?]
-                    } else {
-                        ip.clone()
-                    };
-                    let token = crypto::random32();
-                    let th = crypto::token_hash(&token);
-                    let op = wp::CreateEnrollment {
-                        owner: Some(crypto::k32(&owner_id)),
-                        name: Some(name.clone()),
-                        overlay_ips: Some(overlay_ips(&ips)?),
-                        roles: Some(parse_roles(roles)?),
-                        tags: Some(tags(tg)?),
-                        routes: Some(grants(route)?),
-                        token_hash: Some(crypto::k32(&th)),
-                        expires_at: now_ms() + expires_hours * 3_600_000,
-                        identity_key: None,
-                        node_id: None,
-                    };
-                    let r =
-                        submit(&cli, a.sign(AccountOp::CreateEnrollment(Box::new(op)))?).await?;
-                    eprintln!(
-                        "enrollment for {name} ({}) created (entry {}); on the node run:",
-                        ips.join(", "),
-                        r["index"]
-                    );
-                    println!("{}", ticket(&cli, &token, controller).await?);
-                }
-                NodeCmd::List => {
-                    let v = nodes(&cli).await?;
-                    if cli.json {
-                        print(&cli, &json!(v));
-                    } else {
-                        let mut rows = vec![vec![
-                            "NAME".into(),
-                            "IPS".into(),
-                            "ROLES".into(),
-                            "TAGS".into(),
-                            "OWNER".into(),
-                            "VALID".into(),
-                        ]];
-                        for n in v {
-                            let mut roles = Vec::new();
-                            for r in ["data", "relay", "control"] {
-                                if n[r].as_bool() == Some(true) {
-                                    roles.push(r);
-                                }
+        Cmd::Node { cmd } => match cmd {
+            NodeCmd::Enroll {
+                owner,
+                name,
+                ip,
+                roles,
+                tags: tg,
+                route,
+                expires_hours,
+                controller,
+            } => {
+                let a = load_account(&cli)?;
+                let owner_id = account_id(&cli, owner).await?;
+                let ips = if ip.is_empty() {
+                    vec![pick_ip(&call(&cli, json!({"cmd": "enroll_info"})).await?)?]
+                } else {
+                    ip.clone()
+                };
+                let token = crypto::random32();
+                let th = crypto::token_hash(&token);
+                let op = wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&owner_id)),
+                    name: Some(name.clone()),
+                    overlay_ips: Some(overlay_ips(&ips)?),
+                    roles: Some(parse_roles(roles)?),
+                    tags: Some(tags(tg)?),
+                    routes: Some(grants(route)?),
+                    token_hash: Some(crypto::k32(&th)),
+                    expires_at: now_ms() + expires_hours * 3_600_000,
+                    identity_key: None,
+                    node_id: None,
+                };
+                let r = submit(&cli, a.sign(AccountOp::CreateEnrollment(Box::new(op)))?).await?;
+                eprintln!(
+                    "enrollment for {name} ({}) created (entry {}); on the node run:",
+                    ips.join(", "),
+                    r["index"]
+                );
+                println!("{}", ticket(&cli, &token, controller).await?);
+            }
+            NodeCmd::List => {
+                let v = nodes(&cli).await?;
+                if cli.json {
+                    print(&cli, &json!(v));
+                } else {
+                    let mut rows = vec![vec![
+                        "NAME".into(),
+                        "IPS".into(),
+                        "ROLES".into(),
+                        "TAGS".into(),
+                        "OWNER".into(),
+                        "VALID".into(),
+                    ]];
+                    for n in v {
+                        let mut roles = Vec::new();
+                        for r in ["data", "relay", "control"] {
+                            if n[r].as_bool() == Some(true) {
+                                roles.push(r);
                             }
-                            let j = |k: &str| {
-                                n[k].as_array()
-                                    .cloned()
-                                    .unwrap_or_default()
-                                    .iter()
-                                    .filter_map(|x| x.as_str().map(String::from))
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            };
-                            rows.push(vec![
-                                n["name"].as_str().unwrap_or("").into(),
-                                j("ips"),
-                                roles.join(","),
-                                j("tags"),
-                                n["owner"].as_str().unwrap_or("").into(),
-                                n["valid"].to_string(),
-                            ]);
                         }
-                        print_table(&rows);
+                        let j = |k: &str| {
+                            n[k].as_array()
+                                .cloned()
+                                .unwrap_or_default()
+                                .iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        };
+                        rows.push(vec![
+                            n["name"].as_str().unwrap_or("").into(),
+                            j("ips"),
+                            roles.join(","),
+                            j("tags"),
+                            n["owner"].as_str().unwrap_or("").into(),
+                            n["valid"].to_string(),
+                        ]);
                     }
-                }
-                NodeCmd::Show { name } => {
-                    let id = node_id(&cli, name).await?;
-                    let n = nodes(&cli)
-                        .await?
-                        .into_iter()
-                        .find(|n| n["id"].as_str() == Some(&hex::encode(id)))
-                        .unwrap_or_default();
-                    print(&cli, &n);
-                }
-                NodeCmd::Update {
-                    name,
-                    roles,
-                    tags: tg,
-                    ip,
-                    route,
-                    no_routes,
-                    owner,
-                } => {
-                    let a = load_account(&cli)?;
-                    let id = node_id(&cli, name).await?;
-                    let owner = match owner {
-                        Some(o) => Some(crypto::k32(&account_id(&cli, o).await?)),
-                        None => None,
-                    };
-                    let op = wp::UpdateNode {
-                        node_id: Some(crypto::k32(&id)),
-                        owner,
-                        set_overlay_ips: ip.is_some(),
-                        overlay_ips: ip.as_ref().map(|v| overlay_ips(v)).transpose()?,
-                        set_roles: roles.is_some(),
-                        roles: roles.as_ref().map(|r| parse_roles(r)).transpose()?,
-                        set_tags: tg.is_some(),
-                        tags: tg.as_ref().map(|t| tags(t)).transpose()?,
-                        set_routes: route.is_some() || *no_routes,
-                        routes: if *no_routes {
-                            Some(vec![])
-                        } else {
-                            route.as_ref().map(|r| grants(r)).transpose()?
-                        },
-                    };
-                    let r = submit(&cli, a.sign(AccountOp::UpdateNode(Box::new(op)))?).await?;
-                    println!("{name} updated (entry {})", r["index"]);
-                }
-                NodeCmd::Rename { name, new_name } => {
-                    let a = load_account(&cli)?;
-                    let id = node_id(&cli, name).await?;
-                    let r = submit(
-                        &cli,
-                        a.sign(AccountOp::RenameNode(Box::new(wp::RenameNode {
-                            node_id: Some(crypto::k32(&id)),
-                            name: Some(new_name.clone()),
-                        })))?,
-                    )
-                    .await?;
-                    println!("{name} is now {new_name} (entry {})", r["index"]);
-                }
-                NodeCmd::Revoke { name, reason } => {
-                    let a = load_account(&cli)?;
-                    let id = node_id(&cli, name).await?;
-                    let r = submit(
-                        &cli,
-                        a.sign(AccountOp::TombstoneNode(Box::new(wp::TombstoneNode {
-                            node_id: Some(crypto::k32(&id)),
-                            reason: reason.clone(),
-                        })))?,
-                    )
-                    .await?;
-                    println!("{name} revoked (entry {})", r["index"]);
-                }
-                NodeCmd::Rekey {
-                    name,
-                    revoke_old_now,
-                    expires_hours,
-                    controller,
-                } => {
-                    let a = load_account(&cli)?;
-                    let id = node_id(&cli, name).await?;
-                    let token = crypto::random32();
-                    let op = wp::RekeyNode {
-                        node_id: Some(crypto::k32(&id)),
-                        token_hash: Some(crypto::k32(&crypto::token_hash(&token))),
-                        expires_at: now_ms() + expires_hours * 3_600_000,
-                        revoke_old_now: *revoke_old_now,
-                    };
-                    let r = submit(&cli, a.sign(AccountOp::RekeyNode(Box::new(op)))?).await?;
-                    eprintln!("re-key for {name} issued (entry {}); on the node run `webjetd enroll` with:", r["index"]);
-                    println!("{}", ticket(&cli, &token, controller).await?);
+                    print_table(&rows);
                 }
             }
-        }
+            NodeCmd::Show { name } => {
+                let id = node_id(&cli, name).await?;
+                let n = nodes(&cli)
+                    .await?
+                    .into_iter()
+                    .find(|n| n["id"].as_str() == Some(&hex::encode(id)))
+                    .unwrap_or_default();
+                print(&cli, &n);
+            }
+            NodeCmd::Update {
+                name,
+                roles,
+                tags: tg,
+                ip,
+                route,
+                no_routes,
+                owner,
+            } => {
+                let a = load_account(&cli)?;
+                let id = node_id(&cli, name).await?;
+                let owner = match owner {
+                    Some(o) => Some(crypto::k32(&account_id(&cli, o).await?)),
+                    None => None,
+                };
+                let op = wp::UpdateNode {
+                    node_id: Some(crypto::k32(&id)),
+                    owner,
+                    set_overlay_ips: ip.is_some(),
+                    overlay_ips: ip.as_ref().map(|v| overlay_ips(v)).transpose()?,
+                    set_roles: roles.is_some(),
+                    roles: roles.as_ref().map(|r| parse_roles(r)).transpose()?,
+                    set_tags: tg.is_some(),
+                    tags: tg.as_ref().map(|t| tags(t)).transpose()?,
+                    set_routes: route.is_some() || *no_routes,
+                    routes: if *no_routes {
+                        Some(vec![])
+                    } else {
+                        route.as_ref().map(|r| grants(r)).transpose()?
+                    },
+                };
+                let r = submit(&cli, a.sign(AccountOp::UpdateNode(Box::new(op)))?).await?;
+                println!("{name} updated (entry {})", r["index"]);
+            }
+            NodeCmd::Rename { name, new_name } => {
+                let a = load_account(&cli)?;
+                let id = node_id(&cli, name).await?;
+                let r = submit(
+                    &cli,
+                    a.sign(AccountOp::RenameNode(Box::new(wp::RenameNode {
+                        node_id: Some(crypto::k32(&id)),
+                        name: Some(new_name.clone()),
+                    })))?,
+                )
+                .await?;
+                println!("{name} is now {new_name} (entry {})", r["index"]);
+            }
+            NodeCmd::Revoke { name, reason } => {
+                let a = load_account(&cli)?;
+                let id = node_id(&cli, name).await?;
+                let r = submit(
+                    &cli,
+                    a.sign(AccountOp::TombstoneNode(Box::new(wp::TombstoneNode {
+                        node_id: Some(crypto::k32(&id)),
+                        reason: reason.clone(),
+                    })))?,
+                )
+                .await?;
+                println!("{name} revoked (entry {})", r["index"]);
+            }
+            NodeCmd::Rekey {
+                name,
+                revoke_old_now,
+                expires_hours,
+                controller,
+            } => {
+                let a = load_account(&cli)?;
+                let id = node_id(&cli, name).await?;
+                let token = crypto::random32();
+                let op = wp::RekeyNode {
+                    node_id: Some(crypto::k32(&id)),
+                    token_hash: Some(crypto::k32(&crypto::token_hash(&token))),
+                    expires_at: now_ms() + expires_hours * 3_600_000,
+                    revoke_old_now: *revoke_old_now,
+                };
+                let r = submit(&cli, a.sign(AccountOp::RekeyNode(Box::new(op)))?).await?;
+                eprintln!(
+                    "re-key for {name} issued (entry {}); on the node run `webjetd enroll` with:",
+                    r["index"]
+                );
+                println!("{}", ticket(&cli, &token, controller).await?);
+            }
+        },
         Cmd::Policy { cmd } => match cmd {
             ApplyCmd::Apply { file } | ApplyCmd::Check { file: Some(file) } => {
                 let f: webjet_core::policy::PolicyFile = serde_yaml::from_slice(&read(file)?)?;

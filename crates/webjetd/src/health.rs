@@ -3,7 +3,7 @@
 use crate::node::Node;
 use std::sync::Arc;
 use std::time::Duration;
-use webjet_core::types::{now_ms, SKEW_HEAD};
+use webjet_core::types::{SKEW_HEAD, now_ms};
 
 const WARN_MS: i64 = 30_000;
 const FATAL_MS: i64 = 60_000;

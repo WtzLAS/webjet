@@ -83,10 +83,10 @@ pub fn maybe_start(n: &Arc<Node>, peer: &Bytes32) {
     }
     let mut t = table().lock();
     let st = t.entry(*peer).or_default();
-    if let Some(at) = st.next_try {
-        if Instant::now() < at {
-            return;
-        }
+    if let Some(at) = st.next_try
+        && Instant::now() < at
+    {
+        return;
     }
     st.backoff = if st.backoff.is_zero() {
         Duration::from_secs(60)
@@ -239,12 +239,11 @@ pub async fn run(n: Arc<Node>) {
     loop {
         tokio::select! {
             e = ev.recv() => {
-                if let Ok(crate::node::Event::RecordsChanged(id)) = e {
-                    if n.e2e.get(&id).map(|s| s.established()).unwrap_or(false) {
+                if let Ok(crate::node::Event::RecordsChanged(id)) = e
+                    && n.e2e.get(&id).map(|s| s.established()).unwrap_or(false) {
                         if let Some(st) = table().lock().get_mut(&id) { st.next_try = None; }
                         maybe_start(&n, &id);
                     }
-                }
             }
             _ = tick.tick() => {
                 for s in n.e2e.all() {

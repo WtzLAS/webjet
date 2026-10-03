@@ -5,15 +5,15 @@
 
 use crate::circuit::LocalCircuit;
 use crate::node::Node;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use webjet_core::crypto::{self, Bytes32};
-use webjet_core::frames::{self, ftype, ReplayWindow, SessionKey};
+use webjet_core::frames::{self, ReplayWindow, SessionKey, ftype};
 use webjet_net::tls;
 
 pub const REKEY_AFTER: Duration = Duration::from_secs(120);
@@ -124,10 +124,10 @@ impl Sessions {
             s.view().nodes.get(peer)?.key
         };
         let mut m = self.map.lock();
-        if let Some(s) = m.get(peer) {
-            if s.peer_key == key {
-                return Some(s.clone());
-            }
+        if let Some(s) = m.get(peer)
+            && s.peer_key == key
+        {
+            return Some(s.clone());
         }
         let s = Arc::new(Session {
             peer: *peer,
@@ -320,12 +320,12 @@ fn maybe_rekey(n: &Arc<Node>, s: &Arc<Session>) {
         .map(|k| k.created.elapsed())
         .unwrap_or_default();
     let mine = n.me < s.peer || age > REKEY_AFTER + Duration::from_secs(20);
-    if mine && !s.handshaking() {
-        if let Some(c) = n.circuits.lock().local_circuits(&s.peer).into_iter().next() {
-            if let Err(e) = start_handshake(n, s, &c) {
-                tracing::debug!("rekey: {e}");
-            }
-        }
+    if mine
+        && !s.handshaking()
+        && let Some(c) = n.circuits.lock().local_circuits(&s.peer).into_iter().next()
+        && let Err(e) = start_handshake(n, s, &c)
+    {
+        tracing::debug!("rekey: {e}");
     }
 }
 

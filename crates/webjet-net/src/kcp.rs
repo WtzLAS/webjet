@@ -18,18 +18,18 @@
 //! a BBR-style controller.
 
 use crate::fec;
-use crate::gate::{small_packet_padding, GateResult, ReplayCache, SharedEpochs, UdpObfs};
+use crate::gate::{GateResult, ReplayCache, SharedEpochs, UdpObfs, small_packet_padding};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use webjet_core::types::{now_ms, SKEW_PSK_GATE};
+use webjet_core::types::{SKEW_PSK_GATE, now_ms};
 
 const K_SHARD: u8 = 1;
 const K_OPEN: u8 = 2;
@@ -145,7 +145,8 @@ impl UdpEndpoint {
             let Some((gate, inner)) = self.obfs.open(&buf[..n], &self.epochs.read()) else {
                 continue;
             };
-            let (Some(&kind), Some(conv)) = (inner.first(), webjet_core::bytes::be_u32(&inner, 1)) else {
+            let (Some(&kind), Some(conv)) = (inner.first(), webjet_core::bytes::be_u32(&inner, 1))
+            else {
                 continue;
             };
             let body = &inner[5..];
@@ -164,16 +165,16 @@ impl UdpEndpoint {
             if kind != K_OPEN || !self.listening {
                 continue;
             }
-            let (Some(ts), Some(nonce)) = (webjet_core::bytes::be_u64(body, 0), webjet_core::bytes::array::<16>(body, 8)) else {
+            let (Some(ts), Some(nonce)) = (
+                webjet_core::bytes::be_u64(body, 0),
+                webjet_core::bytes::array::<16>(body, 8),
+            ) else {
                 continue;
             };
             if ts.abs_diff(now_ms()) > SKEW_PSK_GATE {
                 continue;
             }
-            if !self
-                .replay
-                .check_and_insert(nonce, now_ms())
-            {
+            if !self.replay.check_and_insert(nonce, now_ms()) {
                 continue;
             }
             if !self.admit_ip(from.ip()) {

@@ -4,13 +4,13 @@
 
 use crate::circuit::{self, LocalCircuit};
 use crate::node::Node;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use webjet_core::crypto::{self, opt_k32, Bytes32};
+use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::frames::ftype;
-use webjet_core::routing::{spread_pick, Path};
+use webjet_core::routing::{Path, spread_pick};
 use webjet_proto::{self as wp, Decodable, Encodable};
 
 const K_PATHS: usize = 4;

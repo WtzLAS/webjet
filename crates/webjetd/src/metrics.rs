@@ -2,12 +2,12 @@
 
 use crate::node::Node;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use webjet_core::crypto;
 use webjet_core::types::now_ms;
-use webjet_proto::{self as wp, msg_type as mt, RpcBody};
+use webjet_proto::{self as wp, RpcBody, msg_type as mt};
 
 #[derive(Default, Debug)]
 pub struct Counters {

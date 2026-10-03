@@ -11,10 +11,10 @@
 //!   camouflage website from the bytes already read (`WEBSITE`) or closes
 //!   (`REFUSE`).
 
-use crate::gate::{anytls_enroll_password, anytls_password, Epochs, GateResult, SharedEpochs};
-use crate::hop::{exchange_identity, BoxIo, Established};
+use crate::gate::{Epochs, GateResult, SharedEpochs, anytls_enroll_password, anytls_password};
+use crate::hop::{BoxIo, Established, exchange_identity};
 use crate::tls::PeerTrust;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use boring::ssl::{
     SslAcceptor, SslConnector, SslMethod, SslVerifyError, SslVerifyMode, SslVersion,
 };
@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use webjet_core::crypto::{ct_eq, Bytes32, KeyPair};
+use webjet_core::crypto::{Bytes32, KeyPair, ct_eq};
 use webjet_proto::Transport;
 
 const EXPORTER_LABEL: &str = "EXPORTER-webjet-anytls-binding";

@@ -4,7 +4,7 @@
 //! `leaf = BLAKE3(0x00 ‖ kind ‖ key ‖ bytes)`, `internal = BLAKE3(0x01 ‖ l ‖ r)`,
 //! `empty[d]` = a fixed constant per depth. Empty subtrees prove absence.
 
-use crate::crypto::{ctx, derive, Bytes32};
+use crate::crypto::{Bytes32, ctx, derive};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 

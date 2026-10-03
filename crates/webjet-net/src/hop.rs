@@ -4,17 +4,17 @@
 //! Hop record framing: `type[1] || len[3] || payload`.
 
 use crate::gate::{
-    self, check_tcp_preamble, tcp_preamble, GateResult, ReplayCache, SharedEpochs, TCP_PREAMBLE,
+    self, GateResult, ReplayCache, SharedEpochs, TCP_PREAMBLE, check_tcp_preamble, tcp_preamble,
 };
 use crate::kcp::{KcpStats, UdpEndpoint};
 use crate::tls::{self, PeerTrust};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use webjet_core::crypto::{keyed, Bytes32, KeyPair};
+use webjet_core::crypto::{Bytes32, KeyPair, keyed};
 use webjet_proto::Transport;
 
 pub const MAX_RECORD: usize = 1 << 20;
@@ -104,7 +104,7 @@ fn tune_tcp(s: &TcpStream) {
 }
 
 #[cfg(target_os = "linux")]
-extern "C" {
+unsafe extern "C" {
     #[link_name = "setsockopt"]
     fn libc_setsockopt(
         fd: i32,
@@ -379,10 +379,10 @@ pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(
     if !webjet_core::crypto::verify_raw(&pk, &msg, &psig) {
         bail!("bad identity signature");
     }
-    if let Some(e) = expected {
-        if !e.contains(&pk) {
-            bail!("peer presented an unexpected key");
-        }
+    if let Some(e) = expected
+        && !e.contains(&pk)
+    {
+        bail!("peer presented an unexpected key");
     }
     if !trust.trusted(&pk) {
         bail!("peer key is not trusted");

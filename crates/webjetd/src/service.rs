@@ -18,7 +18,7 @@ pub fn signals() -> Shutdown {
     Box::pin(async {
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut term = match signal(SignalKind::terminate()) {
                 Ok(s) => s,
                 Err(_) => {

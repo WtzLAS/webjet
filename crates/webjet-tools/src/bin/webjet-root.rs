@@ -2,12 +2,12 @@
 //! revocation keys (§5). It never talks to the network; files move on
 //! removable media.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use webjet_core::crypto::{self, KeyPair};
 use webjet_core::types::{net_to_cidr, now_ms, parse_net};
-use webjet_proto::{self as wp, msg_type as mt, Decodable, Encodable};
+use webjet_proto::{self as wp, Decodable, Encodable, msg_type as mt};
 use webjet_tools::*;
 
 #[derive(Parser)]
@@ -292,7 +292,11 @@ fn main() -> Result<()> {
                 reason,
             };
             write_public(&out, &pick(&k, &with)?.sign_obj(mt::ACCOUNT_TOMBSTONE, &t))?;
-            println!("account tombstone for {} → {} (submit with `webjetctl submit`, or inject on any node)", p.name, out.display());
+            println!(
+                "account tombstone for {} → {} (submit with `webjetctl submit`, or inject on any node)",
+                p.name,
+                out.display()
+            );
         }
         Cmd::Genesis {
             overlay_pool,

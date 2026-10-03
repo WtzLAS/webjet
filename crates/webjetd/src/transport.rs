@@ -32,13 +32,16 @@ pub fn priority(n: &Node, node: &Bytes32, t: Transport) -> u8 {
         if let Some(p) = n.cfg.local_priority(t) {
             return p;
         }
-    } else if let Some((r, _)) = n.records.lock().endpoints.get(node) {
-        if let Some(p) = r
-            .priorities
-            .as_ref()
-            .and_then(|ps| ps.iter().find(|p| p.transport == t))
-        {
-            return p.priority;
+    } else {
+        // Read the published priority and release the records lock before
+        // taking the store lock below.
+        let published = n.records.lock().endpoints.get(node).and_then(|(r, _)| {
+            r.priorities
+                .as_ref()
+                .and_then(|ps| ps.iter().find(|p| p.transport == t).map(|p| p.priority))
+        });
+        if let Some(p) = published {
+            return p;
         }
     }
     let s = n.store.read();
@@ -54,16 +57,15 @@ pub fn priority(n: &Node, node: &Bytes32, t: Transport) -> u8 {
                     .iter()
                     .filter_map(|s| Selector::parse(s).ok())
                     .collect();
-                if selects(&sels, &subj) {
-                    if let Some(p) = o
+                if selects(&sels, &subj)
+                    && let Some(p) = o
                         .values
                         .clone()
                         .unwrap_or_default()
                         .iter()
                         .find(|p| p.transport == t)
-                    {
-                        return p.priority;
-                    }
+                {
+                    return p.priority;
                 }
             }
         }
@@ -324,10 +326,12 @@ pub fn refresh_anytls(n: &Arc<Node>) {
         _ => return,
     };
     let mut cur = n.anytls_acceptor.lock();
-    if let Some((_, s, w)) = cur.as_ref() {
-        if s.key_pem == secret.key_pem && s.site == secret.site && *w == cam.website {
-            return;
-        }
+    if let Some((_, s, w)) = cur.as_ref()
+        && s.key_pem == secret.key_pem
+        && s.site == secret.site
+        && *w == cam.website
+    {
+        return;
     }
     match webjet_net::anytls::acceptor(&cam, &secret) {
         Ok(a) => *cur = Some((Arc::new(a), secret, cam.website)),
@@ -381,12 +385,11 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
         .map(|a| a.port())
     {
         for h in n.hops.lock().values() {
-            if h.transport == Transport::KcpFecTls {
-                if let Some(o) = *h.observed.lock() {
-                    if o.port() != 0 {
-                        push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
-                    }
-                }
+            if h.transport == Transport::KcpFecTls
+                && let Some(o) = *h.observed.lock()
+                && o.port() != 0
+            {
+                push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
             }
         }
         for ip in crate::platform::local_ips() {

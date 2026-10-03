@@ -23,7 +23,7 @@
 //! In memory the key lives in a locked (non-swappable) page and is zeroed
 //! on drop; the process also opts out of core dumps.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use webjet_core::crypto::{Bytes32, KeyPair};
@@ -188,10 +188,12 @@ fn unseal(raw: &[u8], cfg: &KeyCfg) -> Result<(Zeroizing<Bytes32>, Backend)> {
 
 /// Remove external material (Keychain items) for a key file being replaced.
 pub fn discard(path: &Path, cfg: &KeyCfg) {
-    if let Ok(raw) = std::fs::read(path) {
-        if raw.len() > 5 && &raw[..4] == MAGIC && raw[4] == TAG_KEYCHAIN {
-            keychain::delete(cfg.keychain.as_deref(), &raw[5..]);
-        }
+    if let Ok(raw) = std::fs::read(path)
+        && raw.len() > 5
+        && &raw[..4] == MAGIC
+        && raw[4] == TAG_KEYCHAIN
+    {
+        keychain::delete(cfg.keychain.as_deref(), &raw[5..]);
     }
 }
 
@@ -333,10 +335,10 @@ pub mod tpm {
         let mut child = c
             .spawn()
             .with_context(|| format!("{} (install tpm2-tools)", args[0]))?;
-        if let Some(i) = input {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(i)?;
-            }
+        if let Some(i) = input
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            stdin.write_all(i)?;
         }
         let o = child.wait_with_output()?;
         if !o.status.success() {
@@ -482,10 +484,10 @@ pub mod keychain {
 
     #[cfg(target_os = "macos")]
     pub fn delete(path: Option<&Path>, payload: &[u8]) {
-        if let (Ok(account), Ok(kc)) = (std::str::from_utf8(payload), open(path)) {
-            if let Ok((_, item)) = kc.find_generic_password(SERVICE, account) {
-                item.delete();
-            }
+        if let (Ok(account), Ok(kc)) = (std::str::from_utf8(payload), open(path))
+            && let Ok((_, item)) = kc.find_generic_password(SERVICE, account)
+        {
+            item.delete();
         }
     }
 
@@ -511,8 +513,8 @@ pub mod dpapi {
         use super::*;
         use windows_sys::Win32::Foundation::LocalFree;
         use windows_sys::Win32::Security::Cryptography::{
-            CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE,
-            CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+            CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN,
+            CryptProtectData, CryptUnprotectData,
         };
 
         fn blob(b: &[u8]) -> CRYPT_INTEGER_BLOB {

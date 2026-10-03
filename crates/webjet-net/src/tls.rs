@@ -4,7 +4,7 @@
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{
-    aws_lc_rs, verify_tls13_signature_with_raw_key, CryptoProvider, WebPkiSupportedAlgorithms,
+    CryptoProvider, WebPkiSupportedAlgorithms, aws_lc_rs, verify_tls13_signature_with_raw_key,
 };
 use rustls::pki_types::{
     CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, SubjectPublicKeyInfoDer,
@@ -14,7 +14,7 @@ use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::sign::CertifiedKey;
 use rustls::{DigitallySignedStruct, DistinguishedName, Error, SignatureScheme};
 use std::sync::Arc;
-use webjet_core::crypto::{spki_der, spki_to_key, Bytes32, KeyPair};
+use webjet_core::crypto::{Bytes32, KeyPair, spki_der, spki_to_key};
 
 /// ALPN for hop sessions (§15.8).
 pub const ALPN_HOP: &[u8] = b"webjet/1";
@@ -159,10 +159,10 @@ impl ClientCertVerifier for TrustedClient {
             return Err(Error::General("unexpected certificate chain".into()));
         }
         let k = key_of(end_entity)?;
-        if let Some(e) = self.expected {
-            if e != k {
-                return Err(Error::General("peer presented an unexpected key".into()));
-            }
+        if let Some(e) = self.expected
+            && e != k
+        {
+            return Err(Error::General("peer presented an unexpected key".into()));
         }
         if !self.trust.trusted(&k) {
             return Err(Error::General("peer key is not trusted".into()));
@@ -371,7 +371,8 @@ pub fn enroll_server_config(kp: &KeyPair) -> anyhow::Result<Arc<rustls::ServerCo
 /// raw public keys, so the name is never verified; the IP fallback is only
 /// there to avoid a panic path (the constant is a valid DNS name).
 pub fn server_name() -> ServerName<'static> {
-    ServerName::try_from(SERVER_NAME).unwrap_or(ServerName::IpAddress(std::net::Ipv4Addr::LOCALHOST.into()))
+    ServerName::try_from(SERVER_NAME)
+        .unwrap_or(ServerName::IpAddress(std::net::Ipv4Addr::LOCALHOST.into()))
 }
 
 /// The peer's raw public key after a completed handshake.

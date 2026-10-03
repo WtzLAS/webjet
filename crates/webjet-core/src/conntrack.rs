@@ -4,7 +4,7 @@
 //! idle.
 
 use crate::crypto::Bytes32;
-use crate::packet::{tcpf, Flow, IcmpKind, Parsed};
+use crate::packet::{Flow, IcmpKind, Parsed, tcpf};
 use crate::policy::{PROTO_ICMP, PROTO_ICMPV6, PROTO_TCP, PROTO_UDP};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -142,10 +142,9 @@ impl Conntrack {
                     if let Some(e) = self.entries.get(&Key {
                         peer: *peer,
                         flow: f,
-                    }) {
-                        if now.duration_since(e.last) < e.state.timeout() {
-                            return Verdict::RelatedError;
-                        }
+                    }) && now.duration_since(e.last) < e.state.timeout()
+                    {
+                        return Verdict::RelatedError;
                     }
                 }
             }
@@ -250,12 +249,12 @@ impl Conntrack {
     }
 
     fn remove(&mut self, k: &Key) {
-        if self.entries.remove(k).is_some() {
-            if let Some(c) = self.per_peer.get_mut(&k.peer) {
-                *c = c.saturating_sub(1);
-                if *c == 0 {
-                    self.per_peer.remove(&k.peer);
-                }
+        if self.entries.remove(k).is_some()
+            && let Some(c) = self.per_peer.get_mut(&k.peer)
+        {
+            *c = c.saturating_sub(1);
+            if *c == 0 {
+                self.per_peer.remove(&k.peer);
             }
         }
     }

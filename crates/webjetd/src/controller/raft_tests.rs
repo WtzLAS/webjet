@@ -17,7 +17,7 @@
 
 use super::*;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use webjet_proto::EntryPayload;
@@ -214,7 +214,7 @@ impl Sim {
 
     fn start(&mut self, i: usize) {
         let now = self.now();
-        let seed = self.rng.gen();
+        let seed: u64 = self.rng.next_u64();
         let node = &mut self.nodes[i];
         let snap = node.store.lock().snapshot.clone();
         node.sm = match snap {
@@ -428,7 +428,11 @@ impl Sim {
         if self.completeness_checked.insert((term, id)) {
             let r = self.nodes[i].raft.as_ref().unwrap();
             for (idx, h) in self.committed.range(r.snap_index + 1..) {
-                let e = r.entry(*idx).unwrap_or_else(|| panic!("leader completeness: new leader of term {term} lacks committed entry {idx}"));
+                let e = r.entry(*idx).unwrap_or_else(|| {
+                    panic!(
+                        "leader completeness: new leader of term {term} lacks committed entry {idx}"
+                    )
+                });
                 assert_eq!(
                     hash(&e.bytes),
                     *h,
@@ -653,11 +657,11 @@ impl Sim {
             );
             // A value proposed to a leader that was then deposed is lost
             // (legitimately); propose a fresh one and wait for that instead.
-            if since_propose >= 5_000 {
-                if let Some((nv, _)) = self.propose_value() {
-                    v = nv;
-                    since_propose = 0;
-                }
+            if since_propose >= 5_000
+                && let Some((nv, _)) = self.propose_value()
+            {
+                v = nv;
+                since_propose = 0;
             }
         }
         self.check_log_matching();

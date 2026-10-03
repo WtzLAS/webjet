@@ -4,16 +4,16 @@
 //! Everything here is verified before it is stored; the derived [`View`] is
 //! what the rest of the agent reads.
 
-use crate::crypto::{self, open_envelope, open_expect, Bytes32};
+use crate::crypto::{self, Bytes32, open_envelope, open_expect};
 use crate::leaf::{self, LeafValue};
-use crate::merkle::{self, kind, Tree};
+use crate::merkle::{self, Tree, kind};
 use crate::policy::{Policy, Subject};
-use crate::types::{cidr_to_net, now_ms, Grant, SKEW_HEAD};
-use anyhow::{anyhow, bail, Result};
+use crate::types::{Grant, SKEW_HEAD, cidr_to_net, now_ms};
+use anyhow::{Result, anyhow, bail};
 use ipnet::IpNet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
-use webjet_proto::{self as wp, msg_type as mt, Decodable};
+use webjet_proto::{self as wp, Decodable, msg_type as mt};
 
 #[derive(Clone, Debug)]
 pub struct CertEntry {
@@ -362,23 +362,26 @@ impl Store {
         );
         self.certs.remove(&id);
         // Discard state known only through heads above last_valid_version.
-        if let Some(h) = &self.head {
-            if h.key_id() == id && h.head.version > last_valid {
-                tracing::warn!("current tree head came from a retired key above its last valid version; discarding it");
-                self.head = None;
-                self.tree = Tree::new();
-                self.high_water = self.high_water.min(last_valid);
-            }
+        if let Some(h) = &self.head
+            && h.key_id() == id
+            && h.head.version > last_valid
+        {
+            tracing::warn!(
+                "current tree head came from a retired key above its last valid version; discarding it"
+            );
+            self.head = None;
+            self.tree = Tree::new();
+            self.high_water = self.high_water.min(last_valid);
         }
         self.rebuild();
         Ok(true)
     }
 
     fn key_for_head(&self, key_id: &Bytes32, version: u64) -> Option<Bytes32> {
-        if let Some(t) = self.key_tombs.get(key_id) {
-            if version > t.tomb.last_valid_version {
-                return None;
-            }
+        if let Some(t) = self.key_tombs.get(key_id)
+            && version > t.tomb.last_valid_version
+        {
+            return None;
         }
         // A retired key's cert is removed, so only heads from still-certified
         // keys can be verified; retired keys' older heads are kept as stored.
@@ -486,21 +489,21 @@ impl Store {
             match bytes {
                 Some(b) => {
                     let new = leaf::decode(*k, key, b)?;
-                    if let Some(old) = t.get(*k, key) {
-                        if let Ok(oldv) = leaf::decode(*k, key, &old.bytes) {
-                            let tomb_old = matches!(
-                                oldv,
-                                LeafValue::NodeTombstone(_) | LeafValue::AccountTombstone(..)
-                            );
-                            if tomb_old {
-                                bail!("a tombstone can't be replaced");
-                            }
-                            if *k != kind::VALIDITY
-                                && leaf::version(&new) <= leaf::version(&oldv)
-                                && old.bytes != *b
-                            {
-                                bail!("leaf version went backwards");
-                            }
+                    if let Some(old) = t.get(*k, key)
+                        && let Ok(oldv) = leaf::decode(*k, key, &old.bytes)
+                    {
+                        let tomb_old = matches!(
+                            oldv,
+                            LeafValue::NodeTombstone(_) | LeafValue::AccountTombstone(..)
+                        );
+                        if tomb_old {
+                            bail!("a tombstone can't be replaced");
+                        }
+                        if *k != kind::VALIDITY
+                            && leaf::version(&new) <= leaf::version(&oldv)
+                            && old.bytes != *b
+                        {
+                            bail!("leaf version went backwards");
                         }
                     }
                     t.insert(*k, *key, b.clone());
@@ -566,10 +569,10 @@ impl Store {
             mt::TOMBSTONE => {
                 let t: wp::Tombstone = v.decode()?;
                 let id = crypto::opt_k32(&t.node_id);
-                if let Some((old, _)) = self.offline_node_tombs.get(&id) {
-                    if old.version >= t.version {
-                        return Ok(false);
-                    }
+                if let Some((old, _)) = self.offline_node_tombs.get(&id)
+                    && old.version >= t.version
+                {
+                    return Ok(false);
                 }
                 self.offline_node_tombs.insert(id, (t, raw.to_vec()));
             }
@@ -750,12 +753,11 @@ pub fn build_view(
         }
     }
     for (_, e) in tree.iter() {
-        if e.kind == kind::ACCOUNT {
-            if let Ok(LeafValue::AccountTombstone(t, _)) = leaf::decode(e.kind, &e.key, &e.bytes) {
-                if t.revoke_issued {
-                    revoke_issuers.insert(crypto::opt_k32(&t.account_id));
-                }
-            }
+        if e.kind == kind::ACCOUNT
+            && let Ok(LeafValue::AccountTombstone(t, _)) = leaf::decode(e.kind, &e.key, &e.bytes)
+            && t.revoke_issued
+        {
+            revoke_issuers.insert(crypto::opt_k32(&t.account_id));
         }
     }
     // Admin accounts (root-signed) first, then normal accounts.

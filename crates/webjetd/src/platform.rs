@@ -135,7 +135,10 @@ pub fn nrpt_script(resolver: &[IpAddr], domains: &[String]) -> String {
         .map(|r| ps_quote(&r.to_string()))
         .collect::<Vec<_>>()
         .join(",");
-    let mut s = format!("Get-DnsClientNrptRule | Where-Object {{ $_.Comment -eq {} }} | Remove-DnsClientNrptRule -Force; ", ps_quote(OWNER_TAG));
+    let mut s = format!(
+        "Get-DnsClientNrptRule | Where-Object {{ $_.Comment -eq {} }} | Remove-DnsClientNrptRule -Force; ",
+        ps_quote(OWNER_TAG)
+    );
     for d in domains {
         s.push_str(&format!(
             "Add-DnsClientNrptRule -Namespace {} -NameServers @({ns}) -Comment {} | Out-Null; ",
@@ -213,7 +216,10 @@ pub fn cleanup(dev: &str) {
         }
     } else {
         #[cfg(windows)]
-        powershell(&format!("Get-DnsClientNrptRule | Where-Object {{ $_.Comment -eq {} }} | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache", ps_quote(OWNER_TAG)));
+        powershell(&format!(
+            "Get-DnsClientNrptRule | Where-Object {{ $_.Comment -eq {} }} | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache",
+            ps_quote(OWNER_TAG)
+        ));
     }
     let _ = dev;
 }
@@ -280,10 +286,10 @@ fn interfaces() -> Vec<if_addrs::Interface> {
 
 /// The interface exists and has an address (the gateway's LAN check, §11.9.2).
 pub fn iface_up(name: &str) -> bool {
-    if cfg!(target_os = "linux") {
-        if let Ok(s) = std::fs::read_to_string(format!("/sys/class/net/{name}/operstate")) {
-            return s.trim() != "down";
-        }
+    if cfg!(target_os = "linux")
+        && let Ok(s) = std::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+    {
+        return s.trim() != "down";
     }
     interfaces().iter().any(|i| i.name == name)
 }
@@ -343,9 +349,10 @@ mod tests {
             );
         } else if cfg!(target_os = "macos") {
             assert_eq!(cmd, "route");
-            assert!(args
-                .join(" ")
-                .contains("add -inet 192.168.50.0/24 -interface webjet0"));
+            assert!(
+                args.join(" ")
+                    .contains("add -inet 192.168.50.0/24 -interface webjet0")
+            );
         } else {
             assert_eq!(
                 args.join(" "),

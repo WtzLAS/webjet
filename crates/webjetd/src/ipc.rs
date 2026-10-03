@@ -57,7 +57,7 @@ pub async fn connect(path: &Path) -> std::io::Result<Box<dyn Stream>> {
 }
 
 #[cfg(windows)]
-pub use win::{connect, Listener};
+pub use win::{Listener, connect};
 
 #[cfg(windows)]
 mod win {

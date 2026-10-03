@@ -1,7 +1,7 @@
 //! Semantic validation of decoded objects (§15.2 step 2).
 
-use crate::types::{canonical, sorted_unique, valid_name, valid_tag, Grant};
-use anyhow::{bail, Result};
+use crate::types::{Grant, canonical, sorted_unique, valid_name, valid_tag};
+use anyhow::{Result, bail};
 use webjet_proto as wp;
 
 pub fn node_record(r: &wp::NodeRecord) -> Result<()> {
@@ -117,12 +117,12 @@ pub fn transport(t: &wp::TransportConfig) -> Result<()> {
             crate::policy::Selector::parse(&s)?;
         }
     }
-    if let Some(c) = &t.camouflage {
-        if let Some(d) = &c.domain {
-            if !d.is_empty() && !valid_dns_name(d) {
-                bail!("invalid camouflage domain {d:?}");
-            }
-        }
+    if let Some(c) = &t.camouflage
+        && let Some(d) = &c.domain
+        && !d.is_empty()
+        && !valid_dns_name(d)
+    {
+        bail!("invalid camouflage domain {d:?}");
     }
     if let Some(p) = &t.padding {
         for l in p.lines.clone().unwrap_or_default() {

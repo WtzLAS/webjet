@@ -1,6 +1,6 @@
 //! Common value types: CIDRs, names, tags, roles, time.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};

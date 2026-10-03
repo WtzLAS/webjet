@@ -6,8 +6,8 @@
 
 use crate::node::Node;
 use crate::state::{b64, unb64};
-use anyhow::{anyhow, bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, anyhow, bail};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -389,10 +389,11 @@ fn enroll_info(n: &Arc<Node>) -> Value {
     for id in v.controllers.keys() {
         if let Some((r, _)) = recs.endpoints.get(id) {
             for a in r.addrs.clone().unwrap_or_default() {
-                if a.kind == wp::AddrKind::Public && a.transport != wp::Transport::KcpFecTls {
-                    if let Some(sa) = a.addr.as_ref().and_then(|x| x.to_sock()) {
-                        controllers.push(json!({"host": sa.ip().to_string(), "port": sa.port(), "transport": a.transport.name()}));
-                    }
+                if a.kind == wp::AddrKind::Public
+                    && a.transport != wp::Transport::KcpFecTls
+                    && let Some(sa) = a.addr.as_ref().and_then(|x| x.to_sock())
+                {
+                    controllers.push(json!({"host": sa.ip().to_string(), "port": sa.port(), "transport": a.transport.name()}));
                 }
             }
         }
@@ -400,12 +401,13 @@ fn enroll_info(n: &Arc<Node>) -> Value {
     drop(recs);
     if n.is_controller() {
         for a in crate::transport::my_addrs(n) {
-            if a.kind == wp::AddrKind::Public && a.transport != wp::Transport::KcpFecTls {
-                if let Some(sa) = a.addr.as_ref().and_then(|x| x.to_sock()) {
-                    let j = json!({"host": sa.ip().to_string(), "port": sa.port(), "transport": a.transport.name()});
-                    if !controllers.contains(&j) {
-                        controllers.push(j);
-                    }
+            if a.kind == wp::AddrKind::Public
+                && a.transport != wp::Transport::KcpFecTls
+                && let Some(sa) = a.addr.as_ref().and_then(|x| x.to_sock())
+            {
+                let j = json!({"host": sa.ip().to_string(), "port": sa.port(), "transport": a.transport.name()});
+                if !controllers.contains(&j) {
+                    controllers.push(j);
                 }
             }
         }

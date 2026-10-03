@@ -23,7 +23,11 @@ pub struct Encoder {
 
 /// A cached Reed–Solomon codec; `None` for parameters it can't handle
 /// (zero shards, or more than 256 in total).
-fn codec(cache: &mut HashMap<(usize, usize), ReedSolomon>, k: usize, m: usize) -> Option<&ReedSolomon> {
+fn codec(
+    cache: &mut HashMap<(usize, usize), ReedSolomon>,
+    k: usize,
+    m: usize,
+) -> Option<&ReedSolomon> {
     use std::collections::hash_map::Entry;
     match cache.entry((k, m)) {
         Entry::Occupied(e) => Some(e.into_mut()),
@@ -245,7 +249,8 @@ impl Decoder {
             return out;
         }
         let missing: Vec<usize> = (0..kk).filter(|i| slots[*i].is_none()).collect();
-        let ok = codec(&mut self.codecs, kk, mm).is_some_and(|c| c.reconstruct_data(&mut slots).is_ok());
+        let ok =
+            codec(&mut self.codecs, kk, mm).is_some_and(|c| c.reconstruct_data(&mut slots).is_ok());
         if let Some(g) = self.groups.get_mut(&group) {
             g.done = true;
         }

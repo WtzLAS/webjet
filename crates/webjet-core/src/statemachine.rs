@@ -10,19 +10,19 @@
 //! Rules (§15.5): no wall clock (only `entry.timestamp`), no randomness (only
 //! `entry.random`), only ordered maps.
 
-use crate::crypto::{self, open_envelope, open_expect, opt_k32, Bytes32};
+use crate::crypto::{self, Bytes32, open_envelope, open_expect, opt_k32};
 use crate::leaf::{self, LeafValue, SINGLETON};
-use crate::merkle::{kind, Tree};
+use crate::merkle::{Tree, kind};
 use crate::policy::{Policy, Selector};
-use crate::store::{build_view, View};
+use crate::store::{View, build_view};
 use crate::types::{
-    self, canonical, cidr_to_net, overlaps, sort_dedup, valid_name, valid_tag, Grant, MINUTE,
-    SKEW_SHORT_RECORD, VALIDITY_PERIOD,
+    self, Grant, MINUTE, SKEW_SHORT_RECORD, VALIDITY_PERIOD, canonical, cidr_to_net, overlaps,
+    sort_dedup, valid_name, valid_tag,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ipnet::IpNet;
 use std::collections::{BTreeMap, BTreeSet};
-use webjet_proto::{self as wp, msg_type as mt, AccountOp, Decodable, EntryPayload};
+use webjet_proto::{self as wp, AccountOp, Decodable, EntryPayload, msg_type as mt};
 
 #[derive(Clone, Debug)]
 pub struct Pending {
@@ -318,18 +318,18 @@ impl Machine {
             self.state_version = Some(sv);
         }
         if let Some(g) = fx.genesis {
-            let (gen, root, em) = crate::store::open_genesis(&g)
+            let (genesis_rec, root, em) = crate::store::open_genesis(&g)
                 .map_err(|e| ApplyError::Divergence(e.to_string()))?;
             self.root_key = root;
             self.emergency_key = em;
-            self.pool = gen
+            self.pool = genesis_rec
                 .overlay_pool
                 .clone()
                 .unwrap_or_default()
                 .iter()
                 .filter_map(cidr_to_net)
                 .collect();
-            self.genesis = Some((g, gen));
+            self.genesis = Some((g, genesis_rec));
         }
         self.last_index = entry.index;
         self.last_term = entry.term;
@@ -364,9 +364,9 @@ impl Machine {
                     return rej("genesis already applied");
                 }
                 let raw = g.genesis.clone().unwrap_or_default();
-                let (gen, root, _) = crate::store::open_genesis(&raw)
+                let (genesis_rec, root, _) = crate::store::open_genesis(&raw)
                     .map_err(|e| ApplyError::Rejected(e.to_string()))?;
-                let admin = gen
+                let admin = genesis_rec
                     .first_admin
                     .clone()
                     .ok_or_else(|| ApplyError::Rejected("genesis without admin".into()))?;
@@ -459,7 +459,7 @@ impl Machine {
                 self.signed_op(&raw, ts, &random, &mut fx)?;
             }
             EntryPayload::MembershipEntry(_) => {
-                return rej("raw membership entries are not accepted")
+                return rej("raw membership entries are not accepted");
             }
         }
         Ok(fx)
@@ -544,20 +544,20 @@ impl Machine {
                 need_admin()?;
                 let id = opt_k32(&u.node_id);
                 let mut rec = self.live_node(&id)?;
-                if let Some(o) = u.owner {
-                    if !o.is_zero() {
-                        let oid = o.to_bytes();
-                        if !self
-                            .view
-                            .accounts
-                            .get(&oid)
-                            .map(|a| a.valid)
-                            .unwrap_or(false)
-                        {
-                            return rej("new owner is not a valid account");
-                        }
-                        rec.owner = Some(o);
+                if let Some(o) = u.owner
+                    && !o.is_zero()
+                {
+                    let oid = o.to_bytes();
+                    if !self
+                        .view
+                        .accounts
+                        .get(&oid)
+                        .map(|a| a.valid)
+                        .unwrap_or(false)
+                    {
+                        return rej("new owner is not a valid account");
                     }
+                    rec.owner = Some(o);
                 }
                 if u.set_overlay_ips {
                     rec.overlay_ips = Some(
@@ -825,12 +825,11 @@ impl Machine {
     // ------------------------------------------------------------ helpers
 
     fn check_version(&self, k: u8, v: u64) -> std::result::Result<(), ApplyError> {
-        if let Some(e) = self.tree.get(k, &SINGLETON) {
-            if let Ok(old) = leaf::decode(k, &SINGLETON, &e.bytes) {
-                if v <= leaf::version(&old) {
-                    return rej("version must increase");
-                }
-            }
+        if let Some(e) = self.tree.get(k, &SINGLETON)
+            && let Ok(old) = leaf::decode(k, &SINGLETON, &e.bytes)
+            && v <= leaf::version(&old)
+        {
+            return rej("version must increase");
         }
         Ok(())
     }
@@ -860,18 +859,19 @@ impl Machine {
         name: &str,
         except: Option<&Bytes32>,
     ) -> std::result::Result<(), ApplyError> {
-        if let Some(id) = self.view.by_name.get(name) {
-            if Some(id) != except && !self.view.tombstoned_nodes.contains(id) {
-                return rej(format!("node name {name} is taken"));
-            }
+        if let Some(id) = self.view.by_name.get(name)
+            && Some(id) != except
+            && !self.view.tombstoned_nodes.contains(id)
+        {
+            return rej(format!("node name {name} is taken"));
         }
         for p in self.pending.values() {
-            if let Some(c) = &p.create {
-                if c.name.as_deref() == Some(name) {
-                    return rej(format!(
-                        "node name {name} is reserved by a pending enrollment"
-                    ));
-                }
+            if let Some(c) = &p.create
+                && c.name.as_deref() == Some(name)
+            {
+                return rej(format!(
+                    "node name {name} is reserved by a pending enrollment"
+                ));
             }
         }
         Ok(())
@@ -919,17 +919,16 @@ impl Machine {
                 }
             }
             for p in self.pending.values() {
-                if let Some(cr) = &p.create {
-                    if cr
+                if let Some(cr) = &p.create
+                    && cr
                         .overlay_ips
                         .clone()
                         .unwrap_or_default()
                         .iter()
                         .filter_map(cidr_to_net)
                         .any(|o| overlaps(&o, &n))
-                    {
-                        return rej(format!("{n} is reserved by a pending enrollment"));
-                    }
+                {
+                    return rej(format!("{n} is reserved by a pending enrollment"));
                 }
             }
             for g in self.all_grants(except) {
@@ -986,7 +985,10 @@ impl Machine {
                     ));
                 }
             }
-            if accepted.iter().any(|pg| overlaps(&pg.published, &g.published)) {
+            if accepted
+                .iter()
+                .any(|pg| overlaps(&pg.published, &g.published))
+            {
                 return rej("overlapping grants on one node");
             }
             accepted.push(g);
@@ -1515,17 +1517,18 @@ impl Machine {
             .into_iter()
             .collect();
         if let Some(g) = &s.genesis {
-            let (gen, root, em) = crate::store::open_genesis(g).context("snapshot genesis")?;
+            let (genesis_rec, root, em) =
+                crate::store::open_genesis(g).context("snapshot genesis")?;
             m.root_key = root;
             m.emergency_key = em;
-            m.pool = gen
+            m.pool = genesis_rec
                 .overlay_pool
                 .clone()
                 .unwrap_or_default()
                 .iter()
                 .filter_map(cidr_to_net)
                 .collect();
-            m.genesis = Some((g.clone(), gen));
+            m.genesis = Some((g.clone(), genesis_rec));
         }
         m.last_index = s.last_index;
         m.last_term = s.last_term;
@@ -1650,7 +1653,7 @@ mod tests {
     use super::ops::*;
     use super::*;
     use crate::crypto::KeyPair;
-    use crate::store::{testutil, Store};
+    use crate::store::{Store, testutil};
     use crate::types::now_ms;
     use webjet_proto::Encodable;
 
@@ -1769,10 +1772,10 @@ mod tests {
             )))
             .unwrap();
         let nid = o.node_id.unwrap();
-        assert!(h
-            .m
-            .pending_by_lookup(&crypto::enroll_lookup_id(&th))
-            .is_some());
+        assert!(
+            h.m.pending_by_lookup(&crypto::enroll_lookup_id(&th))
+                .is_some()
+        );
         let k = KeyPair::generate();
         h.run(EntryPayload::RedeemEnrollmentEntry(Box::new(
             wp::RedeemEnrollmentEntry {
@@ -1886,11 +1889,12 @@ mod tests {
             version: 1,
         };
         let signed = h.net.admin.sign_obj(mt::ACCOUNT_RECORD, &rec);
-        assert!(h
-            .admin_op(AccountOp::PutAccount(Box::new(wp::PutAccount {
+        assert!(
+            h.admin_op(AccountOp::PutAccount(Box::new(wp::PutAccount {
                 record: Some(signed)
             })))
-            .is_err());
+            .is_err()
+        );
     }
 
     #[test]
@@ -2002,9 +2006,10 @@ mod tests {
         assert!(!st.node_trusted(&id));
         // A forged head (signed by an uncertified key) is rejected.
         let rogue = KeyPair::generate();
-        assert!(st
-            .offer_head(&rogue.sign_obj(mt::SIGNED_TREE_HEAD, &head))
-            .is_err());
+        assert!(
+            st.offer_head(&rogue.sign_obj(mt::SIGNED_TREE_HEAD, &head))
+                .is_err()
+        );
     }
 
     #[test]
@@ -2070,11 +2075,12 @@ mod tests {
             name: Some("bob".into()),
             ..rec
         };
-        assert!(h
-            .admin_op(AccountOp::PutAccount(Box::new(wp::PutAccount {
+        assert!(
+            h.admin_op(AccountOp::PutAccount(Box::new(wp::PutAccount {
                 record: Some(h.net.admin.sign_obj(mt::ACCOUNT_RECORD, &rec2))
             })))
-            .is_err());
+            .is_err()
+        );
     }
 
     #[test]
@@ -2095,9 +2101,8 @@ mod tests {
         h.m.apply(&e).unwrap();
         assert_eq!(h.m.view().valid_until, ts + VALIDITY_PERIOD);
         // Wrong period rejected.
-        assert!(h
-            .m
-            .prepare(
+        assert!(
+            h.m.prepare(
                 1,
                 h.idx + 1,
                 ts + 5,
@@ -2105,16 +2110,18 @@ mod tests {
                     valid_until: ts + 5 + VALIDITY_PERIOD + 1
                 }))
             )
-            .is_err());
+            .is_err()
+        );
         h.admin_op(AccountOp::RotatePsk(Box::new(wp::RotatePsk {
             epoch_id: 1,
         })))
         .unwrap();
         assert!(h.m.psk(1).is_some());
-        assert!(h
-            .admin_op(AccountOp::RotatePsk(Box::new(wp::RotatePsk {
+        assert!(
+            h.admin_op(AccountOp::RotatePsk(Box::new(wp::RotatePsk {
                 epoch_id: 1
             })))
-            .is_err());
+            .is_err()
+        );
     }
 }

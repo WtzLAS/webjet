@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
-use webjet_core::crypto::{opt_k32, Bytes32};
+use webjet_core::crypto::{Bytes32, opt_k32};
 use webjet_proto as wp;
 
 /// Names for node ids and the owner (account name) of each node.
@@ -531,14 +531,20 @@ pub async fn serve(
                 "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET, HEAD\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
             } else if path == "/metrics" {
                 let b = body();
-                let mut r = format!("HTTP/1.1 200 OK\r\nContent-Type: {CONTENT_TYPE}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", b.len());
+                let mut r = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {CONTENT_TYPE}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    b.len()
+                );
                 if method == "GET" {
                     r.push_str(&b);
                 }
                 r
             } else {
                 let b = "see /metrics\n";
-                format!("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}", b.len())
+                format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                    b.len()
+                )
             };
             let _ = s.write_all(resp.as_bytes()).await;
             let _ = s.shutdown().await;

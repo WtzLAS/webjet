@@ -7,7 +7,7 @@ A Rust implementation of the Webjet overlay VPN described in
 ## Layout
 
 | Crate | What it holds |
-|---|---|
+| --- | --- |
 | `crates/webjet-proto` | FlatBuffers schemas (`schema/*.fbs`) and generated types; message-type registry |
 | `crates/webjet-core` | Pure logic: Ed25519 envelopes and BLAKE3 derivations, sparse Merkle tree, trust store and merge rules, deterministic controller state machine, policy engine, routing (k-shortest paths, load, hysteresis), e2e frames and replay window, packet parsing/NAT/ICMP, conntrack, FQ-CoDel hop queue with ECN |
 | `crates/webjet-net` | Transports: PSK gate and UDP obfuscation, raw-public-key TLS 1.3 with X25519MLKEM768 only, KCP + adaptive Reed–Solomon FEC with BBR-style pacing, AnyTLS (BoringSSL, Chrome-like ClientHello, camouflage website) |
@@ -80,8 +80,8 @@ addresses, tun, gateway routes, local limits and the controller role.
 
 ## Platform notes
 
-| | Linux | macOS | Windows |
-|---|---|---|---|
+| Platform | Linux | macOS | Windows |
+| --- | --- | --- | --- |
 | Install / upgrade | `scripts/upgrade.sh` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `scripts/upgrade.sh` (launchd daemon) | `scripts/upgrade.ps1` (LocalSystem service via `webjetd install`) |
 | Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) |
 | Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` |

@@ -1,10 +1,10 @@
 //! Keys, signatures, the signed envelope (§15.3) and BLAKE3 derivations (§15.4).
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::RngCore;
-use webjet_proto::{msg_type, Decodable, Encodable, Key32, Sig64, Signed};
+use webjet_proto::{Decodable, Encodable, Key32, Sig64, Signed, msg_type};
 use zeroize::Zeroizing;
 
 pub type Bytes32 = [u8; 32];
@@ -102,9 +102,13 @@ impl KeyPair {
 }
 
 /// DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410); the 32-byte key follows.
-const SPKI_ED25519_PREFIX: [u8; 12] = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
+const SPKI_ED25519_PREFIX: [u8; 12] = [
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+];
 /// DER prefix of an Ed25519 PKCS#8 v1 private key (RFC 8410); the seed follows.
-const PKCS8_ED25519_PREFIX: [u8; 16] = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
+const PKCS8_ED25519_PREFIX: [u8; 16] = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
 
 /// Ed25519 SubjectPublicKeyInfo DER (RFC 8410), as used for TLS raw public keys.
 pub fn spki_der(pk: &Bytes32) -> Vec<u8> {

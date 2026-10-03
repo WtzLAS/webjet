@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::state::{self, Paths};
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -11,13 +11,13 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
-use webjet_core::crypto::{self, opt_k32, Bytes32, KeyPair};
+use webjet_core::crypto::{self, Bytes32, KeyPair, opt_k32};
 use webjet_core::queue::{HopQueue, Item};
 use webjet_core::routing::LinkStats;
 use webjet_core::store::Store;
 use webjet_core::types::now_ms;
 use webjet_net::gate::SharedEpochs;
-use webjet_net::hop::{self, rec, BoxIo, Established};
+use webjet_net::hop::{self, BoxIo, Established, rec};
 use webjet_net::kcp::{KcpStats, UdpEndpoint};
 use webjet_net::tls::PeerTrust;
 use webjet_proto::{self as wp, Decodable, Encodable, HopMsg, Transport};
@@ -324,11 +324,7 @@ impl Node {
                 transport: h.transport,
                 cost: {
                     let c = h.cost();
-                    if c.is_finite() {
-                        c
-                    } else {
-                        1e6
-                    }
+                    if c.is_finite() { c } else { 1e6 }
                 },
                 prio_sum: view_prio(h.transport) as u16
                     + crate::transport::priority(self, &h.peer, h.transport) as u16,
@@ -809,10 +805,10 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
         match ty {
             rec::CONTROL => match wp::HopControl::decode_bytes(&payload) {
                 Ok(c) => {
-                    if let Some(m) = c.msg {
-                        if let Err(e) = handle_control(&n, &hop, m).await {
-                            tracing::debug!(peer = %n.name_of(&hop.peer), "control message: {e}");
-                        }
+                    if let Some(m) = c.msg
+                        && let Err(e) = handle_control(&n, &hop, m).await
+                    {
+                        tracing::debug!(peer = %n.name_of(&hop.peer), "control message: {e}");
                     }
                 }
                 Err(e) => tracing::debug!("bad control message: {e}"),

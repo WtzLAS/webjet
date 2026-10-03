@@ -4,13 +4,13 @@
 use crate::config::Config;
 use crate::node::{Event, Node};
 use crate::state::{self, NodeFile, Paths, SeedHint};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use webjet_core::crypto::{self, opt_k32, Bytes32, KeyPair};
+use webjet_core::crypto::{self, Bytes32, KeyPair, opt_k32};
 use webjet_core::store::{HeadOutcome, Store};
 use webjet_net::hop::{self, rec};
 use webjet_proto::{self as wp, Decodable, Encodable, RpcBody, Transport};
@@ -566,10 +566,10 @@ async fn connections(n: Arc<Node>) {
             if n.endpoint_addrs(peer).is_empty() {
                 continue;
             }
-            if let Some((at, _)) = backoff.get(peer) {
-                if Instant::now() < *at {
-                    continue;
-                }
+            if let Some((at, _)) = backoff.get(peer)
+                && Instant::now() < *at
+            {
+                continue;
             }
             let n2 = n.clone();
             let p = *peer;
@@ -681,21 +681,21 @@ async fn secrets(n: Arc<Node>) {
                 tracing::debug!("PSK fetch: {e}");
             }
         }
-        if relay && n.cfg.listen.anytls.is_some() {
-            if let Ok((_, RpcBody::CamouflageSecret(c))) = crate::rpc::call_any(
+        if relay
+            && n.cfg.listen.anytls.is_some()
+            && let Ok((_, RpcBody::CamouflageSecret(c))) = crate::rpc::call_any(
                 &n,
                 RpcBody::GetCamouflage(Box::new(wp::GetCamouflage {})),
                 Duration::from_secs(15),
             )
             .await
-            {
-                let f = state::CamouflageFile {
-                    key_pem: c.private_key.unwrap_or_default(),
-                    site: c.site.unwrap_or_default(),
-                };
-                let _ = state::save_json(&n.paths.camouflage(), &f);
-                crate::transport::refresh_anytls(&n);
-            }
+        {
+            let f = state::CamouflageFile {
+                key_pem: c.private_key.unwrap_or_default(),
+                site: c.site.unwrap_or_default(),
+            };
+            let _ = state::save_json(&n.paths.camouflage(), &f);
+            crate::transport::refresh_anytls(&n);
         }
     }
 }

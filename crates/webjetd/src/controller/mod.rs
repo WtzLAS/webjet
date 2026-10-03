@@ -7,7 +7,7 @@ pub mod signer;
 
 use crate::node::Node;
 use crate::rpc;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use raft::{Raft, Role};
 use signer::Signer;
@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use webjet_core::crypto::{self, opt_k32, Bytes32};
+use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::statemachine::{ApplyError, Machine, Membership, Outcome};
 use webjet_core::store::HeadOutcome;
-use webjet_core::types::{now_ms, HOUR, VALIDITY_PERIOD};
-use webjet_net::hop::{self, rec, BoxIo};
+use webjet_core::types::{HOUR, VALIDITY_PERIOD, now_ms};
+use webjet_net::hop::{self, BoxIo, rec};
 use webjet_proto::{
-    self as wp, msg_type as mt, Decodable, Encodable, EntryPayload, RaftBody, RpcBody,
+    self as wp, Decodable, Encodable, EntryPayload, RaftBody, RpcBody, msg_type as mt,
 };
 
 const PROPOSE_TIMEOUT: Duration = Duration::from_secs(15);

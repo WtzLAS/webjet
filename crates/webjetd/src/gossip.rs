@@ -3,15 +3,15 @@
 //! records (EndpointRecords, LinkStateAdverts, AttachmentRecords).
 
 use crate::node::{Event, Hop, Node};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use webjet_core::crypto::{self, opt_k32, Bytes32};
+use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::store::HeadOutcome;
-use webjet_core::types::{now_ms, MINUTE, SECOND, SKEW_SHORT_RECORD};
-use webjet_proto::{self as wp, msg_type as mt, HopMsg, Transport};
+use webjet_core::types::{MINUTE, SECOND, SKEW_SHORT_RECORD, now_ms};
+use webjet_proto::{self as wp, HopMsg, Transport, msg_type as mt};
 
 pub const LSA_REFRESH: u64 = 5 * MINUTE;
 pub const LSA_LIFETIME: u64 = 15 * MINUTE;
@@ -179,10 +179,10 @@ fn send_records(hop: &Hop, items: Vec<Vec<u8>>) {
 
 pub fn on_digest(n: &Arc<Node>, hop: &Arc<Hop>, digest: Bytes32) {
     *hop.peer_digest.lock() = Some(digest);
-    if digest != n.store.read().digest() {
-        if let Some(m) = head_msg(n) {
-            hop.send_control(m);
-        }
+    if digest != n.store.read().digest()
+        && let Some(m) = head_msg(n)
+    {
+        hop.send_control(m);
     }
 }
 
@@ -321,19 +321,19 @@ pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
 fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
     {
         let mut rl = n.sync.head_rx.lock();
-        if let Some(t) = rl.get(&hop.id) {
-            if t.elapsed() < Duration::from_millis(900) {
-                return Ok(());
-            }
+        if let Some(t) = rl.get(&hop.id)
+            && t.elapsed() < Duration::from_millis(900)
+        {
+            return Ok(());
         }
         rl.insert(hop.id, Instant::now());
     }
-    if let Some(oh) = a.offline_hash {
-        if oh.to_bytes() != n.store.read().offline_hash() {
-            hop.send_control(HopMsg::GetOffline(Box::new(wp::GetOffline {
-                have_hash: Some(crypto::k32(&n.store.read().offline_hash())),
-            })));
-        }
+    if let Some(oh) = a.offline_hash
+        && oh.to_bytes() != n.store.read().offline_hash()
+    {
+        hop.send_control(HopMsg::GetOffline(Box::new(wp::GetOffline {
+            have_hash: Some(crypto::k32(&n.store.read().offline_hash())),
+        })));
     }
     let Some(raw) = a.head else { return Ok(()) };
     let outcome = n.store.write().offer_head(&raw);
@@ -350,10 +350,10 @@ fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
                 .and_then(|v| v.decode::<wp::SignedTreeHead>().ok())
                 .map(|h| h.version)
                 .unwrap_or(0);
-            if theirs < ours {
-                if let Some(m) = head_msg(n) {
-                    hop.send_control(m);
-                }
+            if theirs < ours
+                && let Some(m) = head_msg(n)
+            {
+                hop.send_control(m);
             }
         }
         Ok(HeadOutcome::NeedSync) => start_walk(n, hop, raw)?,
@@ -379,21 +379,21 @@ fn start_walk(n: &Arc<Node>, hop: &Arc<Hop>, head_raw: Vec<u8>) -> Result<()> {
     let h = n.store.read().verify_head(&head_raw)?;
     let root = opt_k32(&h.root);
     let mut w = n.sync.walk.lock();
-    if let Some(cur) = w.as_ref() {
-        if cur.started.elapsed() < Duration::from_secs(10) {
-            // Prefer the newer target, but don't restart a walk to the same root.
-            if cur.root == root {
-                return Ok(());
-            }
-            let cur_v = n
-                .store
-                .read()
-                .verify_head(&cur.head_raw)
-                .map(|x| x.version)
-                .unwrap_or(0);
-            if cur_v >= h.version {
-                return Ok(());
-            }
+    if let Some(cur) = w.as_ref()
+        && cur.started.elapsed() < Duration::from_secs(10)
+    {
+        // Prefer the newer target, but don't restart a walk to the same root.
+        if cur.root == root {
+            return Ok(());
+        }
+        let cur_v = n
+            .store
+            .read()
+            .verify_head(&cur.head_raw)
+            .map(|x| x.version)
+            .unwrap_or(0);
+        if cur_v >= h.version {
+            return Ok(());
         }
     }
     *w = Some(Walk {
@@ -778,12 +778,12 @@ pub fn publish_endpoint(n: &Arc<Node>, force: bool) {
     let now = now_ms();
     {
         let last = n.sync.last_endpoint.lock();
-        if !force {
-            if let Some((a, t)) = last.as_ref() {
-                if *a == addrs && now < t + ENDPOINT_REFRESH {
-                    return;
-                }
-            }
+        if !force
+            && let Some((a, t)) = last.as_ref()
+            && *a == addrs
+            && now < t + ENDPOINT_REFRESH
+        {
+            return;
         }
     }
     let serving: Vec<wp::Cidr> = n
@@ -915,10 +915,11 @@ pub fn publish_attachment(n: &Arc<Node>) {
     let ids: Vec<Bytes32> = relays.iter().map(|r| r.0).collect();
     {
         let last = n.sync.last_attach.lock();
-        if let Some((prev, t)) = last.as_ref() {
-            if *prev == ids && now < t + ATTACH_REFRESH {
-                return;
-            }
+        if let Some((prev, t)) = last.as_ref()
+            && *prev == ids
+            && now < t + ATTACH_REFRESH
+        {
+            return;
         }
     }
     let rec = wp::AttachmentRecord {
@@ -966,7 +967,7 @@ pub fn expire_records(n: &Arc<Node>) {
 
 /// Build the routing graph from LSAs and attachments (§11.4).
 pub fn graph(n: &Node) -> webjet_core::routing::Graph {
-    use webjet_core::routing::{link_cost, Graph, RelayInfo};
+    use webjet_core::routing::{Graph, RelayInfo, link_cost};
     let now = now_ms();
     let recs = n.records.lock();
     let s = n.store.read();

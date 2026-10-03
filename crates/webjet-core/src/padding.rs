@@ -2,7 +2,7 @@
 //! manner of AnyTLS: for packet number `n`, a list of segment size ranges.
 //! A `c` entry means "stop splitting here if the payload is exhausted".
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use rand::Rng;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

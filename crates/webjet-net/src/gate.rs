@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use rand::RngCore;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
-use webjet_core::crypto::{ct_eq, ctx, derive, keyed, Bytes32};
-use webjet_core::types::{now_ms, SKEW_PSK_GATE};
+use webjet_core::crypto::{Bytes32, ct_eq, ctx, derive, keyed};
+use webjet_core::types::{SKEW_PSK_GATE, now_ms};
 
 pub const TCP_PREAMBLE: usize = 2 + 8 + 16 + 32;
 pub const UDP_OVERHEAD: usize = 24 + 2 + 16;
