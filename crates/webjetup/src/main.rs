@@ -373,11 +373,16 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
         bail!("Webjet isn't installed: run `webjetup install` first");
     }
     println!("==> Enrolling this node");
+    let args = ["--config", &*l.config.to_string_lossy(), "enroll", s];
+    // The first controller of a new network (`webjetd init`) enrolls its own
+    // node through its running agent, so it must not be stopped.
+    if bootstrapping(l) {
+        sys.run(&exe.to_string_lossy(), &args)?;
+        println!("==> Enrolled the bootstrap controller's node.");
+        return Ok(());
+    }
     system::stop(sys, l);
-    sys.run(
-        &exe.to_string_lossy(),
-        &["--config", &l.config.to_string_lossy(), "enroll", s],
-    )?;
+    sys.run(&exe.to_string_lossy(), &args)?;
     if cfg!(target_os = "linux") {
         system::fix_linux_ownership(sys, l)?;
     }
@@ -388,6 +393,15 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
     Ok(())
 }
 
+/// Whether this is a bootstrap controller that hasn't enrolled its node yet
+/// (`"bootstrap": true` in node.json, written by `webjetd init`).
+fn bootstrapping(l: &Layout) -> bool {
+    std::fs::read(l.data_dir.join("node.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("bootstrap").and_then(|b| b.as_bool()))
+        .unwrap_or(false)
+}
 // ---------------------------------------------------------------- status and list
 
 fn status(l: &Layout) -> Result<()> {

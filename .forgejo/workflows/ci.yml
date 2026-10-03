@@ -1,0 +1,47 @@
+# Checks for every push and pull request: formatting, clippy (Linux and
+# Windows, with and without AnyTLS) and the test suite.
+#
+# Runs in the builder image (ci/builder.Dockerfile) on a runner with the
+# `docker` label. webjet-app is left out: GPUI needs X11/Wayland and Vulkan
+# development packages the image doesn't have.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  lint:
+    runs-on: docker
+    container:
+      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: clippy (Linux)
+        run: >
+          cargo clippy --locked --workspace --exclude webjet-app
+          --all-targets -- -D warnings
+      - name: clippy (Linux, without AnyTLS)
+        run: >
+          cargo clippy --locked --workspace --exclude webjet-app
+          --all-targets --no-default-features -- -D warnings
+      - name: clippy (Windows)
+        run: >
+          cargo xwin clippy --locked --target x86_64-pc-windows-msvc
+          -p webjetd -p webjet-tools -p webjetup
+          --all-targets --no-default-features -- -D warnings
+
+  test:
+    runs-on: docker
+    container:
+      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo test
+        run: cargo test --locked --workspace --exclude webjet-app

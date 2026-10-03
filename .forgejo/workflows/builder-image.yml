@@ -1,0 +1,49 @@
+# Builds the CI builder image (ci/builder.Dockerfile) and pushes it to the
+# repository owner's container registry, when the Dockerfile changes on main
+# or when run by hand.
+#
+# Needs:
+# - a runner job container that can reach a Docker daemon: in the runner's
+#   config.yml, `container: docker_host: automount` (or mount
+#   /var/run/docker.sock), with the `docker` label
+# - secrets REGISTRY_USER and REGISTRY_TOKEN: a Forgejo user and a token of
+#   theirs with write:package
+#
+# The image tag is the number in IMAGE below; bump it together with the
+# `image:` lines in ci.yml and release.yml when the Dockerfile changes, so
+# running jobs keep their image until the new one is pushed.
+name: builder-image
+
+on:
+  push:
+    branches: [main]
+    paths: ["ci/builder.Dockerfile"]
+  workflow_dispatch:
+
+env:
+  IMAGE: forgejo.wolf109909.top/webj8/webjet-builder:1
+
+jobs:
+  image:
+    runs-on: docker
+    container:
+      image: docker:27-cli
+    steps:
+      - name: Get the Dockerfile
+        run: |
+          apk add --no-cache git
+          host=${GITHUB_SERVER_URL#https://}
+          url="https://oauth2:${{ github.token }}@$host/${GITHUB_REPOSITORY}.git"
+          git clone --depth 1 --branch "${GITHUB_REF_NAME}" "$url" src
+      - name: Build
+        run: docker build --pull -f src/ci/builder.Dockerfile -t "$IMAGE" src/ci
+      - name: Push
+        env:
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          registry=${IMAGE%%/*}
+          printf '%s' "$REGISTRY_TOKEN" |
+            docker login "$registry" -u "$REGISTRY_USER" --password-stdin
+          docker push "$IMAGE"
+          docker logout "$registry"

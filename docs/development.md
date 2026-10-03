@@ -183,23 +183,75 @@ variables into `webjetd.toml` and handles first-start enrollment; it writes
 values into TOML strings, so it rejects values containing quotes,
 backslashes or newlines. Everything an operator needs is in docs/docker.md.
 
+## Continuous integration
+
+`.forgejo/workflows/` runs on one Forgejo runner for `linux/amd64` with the
+label `docker`, in the builder image `ci/builder.Dockerfile`
+(`forgejo.wolf109909.top/webj8/webjet-builder:1`):
+
+| Workflow | When | What |
+| --- | --- | --- |
+| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS) and Windows; `cargo test`. `webjet-app` is left out (GPUI needs X11/Wayland and Vulkan packages). |
+| `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for Linux x86_64, Linux arm64 (cross-compiled) and Windows x86_64 |
+| `builder-image.yml` | change to `ci/builder.Dockerfile` on `main`, or by hand | builds the builder image and pushes it to the registry |
+
+The builder image is Debian 11 (glibc 2.31, so the Linux binaries run on
+Debian 11+, Ubuntu 20.04+, RHEL 9+) with Rust, the aarch64 cross toolchain,
+LLVM 18 (libclang for bindgen, `clang-cl`/`lld-link` for Windows), NASM,
+CMake 3.31, cargo-xwin with the Microsoft CRT and SDK already downloaded, and
+Node.js for `actions/checkout`. Building it accepts Microsoft's license for
+the CRT and SDK, as cargo-xwin does on first use.
+
+Setting up the runner:
+
+1. Register a runner with the label `docker` (`docker://node:20-bookworm` or
+   any image as the label's default; the jobs name their own image).
+2. Build and push the builder image once, by hand or by running
+   `builder-image.yml`:
+   ```
+   docker build -f ci/builder.Dockerfile -t forgejo.wolf109909.top/webj8/webjet-builder:1 ci
+   docker push forgejo.wolf109909.top/webj8/webjet-builder:1
+   ```
+   The package must be readable by the runner: make it public, or give the
+   runner registry credentials.
+3. Secrets in the repository settings:
+   - `RELEASE_TOKEN`: a token with `write:repository`, for creating releases
+     (optional; without it the workflow's automatic token is used).
+   - `REGISTRY_USER`, `REGISTRY_TOKEN`: for `builder-image.yml` (`write:package`).
+     That workflow also needs a job container that can reach a Docker daemon:
+     `container: docker_host: automount` in the runner's `config.yml`.
+
+When the image changes, bump its tag (`:1` → `:2`) in `builder-image.yml`,
+`ci.yml` and `release.yml` together.
+
 ## Releases
 
 1. Set the version in the workspace `Cargo.toml` (`version = "X.Y.Z"`),
-   commit, and tag the commit: `git tag -a vX.Y.Z` with release notes as the
-   message (they become the release's description).
-2. With the tag checked out and Docker running, on macOS:
-   `WEBJET_FORGEJO_TOKEN=… scripts/release.sh vX.Y.Z --publish`. It checks
-   the tag, version and a clean source tree, builds macOS binaries natively,
-   Linux binaries in `docker/release.Dockerfile` and Windows binaries with
-   `cargo xwin`, packages `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`
-   with `wintun.dll` and its license) with `.sha256` files into `dist/<tag>`,
-   pushes the tag and creates the Forgejo release with the files. Without
-   `--publish` it only builds and packages.
-3. Check the published release the way hosts install it:
-   `WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download docker/release-test.sh vX.Y.Z`
-   runs `install.sh` and `webjetup` in fresh Debian 11, Ubuntu 20.04 and
-   Debian 12 containers on amd64 and arm64.
+   update the version in the install commands in `README.md`,
+   `scripts/install.sh` and `docs/webjet-operations-guide.md`, commit, and
+   tag the commit: `git tag -a vX.Y.Z` with release notes as the message
+   (they become the release's description).
+2. Push the tag: `git push origin vX.Y.Z`. `release.yml` tests, builds Linux
+   x86_64 and arm64 and Windows, packages `webjet-<tag>-<target>.tar.gz`
+   (Windows: `.zip` with `wintun.dll` and its license), the `webjetup`
+   binaries and `install.sh`, each with a `.sha256`, and creates the Forgejo
+   release.
+3. Add macOS from a Mac, with the tag checked out:
+   ```
+   WEBJET_FORGEJO_TOKEN=… scripts/release.sh vX.Y.Z --publish \
+     --targets "aarch64-apple-darwin x86_64-apple-darwin"
+   ```
+   `--targets` uploads into the existing release; files with the same name
+   are replaced, so a target can also be rebuilt and uploaded again.
+4. Check the published release the way hosts install it:
+   `docker/release-test.sh vX.Y.Z` runs `install.sh` and `webjetup` in fresh
+   Debian 11, Ubuntu 20.04 and Debian 12 containers on amd64 and arm64, and
+   `RELEASE=vX.Y.Z docker/runbook-test.sh` runs the operations guide's
+   runbooks 1, 2, 3, 5, 7 and 8 on systemd hosts installed from it.
+
+`scripts/release.sh` without `--targets` still builds everything on a Mac
+(Linux in Docker with `docker/release.Dockerfile`, Windows with cargo-xwin),
+and without `--publish` it only builds and packages into `dist/<tag>`.
 
 Before tagging, `docker/webjetup-test.sh` tests webjetup and `install.sh`
 from the working tree end to end: it builds the Linux release files, serves
@@ -207,9 +259,10 @@ them from a stand-in for the Forgejo release pages, starts a controller, and
 on a container that boots systemd runs `curl … install.sh | sh` with an
 enrollment string, checks the agent runs as `webjet` and pings the
 controller, then reinstall, `remove` (identity kept), install again and
-`nuke`.
+`nuke`. `docker/runbook-test.sh` without `RELEASE` does the same for the
+operations guide.
 
-The Windows build needs `cargo install cargo-xwin` and Homebrew's `llvm` and
+Building Windows on a Mac needs `cargo install cargo-xwin` and Homebrew's `llvm` and
 `lld`. Without Homebrew's `lld-link` on `PATH`, cargo-xwin links rustup's
 `rust-lld` into its cache, which can't run on its own (it misses
 `libLLVM.dylib`), and CMake-built dependencies (BoringSSL, aws-lc) fail their

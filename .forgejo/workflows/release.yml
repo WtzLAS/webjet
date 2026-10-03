@@ -1,0 +1,56 @@
+# Publishes a release when a version tag is pushed:
+#
+#   git tag -a v0.3.0      # release notes as the message
+#   git push origin v0.3.0
+#
+# Runs the tests, then builds Linux x86_64, Linux arm64 (cross-compiled) and
+# Windows x86_64 in the builder image, and creates the Forgejo release with
+# their files, webjetup and install.sh (scripts/release.sh). macOS isn't
+# built here: add it from a Mac afterwards with
+#
+#   WEBJET_FORGEJO_TOKEN=… scripts/release.sh v0.3.0 --publish \
+#     --targets "aarch64-apple-darwin x86_64-apple-darwin"
+#
+# Publishing uses the RELEASE_TOKEN secret if set (a Forgejo token with
+# write:repository), else the workflow's automatic token.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo test
+        run: cargo test --locked --workspace --exclude webjet-app
+
+  release:
+    needs: test
+    runs-on: docker
+    container:
+      image: forgejo.wolf109909.top/webj8/webjet-builder:1
+    steps:
+      - uses: actions/checkout@v4
+      # actions/checkout fetches the tagged commit, not the tag object, so
+      # the release notes (the tag's message) would be missing.
+      - name: Fetch the annotated tag
+        run: |
+          tag="refs/tags/${GITHUB_REF_NAME}"
+          git fetch --force --depth=1 origin "+$tag:$tag"
+      - name: Build, package and publish
+        env:
+          WEBJET_FORGEJO_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          WEBJET_FORGEJO_API: ${{ github.server_url }}/api/v1
+          WEBJET_FORGEJO_REPO: ${{ github.repository }}
+        run: |
+          targets="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu"
+          targets="$targets x86_64-pc-windows-msvc"
+          scripts/release.sh "${GITHUB_REF_NAME}" --publish --targets "$targets"

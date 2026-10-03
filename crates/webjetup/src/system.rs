@@ -279,8 +279,8 @@ ExecStart={bin} run
 Restart=on-failure
 RestartSec=5
 User={LINUX_USER}
-{groups}AmbientCapabilities=CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN
+{groups}AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 StateDirectory=webjet
 StateDirectoryMode=0700
 RuntimeDirectory=webjet
@@ -582,7 +582,13 @@ mod tests {
         let l = Layout::system();
         let unit = systemd_unit(&l, false);
         assert!(unit.contains(&format!("ExecStart={} run", l.program("webjetd").display())));
-        assert!(unit.contains("User=webjet\nAmbientCapabilities=CAP_NET_ADMIN"));
+        assert!(
+            unit.contains("User=webjet\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\n")
+        );
+        assert!(
+            unit.contains("CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\n"),
+            "relays listen on 443"
+        );
         assert!(systemd_unit(&l, true).contains("User=webjet\nSupplementaryGroups=tss\n"));
         let plist = launchd_plist(&l);
         assert!(plist.contains("<string>net.webjet.webjetd</string>"));
