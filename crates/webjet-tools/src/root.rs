@@ -1,31 +1,20 @@
-//! webjet-root: the offline tool that holds the root and emergency
+//! `webjetctl root`: the offline part that holds the root and emergency
 //! revocation keys (§5). It never talks to the network; files move on
 //! removable media.
 
+use crate::*;
 use anyhow::{Result, anyhow, bail};
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use clap::Subcommand;
+use std::path::{Path, PathBuf};
 use webjet_core::crypto::{self, KeyPair};
 use webjet_core::types::{net_to_cidr, now_ms, parse_net};
 use webjet_proto::{self as wp, Decodable, Encodable, msg_type as mt};
-use webjet_tools::*;
 
-#[derive(Parser)]
-#[command(
-    name = "webjet-root",
-    version,
-    about = "Offline root-key tool for Webjet"
-)]
-struct Cli {
-    /// Directory holding the encrypted root and emergency keys.
-    #[arg(long, global = true, default_value = "./webjet-root")]
-    dir: PathBuf,
-    #[command(subcommand)]
-    cmd: Cmd,
-}
+/// The directory `root` commands use unless `--dir` says otherwise.
+pub const DEFAULT_DIR: &str = "./webjet-root";
 
-#[derive(Subcommand)]
-enum Cmd {
+#[derive(Subcommand, Clone)]
+pub enum RootCmd {
     /// Create the root and emergency revocation keys.
     Init,
     /// Write an encrypted backup of both keys.
@@ -40,6 +29,7 @@ enum Cmd {
     },
     /// Print the public keys.
     Show,
+    /// Admin accounts: sign (create) and revoke
     Admin {
         #[command(subcommand)]
         cmd: AdminCmd,
@@ -53,14 +43,17 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Controller certificates: sign requests, retire keys
     Controller {
         #[command(subcommand)]
         cmd: ControllerCmd,
     },
+    /// Revoke a normal account without an admin
     Account {
         #[command(subcommand)]
         cmd: AccountCmd,
     },
+    /// Revoke a node with the emergency key (no controller needed)
     Node {
         #[command(subcommand)]
         cmd: NodeCmd,
@@ -72,8 +65,8 @@ enum Cmd {
     },
 }
 
-#[derive(Subcommand)]
-enum AdminCmd {
+#[derive(Subcommand, Clone)]
+pub enum AdminCmd {
     /// Sign an admin account record (root-issued).
     Sign {
         #[arg(long)]
@@ -98,8 +91,8 @@ enum AdminCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum ControllerCmd {
+#[derive(Subcommand, Clone)]
+pub enum ControllerCmd {
     /// Sign a controller's certificate request.
     Sign {
         request: PathBuf,
@@ -121,8 +114,8 @@ enum ControllerCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum AccountCmd {
+#[derive(Subcommand, Clone)]
+pub enum AccountCmd {
     /// Revoke an account (runbook 7, admin unavailable or compromised).
     Revoke {
         /// The account's public file.
@@ -139,8 +132,8 @@ enum AccountCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum NodeCmd {
+#[derive(Subcommand, Clone)]
+pub enum NodeCmd {
     /// An offline node tombstone (runbook 7, no controller majority).
     Revoke {
         /// Node id (hex).
@@ -155,8 +148,8 @@ enum NodeCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum StateVersionCmd {
+#[derive(Subcommand, Clone)]
+pub enum StateVersionCmd {
     Sign {
         #[arg(long)]
         version: u32,
@@ -174,14 +167,14 @@ struct Keys {
     emergency: KeyPair,
 }
 
-fn root_path(dir: &std::path::Path) -> PathBuf {
+fn root_path(dir: &Path) -> PathBuf {
     dir.join("root.key.enc")
 }
-fn emergency_path(dir: &std::path::Path) -> PathBuf {
+fn emergency_path(dir: &Path) -> PathBuf {
     dir.join("emergency.key.enc")
 }
 
-fn load_keys(dir: &std::path::Path) -> Result<Keys> {
+fn load_keys(dir: &Path) -> Result<Keys> {
     let pass = passphrase("WEBJET_ROOT_PASSPHRASE", "root key passphrase")?;
     let root = keypair_from(&unseal(&pass, &read(&root_path(dir))?)?)?;
     let emergency = keypair_from(&unseal(&pass, &read(&emergency_path(dir))?)?)?;
@@ -196,11 +189,10 @@ fn pick<'a>(k: &'a Keys, with: &str) -> Result<&'a KeyPair> {
     }
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let dir = &cli.dir;
-    match cli.cmd {
-        Cmd::Init => {
+/// Run one `webjetctl root` command with the keys in `dir`.
+pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
+    match cmd {
+        RootCmd::Init => {
             if root_path(dir).exists() {
                 bail!("{} already holds keys", dir.display());
             }
@@ -219,9 +211,9 @@ fn main() -> Result<()> {
             write_public(&dir.join("emergency.cert"), &cert)?;
             println!("root key:      {}", crypto::key_b64(&root.public()));
             println!("emergency key: {}", crypto::key_b64(&emergency.public()));
-            println!("Back both up now: webjet-root backup --out <media>");
+            println!("Back both up now: webjetctl root backup --out <media>");
         }
-        Cmd::Backup { out } => {
+        RootCmd::Backup { out } => {
             let k = load_keys(dir)?;
             let pass = new_passphrase("WEBJET_BACKUP_PASSPHRASE", "passphrase for the backup")?;
             let mut plain = k.root.seed().to_vec();
@@ -229,7 +221,7 @@ fn main() -> Result<()> {
             write_private(&out, &seal(&pass, &plain)?)?;
             println!("backup written to {}", out.display());
         }
-        Cmd::Restore { from } => {
+        RootCmd::Restore { from } => {
             let pass = passphrase("WEBJET_BACKUP_PASSPHRASE", "backup passphrase")?;
             let plain = unseal(&pass, &read(&from)?)?;
             if plain.len() != 64 {
@@ -250,12 +242,12 @@ fn main() -> Result<()> {
             write_public(&dir.join("emergency.cert"), &cert)?;
             println!("restored root key {}", crypto::key_b64(&root.public()));
         }
-        Cmd::Show => {
+        RootCmd::Show => {
             let k = load_keys(dir)?;
             println!("root key:      {}", crypto::key_b64(&k.root.public()));
             println!("emergency key: {}", crypto::key_b64(&k.emergency.public()));
         }
-        Cmd::Admin {
+        RootCmd::Admin {
             cmd: AdminCmd::Sign { name, key, out },
         } => {
             let k = load_keys(dir)?;
@@ -265,7 +257,7 @@ fn main() -> Result<()> {
             write_public(&out, &k.root.sign_obj(mt::ACCOUNT_RECORD, &rec))?;
             println!("signed admin account {} → {}", p.name, out.display());
         }
-        Cmd::Admin {
+        RootCmd::Admin {
             cmd:
                 AdminCmd::Revoke {
                     key,
@@ -275,7 +267,7 @@ fn main() -> Result<()> {
                     out,
                 },
         }
-        | Cmd::Account {
+        | RootCmd::Account {
             cmd:
                 AccountCmd::Revoke {
                     key,
@@ -300,7 +292,7 @@ fn main() -> Result<()> {
                 out.display()
             );
         }
-        Cmd::Genesis {
+        RootCmd::Genesis {
             overlay_pool,
             admin,
             out,
@@ -341,7 +333,7 @@ fn main() -> Result<()> {
                 crypto::key_b64(&k.root.public())
             );
         }
-        Cmd::Controller {
+        RootCmd::Controller {
             cmd: ControllerCmd::Sign { request, out },
         } => {
             let k = load_keys(dir)?;
@@ -368,7 +360,7 @@ fn main() -> Result<()> {
             write_public(&out, &k.root.sign_obj(mt::SIGNING_KEY_CERT, &c))?;
             println!("certificate → {}", out.display());
         }
-        Cmd::Controller {
+        RootCmd::Controller {
             cmd:
                 ControllerCmd::Retire {
                     key_id,
@@ -392,7 +384,7 @@ fn main() -> Result<()> {
             )?;
             println!("key tombstone → {}", out.display());
         }
-        Cmd::Node {
+        RootCmd::Node {
             cmd:
                 NodeCmd::Revoke {
                     node,
@@ -417,7 +409,7 @@ fn main() -> Result<()> {
                 out.display()
             );
         }
-        Cmd::StateVersion {
+        RootCmd::StateVersion {
             cmd:
                 StateVersionCmd::Sign {
                     version,

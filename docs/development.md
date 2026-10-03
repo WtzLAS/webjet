@@ -13,7 +13,7 @@ comments refer to it.
 | `webjet-core` | proto | Pure, deterministic logic: no I/O, no clocks except where passed in. |
 | `webjet-net` | core, proto | Transports. Feature `anytls` (default) pulls in BoringSSL. |
 | `webjetd` | core, net, proto | The agent (library + binary). Feature `anytls` forwards to `webjet-net`. |
-| `webjet-tools` | webjetd, core, net, proto | `webjetctl`, `webjet-root`, `webjet-signer`; also the shared account-key code (`Account::unlock`, `sign`). |
+| `webjet-tools` | webjetd, core, net, proto | `webjetctl` (including `root`, `init`, `enroll`); also the shared account-key code (`Account::unlock`, `sign`). |
 | `webjet-app` | webjetd, tools, core, proto | GPUI desktop app. `model` and `client` are GUI-free and unit-tested; `ui` is the GPUI front end. |
 
 Edition 2024, `rust-version = "1.88"`.

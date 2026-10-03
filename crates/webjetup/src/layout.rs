@@ -3,7 +3,15 @@
 use std::path::PathBuf;
 
 /// The programs of a Webjet installation.
-pub const PROGRAMS: [&str; 4] = ["webjetd", "webjetctl", "webjet-root", "webjet-signer"];
+pub const PROGRAMS: [&str; 2] = ["webjetd", "webjetctl"];
+
+/// Programs of releases before 0.3.0, merged into `webjetctl root` and
+/// `webjetd signer` since; removed when found.
+pub const RETIRED_PROGRAMS: [&str; 2] = ["webjet-root", "webjet-signer"];
+
+/// The Windows service's display name and description.
+pub const SERVICE_DISPLAY_NAME: &str = "Webjet agent";
+pub const SERVICE_DESCRIPTION: &str = "Webjet overlay network agent";
 
 /// This tool's own name.
 pub const SELF: &str = "webjetup";
@@ -116,6 +124,15 @@ impl Layout {
     }
 }
 
+/// Whether a version (`0.2.2`, `v0.2.2`) predates the 0.3.0 command layout
+/// (`webjetd enroll`, `webjetd install`, separate webjet-root/webjet-signer).
+pub fn before_0_3(version: &str) -> bool {
+    let v = version.trim().trim_start_matches('v');
+    let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    major == 0 && minor < 3
+}
+
 /// The release target of this build of webjetup, which is also the machine's
 /// (install.sh picks the matching webjetup).
 pub fn target() -> Option<&'static str> {
@@ -146,6 +163,12 @@ pub fn archive_name(tag: &str, target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_layouts() {
+        assert!(before_0_3("0.2.2") && before_0_3("v0.1.0"));
+        assert!(!before_0_3("0.3.0") && !before_0_3("v0.10.1") && !before_0_3("1.0.0"));
+    }
 
     #[test]
     fn names() {

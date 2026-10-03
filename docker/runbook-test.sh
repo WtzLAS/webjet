@@ -97,8 +97,8 @@ else
     api=$www/api/v1/repos/webj8/webjet/releases
     mkdir -p "$dl" "$api/latest" "$api/tags/$TAG"
     stage=$(mktemp -d)
-    for b in webjetd webjetctl webjet-root webjet-signer; do cp "$out/$b" "$stage/"; done
-    COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$dl/webjet-$TAG-$target.tar.gz" -C "$stage" webjetd webjetctl webjet-root webjet-signer
+    for b in webjetd webjetctl; do cp "$out/$b" "$stage/"; done
+    COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$dl/webjet-$TAG-$target.tar.gz" -C "$stage" webjetd webjetctl
     rm -rf "$stage"
     cp "$out/webjetup" "$dl/webjetup-$TAG-$target"
     cp scripts/install.sh "$dl/install.sh"
@@ -131,26 +131,26 @@ echo "== runbook 1: bootstrap"
 install ctl-01 --no-start || fail "install on ctl-01"
 # 1-3 [offline] and [admin]
 on ctl-01 'mkdir -p /offline /admin
-webjet-root --dir /offline/root init >/dev/null
-webjet-root --dir /offline/root backup --out /offline/root-backup.enc >/dev/null
+webjetctl root --dir /offline/root init >/dev/null
+webjetctl root --dir /offline/root backup --out /offline/root-backup.enc >/dev/null
 webjetctl --keys /admin/keys account keygen --name alice --pub-out /admin/alice.pub >/dev/null
-webjet-root --dir /offline/root admin sign --name alice --key /admin/alice.pub --out /offline/alice.account >/dev/null
-webjet-root --dir /offline/root genesis --overlay-pool 10.7.0.0/16 --admin /offline/alice.account --out /offline/genesis.wj >/dev/null' ||
+webjetctl root --dir /offline/root admin sign --name alice --key /admin/alice.pub --out /offline/alice.account >/dev/null
+webjetctl root --dir /offline/root genesis --overlay-pool 10.7.0.0/16 --admin /offline/alice.account --out /offline/genesis.wj >/dev/null' ||
     fail "offline steps"
 # 4 [node] configure, init, start
 on ctl-01 "printf '%s\n' '$(public "$C1")' > /etc/webjet/webjetd.toml; printf '[controller]\nenabled = true\n' >> /etc/webjet/webjetd.toml"
-on ctl-01 'webjetd init --genesis /offline/genesis.wj >/dev/null && systemctl start webjetd' || fail "init"
+on ctl-01 'webjetctl init --genesis /offline/genesis.wj >/dev/null && systemctl start webjetd' || fail "init"
 wait_for ctl-01 'webjetctl controller list | grep -q "valid_until: [1-9]"' "first controller did not start"
 on ctl-01 'stat -c %U /var/lib/webjet/node.json' | grep -qx webjet || fail "state not owned by the agent's user"
 # 5 [admin] infra account, enroll the controller's node
 on ctl-01 'webjetctl --keys /admin/keys account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
 admin "account create --name infra --key /admin/infra.pub" >/dev/null || fail "account create"
 T=$(admin "node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --tags tag:infra --controller tls:$C1:$PORT" 2>/dev/null) || fail "node enroll"
-on ctl-01 "webjetd enroll '$T'" >/dev/null || fail "webjetd enroll on the bootstrap controller"
+on ctl-01 "webjetctl enroll '$T'" >/dev/null || fail "webjetctl enroll on the bootstrap controller"
 on ctl-01 'systemctl is-active webjetd' | grep -qx active || fail "agent stopped during the bootstrap enrollment"
 # 6 certificate
 on ctl-01 'webjetctl controller cert-request --out /offline/ctl-01.req >/dev/null
-webjet-root --dir /offline/root controller sign /offline/ctl-01.req --out /offline/ctl-01.cert >/dev/null' || fail "certificate"
+webjetctl root --dir /offline/root controller sign /offline/ctl-01.req --out /offline/ctl-01.cert >/dev/null' || fail "certificate"
 admin "submit /offline/ctl-01.cert" >/dev/null 2>&1 || fail "submit certificate"
 # 7 settings
 on ctl-01 "cat > /admin/policy.yaml <<EOT
@@ -190,7 +190,7 @@ echo "== runbook 3: make ctl-02 a controller"
 on ctl-02 "printf '[controller]\nenabled = true\n\n' >> /etc/webjet/webjetd.toml && systemctl restart webjetd"
 wait_for ctl-02 'webjetctl controller cert-request --out /tmp/ctl-02.req' "cert-request on ctl-02"
 docker cp "$P-ctl-02:/tmp/ctl-02.req" "$out/ctl-02.req" && docker cp "$out/ctl-02.req" "$P-ctl-01:/offline/ctl-02.req"
-on ctl-01 'webjet-root --dir /offline/root controller sign /offline/ctl-02.req --out /offline/ctl-02.cert' | grep -q "key id" || fail "sign ctl-02"
+on ctl-01 'webjetctl root --dir /offline/root controller sign /offline/ctl-02.req --out /offline/ctl-02.cert' | grep -q "key id" || fail "sign ctl-02"
 admin "submit /offline/ctl-02.cert" >/dev/null 2>&1 || fail "submit ctl-02 cert"
 admin "controller add-learner ctl-02" >/dev/null || fail "add-learner"
 wait_for ctl-02 'webjetctl controller list | grep -q "role: Learner"' "ctl-02 not a learner"
@@ -217,7 +217,7 @@ echo "== runbook 7: revoke a device; offline tombstone"
 admin "node revoke node-03 --reason lost" >/dev/null || fail "node revoke"
 wait_for ctl-02 '! webjetctl node list | grep -q "^node-03 "' "revocation didn't spread"
 id=$(admin "node show ctl-02" | sed -n 's/^id: //p')
-on ctl-01 "webjet-root --dir /offline/root node revoke --node $id --out /offline/ctl-02.tomb" >/dev/null || fail "offline tombstone"
+on ctl-01 "webjetctl root --dir /offline/root node revoke --node $id --out /offline/ctl-02.tomb" >/dev/null || fail "offline tombstone"
 on ctl-01 'test -s /offline/ctl-02.tomb' || fail "no tombstone file"
 
 cleanup

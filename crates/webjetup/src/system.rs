@@ -227,6 +227,54 @@ pub fn service_state(l: &Layout) -> String {
     }
 }
 
+/// The Windows service command line: `webjetd --config <file> service`.
+fn windows_service_command(l: &Layout) -> String {
+    format!(
+        "\"{}\" --config \"{}\" service",
+        l.program("webjetd").display(),
+        l.config.display()
+    )
+}
+
+/// Split-DNS (NRPT) rules webjetd tags with the comment `webjet`.
+const WINDOWS_NRPT_CLEANUP: &str = "Get-DnsClientNrptRule | Where-Object { $_.Comment -eq 'webjet' } | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache";
+
+/// Register webjetd as an automatic LocalSystem service that starts after
+/// the time and DNS client services (§18.6), restarting after failures.
+fn create_windows_service(sys: &Sys, l: &Layout) -> Result<()> {
+    sys.run(
+        "sc.exe",
+        &[
+            "create",
+            SERVICE,
+            "binPath=",
+            &windows_service_command(l),
+            "start=",
+            "auto",
+            "depend=",
+            "W32Time/Dnscache",
+            "DisplayName=",
+            crate::layout::SERVICE_DISPLAY_NAME,
+        ],
+    )?;
+    sys.try_run(
+        "sc.exe",
+        &["description", SERVICE, crate::layout::SERVICE_DESCRIPTION],
+    );
+    sys.try_run(
+        "sc.exe",
+        &[
+            "failure",
+            SERVICE,
+            "reset=",
+            "86400",
+            "actions=",
+            "restart/5000/restart/5000/restart/30000",
+        ],
+    );
+    Ok(())
+}
+
 fn windows_service_exists() -> bool {
     query("sc.exe", &["query", SERVICE]).is_some()
 }
@@ -383,14 +431,9 @@ pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
                 sys.run("sc.exe", &["start", SERVICE])?;
             }
         } else {
-            // webjetd registers the LocalSystem service itself and starts it.
-            let exe = l.program("webjetd");
-            sys.run(
-                &exe.to_string_lossy(),
-                &["--config", &l.config.to_string_lossy(), "install"],
-            )?;
-            if !start {
-                sys.try_run("sc.exe", &["stop", SERVICE]);
+            create_windows_service(sys, l)?;
+            if start {
+                sys.run("sc.exe", &["start", SERVICE])?;
             }
         }
     } else {
@@ -429,18 +472,19 @@ pub fn remove_service(sys: &Sys, l: &Layout) -> Result<()> {
         if !windows_service_exists() {
             return Ok(());
         }
-        let exe = l.program("webjetd");
-        if exe.exists() {
-            // Also removes the NRPT rules and routes it set up.
-            if !sys.try_run(&exe.to_string_lossy(), &["uninstall"]) {
-                println!("    webjetd uninstall failed; removing the service directly");
-                stop(sys, l);
-                sys.run("sc.exe", &["delete", SERVICE])?;
-            }
-        } else {
-            stop(sys, l);
-            sys.run("sc.exe", &["delete", SERVICE])?;
-        }
+        // The agent removes its split-DNS rules when it stops; this catches
+        // what an unclean stop left behind.
+        stop(sys, l);
+        sys.run("sc.exe", &["delete", SERVICE])?;
+        sys.try_run(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                WINDOWS_NRPT_CLEANUP,
+            ],
+        );
     } else if let Some(unit) = &l.service_file
         && unit.exists()
     {
@@ -596,6 +640,14 @@ mod tests {
             "<string>{}</string><string>run</string>",
             l.program("webjetd").display()
         )));
+    }
+
+    #[test]
+    fn windows_service_runs_the_agent_with_its_config() {
+        let l = Layout::system();
+        let cmd = windows_service_command(&l);
+        assert!(cmd.starts_with(&format!("\"{}\"", l.program("webjetd").display())));
+        assert!(cmd.ends_with(&format!("--config \"{}\" service", l.config.display())));
     }
 
     #[test]

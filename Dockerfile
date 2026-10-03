@@ -34,7 +34,7 @@ RUN --mount=type=cache,id=webjet-cargo-registry,target=/usr/local/cargo/registry
     if [ "$ANYTLS" = 1 ]; then features="--features webjetd/anytls,webjet-tools/anytls"; fi; \
     cargo build --release --locked --no-default-features $features -p webjetd -p webjet-tools; \
     mkdir -p /out; \
-    for b in webjetd webjetctl webjet-root webjet-signer; do cp "target/release/$b" /out/; done
+    for b in webjetd webjetctl; do cp "target/release/$b" /out/; done
 
 # ---------------------------------------------------------------- runtime contents
 FROM ${DEBIAN_IMAGE} AS base

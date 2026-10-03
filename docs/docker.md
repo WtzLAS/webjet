@@ -1,7 +1,7 @@
 # Running Webjet in Docker
 
-The Webjet image holds `webjetd` and the admin tools (`webjetctl`,
-`webjet-root`, `webjet-signer`). A container runs one agent: a data node, a
+The Webjet image holds `webjetd` (the agent, and `webjetd signer`) and
+`webjetctl` (node setup, administration and `webjetctl root`). A container runs one agent: a data node, a
 relay, a gateway or a controller. Its roles come from its record in the
 network, exactly as with a package install.
 
@@ -68,7 +68,7 @@ starts use the state in the volume. `WEBJET_ENROLL_FILE` reads it from a file
 instead, which works with Docker and Compose secrets.
 
 To re-key a node (runbook 8), stop the container, run
-`docker run --rm -v webjet-state:/var/lib/webjet webjet webjetd enroll <string>`,
+`docker run --rm -v webjet-state:/var/lib/webjet webjet webjetctl enroll <string>`,
 and start it again.
 
 ## The first controller of a new network
@@ -105,12 +105,12 @@ Then:
 ```sh
 docker exec -it webjet-ctl webjetctl --account alice account create --name infra --key /admin-keys/infra.pub
 docker exec -it webjet-ctl webjetctl --account alice node enroll --owner infra --name ctl-01 --roles data,relay --controller tls:203.0.113.10:443
-docker exec -it webjet-ctl webjetd enroll <string>
+docker exec -it webjet-ctl webjetctl enroll <string>
 docker exec -it webjet-ctl webjetctl controller cert-request --out /var/lib/webjet/ctl-01.req
 ```
 
 `webjetctl` asks for the account passphrase. Copy the request out with
-`docker cp`, sign it with `webjet-root` on the offline machine, copy the
+`docker cp`, sign it with `webjetctl root controller sign` on the offline machine, copy the
 certificate back in and run `webjetctl submit` on it.
 
 Once the network runs, recreate the container without the key directory, so
@@ -150,7 +150,7 @@ variables above are then ignored, except for the enrollment ones.
 ## Signing keys for controllers
 
 Controllers sign tree heads. By default the key sits in the controller's
-volume. To keep it in a separate process (§19.2), run `webjet-signer` in its
+volume. To keep it in a separate process (§19.2), run `webjetd signer` in its
 own container with no network, sharing only the socket:
 
 ```sh
@@ -159,7 +159,7 @@ docker run -d --name webjet-signer --network none \
   -v webjet-signer-key:/var/lib/webjet-signer \
   -v webjet-signer-run:/run/webjet-signer \
   -e WEBJET_SIGNER_SOCKET=/run/webjet-signer/signer.sock \
-  webjet webjet-signer --socket /run/webjet-signer/signer.sock
+  webjet webjetd signer --socket /run/webjet-signer/signer.sock
 # and on the controller:
 #   -v webjet-signer-run:/run/webjet-signer
 #   -e WEBJET_SIGNER_SOCKET=/run/webjet-signer/signer.sock

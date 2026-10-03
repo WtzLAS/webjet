@@ -30,19 +30,19 @@ x() { c=$1; shift; docker exec $c "$@"; }
 bg() { c=$1; shift; docker exec -d $c sh -c "$* > /var/log/webjetd.log 2>&1"; }
 CTL_IP=$(x $P-ctl hostname -i | awk '{print $1}')
 echo "== bootstrap on ctl-01 ($CTL_IP)"
-x $P-ctl sh -c 'cd /root && webjet-root --dir root init >/dev/null && webjetctl account keygen --name alice --pub-out alice.pub >/dev/null &&
-  webjet-root --dir root admin sign --name alice --key alice.pub --out alice.account >/dev/null &&
-  webjet-root --dir root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj >/dev/null &&
-  webjetd init --genesis genesis.wj >/dev/null'
+x $P-ctl sh -c 'cd /root && webjetctl root --dir root init >/dev/null && webjetctl account keygen --name alice --pub-out alice.pub >/dev/null &&
+  webjetctl root --dir root admin sign --name alice --key alice.pub --out alice.account >/dev/null &&
+  webjetctl root --dir root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj >/dev/null &&
+  webjetctl init --genesis genesis.wj >/dev/null'
 bg $P-ctl webjetd run
 W() { x $P-ctl webjetctl --account alice "$@"; }
 i=0; until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do sleep 0.5; i=$((i+1)); [ $i -lt 60 ] || { echo "controller did not start"; x $P-ctl cat /var/log/webjetd.log; exit 1; }; done
 x $P-ctl sh -c 'cd /root && webjetctl account keygen --name infra --pub-out infra.pub >/dev/null'
 W account create --name infra --key /root/infra.pub
 T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --controller tls:$CTL_IP:443 2>/dev/null)
-x $P-ctl webjetd enroll "$T" >/dev/null
+x $P-ctl webjetctl enroll "$T" >/dev/null
 W controller cert-request --out /root/ctl.req >/dev/null
-x $P-ctl webjet-root --dir /root/root controller sign /root/ctl.req --out /root/ctl.cert >/dev/null
+x $P-ctl webjetctl root --dir /root/root controller sign /root/ctl.req --out /root/ctl.cert >/dev/null
 W submit /root/ctl.cert >/dev/null 2>&1
 x $P-ctl sh -c 'cat > /root/policy.yaml <<EOT
 version: 1
@@ -84,7 +84,7 @@ W dns apply /root/dns.yaml
 W seeds apply /root/seeds.yaml
 enroll() { # container name ip [routes]
   T=$(W node enroll --owner infra --name $2 --ip $3 --roles data $4 --controller tls:$CTL_IP:443 2>/dev/null)
-  x $1 webjetd enroll "$T"
+  x $1 webjetctl enroll "$T"
   bg $1 webjetd run
 }
 enroll $P-a node-a 10.7.0.10 ""

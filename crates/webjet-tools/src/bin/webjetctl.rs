@@ -1,6 +1,10 @@
-//! webjetctl: the admin and node command-line tool (§13). It signs
-//! operations with an account key kept on this machine and submits them
-//! through the local webjetd's control channel.
+//! webjetctl: the Webjet command-line tool (§13).
+//!
+//! - setting up this machine: `init` (first controller), `enroll`
+//! - this node: `status`, `peers`, `sessions`, `metrics`, `ping`, `inject`
+//! - administration: signs operations with an account key kept on this
+//!   machine and submits them through the local webjetd's control channel
+//! - `root`: the offline root and emergency revocation keys
 
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -38,6 +42,34 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Make this machine the first controller of a new network (runbook 1):
+    /// creates the agent's data directory from the genesis file. Start the
+    /// agent afterwards.
+    Init {
+        /// The genesis file from `webjetctl root genesis`.
+        #[arg(long)]
+        genesis: PathBuf,
+        /// webjetd.toml to read the data directory from (default: the
+        /// platform's, see docs/configuration.md).
+        #[arg(short, long, env = "WEBJET_CONFIG")]
+        config: Option<PathBuf>,
+        /// Override the data directory.
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Enroll (or re-key) this machine with an enrollment string from
+    /// `node enroll` or `node rekey`. Restart the agent afterwards (webjetup
+    /// enroll does both). On the first controller, run it while the agent
+    /// runs: the agent itself answers the enrollment.
+    Enroll {
+        string: String,
+        /// webjetd.toml to read the data directory and key storage from.
+        #[arg(short, long, env = "WEBJET_CONFIG")]
+        config: Option<PathBuf>,
+        /// Override the data directory.
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
     /// This node's state, tree version and alarms.
     Status,
     /// Hop sessions to neighbors.
@@ -56,42 +88,52 @@ enum Cmd {
         #[arg(short, long, default_value_t = 3)]
         count: u16,
     },
+    /// Accounts: create key pairs, add, list and revoke accounts
     Account {
         #[command(subcommand)]
         cmd: AccountCmd,
     },
+    /// Nodes: enrollment strings, list, show, update, rename, revoke, re-key
     Node {
         #[command(subcommand)]
         cmd: NodeCmd,
     },
+    /// The network's access policy (apply, check, show)
     Policy {
         #[command(subcommand)]
         cmd: ApplyCmd,
     },
+    /// Magic DNS settings: suffix, resolver address, records, forwarding
     Dns {
         #[command(subcommand)]
         cmd: ApplyCmd,
     },
+    /// The seed list nodes use to find the network
     Seeds {
         #[command(subcommand)]
         cmd: ApplyCmd,
     },
+    /// Network-wide resource limits (§16.2)
     Limits {
         #[command(subcommand)]
         cmd: ApplyCmd,
     },
+    /// Transport priorities, camouflage and padding
     Transport {
         #[command(subcommand)]
         cmd: ApplyCmd,
     },
+    /// The network's pre-shared key
     Psk {
         #[command(subcommand)]
         cmd: PskCmd,
     },
+    /// The AnyTLS camouflage certificate key and website
     Camouflage {
         #[command(subcommand)]
         cmd: CamouflageCmd,
     },
+    /// Controllers: certificate requests and cluster membership
     Controller {
         #[command(subcommand)]
         cmd: ControllerCmd,
@@ -100,6 +142,33 @@ enum Cmd {
     Submit { file: PathBuf },
     /// Inject offline-signed material into this node (spreads by gossip).
     Inject { file: PathBuf },
+    /// The offline root and emergency revocation keys (§5): run these on
+    /// the offline computer. They never talk to the network.
+    Root {
+        /// Directory holding the encrypted root and emergency keys.
+        #[arg(long, global = true, default_value = webjet_tools::root::DEFAULT_DIR)]
+        dir: PathBuf,
+        #[command(subcommand)]
+        cmd: webjet_tools::root::RootCmd,
+    },
+}
+
+/// The agent's configuration for `init` and `enroll`.
+fn agent_config(
+    config: Option<&Path>,
+    data_dir: Option<PathBuf>,
+) -> Result<webjetd::config::Config> {
+    let path = config
+        .map(Path::to_path_buf)
+        .unwrap_or_else(webjetd::config::default_config_path);
+    if config.is_some() && !path.exists() {
+        bail!("configuration file {} not found", path.display());
+    }
+    let mut cfg = webjetd::config::Config::load(Some(&path))?;
+    if let Some(d) = data_dir {
+        cfg.override_data_dir(d, path.exists());
+    }
+    Ok(cfg)
 }
 
 #[derive(Subcommand)]
@@ -518,6 +587,28 @@ async fn transport_apply(cli: &Cli, file: &Path) -> Result<()> {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.cmd {
+        Cmd::Init {
+            genesis,
+            config,
+            data_dir,
+        } => {
+            let cfg = agent_config(config.as_deref(), data_dir.clone())?;
+            webjetd::agent::init(&cfg, &read(genesis)?, true)?;
+        }
+        Cmd::Enroll {
+            string,
+            config,
+            data_dir,
+        } => {
+            let cfg = agent_config(config.as_deref(), data_dir.clone())?;
+            webjetd::agent::enroll(&cfg, string).await?;
+        }
+        Cmd::Root { dir, cmd } => {
+            // Offline: no agent, no network. Blocking file and prompt work
+            // runs off the async runtime's thread.
+            let (dir, cmd) = (dir.clone(), cmd.clone());
+            tokio::task::spawn_blocking(move || webjet_tools::root::run(&dir, cmd)).await??;
+        }
         Cmd::Status => {
             let s = call(&cli, json!({"cmd": "status"})).await?;
             print(&cli, &s);
@@ -842,7 +933,7 @@ async fn main() -> Result<()> {
                 };
                 let r = submit(&cli, a.sign(AccountOp::RekeyNode(Box::new(op)))?).await?;
                 eprintln!(
-                    "re-key for {name} issued (entry {}); on the node run `webjetd enroll` with:",
+                    "re-key for {name} issued (entry {}); on the node run `webjetup enroll` (or `webjetctl enroll`) with:",
                     r["index"]
                 );
                 println!("{}", ticket(&cli, &token, controller).await?);
@@ -1002,7 +1093,7 @@ async fn main() -> Result<()> {
                 let raw = webjetd::state::unb64(r["request"].as_str().unwrap_or(""))?;
                 write_public(out, &raw)?;
                 println!(
-                    "certificate request → {} (sign it with webjet-root controller sign)",
+                    "certificate request → {} (sign it offline: webjetctl root controller sign)",
                     out.display()
                 );
             }

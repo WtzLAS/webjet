@@ -7,7 +7,7 @@
 #   node        a data node or relay on this host (host networking, so the
 #               overlay is reachable from the host itself)
 #   controller  a controller with its signing key in a separate container
-#   signer      webjet-signer for the controller (§19.2)
+#   signer      `webjetd signer` for the controller (§19.2)
 #
 # Start only what this host runs, e.g. `docker compose up -d node`.
 
@@ -46,7 +46,7 @@ services:
       WEBJET_CONTROLLER: "true"
       WEBJET_SIGNER_SOCKET: /run/webjet-signer/signer.sock
       WEBJET_PUBLIC: tls:203.0.113.10:443,kcp:203.0.113.10:443
-      # First controller of a new network: the genesis from webjet-root.
+      # First controller of a new network: the genesis from `webjetctl root genesis`.
       # Additional controllers enroll instead: WEBJET_ENROLL_FILE.
       WEBJET_GENESIS: /run/secrets/genesis
     secrets: [genesis]
@@ -61,7 +61,8 @@ services:
     image: webjet:latest
     restart: unless-stopped
     command:
-      - webjet-signer
+      - webjetd
+      - signer
       - --socket
       - /run/webjet-signer/signer.sock
       - --key
@@ -83,4 +84,4 @@ secrets:
   node_enroll:
     file: ./node.enroll       # the string from `webjetctl node enroll`
   genesis:
-    file: ./genesis.wj        # from `webjet-root genesis`
+    file: ./genesis.wj        # from `webjetctl root genesis`

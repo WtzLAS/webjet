@@ -1,4 +1,4 @@
-//! Signing keys for controllers (§19.2): either `webjet-signer` over a Unix
+//! Signing keys for controllers (§19.2): either `webjetd signer` over a Unix
 //! socket (production), or an in-process key file (tests, small setups).
 //!
 //! The socket protocol is one JSON request per connection:
@@ -20,23 +20,31 @@ pub struct FileSigner {
     kp: KeyPair,
 }
 
+/// The signing key in `path`, generated (and written there) when missing.
+pub fn load_or_create_key(path: &std::path::Path) -> Result<KeyPair> {
+    if !path.exists() {
+        let kp = KeyPair::generate();
+        crate::state::write_private(path, &kp.seed()[..])?;
+        tracing::info!("generated a new signing key at {}", path.display());
+    }
+    let b = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let seed: Bytes32 = b
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("bad signing key file {}", path.display()))?;
+    Ok(KeyPair::from_seed(&seed))
+}
+
 impl FileSigner {
     pub fn open(path: &std::path::Path) -> Result<FileSigner> {
         if !path.exists() {
-            let kp = KeyPair::generate();
-            crate::state::write_private(path, &kp.seed()[..])?;
             tracing::warn!(
-                "generated an in-process signing key at {} (use webjet-signer in production)",
+                "using an in-process signing key at {} (run `webjetd signer` to keep it in a separate process)",
                 path.display()
             );
         }
-        let b = std::fs::read(path)?;
-        let seed: Bytes32 = b
-            .as_slice()
-            .try_into()
-            .map_err(|_| anyhow!("bad signing key file"))?;
         Ok(FileSigner {
-            kp: KeyPair::from_seed(&seed),
+            kp: load_or_create_key(path)?,
         })
     }
 }
@@ -83,7 +91,7 @@ impl SocketSigner {
                 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
                 let s = crate::ipc::connect(&path)
                     .await
-                    .with_context(|| format!("webjet-signer at {}", path.display()))?;
+                    .with_context(|| format!("webjetd signer at {}", path.display()))?;
                 let (r, mut w) = tokio::io::split(s);
                 w.write_all(&line).await?;
                 let mut resp = String::new();
@@ -92,7 +100,7 @@ impl SocketSigner {
                     BufReader::new(r).read_line(&mut resp),
                 )
                 .await
-                .map_err(|_| anyhow!("webjet-signer timed out"))??;
+                .map_err(|_| anyhow!("webjetd signer timed out"))??;
                 Ok(resp)
             })
         })
@@ -100,7 +108,7 @@ impl SocketSigner {
         .map_err(|_| anyhow!("signer thread panicked"))??;
         let v: serde_json::Value = serde_json::from_str(&resp)?;
         if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
-            bail!("webjet-signer: {e}");
+            bail!("webjetd signer: {e}");
         }
         Ok(v)
     }
@@ -126,11 +134,11 @@ impl Signer for SocketSigner {
     }
 }
 
-/// Serve the signer protocol for `kp` (used by the `webjet-signer` binary).
+/// Serve the signer protocol for `kp` (`webjetd signer`).
 pub async fn serve(path: &std::path::Path, kp: KeyPair) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut l = crate::ipc::Listener::bind(path)?;
-    tracing::info!("webjet-signer listening on {}", path.display());
+    tracing::info!("signer listening on {}", path.display());
     let kp = std::sync::Arc::new(kp);
     loop {
         let s = l.accept().await?;

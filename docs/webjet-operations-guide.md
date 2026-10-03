@@ -7,7 +7,7 @@ Each command is marked with where it runs:
 
 | Mark | Where |
 |---|---|
-| `[offline]` | The offline computer that holds the root and emergency revocation keys (`webjet-root`) |
+| `[offline]` | The offline computer that holds the root and emergency revocation keys (`webjetctl root`) |
 | `[admin]` | An admin's own machine, which holds their account key (`webjetctl`) |
 | `[node]` | The machine being set up or repaired (`webjetup`, `webjetd`, `webjetctl`) |
 | `[controller]` | A controller, through its local control channel (`webjetctl`) |
@@ -23,10 +23,8 @@ Files move to and from the offline computer on removable media only.
 | Program | What it is | Where it's needed |
 |---|---|---|
 | `webjetup` | Installs, upgrades and removes Webjet | Every node |
-| `webjetd` | The agent, run as a system service | Every node |
-| `webjetctl` | Talks to the local agent; signs operations with an account key | Every node, and admins' machines |
-| `webjet-root` | Holds the root and emergency revocation keys | The offline computer only |
-| `webjet-signer` | Optional: keeps a controller's signing key in a separate process (runbook 1, step 4) | Controllers that use it |
+| `webjetd` | The agent, run as a system service (`webjetd run`); `webjetd signer` optionally holds a controller's signing key in a separate process (runbook 1, step 4) | Every node |
+| `webjetctl` | Sets up a node (`init`, `enroll`); talks to the local agent; signs operations with an account key; `webjetctl root` holds the offline root keys | Every node, admins' machines, the offline computer |
 
 On every Linux or macOS machine that joins the network, as root:
 
@@ -34,9 +32,9 @@ On every Linux or macOS machine that joins the network, as root:
 curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.2.2/install.sh | sudo sh
 ```
 
-This installs all five programs into `/usr/local/bin` and sets up the `webjetd` service (systemd on Linux, running as the `webjet` user; launchd on macOS). On Windows, download `webjetup-<version>-x86_64-pc-windows-msvc.exe` from the release page and run `webjetup install` in an Administrator prompt. `sudo webjetup status` shows what is installed and running. Upgrades are `sudo webjetup upgrade`, and `webjetup remove` or `webjetup nuke` take Webjet off a machine again.
+This installs `webjetd`, `webjetctl` and `webjetup` into `/usr/local/bin` and sets up the `webjetd` service (systemd on Linux, running as the `webjet` user; launchd on macOS). On Windows, download `webjetup-<version>-x86_64-pc-windows-msvc.exe` from the release page and run `webjetup install` in an Administrator prompt. `sudo webjetup status` shows what is installed and running. Upgrades are `sudo webjetup upgrade`, and `webjetup remove` or `webjetup nuke` take Webjet off a machine again.
 
-The offline computer gets no network. Copy the release archive for its platform (`webjet-<version>-<target>.tar.gz`, or the `.zip` on Windows) and its `.sha256` file over on removable media, check the checksum, and take `webjet-root` out of the archive.
+The offline computer gets no network. Copy the release archive for its platform (`webjet-<version>-<target>.tar.gz`, or the `.zip` on Windows) and its `.sha256` file over on removable media, check the checksum, and take `webjetctl` out of the archive. Only its `root` commands are used there.
 
 ### Running `webjetctl`
 
@@ -48,7 +46,7 @@ Account keys live in `~/.config/webjet/accounts` (macOS: `~/Library/Application 
 sudo webjetctl --keys ~/.config/webjet/accounts --account alice node list
 ```
 
-The examples below leave out `sudo` and `--keys`. With a single key in the directory, `--account` can be left out as well. `webjetctl` asks for the key's passphrase. Scripts can set `WEBJET_ACCOUNT_PASSPHRASE` instead, and `webjet-root` reads `WEBJET_ROOT_PASSPHRASE` and `WEBJET_BACKUP_PASSPHRASE`.
+The examples below leave out `sudo` and `--keys`. With a single key in the directory, `--account` can be left out as well. `webjetctl` asks for the key's passphrase. Scripts can set `WEBJET_ACCOUNT_PASSPHRASE` instead, and `webjetctl root` reads `WEBJET_ROOT_PASSPHRASE` and `WEBJET_BACKUP_PASSPHRASE`.
 
 ### Reading the output
 
@@ -86,18 +84,18 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 
 1. Create the root and emergency revocation keys, and back them up encrypted on two separate media. Both commands ask for a new passphrase twice.
    ```
-   [offline]  webjet-root --dir ./webjet-root init
-   [offline]  webjet-root --dir ./webjet-root backup --out /media/usb1/root-backup.enc
+   [offline]  webjetctl root --dir ./webjet-root init
+   [offline]  webjetctl root --dir ./webjet-root backup --out /media/usb1/root-backup.enc
    ```
-   Every `webjet-root` command takes the same `--dir`. It defaults to `./webjet-root`, which is what the examples below assume.
+   Every `webjetctl root` command takes the same `--dir`. It defaults to `./webjet-root`, which is what the examples below assume.
 2. Create the first admin's account key. It never leaves the admin's machine; copy only `alice.pub` to the offline computer.
    ```
    [admin]    webjetctl account keygen --name alice --pub-out alice.pub
    ```
 3. Sign the admin account with the root key and build the genesis file. The genesis file holds the root public key, the emergency key's certificate, the first admin account and the overlay range.
    ```
-   [offline]  webjet-root admin sign --name alice --key alice.pub --out alice.account
-   [offline]  webjet-root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj
+   [offline]  webjetctl root admin sign --name alice --key alice.pub --out alice.account
+   [offline]  webjetctl root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj
    ```
 4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, turn on the controller role and give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it.
    ```
@@ -120,11 +118,11 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    transport = "kcp"
    ```
    ```
-   [node]     sudo webjetd init --genesis genesis.wj
+   [node]     sudo webjetctl init --genesis genesis.wj
    [node]     sudo systemctl start webjetd
    [node]     sudo webjetctl controller list      # wait for a non-zero valid_until
    ```
-   The controller's signing key is created on first start, as `signing.key` in `/var/lib/webjet`. To keep it out of the agent's process, run `webjet-signer --socket /run/webjet-signer/signer.sock --key /var/lib/webjet-signer/signing.key` as its own service before the first start, and set `signer_socket = "/run/webjet-signer/signer.sock"` in the `[controller]` section. The signer's socket is private to the user it runs as, so on Linux run the signer as the `webjet` user too. There is no ready-made service file for it.
+   The controller's signing key is created on first start, as `signing.key` in `/var/lib/webjet`. To keep it out of the agent's process, run `webjetd signer --socket /run/webjet-signer/signer.sock --key /var/lib/webjet-signer/signing.key` as its own service before the first start, and set `signer_socket = "/run/webjet-signer/signer.sock"` in the `[controller]` section. The signer's socket is private to the user it runs as, so on Linux run the signer as the `webjet` user too. There is no ready-made service file for it.
 5. Create an account to own infrastructure nodes, and enroll the controller's own node. The overlay doesn't exist yet, so the admin's operations go through the controller's agent. Either run them on the controller with the admin's key directory copied there for the bootstrap (remove it afterwards), or forward the controller's control socket to the admin's machine over SSH and point `webjetctl` at it:
    ```
    [admin]    ssh -N -L /tmp/ctl-01.sock:/run/webjet/control.sock root@ctl-01 &
@@ -137,13 +135,13 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    [admin]    webjetctl node enroll --owner infra --name ctl-01 --ip 10.7.0.1 \
                   --roles data,relay --tags tag:infra --controller tls:203.0.113.10:443
               → prints an enrollment string
-   [node]     sudo webjetd enroll '<enrollment string>'
+   [node]     sudo webjetctl enroll '<enrollment string>'
    ```
-   The first controller enrolls its own node through its running agent, so leave the agent running here; `webjetd enroll` talks to it. Every other node is enrolled with `webjetup enroll` (runbooks 2 and 8), which stops the agent, enrolls and starts it again. The enrollment string is valid for 24 hours (`--expires-hours`).
-6. Make the node a controller: request a certificate for its signing key, sign it offline, and submit it. `webjet-root controller sign` prints the key ID; note it for runbook 9.
+   The first controller enrolls its own node through its running agent, so leave the agent running here; `webjetctl enroll` talks to it. Every other node is enrolled with `webjetup enroll` (runbooks 2 and 8), which stops the agent, enrolls and starts it again. The enrollment string is valid for 24 hours (`--expires-hours`).
+6. Make the node a controller: request a certificate for its signing key, sign it offline, and submit it. `webjetctl root controller sign` prints the key ID; note it for runbook 9.
    ```
    [controller]  webjetctl controller cert-request --out ctl-01.req
-   [offline]     webjet-root controller sign ctl-01.req --out ctl-01.cert
+   [offline]     webjetctl root controller sign ctl-01.req --out ctl-01.cert
    [admin]       webjetctl submit ctl-01.cert
    ```
    From now on, nodes accept this controller's tree heads.
@@ -283,15 +281,15 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 
 **Steps:**
 
-1. Turn on the controller role and restart the agent. This creates the controller's signing key (or uses `webjet-signer`, see runbook 1, step 4). Then create a certificate request.
+1. Turn on the controller role and restart the agent. This creates the controller's signing key (or uses `webjetd signer`, see runbook 1, step 4). Then create a certificate request.
    ```
    [node]     sudoedit /etc/webjet/webjetd.toml       # [controller] enabled = true
    [node]     sudo systemctl restart webjetd
    [node]     sudo webjetctl controller cert-request --out ctl-06.req
    ```
-2. Sign the certificate with the root key and submit it. Note the key ID that `webjet-root` prints.
+2. Sign the certificate with the root key and submit it. Note the key ID that `webjetctl root controller sign` prints.
    ```
-   [offline]  webjet-root controller sign ctl-06.req --out ctl-06.cert
+   [offline]  webjetctl root controller sign ctl-06.req --out ctl-06.cert
    [admin]    webjetctl submit ctl-06.cert
    ```
 3. Add it to the cluster as a learner. It receives a snapshot, catches up and starts signing tree heads.
@@ -417,18 +415,18 @@ Add `--revoke-issued` to also revoke the accounts that one signed.
 
 An **admin** account can only be revoked with the root or emergency key. It takes the admin's public file (the `.pub` from `webjetctl account keygen`). Add `--revoke-issued` if the admin may have been compromised, which also revokes the accounts that admin signed.
 ```
-[offline]  webjet-root admin revoke --key carol.pub --reason compromised --revoke-issued --out carol.tomb
+[offline]  webjetctl root admin revoke --key carol.pub --reason compromised --revoke-issued --out carol.tomb
 [admin]    webjetctl submit carol.tomb
 ```
 
-`webjet-root account revoke --key <account>.pub` does the same for a normal account, for when no admin is available to do it.
+`webjetctl root account revoke --key <account>.pub` does the same for a normal account, for when no admin is available to do it.
 
 ### If no controller majority is available
 
-Sign the tombstone with the emergency revocation key and inject it at any node. It spreads by gossip. `webjet-root` needs the node's ID, which `webjetctl node show` prints (`id:`).
+Sign the tombstone with the emergency revocation key and inject it at any node. It spreads by gossip. `webjetctl root node revoke` needs the node's ID, which `webjetctl node show` prints (`id:`).
 ```
 [admin]    webjetctl node show laptop-17
-[offline]  webjet-root node revoke --node <node id> --reason lost --out laptop-17.tomb
+[offline]  webjetctl root node revoke --node <node id> --reason lost --out laptop-17.tomb
 [node]     sudo webjetctl inject laptop-17.tomb
 ```
 
@@ -474,11 +472,11 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 
 **Steps:**
 
-1. Find the key ID and the highest tree-head version that key signed. The key ID was printed by `webjet-root controller sign` when the controller was set up. While the controller still runs, `webjetctl controller list` on it shows the same value as `signing_key_id`. The current tree version is `tree_version` in `webjetctl status`.
+1. Find the key ID and the highest tree-head version that key signed. The key ID was printed by `webjetctl root controller sign` when the controller was set up. While the controller still runs, `webjetctl controller list` on it shows the same value as `signing_key_id`. The current tree version is `tree_version` in `webjetctl status`.
    For a suspected compromise, find the last version known to be legitimate by comparing with the other controllers' logs.
 2. Sign the retirement with the root or emergency key (`--with emergency`), and submit it. If no controller majority is available, inject it at any node instead (`webjetctl inject`).
    ```
-   [offline]  webjet-root controller retire --key-id <id> --last-valid-version <n> \
+   [offline]  webjetctl root controller retire --key-id <id> --last-valid-version <n> \
                   --reason decommissioned --out ctl-03.keytomb
    [admin]    webjetctl submit ctl-03.keytomb
    ```
@@ -509,7 +507,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 5. Decide what to do about nodes that are offline. After activation, a node on the old release raises "upgrade required" and eventually drops off.
 6. When every node that matters runs the new release, sign the StateVersion and submit it. Take the version number and the minimum node software version from the release notes.
    ```
-   [offline]  webjet-root state-version sign --version <n> --min-node-software 2.4.0 --out release-2.4.sv
+   [offline]  webjetctl root state-version sign --version <n> --min-node-software 2.4.0 --out release-2.4.sv
    [admin]    webjetctl submit release-2.4.sv
    ```
 7. Watch for the "doesn't support the active StateVersion" alarm, and upgrade any node that raises it.

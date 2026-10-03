@@ -1,6 +1,6 @@
 #!/bin/sh
 # Test the TPM key storage backend against a software TPM (swtpm):
-# unit test, then a full `webjetd init` + start that seals the identity key,
+# unit test, then a full `webjetctl init` + start that seals the identity key,
 # and a check that a different TPM can't unseal it.
 set -eu
 docker run --rm -v "$(cd "$(dirname "$0")/.." && pwd)":/src -w /src \
@@ -19,13 +19,13 @@ cargo build -q -p webjetd -p webjet-tools 2>/dev/null
 B=target/debug
 D=/tmp/wj; rm -rf $D; mkdir -p $D
 export WEBJET_ROOT_PASSPHRASE=r WEBJET_ACCOUNT_PASSPHRASE=a WEBJET_KEYS=$D/keys
-$B/webjet-root --dir $D/root init >/dev/null
+$B/webjetctl root --dir $D/root init >/dev/null
 $B/webjetctl account keygen --name alice --pub-out $D/alice.pub >/dev/null
-$B/webjet-root --dir $D/root admin sign --name alice --key $D/alice.pub --out $D/alice.account >/dev/null
-$B/webjet-root --dir $D/root genesis --overlay-pool 10.7.0.0/16 --admin $D/alice.account --out $D/genesis.wj >/dev/null
+$B/webjetctl root --dir $D/root admin sign --name alice --key $D/alice.pub --out $D/alice.account >/dev/null
+$B/webjetctl root --dir $D/root genesis --overlay-pool 10.7.0.0/16 --admin $D/alice.account --out $D/genesis.wj >/dev/null
 printf "data_dir = \"$D/node\"\ncontrol_socket = \"$D/node/control.sock\"\n[tun]\nenabled = false\n[controller]\nenabled = true\n" > $D/webjetd.toml
 echo "== init seals the key in the TPM"
-$B/webjetd -c $D/webjetd.toml init --genesis $D/genesis.wj 2>&1 | tee $D/init.log
+$B/webjetctl init --config $D/webjetd.toml --genesis $D/genesis.wj 2>&1 | tee $D/init.log
 head -c 5 $D/node/identity.key | od -c | head -1
 grep -q "identity key stored with tpm storage" $D/init.log || { echo "FAIL: key not TPM-sealed"; exit 1; }
 echo "== repeated seal/unseal does not exhaust TPM object slots"

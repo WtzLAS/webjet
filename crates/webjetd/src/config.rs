@@ -147,7 +147,7 @@ pub struct ControllerCfg {
     /// Run the controller role (requires a SigningKeyCert for this node).
     #[serde(default)]
     pub enabled: bool,
-    /// `webjet-signer` socket; when absent an in-process key file is used.
+    /// `webjetd signer` socket; when absent an in-process key file is used.
     pub signer_socket: Option<PathBuf>,
     /// Tree head lifetime in hours (§7.3, §24: 24–72 h).
     #[serde(default = "default_head_hours")]
@@ -217,6 +217,19 @@ impl Config {
             c.control_socket = c.data_dir.join(&c.control_socket);
         }
         Ok(c)
+    }
+
+    /// Use `dir` as the data directory (`--data-dir`). Without a config file
+    /// the control socket moves with it.
+    pub fn override_data_dir(&mut self, dir: PathBuf, have_config_file: bool) {
+        self.data_dir = dir;
+        if !have_config_file {
+            self.control_socket = if cfg!(windows) {
+                crate::ipc::default_control()
+            } else {
+                self.data_dir.join("control.sock")
+            };
+        }
     }
 
     pub fn local_priority(&self, t: Transport) -> Option<u8> {

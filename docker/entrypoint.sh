@@ -1,13 +1,14 @@
 #!/bin/sh
 # Container entrypoint (docs/docker.md).
 #
-# For `webjetd ...` commands it prepares the configuration: a mounted
+# For `webjetd run` it prepares the configuration: a mounted
 # /etc/webjet/webjetd.toml is used as is, otherwise one is generated from
-# WEBJET_* variables. For `webjetd run` on a fresh data volume it first
-# enrolls the node (WEBJET_ENROLL / WEBJET_ENROLL_FILE) or initializes the
-# first controller of a new network (WEBJET_GENESIS).
+# WEBJET_* variables. On a fresh data volume it first enrolls the node
+# (WEBJET_ENROLL / WEBJET_ENROLL_FILE, with `webjetctl enroll`) or
+# initializes the first controller of a new network (WEBJET_GENESIS, with
+# `webjetctl init`).
 #
-# Any other command (webjetctl, webjet-root, webjet-signer, sh) runs as given.
+# Any other command (`webjetd signer`, webjetctl, sh) runs as given.
 set -eu
 
 CONF=${WEBJET_CONFIG:-/run/webjet/webjetd.toml}
@@ -168,27 +169,31 @@ first_run() {
     if [ -n "${WEBJET_GENESIS:-}" ]; then
         [ -r "$WEBJET_GENESIS" ] || die "WEBJET_GENESIS $WEBJET_GENESIS is not readable"
         log "initializing the first controller of a new network from $WEBJET_GENESIS"
-        webjetd init --genesis "$WEBJET_GENESIS"
+        webjetctl init --genesis "$WEBJET_GENESIS"
         return 0
     fi
     ticket=$(enrollment_string)
     [ -n "$ticket" ] || die "this node is not enrolled: set WEBJET_ENROLL (or WEBJET_ENROLL_FILE) to its enrollment string, or WEBJET_GENESIS for the first controller of a new network"
     log "enrolling this node"
-    webjetd enroll "$ticket"
+    webjetctl enroll "$ticket"
 }
 
 case "${1:-}" in
     webjetd)
-        prepare_config
-        if [ "${2:-}" = run ]; then
-            checks
-            first_run
-            role agent
-        else
-            role other
-        fi
+        case "${2:-}" in
+            run)
+                prepare_config
+                checks
+                first_run
+                role agent
+                ;;
+            signer) role signer ;;
+            *)
+                prepare_config
+                role other
+                ;;
+        esac
         ;;
-    webjet-signer) role signer ;;
     *) role other ;;
 esac
 exec "$@"

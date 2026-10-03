@@ -20,8 +20,20 @@ A Rust implementation of the Webjet overlay VPN described in
 | `crates/webjet-core` | Pure logic: Ed25519 envelopes and BLAKE3 derivations, sparse Merkle tree, trust store and merge rules, deterministic controller state machine, policy engine, routing (k-shortest paths, load, hysteresis), e2e frames and replay window, packet parsing/NAT/ICMP, conntrack, FQ-CoDel hop queue with ECN |
 | `crates/webjet-net` | Transports: PSK gate and UDP obfuscation, raw-public-key TLS 1.3 with X25519MLKEM768 only, KCP + adaptive Reed–Solomon FEC with BBR-style pacing, AnyTLS (BoringSSL, Chrome-like ClientHello, camouflage website) |
 | `crates/webjetd` | The agent: hop sessions, gossip and Merkle anti-entropy, circuits (label switching), end-to-end sessions, path probing, hole punching, tun data plane, gateway, magic DNS, metrics, controller role (Raft, signing, enrollment), local control socket |
-| `crates/webjet-tools` | `webjetctl` (admin/node CLI), `webjet-root` (offline root key), `webjet-signer` (controller signing-key service) |
+| `crates/webjet-tools` | `webjetctl`: node setup (`init`, `enroll`), admin and node commands, and the offline root keys (`webjetctl root`) |
 | `crates/webjet-app` | `webjet-app`, a GPUI desktop app: network overview, nodes, accounts; admin or read-only by account |
+
+## Programs
+
+| Program | Commands |
+| --- | --- |
+| `webjetup` | `install` / `upgrade`, `enroll`, `status`, `list`, `remove`, `nuke`: installs and removes Webjet, including the system service (systemd, launchd, Windows service) |
+| `webjetd` | `run`: the agent. `signer`: holds a controller's signing key in a separate process (§19.2) |
+| `webjetctl` | This machine: `init` (first controller), `enroll` (join or re-key). This node: `status`, `peers`, `sessions`, `metrics`, `ping`, `inject`. Administration, signed with an account key: `account`, `node`, `policy`, `dns`, `seeds`, `limits`, `transport`, `psk`, `camouflage`, `controller`, `submit`. Offline: `root` (root and emergency keys: `init`, `backup`, `restore`, `show`, `genesis`, `admin`, `controller`, `account`, `node`, `state-version`) |
+
+Before 0.3.0, `webjetctl root` was a separate `webjet-root`, `webjetd signer`
+was `webjet-signer`, and `webjetctl init`/`enroll` were `webjetd init`/`enroll`;
+`webjetup` removes the old programs when it upgrades.
 
 ## Build
 
@@ -91,16 +103,16 @@ The operations guide's runbooks map to these commands:
 
 ```sh
 # Root key holder (offline machine)
-webjet-root --dir ./root init
-webjet-root --dir ./root admin sign --name alice --key alice.pub --out alice.account
-webjet-root --dir ./root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj
-webjet-root --dir ./root controller sign ctl.req --out ctl.cert
+webjetctl root --dir ./root init
+webjetctl root --dir ./root admin sign --name alice --key alice.pub --out alice.account
+webjetctl root --dir ./root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj
+webjetctl root --dir ./root controller sign ctl.req --out ctl.cert
 
 # First controller
-webjetd init --genesis genesis.wj && webjetd run
+webjetctl init --genesis genesis.wj && webjetd run
 webjetctl account keygen --name alice --pub-out alice.pub
 webjetctl node enroll --owner infra --name ctl-01 --roles data,relay --controller tls:203.0.113.5:443
-webjetd enroll 'wj1:…'
+webjetctl enroll 'wj1:…'
 webjetctl controller cert-request --out ctl.req;  webjetctl submit ctl.cert
 
 # Everyday administration
@@ -161,7 +173,7 @@ repository.
 
 | Platform | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service via `webjetd install`) |
+| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) |
 | Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) |
 | Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` |
 | Control channel | Unix socket, 0600 | Unix socket, 0600 | named pipe `\\.\pipe\webjet`, SYSTEM + Administrators |

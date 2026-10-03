@@ -51,7 +51,7 @@ async fn resolve(host: &str, port: u16) -> Vec<SocketAddr> {
 
 // ---------------------------------------------------------------- init
 
-/// `webjetd init --genesis`: create the data directory for a new node.
+/// `webjetctl init --genesis`: create the data directory for a new node.
 pub fn init(cfg: &Config, genesis: &[u8], bootstrap: bool) -> Result<()> {
     let paths = Paths::new(&cfg.data_dir);
     webjet_core::store::open_genesis(genesis).context("genesis file")?;
@@ -82,7 +82,7 @@ pub fn init(cfg: &Config, genesis: &[u8], bootstrap: bool) -> Result<()> {
 
 // ---------------------------------------------------------------- enrollment client
 
-/// `webjetd enroll <ticket>`: generate a fresh identity key, redeem the
+/// `webjetctl enroll <string>`: generate a fresh identity key, redeem the
 /// token at a controller, verify everything against the root key and store
 /// the result. Also used for re-keying (§8.1).
 pub async fn enroll(cfg: &Config, ticket_str: &str) -> Result<()> {
@@ -286,7 +286,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     crate::keystore::harden_process();
     let kp = state::load_identity(&paths, &cfg.key)?.ok_or_else(|| {
         anyhow!(
-            "no identity key in {}; run `webjetd init` or `webjetd enroll` first",
+            "no identity key in {}; run `webjetctl init` or `webjetctl enroll` (or `webjetup enroll`) first",
             cfg.data_dir.display()
         )
     })?;
@@ -313,7 +313,9 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
         let s = n.store.read();
         let enrolled = s.view().nodes.contains_key(&me);
         if !enrolled && !bootstrap && !n.cfg.controller.enabled {
-            bail!("this node is not enrolled; run `webjetd enroll <enrollment string>`");
+            bail!(
+                "this node is not enrolled; run `webjetup enroll <enrollment string>` (or `webjetctl enroll`)"
+            );
         }
     }
     if n.cfg.controller.enabled || bootstrap {

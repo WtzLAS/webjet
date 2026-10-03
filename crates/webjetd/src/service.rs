@@ -11,7 +11,6 @@ use std::pin::Pin;
 pub type Shutdown = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub const SERVICE_NAME: &str = "webjetd";
-pub const DISPLAY_NAME: &str = "Webjet agent";
 
 /// Resolves when the process is asked to stop (Ctrl-C, SIGTERM).
 pub fn signals() -> Shutdown {
@@ -45,12 +44,10 @@ pub mod windows {
     use std::ffi::OsString;
     use std::time::Duration;
     use windows_service::service::{
-        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceDependency,
-        ServiceErrorControl, ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState,
-        ServiceStatus, ServiceType,
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+        ServiceType,
     };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
-    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
     use windows_service::{define_windows_service, service_dispatcher};
 
     static CONFIG: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -141,61 +138,5 @@ pub mod windows {
             code,
             Duration::ZERO,
         ));
-    }
-
-    /// Register webjetd as an automatic LocalSystem service that starts
-    /// after the Windows Time service (§18.6).
-    pub fn install(config: &std::path::Path) -> Result<()> {
-        let m = ServiceManager::local_computer(
-            None::<&str>,
-            ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
-        )?;
-        let exe = std::env::current_exe()?;
-        let info = ServiceInfo {
-            name: OsString::from(SERVICE_NAME),
-            display_name: OsString::from(DISPLAY_NAME),
-            service_type: ServiceType::OWN_PROCESS,
-            start_type: ServiceStartType::AutoStart,
-            error_control: ServiceErrorControl::Normal,
-            executable_path: exe,
-            launch_arguments: vec![
-                OsString::from("--config"),
-                config.as_os_str().to_owned(),
-                OsString::from("service"),
-            ],
-            dependencies: vec![
-                ServiceDependency::Service(OsString::from("W32Time")),
-                ServiceDependency::Service(OsString::from("Dnscache")),
-            ],
-            account_name: None, // LocalSystem
-            account_password: None,
-        };
-        let s = m.create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
-        s.set_description("Webjet overlay network agent")?;
-        s.start::<&str>(&[])?;
-        println!("service {SERVICE_NAME} installed and started");
-        Ok(())
-    }
-
-    /// Stop and remove the service and everything the agent configured.
-    pub fn uninstall() -> Result<()> {
-        let m = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-        let s = m.open_service(
-            SERVICE_NAME,
-            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
-        )?;
-        if s.query_status()?.current_state != ServiceState::Stopped {
-            let _ = s.stop();
-            for _ in 0..60 {
-                if s.query_status()?.current_state == ServiceState::Stopped {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        }
-        s.delete()?;
-        crate::platform::cleanup("Webjet");
-        println!("service {SERVICE_NAME} removed");
-        Ok(())
     }
 }

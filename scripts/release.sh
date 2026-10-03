@@ -22,7 +22,7 @@
 #                    rustup's rust-lld, which cargo-xwin falls back to, can't
 #                    run standalone)
 #
-# Each archive holds webjetd, webjetctl, webjet-root and webjet-signer at the
+# Each archive holds webjetd and webjetctl at the
 # top level, next to a `.sha256` file:
 #
 #   webjet-<tag>-<target>.tar.gz          (Windows: .zip, with wintun.dll and
@@ -57,7 +57,7 @@ while [ $# -gt 0 ]; do
 done
 VERSION=${TAG#v}
 DIST=dist/$TAG
-BINS="webjetd webjetctl webjet-root webjet-signer"
+BINS="webjetd webjetctl"
 HOST_OS=$(uname -s)
 
 die() { echo "release: $*" >&2; exit 1; }

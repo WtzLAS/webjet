@@ -71,8 +71,8 @@ dl=$www/webj8/webjet/releases/download/$TAG
 api=$www/api/v1/repos/webj8/webjet/releases
 mkdir -p "$dl" "$api/latest" "$api/tags/$TAG"
 stage=$(mktemp -d)
-for b in webjetd webjetctl webjet-root webjet-signer; do cp "$out/$b" "$stage/"; done
-COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$dl/webjet-$TAG-$target.tar.gz" -C "$stage" webjetd webjetctl webjet-root webjet-signer
+for b in webjetd webjetctl; do cp "$out/$b" "$stage/"; done
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$dl/webjet-$TAG-$target.tar.gz" -C "$stage" webjetd webjetctl
 rm -rf "$stage"
 cp "$out/webjetup" "$dl/webjetup-$TAG-$target"
 cp scripts/install.sh "$dl/install.sh"
@@ -90,10 +90,10 @@ echo "== controller"
 ADMIN_ENV="-e WEBJET_ROOT_PASSPHRASE=root-pass -e WEBJET_ACCOUNT_PASSPHRASE=acct-pass -e WEBJET_KEYS=/admin/keys"
 # shellcheck disable=SC2086
 docker run --rm -v "$P-admin:/admin" $ADMIN_ENV "$IMG" sh -ec '
-    webjet-root --dir /admin/root init >/dev/null
+    webjetctl root --dir /admin/root init >/dev/null
     webjetctl account keygen --name alice --pub-out /admin/alice.pub >/dev/null
-    webjet-root --dir /admin/root admin sign --name alice --key /admin/alice.pub --out /admin/alice.account >/dev/null
-    webjet-root --dir /admin/root genesis --overlay-pool 10.7.0.0/16 --admin /admin/alice.account --out /admin/genesis.wj >/dev/null
+    webjetctl root --dir /admin/root admin sign --name alice --key /admin/alice.pub --out /admin/alice.account >/dev/null
+    webjetctl root --dir /admin/root genesis --overlay-pool 10.7.0.0/16 --admin /admin/alice.account --out /admin/genesis.wj >/dev/null
     webjetctl account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
 # shellcheck disable=SC2086
 docker run -d --name "$P-ctl" --hostname ctl-01 --network "$NET" --ip "$CTL_IP" \
@@ -109,9 +109,9 @@ until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do
 done
 W account create --name infra --key /admin/infra.pub >/dev/null
 T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --controller "tls:$CTL_IP:443" 2>/dev/null)
-docker exec "$P-ctl" webjetd enroll "$T" >/dev/null
+docker exec "$P-ctl" webjetctl enroll "$T" >/dev/null
 W controller cert-request --out /admin/ctl.req >/dev/null
-docker exec -e WEBJET_ROOT_PASSPHRASE=root-pass "$P-ctl" webjet-root --dir /admin/root controller sign /admin/ctl.req --out /admin/ctl.cert >/dev/null
+docker exec -e WEBJET_ROOT_PASSPHRASE=root-pass "$P-ctl" webjetctl root --dir /admin/root controller sign /admin/ctl.req --out /admin/ctl.cert >/dev/null
 W submit /admin/ctl.cert >/dev/null 2>&1
 docker exec "$P-ctl" sh -c 'printf "version: 1\ndefault: allow\nrules: []\n" > /admin/policy.yaml
 printf "version: 1\nseeds:\n  - node: ctl-01\n    addrs: [tls:'"$CTL_IP"':443, kcp:'"$CTL_IP"':443]\n" > /admin/seeds.yaml'

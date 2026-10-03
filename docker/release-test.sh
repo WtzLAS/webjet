@@ -34,7 +34,7 @@ for img in ${WEBJET_TEST_IMAGES:-debian:bullseye ubuntu:20.04 debian:bookworm}; 
 
             curl -fsSL "$REPO/releases/download/$TAG/install.sh" | WEBJET_REPO="$REPO" WEBJET_VERSION="$TAG" sh -s -- "$TAG" > /tmp/out.txt 2>&1 ||
                 { cat /tmp/out.txt; exit 1; }
-            for b in webjetd webjetctl webjet-root webjet-signer webjetup; do
+            for b in webjetd webjetctl webjetup; do
                 /usr/local/bin/$b --version >/dev/null || { echo "$b does not run"; exit 1; }
             done
             /usr/local/bin/webjetd --version | grep -q " $VERSION\$" || { echo "wrong webjetd version"; exit 1; }

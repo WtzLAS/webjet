@@ -21,7 +21,7 @@ done
 sleep 4
 for n in node-02 node-03; do
   C $n controller cert-request --out $n.req > /dev/null
-  "$B/webjet-root" --dir root controller sign $n.req --out $n.cert > /dev/null
+  "$B/webjetctl" root --dir root controller sign $n.req --out $n.cert > /dev/null
   C ctl-01 submit $n.cert > /dev/null 2>&1
   C ctl-01 controller add-learner $n
 done

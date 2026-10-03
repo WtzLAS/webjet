@@ -14,7 +14,7 @@ mod system;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use layout::{Layout, PROGRAMS, SELF};
+use layout::{Layout, PROGRAMS, RETIRED_PROGRAMS, SELF};
 use release::{Client, Repo};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -312,6 +312,7 @@ fn install(
         let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
         sys.install_file(&stage.path().join(&f), &l.bin_dir.join(&f), mode)?;
     }
+    remove_retired(sys, l)?;
     // webjetup installs itself next to the programs, so `webjetup` keeps
     // working after install.sh's temporary copy is gone.
     install_self(sys, l)?;
@@ -326,6 +327,14 @@ fn install(
     }
     if !l.config.exists() {
         sys.write(&l.config, "# webjetd configuration: see docs/configuration.md.\n# Everything has a default; an empty file is a valid configuration.\n", 0o644)?;
+    }
+    Ok(())
+}
+
+/// Programs of older releases that newer ones merged into others.
+fn remove_retired(sys: &Sys, l: &Layout) -> Result<()> {
+    for p in RETIRED_PROGRAMS {
+        sys.remove_file(&l.program(p))?;
     }
     Ok(())
 }
@@ -368,14 +377,21 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
     if !s.starts_with("wj1:") {
         bail!("that doesn't look like an enrollment string (they start with wj1:)");
     }
-    let exe = l.program("webjetd");
+    // Releases before 0.3.0 enrolled with `webjetd enroll`.
+    let legacy = installed_version(l).is_some_and(|v| layout::before_0_3(&v));
+    let exe = l.program(if legacy { "webjetd" } else { "webjetctl" });
     if !exe.exists() && !sys.dry {
         bail!("Webjet isn't installed: run `webjetup install` first");
     }
     println!("==> Enrolling this node");
-    let args = ["--config", &*l.config.to_string_lossy(), "enroll", s];
-    // The first controller of a new network (`webjetd init`) enrolls its own
-    // node through its running agent, so it must not be stopped.
+    let config = l.config.to_string_lossy();
+    let args: [&str; 4] = if legacy {
+        ["--config", &config, "enroll", s]
+    } else {
+        ["enroll", "--config", &config, s]
+    };
+    // The first controller of a new network (`webjetctl init`) enrolls its
+    // own node through its running agent, so it must not be stopped.
     if bootstrapping(l) {
         sys.run(&exe.to_string_lossy(), &args)?;
         println!("==> Enrolled the bootstrap controller's node.");
@@ -394,7 +410,7 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
 }
 
 /// Whether this is a bootstrap controller that hasn't enrolled its node yet
-/// (`"bootstrap": true` in node.json, written by `webjetd init`).
+/// (`"bootstrap": true` in node.json, written by `webjetctl init`).
 fn bootstrapping(l: &Layout) -> bool {
     std::fs::read(l.data_dir.join("node.json"))
         .ok()
@@ -474,6 +490,7 @@ fn remove(sys: &Sys, l: &Layout) -> Result<()> {
         // Left over from replacing running programs on Windows.
         sys.remove_file(&l.bin_dir.join(&f).with_extension("webjetup-old"))?;
     }
+    remove_retired(sys, l)?;
     if cfg!(windows) {
         system::windows_path(sys, &l.bin_dir, false)?;
     }
