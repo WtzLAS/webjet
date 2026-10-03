@@ -1,3 +1,7 @@
+# Keep the build context small: only sources go into the image build.
 target
 .git
 .pi
+**/*.swp
+.DS_Store
+docs

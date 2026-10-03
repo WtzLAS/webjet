@@ -7,8 +7,9 @@ use webjetd::config::Config;
 #[command(name = "webjetd", version, about = "The Webjet agent")]
 struct Cli {
     /// Path to webjetd.toml (default: /etc/webjet, /Library/Application
-    /// Support/Webjet or %ProgramData%\Webjet).
-    #[arg(short, long, global = true)]
+    /// Support/Webjet or %ProgramData%\Webjet). A path given here or in
+    /// WEBJET_CONFIG must exist.
+    #[arg(short, long, global = true, env = "WEBJET_CONFIG")]
     config: Option<PathBuf>,
     /// Override the data directory.
     #[arg(long, global = true)]
@@ -54,6 +55,9 @@ fn main() -> Result<()> {
         Cmd::Install => return webjetd::service::windows::install(&cfg_path),
         Cmd::Uninstall => return webjetd::service::windows::uninstall(),
         _ => {}
+    }
+    if cli.config.is_some() && !cfg_path.exists() {
+        anyhow::bail!("configuration file {} not found", cfg_path.display());
     }
     let mut cfg = Config::load(Some(&cfg_path))?;
     if let Some(d) = cli.data_dir {

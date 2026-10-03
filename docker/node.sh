@@ -1,11 +1,13 @@
 #!/bin/sh
-# Container entrypoint: write webjetd.toml for this container and keep the
-# agent running. Usage: node.sh <name> [controller] [gateway-prefix]
+# Test-container command for docker/e2e.sh: write webjetd.toml for this
+# container and idle; the test starts the agent with `docker exec`.
+# Usage: node.sh <name> [controller] [gateway-prefix]
 set -eu
 NAME=$1; CTL=${2:-false}; GW=${3:-}
+CONF=${WEBJET_CONFIG:-/etc/webjet/webjetd.toml}
 IP=$(hostname -i | tr " " "\n" | grep "^172\.30\." | head -1)
-mkdir -p /var/lib/webjet /etc/webjet
-cat > /etc/webjet/webjetd.toml <<EOT
+mkdir -p /var/lib/webjet "$(dirname "$CONF")"
+cat > "$CONF" <<EOT
 data_dir = "/var/lib/webjet"
 control_socket = "/run/webjet/control.sock"
 [listen]
@@ -24,7 +26,7 @@ enabled = $CTL
 EOT
 if [ -n "$GW" ]; then
   LANIF=$(ip -o -4 addr | awk -v p="$(echo "$GW" | cut -d. -f1-3)." 'index($4, p) == 1 {print $2}')
-  cat >> /etc/webjet/webjetd.toml <<EOT
+  cat >> "$CONF" <<EOT
 [[gateway.route]]
 published = "$GW"
 interface = "$LANIF"

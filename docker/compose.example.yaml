@@ -1,0 +1,86 @@
+# Example Compose file for running Webjet in containers (docs/docker.md).
+#
+# Copy it next to your enrollment string files, adjust the addresses, and
+# run `docker compose up -d`. Each service enrolls itself on first start
+# and keeps its state in its own volume.
+#
+#   node        a data node or relay on this host (host networking, so the
+#               overlay is reachable from the host itself)
+#   controller  a controller with its signing key in a separate container
+#   signer      webjet-signer for the controller (§19.2)
+#
+# Start only what this host runs, e.g. `docker compose up -d node`.
+
+x-webjet: &webjet
+  image: webjet:latest
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  cap_add: [NET_ADMIN]
+  devices: [/dev/net/tun]
+  stop_grace_period: 30s
+
+services:
+  node:
+    <<: *webjet
+    # Host networking: the tun interface, its routes and the listening ports
+    # are the host's, like a package install.
+    network_mode: host
+    environment:
+      WEBJET_ENROLL_FILE: /run/secrets/node_enroll
+      # Relays: the addresses peers should dial (tls and kcp share a port).
+      WEBJET_PUBLIC: tls:203.0.113.5:443,kcp:203.0.113.5:443
+      # Optional: Prometheus endpoint on the host's loopback.
+      WEBJET_METRICS_LISTEN: 127.0.0.1:9469
+    secrets: [node_enroll]
+    volumes:
+      - node-state:/var/lib/webjet
+
+  controller:
+    <<: *webjet
+    ports:
+      - "443:443/tcp"
+      - "443:443/udp"
+    environment:
+      WEBJET_CONTROLLER: "true"
+      WEBJET_SIGNER_SOCKET: /run/webjet-signer/signer.sock
+      WEBJET_PUBLIC: tls:203.0.113.10:443,kcp:203.0.113.10:443
+      # First controller of a new network: the genesis from webjet-root.
+      # Additional controllers enroll instead: WEBJET_ENROLL_FILE.
+      WEBJET_GENESIS: /run/secrets/genesis
+    secrets: [genesis]
+    volumes:
+      - controller-state:/var/lib/webjet
+      - signer-run:/run/webjet-signer
+    depends_on:
+      signer:
+        condition: service_healthy
+
+  signer:
+    image: webjet:latest
+    restart: unless-stopped
+    command:
+      - webjet-signer
+      - --socket
+      - /run/webjet-signer/signer.sock
+      - --key
+      - /var/lib/webjet-signer/signing.key
+    network_mode: none
+    environment:
+      WEBJET_SIGNER_SOCKET: /run/webjet-signer/signer.sock
+    volumes:
+      - signer-key:/var/lib/webjet-signer
+      - signer-run:/run/webjet-signer
+
+volumes:
+  node-state:
+  controller-state:
+  signer-key:
+  signer-run:
+
+secrets:
+  node_enroll:
+    file: ./node.enroll       # the string from `webjetctl node enroll`
+  genesis:
+    file: ./genesis.wj        # from `webjet-root genesis`

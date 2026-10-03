@@ -22,7 +22,30 @@ cargo build --release -p webjetd --no-default-features   # without AnyTLS
 cargo test --workspace
 ```
 
-Linux binaries via Docker: `docker build -f docker/Dockerfile -t webjet:test .`
+## Docker
+
+```sh
+docker build -t webjet .                       # deployment image
+docker build --build-arg ANYTLS=0 -t webjet .  # without AnyTLS (faster build)
+docker build --target test -t webjet:test .    # plus debugging tools and test scripts
+```
+
+A node in a container needs NET_ADMIN, the tun device and a volume for its
+state, and enrolls itself on first start:
+
+```sh
+docker run -d --name webjet --restart unless-stopped \
+  --cap-add NET_ADMIN --device /dev/net/tun \
+  -v webjet-state:/var/lib/webjet \
+  -e WEBJET_ENROLL="<enrollment string>" \
+  webjet
+docker exec webjet webjetctl status
+```
+
+[docs/docker.md](docs/docker.md) covers relays and published ports, the first
+controller (`WEBJET_GENESIS`), the signer container, every `WEBJET_*`
+setting, DNS and upgrades. `docker/compose.example.yaml` is a Compose
+starting point.
 
 ## Try it
 
@@ -44,10 +67,14 @@ scripts/local-net.sh stop
 certificates, adds them as learners and promotes them to voters. It then
 stops the leader and checks that writes still commit.
 
-`docker/e2e.sh` runs Linux containers with real tun interfaces. It checks
-kernel ping across the overlay, magic DNS (including a CNAME to `node:`), a
-deny policy, and a subnet gateway reaching a LAN host.
-`docker/e2e.sh clean` removes the containers.
+`docker/e2e.sh` runs Linux containers with real tun interfaces (image
+`webjet:test`, see above). It checks kernel ping across the overlay, magic DNS
+(including a CNAME to `node:`), a deny policy, and a subnet gateway reaching
+a LAN host. `docker/e2e.sh clean` removes the containers.
+
+`docker/deploy-test.sh` checks the deployment image the way docs/docker.md
+uses it: a first controller from `WEBJET_GENESIS`, a node enrolled with
+`WEBJET_ENROLL`, health checks, a restart and a clean stop.
 
 ## Deploying
 
