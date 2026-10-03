@@ -467,7 +467,11 @@ pub mod client {
             anyhow!(
                 "connect to {}: {e} (is webjetd running? are you {}?)",
                 path.display(),
-                if cfg!(windows) { "an administrator" } else { "root" }
+                if cfg!(windows) {
+                    "an administrator"
+                } else {
+                    "root"
+                }
             )
         })?;
         let (r, mut w) = tokio::io::split(s);
@@ -483,7 +487,10 @@ pub mod client {
         if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else {
-            bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or("error"))
+            bail!(
+                "{}",
+                v.get("error").and_then(|e| e.as_str()).unwrap_or("error")
+            )
         }
     }
 }

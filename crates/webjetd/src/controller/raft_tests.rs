@@ -22,29 +22,55 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use webjet_proto::EntryPayload;
 
-const T: Timing = Timing { heartbeat: Duration::from_millis(50), election_min: Duration::from_millis(300), election_max: Duration::from_millis(600) };
+const T: Timing = Timing {
+    heartbeat: Duration::from_millis(50),
+    election_min: Duration::from_millis(300),
+    election_max: Duration::from_millis(600),
+};
 
 fn nid(i: u8) -> Bytes32 {
     [i; 32]
 }
 
 fn members(voters: &[u8], learners: &[u8]) -> Membership {
-    Membership { voters: voters.iter().map(|i| nid(*i)).collect(), learners: learners.iter().map(|i| nid(*i)).collect() }
+    Membership {
+        voters: voters.iter().map(|i| nid(*i)).collect(),
+        learners: learners.iter().map(|i| nid(*i)).collect(),
+    }
 }
 
 fn classify(b: &[u8]) -> Option<ConfChange> {
     let e = wp::LogEntry::decode_bytes(b).ok()?;
     match e.payload? {
         EntryPayload::MembershipEntry(m) => Some(ConfChange::Set(Membership {
-            voters: m.voters.unwrap_or_default().iter().map(|k| k.to_bytes()).collect(),
-            learners: m.learners.unwrap_or_default().iter().map(|k| k.to_bytes()).collect(),
+            voters: m
+                .voters
+                .unwrap_or_default()
+                .iter()
+                .map(|k| k.to_bytes())
+                .collect(),
+            learners: m
+                .learners
+                .unwrap_or_default()
+                .iter()
+                .map(|k| k.to_bytes())
+                .collect(),
         })),
         _ => None,
     }
 }
 
 fn value_entry(term: u64, index: u64, value: u64) -> wp::LogEntry {
-    wp::LogEntry { term, index, timestamp: 0, payload: Some(EntryPayload::ExpireEnrollmentsEntry(Box::new(wp::ExpireEnrollmentsEntry { now: value }))), random: None, leaves: None }
+    wp::LogEntry {
+        term,
+        index,
+        timestamp: 0,
+        payload: Some(EntryPayload::ExpireEnrollmentsEntry(Box::new(
+            wp::ExpireEnrollmentsEntry { now: value },
+        ))),
+        random: None,
+        leaves: None,
+    }
 }
 
 fn conf_entry(term: u64, index: u64, m: &Membership) -> wp::LogEntry {
@@ -52,10 +78,12 @@ fn conf_entry(term: u64, index: u64, m: &Membership) -> wp::LogEntry {
         term,
         index,
         timestamp: 0,
-        payload: Some(EntryPayload::MembershipEntry(Box::new(wp::MembershipEntry {
-            voters: Some(m.voters.iter().map(crypto::k32).collect()),
-            learners: Some(m.learners.iter().map(crypto::k32).collect()),
-        }))),
+        payload: Some(EntryPayload::MembershipEntry(Box::new(
+            wp::MembershipEntry {
+                voters: Some(m.voters.iter().map(crypto::k32).collect()),
+                learners: Some(m.learners.iter().map(crypto::k32).collect()),
+            },
+        ))),
         random: None,
         leaves: None,
     }
@@ -86,7 +114,10 @@ struct Sm {
 
 impl Sm {
     fn membership(&self) -> Membership {
-        Membership { voters: self.voters.iter().copied().collect(), learners: self.learners.iter().copied().collect() }
+        Membership {
+            voters: self.voters.iter().copied().collect(),
+            learners: self.learners.iter().copied().collect(),
+        }
     }
     fn set_membership(&mut self, m: &Membership) {
         self.voters = m.voters.iter().copied().collect();
@@ -155,9 +186,19 @@ impl Sim {
         for i in 1..=n {
             let id = nid(i);
             let member = initial.voters.contains(&id) || initial.learners.contains(&id);
-            let init = if member { initial.clone() } else { Membership::default() };
+            let init = if member {
+                initial.clone()
+            } else {
+                Membership::default()
+            };
             let (_, store) = Storage::mem();
-            s.nodes.push(SimNode { id, store, raft: None, sm: Sm::default(), initial: init });
+            s.nodes.push(SimNode {
+                id,
+                store,
+                raft: None,
+                sm: Sm::default(),
+                initial: init,
+            });
             s.start(i as usize - 1);
         }
         s
@@ -184,7 +225,18 @@ impl Sim {
                 sm
             }
         };
-        let r = Raft::new(node.id, Storage::Mem(node.store.clone()), node.sm.applied, node.sm.last_term, node.sm.membership(), Box::new(classify), T, now, Some(seed)).unwrap();
+        let r = Raft::new(
+            node.id,
+            Storage::Mem(node.store.clone()),
+            node.sm.applied,
+            node.sm.last_term,
+            node.sm.membership(),
+            Box::new(classify),
+            T,
+            now,
+            Some(seed),
+        )
+        .unwrap();
         node.raft = Some(r);
     }
 
@@ -249,14 +301,22 @@ impl Sim {
     fn handle(&mut self, i: usize, from: Bytes32, body: RaftBody) -> Out {
         let now = self.now();
         if let RaftBody::RaftSnapshot(s) = body {
-            let offer = self.nodes[i].raft.as_mut().unwrap().offer_snapshot(now, from, s.term, s.last_index);
+            let offer = self.nodes[i].raft.as_mut().unwrap().offer_snapshot(
+                now,
+                from,
+                s.term,
+                s.last_index,
+            );
             return match offer {
                 SnapshotOffer::Reply(out) => out,
                 SnapshotOffer::Install => {
                     let data = s.data.clone().unwrap();
                     let sm: Sm = serde_json::from_slice(&data).unwrap();
                     assert_eq!(sm.applied, s.last_index, "snapshot index mismatch");
-                    assert!(sm.applied >= self.nodes[i].sm.applied, "installing a snapshot that rolls the state machine back");
+                    assert!(
+                        sm.applied >= self.nodes[i].sm.applied,
+                        "installing a snapshot that rolls the state machine back"
+                    );
                     for (k, h) in sm.hashes.iter().enumerate() {
                         self.check_committed(k as u64 + 1, *h, "snapshot");
                     }
@@ -264,7 +324,11 @@ impl Sim {
                     let m = sm.membership();
                     self.nodes[i].sm = sm;
                     self.stats.snapshots_installed += 1;
-                    self.nodes[i].raft.as_mut().unwrap().install_snapshot(s.last_index, s.last_term, m)
+                    self.nodes[i].raft.as_mut().unwrap().install_snapshot(
+                        s.last_index,
+                        s.last_term,
+                        m,
+                    )
                 }
             };
         }
@@ -273,7 +337,10 @@ impl Sim {
 
     fn check_committed(&mut self, idx: u64, h: u64, what: &str) {
         match self.committed.get(&idx) {
-            Some(c) => assert_eq!(*c, h, "state machine safety violated at index {idx} ({what})"),
+            Some(c) => assert_eq!(
+                *c, h,
+                "state machine safety violated at index {idx} ({what})"
+            ),
             None => {
                 self.committed.insert(idx, h);
             }
@@ -290,7 +357,9 @@ impl Sim {
                     break;
                 }
                 let idx = n.sm.applied + 1;
-                let e = r.entry(idx).unwrap_or_else(|| panic!("committed entry {idx} missing (snap {})", r.snap_index));
+                let e = r.entry(idx).unwrap_or_else(|| {
+                    panic!("committed entry {idx} missing (snap {})", r.snap_index)
+                });
                 (idx, e.bytes.clone(), e.term)
             };
             let h = hash(&bytes);
@@ -307,7 +376,11 @@ impl Sim {
             n.sm.last_term = term;
             n.sm.hashes.push(h);
             let r = n.raft.as_ref().unwrap();
-            assert_eq!(r.config_at(idx), Some(n.sm.membership()), "Raft's configuration differs from the state machine's at {idx}");
+            assert_eq!(
+                r.config_at(idx),
+                Some(n.sm.membership()),
+                "Raft's configuration differs from the state machine's at {idx}"
+            );
         }
         // Compaction.
         let n = &mut self.nodes[i];
@@ -343,7 +416,10 @@ impl Sim {
             return;
         }
         match self.leaders.get(&term) {
-            Some(l) => assert_eq!(*l, id, "election safety violated: two leaders in term {term}"),
+            Some(l) => assert_eq!(
+                *l, id,
+                "election safety violated: two leaders in term {term}"
+            ),
             None => {
                 self.leaders.insert(term, id);
                 self.stats.elections += 1;
@@ -353,7 +429,11 @@ impl Sim {
             let r = self.nodes[i].raft.as_ref().unwrap();
             for (idx, h) in self.committed.range(r.snap_index + 1..) {
                 let e = r.entry(*idx).unwrap_or_else(|| panic!("leader completeness: new leader of term {term} lacks committed entry {idx}"));
-                assert_eq!(hash(&e.bytes), *h, "leader completeness: wrong entry {idx} in leader of term {term}");
+                assert_eq!(
+                    hash(&e.bytes),
+                    *h,
+                    "leader completeness: wrong entry {idx} in leader of term {term}"
+                );
             }
         }
     }
@@ -374,7 +454,11 @@ impl Sim {
                 }
                 if let Some(top) = top {
                     for idx in lo..=top {
-                        assert_eq!(x.entry(idx).map(|e| hash(&e.bytes)), y.entry(idx).map(|e| hash(&e.bytes)), "log matching violated at {idx} (match up to {top})");
+                        assert_eq!(
+                            x.entry(idx).map(|e| hash(&e.bytes)),
+                            y.entry(idx).map(|e| hash(&e.bytes)),
+                            "log matching violated at {idx} (match up to {top})"
+                        );
                     }
                 }
             }
@@ -384,7 +468,9 @@ impl Sim {
     fn tick(&mut self) {
         let now = self.now();
         for i in 0..self.nodes.len() {
-            let Some(r) = self.nodes[i].raft.as_mut() else { continue };
+            let Some(r) = self.nodes[i].raft.as_mut() else {
+                continue;
+            };
             let id = r.id;
             let out = r.tick(now);
             self.send(id, out);
@@ -394,7 +480,17 @@ impl Sim {
 
     fn leader(&self) -> Option<usize> {
         // The live leader with the highest term.
-        self.nodes.iter().enumerate().filter_map(|(i, n)| n.raft.as_ref().filter(|r| r.role == Role::Leader).map(|r| (r.term, i))).max().map(|x| x.1)
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| {
+                n.raft
+                    .as_ref()
+                    .filter(|r| r.role == Role::Leader)
+                    .map(|r| (r.term, i))
+            })
+            .max()
+            .map(|x| x.1)
     }
 
     fn propose_value(&mut self) -> Option<(u64, u64)> {
@@ -519,7 +615,11 @@ impl Sim {
         while self.leader().is_none() {
             self.run(100, None, 0);
             waited += 100;
-            assert!(waited < 30_000, "no leader 30 s after healing: {:?}", self.roles());
+            assert!(
+                waited < 30_000,
+                "no leader 30 s after healing: {:?}",
+                self.roles()
+            );
         }
         let mut last = None;
         let mut tries = 0;
@@ -538,11 +638,19 @@ impl Sim {
             since_propose += 100;
             let Some(li) = self.leader() else { continue };
             let cfg = self.nodes[li].raft.as_ref().unwrap().config().clone();
-            let done = self.nodes.iter().filter(|n| cfg.voters.contains(&n.id) || cfg.learners.contains(&n.id)).all(|n| n.sm.values.contains(&v));
+            let done = self
+                .nodes
+                .iter()
+                .filter(|n| cfg.voters.contains(&n.id) || cfg.learners.contains(&n.id))
+                .all(|n| n.sm.values.contains(&v));
             if done {
                 break;
             }
-            assert!(waited < 120_000, "entries don't commit after healing: {:?}", self.roles());
+            assert!(
+                waited < 120_000,
+                "entries don't commit after healing: {:?}",
+                self.roles()
+            );
             // A value proposed to a leader that was then deposed is lost
             // (legitimately); propose a fresh one and wait for that instead.
             if since_propose >= 5_000 {
@@ -568,7 +676,15 @@ impl Sim {
             .iter()
             .map(|n| match &n.raft {
                 None => format!("{}:down", n.id[0]),
-                Some(r) => format!("{}:{:?}/t{}/c{}/l{}/v{}", n.id[0], r.role, r.term, r.commit, r.last_index(), r.voters().len()),
+                Some(r) => format!(
+                    "{}:{:?}/t{}/c{}/l{}/v{}",
+                    n.id[0],
+                    r.role,
+                    r.term,
+                    r.commit,
+                    r.last_index(),
+                    r.voters().len()
+                ),
             })
             .collect()
     }
@@ -583,7 +699,10 @@ struct Faults {
 }
 
 fn seeds(default: u64) -> u64 {
-    std::env::var("WEBJET_RAFT_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var("WEBJET_RAFT_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 // ---------------------------------------------------------------- scenarios
@@ -610,7 +729,13 @@ fn three_nodes_replicate() {
     }
     s.run(1000, None, 0);
     for n in &s.nodes {
-        assert_eq!(n.sm.values.len(), 100, "node {} applied {}", n.id[0], n.sm.values.len());
+        assert_eq!(
+            n.sm.values.len(),
+            100,
+            "node {} applied {}",
+            n.id[0],
+            n.sm.values.len()
+        );
     }
     // Stable leadership without faults.
     assert_eq!(s.leader(), Some(l));
@@ -621,13 +746,40 @@ fn three_nodes_replicate() {
 fn commit_never_regresses_on_stale_append() {
     let (st, _) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
-    let entries: Vec<wp::Blob> = (1..=10).map(|i| wp::Blob { data: Some(value_entry(1, i, i).encode_bytes()) }).collect();
-    let a = wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(entries), leader_commit: 10 };
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
+    let entries: Vec<wp::Blob> = (1..=10)
+        .map(|i| wp::Blob {
+            data: Some(value_entry(1, i, i).encode_bytes()),
+        })
+        .collect();
+    let a = wp::RaftAppend {
+        term: 1,
+        prev_log_index: 0,
+        prev_log_term: 0,
+        entries: Some(entries),
+        leader_commit: 10,
+    };
     r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(a)));
     assert_eq!(r.commit, 10);
     // A delayed heartbeat that only proves the log up to 5.
-    let hb = wp::RaftAppend { term: 1, prev_log_index: 5, prev_log_term: 1, entries: Some(vec![]), leader_commit: 12 };
+    let hb = wp::RaftAppend {
+        term: 1,
+        prev_log_index: 5,
+        prev_log_term: 1,
+        entries: Some(vec![]),
+        leader_commit: 12,
+    };
     r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(hb)));
     assert_eq!(r.commit, 10, "commit index went backwards");
 }
@@ -638,10 +790,45 @@ fn heartbeat_does_not_commit_unproven_suffix() {
     // proves only up to 3, so entries 4..=6 must not be committed.
     let (st, _) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
-    let entries: Vec<wp::Blob> = (1..=6).map(|i| wp::Blob { data: Some(value_entry(1, i, i).encode_bytes()) }).collect();
-    r.handle(now, nid(3), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(entries), leader_commit: 0 })));
-    r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 2, prev_log_index: 3, prev_log_term: 1, entries: Some(vec![]), leader_commit: 9 })));
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
+    let entries: Vec<wp::Blob> = (1..=6)
+        .map(|i| wp::Blob {
+            data: Some(value_entry(1, i, i).encode_bytes()),
+        })
+        .collect();
+    r.handle(
+        now,
+        nid(3),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(entries),
+            leader_commit: 0,
+        })),
+    );
+    r.handle(
+        now,
+        nid(1),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 2,
+            prev_log_index: 3,
+            prev_log_term: 1,
+            entries: Some(vec![]),
+            leader_commit: 9,
+        })),
+    );
     assert_eq!(r.commit, 3);
 }
 
@@ -649,16 +836,64 @@ fn heartbeat_does_not_commit_unproven_suffix() {
 fn conflicting_suffix_is_replaced_and_config_reverted() {
     let (st, mem) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
     // Old leader (term 1) appended a value and an uncommitted config change.
-    let old = vec![wp::Blob { data: Some(value_entry(1, 1, 1).encode_bytes()) }, wp::Blob { data: Some(conf_entry(1, 2, &members(&[1, 2, 3], &[4])).encode_bytes()) }];
-    r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(old), leader_commit: 1 })));
-    assert!(r.learners().contains(&nid(4)), "configuration takes effect on append");
+    let old = vec![
+        wp::Blob {
+            data: Some(value_entry(1, 1, 1).encode_bytes()),
+        },
+        wp::Blob {
+            data: Some(conf_entry(1, 2, &members(&[1, 2, 3], &[4])).encode_bytes()),
+        },
+    ];
+    r.handle(
+        now,
+        nid(1),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(old),
+            leader_commit: 1,
+        })),
+    );
+    assert!(
+        r.learners().contains(&nid(4)),
+        "configuration takes effect on append"
+    );
     // New leader (term 2) overwrites index 2.
-    let new = vec![wp::Blob { data: Some(value_entry(2, 2, 99).encode_bytes()) }];
-    let out = r.handle(now, nid(3), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 2, prev_log_index: 1, prev_log_term: 1, entries: Some(new), leader_commit: 2 })));
-    assert!(matches!(&out[0].1, RaftBody::RaftAppendResponse(a) if a.success && a.match_index == 2));
-    assert!(r.learners().is_empty(), "configuration reverted with the truncated entry");
+    let new = vec![wp::Blob {
+        data: Some(value_entry(2, 2, 99).encode_bytes()),
+    }];
+    let out = r.handle(
+        now,
+        nid(3),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 2,
+            prev_log_index: 1,
+            prev_log_term: 1,
+            entries: Some(new),
+            leader_commit: 2,
+        })),
+    );
+    assert!(
+        matches!(&out[0].1, RaftBody::RaftAppendResponse(a) if a.success && a.match_index == 2)
+    );
+    assert!(
+        r.learners().is_empty(),
+        "configuration reverted with the truncated entry"
+    );
     assert_eq!(value_of(&r.entry(2).unwrap().bytes), Some(99));
     // The rewrite is durable.
     assert_eq!(mem.lock().log.len(), 2);
@@ -668,11 +903,46 @@ fn conflicting_suffix_is_replaced_and_config_reverted() {
 fn committed_entries_are_never_overwritten() {
     let (st, _) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
-    let e = vec![wp::Blob { data: Some(value_entry(1, 1, 1).encode_bytes()) }];
-    r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(e), leader_commit: 1 })));
-    let bad = vec![wp::Blob { data: Some(value_entry(2, 1, 7).encode_bytes()) }];
-    let out = r.handle(now, nid(3), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 2, prev_log_index: 0, prev_log_term: 0, entries: Some(bad), leader_commit: 1 })));
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
+    let e = vec![wp::Blob {
+        data: Some(value_entry(1, 1, 1).encode_bytes()),
+    }];
+    r.handle(
+        now,
+        nid(1),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(e),
+            leader_commit: 1,
+        })),
+    );
+    let bad = vec![wp::Blob {
+        data: Some(value_entry(2, 1, 7).encode_bytes()),
+    }];
+    let out = r.handle(
+        now,
+        nid(3),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 2,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(bad),
+            leader_commit: 1,
+        })),
+    );
     assert!(matches!(&out[0].1, RaftBody::RaftAppendResponse(a) if !a.success));
     assert_eq!(value_of(&r.entry(1).unwrap().bytes), Some(1));
 }
@@ -681,12 +951,41 @@ fn committed_entries_are_never_overwritten() {
 fn stale_snapshot_is_not_installed() {
     let (st, _) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
-    let entries: Vec<wp::Blob> = (1..=20).map(|i| wp::Blob { data: Some(value_entry(1, i, i).encode_bytes()) }).collect();
-    r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(entries), leader_commit: 20 })));
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
+    let entries: Vec<wp::Blob> = (1..=20)
+        .map(|i| wp::Blob {
+            data: Some(value_entry(1, i, i).encode_bytes()),
+        })
+        .collect();
+    r.handle(
+        now,
+        nid(1),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(entries),
+            leader_commit: 20,
+        })),
+    );
     match r.offer_snapshot(now, nid(1), 1, 10) {
-        SnapshotOffer::Reply(out) => assert!(matches!(&out[0].1, RaftBody::RaftSnapshotResponse(s) if s.last_index == 20)),
-        SnapshotOffer::Install => panic!("a snapshot behind the commit index must not be installed"),
+        SnapshotOffer::Reply(out) => {
+            assert!(matches!(&out[0].1, RaftBody::RaftSnapshotResponse(s) if s.last_index == 20))
+        }
+        SnapshotOffer::Install => {
+            panic!("a snapshot behind the commit index must not be installed")
+        }
     }
 }
 
@@ -694,18 +993,75 @@ fn stale_snapshot_is_not_installed() {
 fn snapshot_keeps_matching_suffix() {
     let (st, _) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
-    let entries: Vec<wp::Blob> = (1..=20).map(|i| wp::Blob { data: Some(value_entry(1, i, i).encode_bytes()) }).collect();
-    r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(entries), leader_commit: 5 })));
-    assert!(matches!(r.offer_snapshot(now, nid(1), 1, 15), SnapshotOffer::Install));
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
+    let entries: Vec<wp::Blob> = (1..=20)
+        .map(|i| wp::Blob {
+            data: Some(value_entry(1, i, i).encode_bytes()),
+        })
+        .collect();
+    r.handle(
+        now,
+        nid(1),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(entries),
+            leader_commit: 5,
+        })),
+    );
+    assert!(matches!(
+        r.offer_snapshot(now, nid(1), 1, 15),
+        SnapshotOffer::Install
+    ));
     r.install_snapshot(15, 1, members(&[1, 2, 3], &[]));
     assert_eq!(r.snap_index, 15);
-    assert_eq!(r.last_index(), 20, "entries after a matching snapshot point are kept");
+    assert_eq!(
+        r.last_index(),
+        20,
+        "entries after a matching snapshot point are kept"
+    );
     // A snapshot whose term at that index differs discards the log.
     let (st, _) = Storage::mem();
-    let mut r = Raft::new(nid(2), st, 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
-    let entries: Vec<wp::Blob> = (1..=20).map(|i| wp::Blob { data: Some(value_entry(1, i, i).encode_bytes()) }).collect();
-    r.handle(now, nid(1), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 1, prev_log_index: 0, prev_log_term: 0, entries: Some(entries), leader_commit: 5 })));
+    let mut r = Raft::new(
+        nid(2),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
+    let entries: Vec<wp::Blob> = (1..=20)
+        .map(|i| wp::Blob {
+            data: Some(value_entry(1, i, i).encode_bytes()),
+        })
+        .collect();
+    r.handle(
+        now,
+        nid(1),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(entries),
+            leader_commit: 5,
+        })),
+    );
     r.install_snapshot(15, 3, members(&[1, 2, 3], &[]));
     assert_eq!(r.last_index(), 15);
 }
@@ -714,22 +1070,83 @@ fn snapshot_keeps_matching_suffix() {
 fn restart_recovers_term_vote_log_and_config_from_storage() {
     let (st, mem) = Storage::mem();
     let now = Instant::now();
-    let mut r = Raft::new(nid(2), st.clone(), 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(1)).unwrap();
+    let mut r = Raft::new(
+        nid(2),
+        st.clone(),
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(1),
+    )
+    .unwrap();
     // Vote in term 4.
-    let out = r.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 4, last_log_index: 0, last_log_term: 0, pre_vote: false })));
+    let out = r.handle(
+        now,
+        nid(3),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 4,
+            last_log_index: 0,
+            last_log_term: 0,
+            pre_vote: false,
+        })),
+    );
     assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if v.granted));
-    let e = vec![wp::Blob { data: Some(value_entry(4, 1, 1).encode_bytes()) }, wp::Blob { data: Some(conf_entry(4, 2, &members(&[1, 2, 3, 4], &[])).encode_bytes()) }];
-    r.handle(now, nid(3), RaftBody::RaftAppend(Box::new(wp::RaftAppend { term: 4, prev_log_index: 0, prev_log_term: 0, entries: Some(e), leader_commit: 0 })));
+    let e = vec![
+        wp::Blob {
+            data: Some(value_entry(4, 1, 1).encode_bytes()),
+        },
+        wp::Blob {
+            data: Some(conf_entry(4, 2, &members(&[1, 2, 3, 4], &[])).encode_bytes()),
+        },
+    ];
+    r.handle(
+        now,
+        nid(3),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 4,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(e),
+            leader_commit: 0,
+        })),
+    );
     drop(r);
-    let r2 = Raft::new(nid(2), Storage::Mem(mem.clone()), 0, 0, members(&[1, 2, 3], &[]), Box::new(classify), T, now, Some(2)).unwrap();
+    let r2 = Raft::new(
+        nid(2),
+        Storage::Mem(mem.clone()),
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        now,
+        Some(2),
+    )
+    .unwrap();
     assert_eq!(r2.term, 4);
     assert_eq!(r2.voted_for, Some(nid(3)));
     assert_eq!(r2.last_index(), 2);
-    assert_eq!(r2.voters().len(), 4, "uncommitted configuration in the log is in force after a restart");
+    assert_eq!(
+        r2.voters().len(),
+        4,
+        "uncommitted configuration in the log is in force after a restart"
+    );
     assert_eq!(r2.commit, 0);
     // It won't vote for someone else in term 4.
     let mut r2 = r2;
-    let out = r2.handle(now, nid(1), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 4, last_log_index: 9, last_log_term: 4, pre_vote: false })));
+    let out = r2.handle(
+        now,
+        nid(1),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 4,
+            last_log_index: 9,
+            last_log_term: 4,
+            pre_vote: false,
+        })),
+    );
     assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted));
 }
 
@@ -738,16 +1155,38 @@ fn disk_storage_roundtrip() {
     let dir = std::env::temp_dir().join(format!("webjet-raft-{}", rand::random::<u64>()));
     let st = Storage::disk(dir.clone()).unwrap();
     st.save_meta(7, Some(nid(3)));
-    let e: Vec<Entry> = (1..=5).map(|i| Entry { term: 7, index: i, bytes: value_entry(7, i, i).encode_bytes() }).collect();
+    let e: Vec<Entry> = (1..=5)
+        .map(|i| Entry {
+            term: 7,
+            index: i,
+            bytes: value_entry(7, i, i).encode_bytes(),
+        })
+        .collect();
     st.append(&e[..3]);
     st.append(&e[3..]);
     assert_eq!(st.load_log().len(), 5);
     st.rewrite(&e[..2]);
-    let r = Raft::new(nid(1), Storage::disk(dir.clone()).unwrap(), 0, 0, members(&[1], &[]), Box::new(classify), T, Instant::now(), Some(1)).unwrap();
+    let r = Raft::new(
+        nid(1),
+        Storage::disk(dir.clone()).unwrap(),
+        0,
+        0,
+        members(&[1], &[]),
+        Box::new(classify),
+        T,
+        Instant::now(),
+        Some(1),
+    )
+    .unwrap();
     assert_eq!((r.term, r.voted_for, r.last_index()), (7, Some(nid(3)), 2));
     // A torn final record (crash mid-append) is ignored.
     use std::io::Write;
-    std::fs::OpenOptions::new().append(true).open(dir.join("log.bin")).unwrap().write_all(&[0, 0, 1, 0, 1, 2]).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("log.bin"))
+        .unwrap()
+        .write_all(&[0, 0, 1, 0, 1, 2])
+        .unwrap();
     assert_eq!(st.load_log().len(), 2);
     st.save_snapshot(b"snap").unwrap();
     assert_eq!(st.load_snapshot().as_deref(), Some(&b"snap"[..]));
@@ -766,7 +1205,10 @@ fn prevote_keeps_a_partitioned_follower_from_disrupting() {
     s.group = Some(g);
     s.run(10_000, None, 20);
     let vt = s.nodes[victim].raft.as_ref().unwrap();
-    assert_eq!(vt.term, term, "an isolated follower must not raise its term (pre-vote)");
+    assert_eq!(
+        vt.term, term,
+        "an isolated follower must not raise its term (pre-vote)"
+    );
     s.group = None;
     s.run(3000, None, 20);
     assert_eq!(s.leader(), Some(l), "rejoining must not depose the leader");
@@ -783,7 +1225,11 @@ fn isolated_leader_steps_down_and_majority_elects() {
     g[l] = 1;
     s.group = Some(g);
     s.run(T.election_max.as_millis() as u64 * 3, None, 0);
-    assert_ne!(s.nodes[l].raft.as_ref().unwrap().role, Role::Leader, "check-quorum must depose an isolated leader");
+    assert_ne!(
+        s.nodes[l].raft.as_ref().unwrap().role,
+        Role::Leader,
+        "check-quorum must depose an isolated leader"
+    );
     let nl = s.leader().unwrap();
     assert_ne!(nl, l);
     // Writes on the majority side commit.
@@ -834,7 +1280,10 @@ fn lagging_follower_catches_up_by_snapshot() {
     assert!(s.nodes[l].raft.as_ref().unwrap().snap_index > 100);
     s.start(lag);
     s.run(3000, None, 0);
-    assert!(s.stats.snapshots_installed >= 1, "the lagging follower should have received a snapshot");
+    assert!(
+        s.stats.snapshots_installed >= 1,
+        "the lagging follower should have received a snapshot"
+    );
     assert_eq!(s.nodes[lag].sm.values.len(), 200);
 }
 
@@ -848,14 +1297,21 @@ fn conf_change_waits_for_previous_and_for_own_term_commit() {
     let e1 = conf_entry(r.term, r.last_index() + 1, &members(&[1, 2, 3], &[4]));
     r.propose(now, &e1).unwrap();
     let e2 = conf_entry(r.term, r.last_index() + 1, &members(&[1, 2, 3, 4], &[]));
-    assert_eq!(r.propose(now, &e2).err(), Some(ProposeError::ConfChangePending));
+    assert_eq!(
+        r.propose(now, &e2).err(),
+        Some(ProposeError::ConfChangePending)
+    );
     s.run(500, None, 0);
     let now = s.now();
     let r = s.nodes[l].raft.as_mut().unwrap();
     let e2 = conf_entry(r.term, r.last_index() + 1, &members(&[1, 2, 3, 4], &[]));
     r.propose(now, &e2).unwrap();
     s.run(1000, None, 0);
-    assert_eq!(s.nodes[3].raft.as_ref().unwrap().role, Role::Follower, "the promoted learner is a voter now");
+    assert_eq!(
+        s.nodes[3].raft.as_ref().unwrap().role,
+        Role::Follower,
+        "the promoted learner is a voter now"
+    );
     assert_eq!(s.nodes[l].raft.as_ref().unwrap().voters().len(), 4);
 }
 
@@ -876,14 +1332,26 @@ fn learner_joins_votes_only_after_promotion() {
     s.send(nid(l as u8 + 1), out);
     s.run(1500, None, 0);
     assert_eq!(s.nodes[3].raft.as_ref().unwrap().role, Role::Learner);
-    assert_eq!(s.nodes[3].sm.values.len(), 30, "the learner replicates the log");
+    assert_eq!(
+        s.nodes[3].sm.values.len(),
+        30,
+        "the learner replicates the log"
+    );
     // With two voters down, the learner can't help elect anyone.
     let others: Vec<usize> = (0..3).filter(|i| *i != l).collect();
     s.crash(others[0]);
     s.crash(l);
     s.run(5000, None, 0);
     assert!(s.leader().is_none());
-    assert_eq!(s.nodes[3].raft.as_ref().unwrap().term, s.nodes[others[1]].raft.as_ref().unwrap().term.min(s.nodes[3].raft.as_ref().unwrap().term));
+    assert_eq!(
+        s.nodes[3].raft.as_ref().unwrap().term,
+        s.nodes[others[1]]
+            .raft
+            .as_ref()
+            .unwrap()
+            .term
+            .min(s.nodes[3].raft.as_ref().unwrap().term)
+    );
 }
 
 #[test]
@@ -908,7 +1376,11 @@ fn leader_removing_itself_hands_over() {
         s.propose_value();
     }
     s.run(1000, None, 0);
-    assert_eq!(s.nodes[l].sm.values.len(), 10, "the demoted node still replicates as a learner");
+    assert_eq!(
+        s.nodes[l].sm.values.len(),
+        10,
+        "the demoted node still replicates as a learner"
+    );
 }
 
 #[test]
@@ -930,7 +1402,11 @@ fn removed_voter_does_not_disrupt() {
     let term = s.nodes[l].raft.as_ref().unwrap().term;
     s.group = None;
     s.run(10_000, None, 50);
-    assert_eq!(s.leader(), Some(l), "a removed server must not depose the leader");
+    assert_eq!(
+        s.leader(),
+        Some(l),
+        "a removed server must not depose the leader"
+    );
     assert_eq!(s.nodes[l].raft.as_ref().unwrap().term, term);
 }
 
@@ -959,28 +1435,76 @@ fn randomized(seed: u64, n: u8, faults: Faults, ms: u64, lossy: bool) {
 #[test]
 fn randomized_crashes_and_partitions() {
     for seed in 0..seeds(12) {
-        randomized(1000 + seed, 5, Faults { crash: 0.0005, restart: 0.002, partition: 0.0005, conf: 0.0, max_voters: 5 }, 20_000, false);
+        randomized(
+            1000 + seed,
+            5,
+            Faults {
+                crash: 0.0005,
+                restart: 0.002,
+                partition: 0.0005,
+                conf: 0.0,
+                max_voters: 5,
+            },
+            20_000,
+            false,
+        );
     }
 }
 
 #[test]
 fn randomized_lossy_network() {
     for seed in 0..seeds(12) {
-        randomized(2000 + seed, 5, Faults { crash: 0.0003, restart: 0.002, partition: 0.0003, conf: 0.0, max_voters: 5 }, 20_000, true);
+        randomized(
+            2000 + seed,
+            5,
+            Faults {
+                crash: 0.0003,
+                restart: 0.002,
+                partition: 0.0003,
+                conf: 0.0,
+                max_voters: 5,
+            },
+            20_000,
+            true,
+        );
     }
 }
 
 #[test]
 fn randomized_membership_changes() {
     for seed in 0..seeds(12) {
-        randomized(3000 + seed, 6, Faults { crash: 0.0003, restart: 0.002, partition: 0.0003, conf: 0.002, max_voters: 5 }, 25_000, true);
+        randomized(
+            3000 + seed,
+            6,
+            Faults {
+                crash: 0.0003,
+                restart: 0.002,
+                partition: 0.0003,
+                conf: 0.002,
+                max_voters: 5,
+            },
+            25_000,
+            true,
+        );
     }
 }
 
 #[test]
 fn randomized_heavy_churn() {
     for seed in 0..seeds(6) {
-        randomized(4000 + seed, 7, Faults { crash: 0.002, restart: 0.004, partition: 0.001, conf: 0.003, max_voters: 7 }, 25_000, true);
+        randomized(
+            4000 + seed,
+            7,
+            Faults {
+                crash: 0.002,
+                restart: 0.004,
+                partition: 0.001,
+                conf: 0.003,
+                max_voters: 7,
+            },
+            25_000,
+            true,
+        );
     }
 }
 
@@ -1014,13 +1538,20 @@ fn deposed_leader_with_uncommitted_self_demotion_can_finish_it() {
         s.propose_value();
     }
     s.run(T.election_max.as_millis() as u64 * 3, None, 0);
-    assert_ne!(s.nodes[l].raft.as_ref().unwrap().role, Role::Leader, "check-quorum deposes the cut-off leader");
+    assert_ne!(
+        s.nodes[l].raft.as_ref().unwrap().role,
+        Role::Leader,
+        "check-quorum deposes the cut-off leader"
+    );
     s.group = None;
     s.settle_and_check_liveness();
     // The demotion finished: only the other node is a voter now.
     let nl = s.leader().unwrap();
     assert_eq!(nl, other);
-    assert_eq!(s.nodes[nl].raft.as_ref().unwrap().voters(), &BTreeSet::from([nid(other as u8 + 1)]));
+    assert_eq!(
+        s.nodes[nl].raft.as_ref().unwrap().voters(),
+        &BTreeSet::from([nid(other as u8 + 1)])
+    );
 }
 
 /// A node whose storage already holds `log` (term, value) entries and `term`.
@@ -1029,9 +1560,24 @@ fn preloaded(id: u8, term: u64, log: &[(u64, u64)], voters: &[u8]) -> Raft {
     {
         let mut m = mem.lock();
         m.term = term;
-        m.log = log.iter().enumerate().map(|(i, (t, v))| value_entry(*t, i as u64 + 1, *v).encode_bytes()).collect();
+        m.log = log
+            .iter()
+            .enumerate()
+            .map(|(i, (t, v))| value_entry(*t, i as u64 + 1, *v).encode_bytes())
+            .collect();
     }
-    Raft::new(nid(id), st, 0, 0, members(voters, &[]), Box::new(classify), T, Instant::now(), Some(id as u64)).unwrap()
+    Raft::new(
+        nid(id),
+        st,
+        0,
+        0,
+        members(voters, &[]),
+        Box::new(classify),
+        T,
+        Instant::now(),
+        Some(id as u64),
+    )
+    .unwrap()
 }
 
 /// Drive `r` (a voter of 1..=5) to leadership with votes from `from`.
@@ -1041,11 +1587,27 @@ fn elect(r: &mut Raft, from: &[u8]) -> Instant {
     assert_eq!(r.role, Role::PreCandidate);
     let pre_term = r.term + 1;
     for f in from {
-        r.handle(now, nid(*f), RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse { term: pre_term, granted: true, pre_vote: true })));
+        r.handle(
+            now,
+            nid(*f),
+            RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse {
+                term: pre_term,
+                granted: true,
+                pre_vote: true,
+            })),
+        );
     }
     assert_eq!(r.role, Role::Candidate);
     for f in from {
-        r.handle(now, nid(*f), RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse { term: r.term, granted: true, pre_vote: false })));
+        r.handle(
+            now,
+            nid(*f),
+            RaftBody::RaftVoteResponse(Box::new(wp::RaftVoteResponse {
+                term: r.term,
+                granted: true,
+                pre_vote: false,
+            })),
+        );
     }
     assert_eq!(r.role, Role::Leader);
     now += Duration::from_millis(1);
@@ -1065,12 +1627,33 @@ fn figure8_old_term_entry_is_not_committed_by_counting() {
     assert_eq!(s1.last_index(), 3, "the new leader appended its no-op");
     let before = s1.commit;
     for f in [2, 3] {
-        s1.handle(now, nid(f), RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse { term: 4, success: true, match_index: 2, hint_index: 0 })));
+        s1.handle(
+            now,
+            nid(f),
+            RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse {
+                term: 4,
+                success: true,
+                match_index: 2,
+                hint_index: 0,
+            })),
+        );
     }
-    assert_eq!(s1.commit, before, "an old-term entry was committed by counting replicas");
+    assert_eq!(
+        s1.commit, before,
+        "an old-term entry was committed by counting replicas"
+    );
     // The term-4 no-op on a majority commits it, and index 2 with it.
     for f in [2, 3] {
-        s1.handle(now, nid(f), RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse { term: 4, success: true, match_index: 3, hint_index: 0 })));
+        s1.handle(
+            now,
+            nid(f),
+            RaftBody::RaftAppendResponse(Box::new(wp::RaftAppendResponse {
+                term: 4,
+                success: true,
+                match_index: 3,
+                hint_index: 0,
+            })),
+        );
     }
     assert_eq!(s1.commit, 3);
 }
@@ -1080,15 +1663,57 @@ fn votes_require_an_up_to_date_log() {
     let mut f = preloaded(2, 1, &[(1, 1), (1, 2), (1, 3)], &[1, 2, 3]);
     let now = Instant::now();
     // Shorter log, same last term: refused.
-    let out = f.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 2, last_log_index: 2, last_log_term: 1, pre_vote: false })));
-    assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted), "voted for a candidate with a shorter log");
+    let out = f.handle(
+        now,
+        nid(3),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 2,
+            last_log_index: 2,
+            last_log_term: 1,
+            pre_vote: false,
+        })),
+    );
+    assert!(
+        matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted),
+        "voted for a candidate with a shorter log"
+    );
     // Longer log but an older last term: refused.
-    let out = f.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 3, last_log_index: 9, last_log_term: 0, pre_vote: false })));
-    assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted), "voted for a candidate with an older last term");
+    let out = f.handle(
+        now,
+        nid(3),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 3,
+            last_log_index: 9,
+            last_log_term: 0,
+            pre_vote: false,
+        })),
+    );
+    assert!(
+        matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted),
+        "voted for a candidate with an older last term"
+    );
     // The same rules apply to pre-votes.
-    let out = f.handle(now, nid(3), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 4, last_log_index: 2, last_log_term: 1, pre_vote: true })));
+    let out = f.handle(
+        now,
+        nid(3),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 4,
+            last_log_index: 2,
+            last_log_term: 1,
+            pre_vote: true,
+        })),
+    );
     assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if !v.granted));
     // An up-to-date candidate gets the vote.
-    let out = f.handle(now, nid(1), RaftBody::RaftVote(Box::new(wp::RaftVote { term: 4, last_log_index: 3, last_log_term: 1, pre_vote: false })));
+    let out = f.handle(
+        now,
+        nid(1),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 4,
+            last_log_index: 3,
+            last_log_term: 1,
+            pre_vote: false,
+        })),
+    );
     assert!(matches!(&out[0].1, RaftBody::RaftVoteResponse(v) if v.granted));
 }

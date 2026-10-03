@@ -80,9 +80,74 @@ addresses, tun, gateway routes, local limits and the controller role.
 
 ## Platform notes
 
-* Linux: full support (tun, routes, gateway via iptables MASQUERADE, split
-  DNS via `resolvectl`).
-* macOS: utun interface, routes and `/etc/resolver` split DNS. Gateways are
-  Linux-only.
-* Identity keys are 0600 files. `WEBJET_KEY_WRAP=machine-id` binds them to
-  the machine on Linux. TPM, Keychain and DPAPI sealing are not implemented.
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Install / upgrade | `scripts/upgrade.sh` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `scripts/upgrade.sh` (launchd daemon) | `scripts/upgrade.ps1` (LocalSystem service via `webjetd install`) |
+| Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) |
+| Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` |
+| Control channel | Unix socket, 0600 | Unix socket, 0600 | named pipe `\\.\pipe\webjet`, SYSTEM + Administrators |
+| Key storage (`[key] storage`) | `tpm` (tpm2-tools) when a TPM is usable, else `file` | `keychain` (System keychain) | `dpapi` (machine scope) |
+| Roles | all | DATA | DATA |
+
+Routes and split DNS are removed when the agent stops; `upgrade.sh
+--uninstall` / `upgrade.ps1 -Uninstall` remove the service as well.
+
+### Identity key storage (§8.3)
+
+`webjetd.toml`:
+
+```toml
+[key]
+storage = "auto"   # auto | tpm | keychain | dpapi | file
+```
+
+`auto` picks the platform store and falls back to a private file (with a
+warning) when it can't be used, e.g. no TPM access. Sealed keys are
+device-bound. A key copied or restored onto another machine is refused, with
+a message to re-key the node. In memory the key is `mlock`ed / `VirtualLock`ed
+and core dumps are disabled. `docker/tpm-test.sh` checks the TPM backend
+against a software TPM, including refusal by a second TPM.
+
+### Metrics (§12.5)
+
+```toml
+[metrics]
+listen = "127.0.0.1:9469"
+```
+
+On a controller, `GET /metrics` returns the latest report of **every** node
+in OpenMetrics text. Reports are shared between controllers, so any of them
+is a complete scrape target. Elsewhere it returns the node's own metrics, and
+a relay leaves out per-route series. Samples carry the report's timestamp.
+`webjetctl metrics [--all]` prints the same text.
+
+```yaml
+scrape_configs:
+  - job_name: webjet
+    honor_timestamps: true
+    static_configs: [{ targets: ["10.7.0.1:9469", "10.7.0.2:9469"] }]
+```
+
+### Raft
+
+`crates/webjetd/src/controller/raft.rs` is a deterministic core: time is passed
+in, randomness comes from a seeded RNG, and storage can be in memory. It
+supports pre-vote, check-quorum, and membership tracked from the log. Its
+tests (`raft_tests.rs`) include targeted scenarios plus a simulator that
+injects crashes, restarts, partitions, loss, duplication, reordering,
+snapshots and membership changes. After every step it checks election safety,
+log matching, leader completeness, state-machine safety and configuration
+agreement, and once faults stop it checks liveness.
+
+```sh
+cargo test -p webjetd --lib raft
+WEBJET_RAFT_SEEDS=2000 cargo test --release -p webjetd --lib randomized   # soak
+scripts/raft-mutations.py   # re-introduces 10 classic Raft bugs; each must be caught
+```
+
+### Windows builds and tests
+
+```sh
+cargo xwin build --release --target x86_64-pc-windows-msvc -p webjetd -p webjet-tools
+docker/windows-test.sh     # unit tests (DPAPI, named pipes, ACLs, ...) under Wine
+```

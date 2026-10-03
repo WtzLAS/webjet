@@ -25,9 +25,9 @@ $B/webjet-root --dir $D/root admin sign --name alice --key $D/alice.pub --out $D
 $B/webjet-root --dir $D/root genesis --overlay-pool 10.7.0.0/16 --admin $D/alice.account --out $D/genesis.wj >/dev/null
 printf "data_dir = \"$D/node\"\ncontrol_socket = \"$D/node/control.sock\"\n[tun]\nenabled = false\n[controller]\nenabled = true\n" > $D/webjetd.toml
 echo "== init seals the key in the TPM"
-$B/webjetd -c $D/webjetd.toml init --genesis $D/genesis.wj
+$B/webjetd -c $D/webjetd.toml init --genesis $D/genesis.wj 2>&1 | tee $D/init.log
 head -c 5 $D/node/identity.key | od -c | head -1
-[ "$(head -c 5 $D/node/identity.key | tail -c 1 | od -An -tu1 | tr -d ' ')" = 2 ] || { echo "FAIL: key not TPM-sealed"; exit 1; }
+grep -q "identity key stored with tpm storage" $D/init.log || { echo "FAIL: key not TPM-sealed"; exit 1; }
 echo "== repeated seal/unseal does not exhaust TPM object slots"
 for i in 1 2 3 4 5 6; do WEBJET_TEST_TPM=1 cargo test -q -p webjetd --lib keystore::tests::tpm_roundtrip >/dev/null 2>&1 || { echo "FAIL: run $i"; exit 1; }; done; echo ok
 echo "== the agent starts with it"

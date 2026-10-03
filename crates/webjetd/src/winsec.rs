@@ -7,8 +7,14 @@ use anyhow::{bail, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT};
-use windows_sys::Win32::Security::{GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW, SDDL_REVISION_1,
+    SE_FILE_OBJECT,
+};
+use windows_sys::Win32::Security::{
+    GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+};
 
 /// SYSTEM and Administrators, full control, inherited by files and folders.
 pub const PRIVATE_DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
@@ -24,9 +30,19 @@ impl Descriptor {
     pub fn from_sddl(sddl: &str) -> Result<Descriptor> {
         let w = wide(std::ffi::OsStr::new(sddl));
         let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-        let ok = unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(w.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) };
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                w.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                std::ptr::null_mut(),
+            )
+        };
         if ok == 0 {
-            bail!("bad security descriptor {sddl}: {}", std::io::Error::last_os_error());
+            bail!(
+                "bad security descriptor {sddl}: {}",
+                std::io::Error::last_os_error()
+            );
         }
         Ok(Descriptor(sd))
     }
@@ -34,7 +50,10 @@ impl Descriptor {
     fn dacl(&self) -> Result<*mut ACL> {
         let (mut present, mut defaulted) = (0, 0);
         let mut dacl: *mut ACL = std::ptr::null_mut();
-        if unsafe { GetSecurityDescriptorDacl(self.0, &mut present, &mut dacl, &mut defaulted) } == 0 || present == 0 {
+        if unsafe { GetSecurityDescriptorDacl(self.0, &mut present, &mut dacl, &mut defaulted) }
+            == 0
+            || present == 0
+        {
             bail!("security descriptor without DACL");
         }
         Ok(dacl)
@@ -56,7 +75,11 @@ pub struct SecurityAttributes {
 impl SecurityAttributes {
     pub fn from_sddl(sddl: &str) -> Result<SecurityAttributes> {
         let sd = Descriptor::from_sddl(sddl)?;
-        let sa = SECURITY_ATTRIBUTES { nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: sd.0, bInheritHandle: 0 };
+        let sa = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: sd.0,
+            bInheritHandle: 0,
+        };
         Ok(SecurityAttributes { _sd: sd, sa })
     }
 
@@ -71,9 +94,23 @@ pub fn restrict(path: &Path) -> Result<()> {
     let sd = Descriptor::from_sddl(PRIVATE_DIR_SDDL)?;
     let dacl = sd.dacl()?;
     let w = wide(path.as_os_str());
-    let r = unsafe { SetNamedSecurityInfoW(w.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, std::ptr::null_mut(), std::ptr::null_mut(), dacl, std::ptr::null()) };
+    let r = unsafe {
+        SetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null(),
+        )
+    };
     if r != 0 {
-        bail!("set ACL on {}: {}", path.display(), std::io::Error::from_raw_os_error(r as i32));
+        bail!(
+            "set ACL on {}: {}",
+            path.display(),
+            std::io::Error::from_raw_os_error(r as i32)
+        );
     }
     Ok(())
 }

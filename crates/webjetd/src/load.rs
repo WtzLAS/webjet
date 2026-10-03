@@ -16,7 +16,9 @@ pub fn process_cpu_time() -> Option<Duration> {
 
 /// Logical CPUs available to the process.
 pub fn cpu_count() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
 }
 
 #[cfg(unix)]
@@ -27,7 +29,9 @@ mod imp {
         if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } != 0 {
             return None;
         }
-        let tv = |t: libc::timeval| Duration::from_secs(t.tv_sec as u64) + Duration::from_micros(t.tv_usec as u64);
+        let tv = |t: libc::timeval| {
+            Duration::from_secs(t.tv_sec as u64) + Duration::from_micros(t.tv_usec as u64)
+        };
         Some(tv(ru.ru_utime) + tv(ru.ru_stime))
     }
 }
@@ -38,7 +42,10 @@ mod imp {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
     pub fn process_cpu_time() -> Option<Duration> {
-        let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let z = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
         let (mut c, mut e, mut k, mut u) = (z, z, z, z);
         if unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) } == 0 {
             return None;
@@ -91,15 +98,31 @@ impl Default for LoadSampler {
 
 impl LoadSampler {
     pub fn new(cores: usize) -> Self {
-        LoadSampler { samples: VecDeque::new(), cores: cores.max(1), peak_mbps: 0.0, last_peak_decay: None }
+        LoadSampler {
+            samples: VecDeque::new(),
+            cores: cores.max(1),
+            peak_mbps: 0.0,
+            last_peak_decay: None,
+        }
     }
 
     /// Record the current counters. `cpu` is the process CPU time,
     /// `bytes` the total bytes sent on hops, `queue_ms` the worst hop queue
     /// delay right now.
     pub fn record(&mut self, at: Instant, cpu: Duration, bytes: u64, queue_ms: f64) {
-        self.samples.push_back(Sample { at, cpu, bytes, queue_ms });
-        while self.samples.len() > 2 && self.samples.front().map(|s| at.duration_since(s.at) > WINDOW).unwrap_or(false) {
+        self.samples.push_back(Sample {
+            at,
+            cpu,
+            bytes,
+            queue_ms,
+        });
+        while self.samples.len() > 2
+            && self
+                .samples
+                .front()
+                .map(|s| at.duration_since(s.at) > WINDOW)
+                .unwrap_or(false)
+        {
             self.samples.pop_front();
         }
         // Capacity estimate: the highest throughput sustained over a window
@@ -110,7 +133,10 @@ impl LoadSampler {
                 self.peak_mbps = mbps;
             }
         }
-        let decay_due = self.last_peak_decay.map(|t| at.duration_since(t) >= Duration::from_secs(3600)).unwrap_or(true);
+        let decay_due = self
+            .last_peak_decay
+            .map(|t| at.duration_since(t) >= Duration::from_secs(3600))
+            .unwrap_or(true);
         if decay_due {
             self.peak_mbps *= 0.99;
             self.last_peak_decay = Some(at);
@@ -133,7 +159,11 @@ impl LoadSampler {
         let cpu = b.cpu.saturating_sub(a.cpu).as_secs_f64() / dt / self.cores as f64 * 100.0;
         let tx = b.bytes.saturating_sub(a.bytes) as f64 / dt;
         let q = self.samples.iter().map(|s| s.queue_ms).sum::<f64>() / self.samples.len() as f64;
-        Some(LoadAverages { cpu_pct: cpu.clamp(0.0, 100.0), tx_bps: tx, queue_ms: q })
+        Some(LoadAverages {
+            cpu_pct: cpu.clamp(0.0, 100.0),
+            tx_bps: tx,
+            queue_ms: q,
+        })
     }
 }
 
@@ -160,7 +190,12 @@ mod tests {
         let t0 = Instant::now();
         for i in 0..=20u64 {
             // 2 s per sample; the process uses 1 core fully; 1 MB/s; queue 10 ms.
-            s.record(t0 + Duration::from_secs(2 * i), Duration::from_secs(2 * i), 2_000_000 * i, 10.0);
+            s.record(
+                t0 + Duration::from_secs(2 * i),
+                Duration::from_secs(2 * i),
+                2_000_000 * i,
+                10.0,
+            );
         }
         let a = s.averages().unwrap();
         assert!((a.cpu_pct - 25.0).abs() < 0.1, "{a:?}");

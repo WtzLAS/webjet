@@ -311,6 +311,9 @@ pub mod tpm {
     fn primary(dir: &Path) -> Result<()> {
         // Same template every time: the TPM re-derives the same primary key.
         run(&["tpm2_createprimary", "-Q", "-C", "o", "-g", "sha256", "-G", "ecc256:aes128cfb", "-c", "primary.ctx"], dir, None)?;
+        // Each tool saves its objects as context files; without a resource
+        // manager they also stay loaded, and the TPM has only a few slots.
+        flush_transient();
         Ok(())
     }
 
@@ -341,6 +344,7 @@ pub mod tpm {
         std::fs::write(t.0.join("seal.priv"), privb)?;
         primary(&t.0)?;
         run(&["tpm2_load", "-Q", "-C", "primary.ctx", "-u", "seal.pub", "-r", "seal.priv", "-c", "seal.ctx"], &t.0, None).context("this key was sealed by a different TPM")?;
+        flush_transient();
         let out = Zeroizing::new(run(&["tpm2_unseal", "-c", "seal.ctx"], &t.0, None)?);
         Ok(out)
     }
