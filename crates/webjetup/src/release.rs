@@ -92,6 +92,42 @@ pub struct ReleaseInfo {
     pub draft: bool,
 }
 
+/// How a failed attempt ends: try again, or give up now.
+enum Failure {
+    Retry(anyhow::Error),
+    Final(anyhow::Error),
+}
+
+impl From<anyhow::Error> for Failure {
+    fn from(e: anyhow::Error) -> Self {
+        Failure::Final(e)
+    }
+}
+
+const ATTEMPTS: u32 = 4;
+
+/// Run `f` up to [`ATTEMPTS`] times, waiting 1, 2, 4 s between tries.
+fn retry<T>(mut f: impl FnMut() -> std::result::Result<T, Failure>) -> Result<T> {
+    let mut attempt = 1;
+    loop {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(Failure::Final(e)) => return Err(e),
+            Err(Failure::Retry(e)) if attempt >= ATTEMPTS => return Err(e),
+            Err(Failure::Retry(e)) => {
+                eprintln!("    {e:#}; retrying");
+                std::thread::sleep(Duration::from_secs(1 << (attempt - 1)));
+                attempt += 1;
+            }
+        }
+    }
+}
+/// The key exchange groups webjetup offers (see [`Client::new`]).
+fn classic_kx_groups() -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
+    use rustls::crypto::aws_lc_rs::kx_group;
+    vec![kx_group::X25519, kx_group::SECP256R1, kx_group::SECP384R1]
+}
+
 pub struct Client {
     agent: ureq::Agent,
 }
@@ -104,11 +140,16 @@ impl Default for Client {
 
 impl Client {
     pub fn new() -> Client {
+        // Classic key exchange only. The workspace builds rustls with
+        // `prefer-post-quantum` (the overlay wants ML-KEM), which puts a large
+        // X25519MLKEM768 share first in the ClientHello; some servers and
+        // middleboxes reset such handshakes now and then, and release files
+        // are public data checked against their SHA-256 anyway.
+        let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+        provider.kx_groups = classic_kx_groups();
         let tls = ureq::tls::TlsConfig::builder()
             .provider(ureq::tls::TlsProvider::Rustls)
-            .unversioned_rustls_crypto_provider(Arc::new(
-                rustls::crypto::aws_lc_rs::default_provider(),
-            ))
+            .unversioned_rustls_crypto_provider(Arc::new(provider))
             .root_certs(ureq::tls::RootCerts::WebPki)
             .build();
         let agent = ureq::Agent::config_builder()
@@ -122,48 +163,60 @@ impl Client {
         Client { agent }
     }
 
+    /// GET with a few retries for network errors (resets, timeouts); HTTP
+    /// errors like 404 are final.
     fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>> {
-        self.agent.get(url).call().map_err(|e| match e {
-            ureq::Error::StatusCode(404) => anyhow!("{url}: not found"),
-            e => anyhow!("{url}: {e}"),
+        retry(|| {
+            self.agent.get(url).call().map_err(|e| match e {
+                ureq::Error::StatusCode(404) => Failure::Final(anyhow!("{url}: not found")),
+                ureq::Error::StatusCode(c) if c < 500 => Failure::Final(anyhow!("{url}: HTTP {c}")),
+                e => Failure::Retry(anyhow!("{url}: {e}")),
+            })
         })
     }
 
     pub fn text(&self, url: &str) -> Result<String> {
-        Ok(self.get(url)?.body_mut().read_to_string()?)
+        retry(|| {
+            let mut r = self.get(url).map_err(Failure::Final)?;
+            r.body_mut()
+                .read_to_string()
+                .map_err(|e| Failure::Retry(anyhow!("{url}: {e}")))
+        })
     }
 
     /// Download `url` into `dest`, returning the file's SHA-256.
     pub fn download(&self, url: &str, dest: &Path) -> Result<String> {
-        let resp = self.get(url)?;
-        let mut reader = resp.into_body().into_reader();
-        let mut file =
-            std::fs::File::create(dest).with_context(|| format!("create {}", dest.display()))?;
-        let mut hasher = Sha256::new();
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            let n = reader
-                .read(&mut buf)
-                .with_context(|| format!("download {url}"))?;
-            if n == 0 {
-                break;
+        // A connection that drops mid-file starts the download over.
+        retry(|| {
+            let resp = self.get(url).map_err(Failure::Final)?;
+            let mut reader = resp.into_body().into_reader();
+            let mut file = std::fs::File::create(dest)
+                .with_context(|| format!("create {}", dest.display()))
+                .map_err(Failure::Final)?;
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = reader
+                    .read(&mut buf)
+                    .map_err(|e| Failure::Retry(anyhow!("download {url}: {e}")))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                file.write_all(&buf[..n])
+                    .with_context(|| format!("write {}", dest.display()))
+                    .map_err(Failure::Final)?;
             }
-            hasher.update(&buf[..n]);
-            file.write_all(&buf[..n])?;
-        }
-        file.sync_all()?;
-        Ok(hex::encode(hasher.finalize()))
+            file.sync_all().map_err(|e| Failure::Final(e.into()))?;
+            Ok(hex::encode(hasher.finalize()))
+        })
     }
 
     /// Fail clearly when `tag` isn't a published release. Only a definite
     /// "not found" counts; other errors are left to the download.
     pub fn check_release(&self, repo: &Repo, tag: &str) -> Result<()> {
-        match self
-            .agent
-            .get(&format!("{}/releases/tags/{tag}", repo.api))
-            .call()
-        {
-            Err(ureq::Error::StatusCode(404)) => {
+        match self.get(&format!("{}/releases/tags/{tag}", repo.api)) {
+            Err(e) if e.to_string().ends_with(": not found") => {
                 bail!(
                     "there is no release {tag} at {} (see `webjetup list`)",
                     repo.web
@@ -172,6 +225,7 @@ impl Client {
             _ => Ok(()),
         }
     }
+
     pub fn latest(&self, repo: &Repo) -> Result<String> {
         let body = self
             .text(&format!("{}/releases/latest", repo.api))
@@ -298,6 +352,37 @@ mod tests {
         assert!(Repo::parse("https://forgejo.example.net/webjet").is_err());
         assert!(Repo::parse("ftp://h/o/r").is_err());
         assert!(Repo::parse(DEFAULT_REPO).is_ok());
+    }
+
+    #[test]
+    fn retries_network_errors_but_not_final_ones() {
+        let mut calls = 0;
+        let r: Result<u32> = retry(|| {
+            calls += 1;
+            if calls < 2 {
+                Err(Failure::Retry(anyhow!("reset")))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!((r.unwrap(), calls), (7, 2));
+        let mut calls = 0;
+        let r: Result<u32> = retry(|| {
+            calls += 1;
+            Err(Failure::Final(anyhow!("not found")))
+        });
+        assert!(r.is_err());
+        assert_eq!(calls, 1, "a 404 is not retried");
+    }
+
+    #[test]
+    fn download_client_offers_only_classic_key_exchange() {
+        let names: Vec<String> = classic_kx_groups()
+            .iter()
+            .map(|g| format!("{:?}", g.name()))
+            .collect();
+        assert!(!names.is_empty());
+        assert!(names.iter().all(|n| !n.contains("MLKEM")), "{names:?}");
     }
 
     #[test]

@@ -92,6 +92,15 @@ enum Cmd {
 }
 
 fn main() {
+    // Like other command-line tools, end quietly when the reader of our
+    // output goes away (`webjetup status | head`) instead of panicking on a
+    // failed print: Rust ignores SIGPIPE by default.
+    #[cfg(unix)]
+    // SAFETY: restoring the default disposition of a signal, before any
+    // other thread exists.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
         eprintln!("webjetup: {e:#}");
