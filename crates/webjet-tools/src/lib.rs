@@ -28,7 +28,7 @@ pub fn write_public(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(d) = path.parent()
         && !d.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(d)?;
+        std::fs::create_dir_all(d).with_context(|| format!("create {}", d.display()))?;
     }
     std::fs::write(path, data).with_context(|| format!("write {}", path.display()))
 }
@@ -144,7 +144,8 @@ impl Account {
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0);
         let seq = now_ms().max(last + 1);
-        std::fs::write(&path, seq.to_string())?;
+        std::fs::write(&path, seq.to_string())
+            .with_context(|| format!("write {}", path.display()))?;
         Ok(seq)
     }
 
@@ -471,6 +472,14 @@ pub fn pem_certs(pem: &str) -> Result<Vec<Vec<u8>>> {
     Ok(out)
 }
 
+/// The certificates in a PEM file named by `field` of a settings file;
+/// relative paths are relative to that file.
+fn cert_file(path: &Path, field: &str) -> Result<Vec<Vec<u8>>> {
+    let pem = std::fs::read_to_string(path)
+        .with_context(|| format!("{field}: read {}", path.display()))?;
+    pem_certs(&pem).with_context(|| format!("{field}: {}", path.display()))
+}
+
 impl TransportFile {
     pub fn to_wire(&self, base: &Path) -> Result<wp::TransportConfig> {
         let camouflage = match &self.camouflage {
@@ -481,11 +490,11 @@ impl TransportFile {
                     "refuse" => wp::CamouflageMode::Refuse,
                     m => bail!("camouflage mode must be website or refuse, got {m}"),
                 };
-                let chain = pem_certs(&std::fs::read_to_string(base.join(&c.certificate))?)?;
+                let chain = cert_file(&base.join(&c.certificate), "camouflage.certificate")?;
                 let next_spki = match &c.next_certificate {
                     #[cfg(feature = "anytls")]
                     Some(p) => {
-                        let next = pem_certs(&std::fs::read_to_string(base.join(p))?)?;
+                        let next = cert_file(&base.join(p), "camouflage.next_certificate")?;
                         Some(crypto::k32(&webjet_net::anytls::spki_pin(&next[0])?))
                     }
                     #[cfg(not(feature = "anytls"))]
@@ -578,5 +587,31 @@ mod tests {
         assert_eq!(a.transport, Transport::TcpTls);
         let a = parse_seed_addr("kcp:[2001:db8::1]:443").unwrap();
         assert_eq!(a.host.as_deref(), Some("2001:db8::1"));
+    }
+
+    #[test]
+    fn transport_file_errors_name_the_certificate() {
+        let dir = std::env::temp_dir().join(format!("webjet-tools-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f: TransportFile = serde_yaml::from_str(
+            "version: 1\ncamouflage:\n  mode: refuse\n  domain: cdn.example.com\n  certificate: missing.crt\n",
+        )
+        .unwrap();
+        let e = format!("{:#}", f.to_wire(&dir).unwrap_err());
+        assert!(
+            e.contains("camouflage.certificate") && e.contains("missing.crt"),
+            "{e}"
+        );
+        std::fs::write(dir.join("junk.crt"), "not a certificate").unwrap();
+        let f: TransportFile = serde_yaml::from_str(
+            "version: 1\ncamouflage:\n  mode: refuse\n  domain: cdn.example.com\n  certificate: junk.crt\n",
+        )
+        .unwrap();
+        let e = format!("{:#}", f.to_wire(&dir).unwrap_err());
+        assert!(
+            e.contains("junk.crt") && e.contains("no certificate"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
