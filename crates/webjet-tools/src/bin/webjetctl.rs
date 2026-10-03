@@ -515,7 +515,7 @@ async fn main() -> Result<()> {
                 if path.exists() {
                     bail!("{} exists", path.display());
                 }
-                let pass = passphrase(
+                let pass = new_passphrase(
                     "WEBJET_ACCOUNT_PASSPHRASE",
                     &format!("new passphrase for account {name}"),
                 )?;

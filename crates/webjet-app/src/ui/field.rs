@@ -86,7 +86,7 @@ impl Render for Field {
             (self.placeholder.to_string(), rgb(super::theme::MUTED))
         } else if self.secret {
             (
-                "•".repeat(self.text.chars().count()),
+                "*".repeat(self.text.chars().count()),
                 rgb(super::theme::TEXT),
             )
         } else {

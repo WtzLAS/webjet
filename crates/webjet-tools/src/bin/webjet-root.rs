@@ -204,7 +204,8 @@ fn main() -> Result<()> {
             if root_path(dir).exists() {
                 bail!("{} already holds keys", dir.display());
             }
-            let pass = passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
+            let pass =
+                new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
             let root = KeyPair::generate();
             let emergency = KeyPair::generate();
             write_private(&root_path(dir), &seal(&pass, &root.seed()[..])?)?;
@@ -222,7 +223,7 @@ fn main() -> Result<()> {
         }
         Cmd::Backup { out } => {
             let k = load_keys(dir)?;
-            let pass = passphrase("WEBJET_BACKUP_PASSPHRASE", "backup passphrase")?;
+            let pass = new_passphrase("WEBJET_BACKUP_PASSPHRASE", "passphrase for the backup")?;
             let mut plain = k.root.seed().to_vec();
             plain.extend_from_slice(&k.emergency.seed()[..]);
             write_private(&out, &seal(&pass, &plain)?)?;
@@ -234,7 +235,8 @@ fn main() -> Result<()> {
             if plain.len() != 64 {
                 bail!("damaged backup");
             }
-            let newpass = passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
+            let newpass =
+                new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
             write_private(&root_path(dir), &seal(&newpass, &plain[..32])?)?;
             write_private(&emergency_path(dir), &seal(&newpass, &plain[32..])?)?;
             let root = keypair_from(&plain[..32])?;

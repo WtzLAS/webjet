@@ -11,6 +11,9 @@ use webjet_core::types::{Grant, net_to_cidr, now_ms, parse_net};
 use webjet_proto::{self as wp, Transport};
 use zeroize::Zeroizing;
 
+pub mod prompt;
+
+pub use prompt::{new_passphrase, passphrase};
 pub use webjetd::state::write_private;
 
 pub fn b64(b: &[u8]) -> String {
@@ -69,21 +72,6 @@ pub fn unseal(pass: &str, data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         .decrypt(nonce.into(), ct)
         .map_err(|_| anyhow!("wrong passphrase or damaged file"))?;
     Ok(Zeroizing::new(pt))
-}
-
-/// Read a passphrase from `$var`, or from stdin.
-pub fn passphrase(var: &str, prompt: &str) -> Result<String> {
-    if let Ok(p) = std::env::var(var) {
-        return Ok(p);
-    }
-    eprint!("{prompt}: ");
-    let mut s = String::new();
-    std::io::stdin().read_line(&mut s)?;
-    let s = s.trim_end_matches(['\n', '\r']).to_string();
-    if s.is_empty() {
-        bail!("empty passphrase");
-    }
-    Ok(s)
 }
 
 pub fn keypair_from(bytes: &[u8]) -> Result<KeyPair> {
