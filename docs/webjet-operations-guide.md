@@ -29,7 +29,7 @@ Files move to and from the offline computer on removable media only.
 On every Linux or macOS machine that joins the network, as root:
 
 ```
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.2.2/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh | sudo sh
 ```
 
 This installs `webjetd`, `webjetctl` and `webjetup` into `/usr/local/bin` and sets up the `webjetd` service (systemd on Linux, running as the `webjet` user; launchd on macOS). On Windows, download `webjetup-<version>-x86_64-pc-windows-msvc.exe` from the release page and run `webjetup install` in an Administrator prompt. `sudo webjetup status` shows what is installed and running. Upgrades are `sudo webjetup upgrade`, and `webjetup remove` or `webjetup nuke` take Webjet off a machine again.
@@ -99,7 +99,7 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    ```
 4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, turn on the controller role and give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.2.2/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml
    ```
    ```toml
@@ -237,7 +237,7 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    ```
 3. On the host, install Webjet without starting it. In `/etc/webjet/webjetd.toml`, set the addresses others reach it on, the listen addresses if they differ from the defaults, and the capacity if you know it. Then enroll.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.2.2/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml       # [[public]], [listen], [limits] relay_capacity_mbps
    [node]     sudo webjetup enroll '<enrollment string>'
    ```
@@ -452,7 +452,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
    Add `--revoke-old-now` if the old machine was lost or stolen: the old key stops working at once, and the node is offline until step 2.
 2. On the new installation, redeem it.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.2.2/install.sh | sudo sh -s -- --enroll '<enrollment string>'
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh | sudo sh -s -- --enroll '<enrollment string>'
    ```
    On a machine that still has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same.
 
