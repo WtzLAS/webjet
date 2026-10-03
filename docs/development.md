@@ -183,6 +183,29 @@ variables into `webjetd.toml` and handles first-start enrollment; it writes
 values into TOML strings, so it rejects values containing quotes,
 backslashes or newlines. Everything an operator needs is in docs/docker.md.
 
+## Releases
+
+1. Set the version in the workspace `Cargo.toml` (`version = "X.Y.Z"`),
+   commit, and tag the commit: `git tag -a vX.Y.Z` with release notes as the
+   message (they become the release's description).
+2. With the tag checked out and Docker running, on macOS:
+   `WEBJET_FORGEJO_TOKEN=… scripts/release.sh vX.Y.Z --publish`. It checks
+   the tag, version and a clean source tree, builds macOS binaries natively
+   and Linux binaries in `docker/release.Dockerfile`, packages
+   `webjet-<tag>-<target>.tar.gz` with `.sha256` files into `dist/<tag>`,
+   pushes the tag and creates the Forgejo release with the files. Without
+   `--publish` it only builds and packages.
+3. Check the published release the way hosts install it:
+   `WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download docker/release-test.sh vX.Y.Z`
+   runs `scripts/upgrade.sh` in fresh Debian 11, Ubuntu 20.04 and Debian 12
+   containers on amd64 and arm64.
+
+The Linux build uses Debian 11 so the binaries need only glibc 2.31. Debian
+11 is archived, which `docker/release.Dockerfile` works around: CMake comes
+from Kitware (BoringSSL needs 3.22+), and on amd64 empty stand-in packages
+replace the 32-bit multilib libraries libclang depends on, because the
+archive no longer serves the matching glibc security update.
+
 ## Platform code
 
 `webjetd/src/platform.rs` does routes, split DNS and gateway NAT per OS by

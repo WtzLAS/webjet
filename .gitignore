@@ -2,3 +2,6 @@
 .DS_Store
 /.pi/tasks
 *.output
+
+# Release archives (scripts/release.sh)
+/dist/

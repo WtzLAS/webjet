@@ -113,6 +113,27 @@ webjetctl psk rotate;  webjetctl controller add-learner ctl-02 / promote / demot
 The agent's configuration lives in `/etc/webjet/webjetd.toml`; every setting
 is described in [docs/configuration.md](docs/configuration.md).
 
+## Installing a release
+
+Releases are published at
+<https://forgejo.wolf109909.top/webj8/webjet/releases> with binaries for
+Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+)
+and macOS (x86_64 and aarch64). Install or upgrade a host as root from a
+checkout of the release tag:
+
+```sh
+git clone https://forgejo.wolf109909.top/webj8/webjet.git && cd webjet
+git checkout v0.1.0
+WEBJET_RELEASE_URL=https://forgejo.wolf109909.top/webj8/webjet/releases/download \
+  ./scripts/upgrade.sh v0.1.0
+```
+
+`upgrade.sh` downloads `webjet-<tag>-<target>.tar.gz`, checks it against the
+`.sha256` next to it, installs the four binaries into `/usr/local/bin` and
+sets up the systemd unit (Linux) or launchd daemon (macOS).
+`./scripts/upgrade.sh --uninstall` removes them again. Windows binaries
+aren't published yet; build them from source.
+
 ## Platform notes
 
 | Platform | Linux | macOS | Windows |
