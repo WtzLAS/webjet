@@ -24,7 +24,7 @@ env:
 
 jobs:
   test:
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8/webjet-builder:1
     steps:
@@ -34,7 +34,7 @@ jobs:
 
   release:
     needs: test
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8/webjet-builder:1
     steps:

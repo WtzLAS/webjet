@@ -185,15 +185,14 @@ backslashes or newlines. Everything an operator needs is in docs/docker.md.
 
 ## Continuous integration
 
-`.forgejo/workflows/` runs on one Forgejo runner for `linux/amd64` with the
-label `docker`, in the builder image `ci/builder.Dockerfile`
-(`forgejo.wolf109909.top/webj8/webjet-builder:1`):
+`.forgejo/workflows/` runs on the project's Forgejo runner (`linux/amd64`,
+label `ubuntu-latest`), with every job in the builder image
+`forgejo.wolf109909.top/webj8/webjet-builder:1` (`ci/builder.Dockerfile`):
 
 | Workflow | When | What |
 | --- | --- | --- |
 | `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS) and Windows; `cargo test`. `webjet-app` is left out (GPUI needs X11/Wayland and Vulkan packages). |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for Linux x86_64, Linux arm64 (cross-compiled) and Windows x86_64 |
-| `builder-image.yml` | change to `ci/builder.Dockerfile` on `main`, or by hand | builds the builder image and pushes it to the registry |
 
 The builder image is Debian 11 (glibc 2.31, so the Linux binaries run on
 Debian 11+, Ubuntu 20.04+, RHEL 9+) with Rust, the aarch64 cross toolchain,
@@ -202,27 +201,23 @@ CMake 3.31, cargo-xwin with the Microsoft CRT and SDK already downloaded, and
 Node.js for `actions/checkout`. Building it accepts Microsoft's license for
 the CRT and SDK, as cargo-xwin does on first use.
 
-Setting up the runner:
+The runner pulls job images on every run (`force_pull`), so the image must be
+in the registry (the package is public). To change it, edit
+`ci/builder.Dockerfile`, bump the tag (`:1` → `:2`) in `ci.yml` and
+`release.yml`, then build and push it from any machine with Docker and a
+Forgejo token with `write:package`:
 
-1. Register a runner with the label `docker` (`docker://node:20-bookworm` or
-   any image as the label's default; the jobs name their own image).
-2. Build and push the builder image once, by hand or by running
-   `builder-image.yml`:
-   ```
-   docker build -f ci/builder.Dockerfile -t forgejo.wolf109909.top/webj8/webjet-builder:1 ci
-   docker push forgejo.wolf109909.top/webj8/webjet-builder:1
-   ```
-   The package must be readable by the runner: make it public, or give the
-   runner registry credentials.
-3. Secrets in the repository settings:
-   - `RELEASE_TOKEN`: a token with `write:repository`, for creating releases
-     (optional; without it the workflow's automatic token is used).
-   - `REGISTRY_USER`, `REGISTRY_TOKEN`: for `builder-image.yml` (`write:package`).
-     That workflow also needs a job container that can reach a Docker daemon:
-     `container: docker_host: automount` in the runner's `config.yml`.
+```
+docker build -f ci/builder.Dockerfile -t forgejo.wolf109909.top/webj8/webjet-builder:2 ci
+docker login forgejo.wolf109909.top
+docker push forgejo.wolf109909.top/webj8/webjet-builder:2
+```
 
-When the image changes, bump its tag (`:1` → `:2`) in `builder-image.yml`,
-`ci.yml` and `release.yml` together.
+Behind a proxy, pass it to the build: `--build-arg http_proxy=… --build-arg
+https_proxy=…`.
+
+`RELEASE_TOKEN` (repository secret, `write:repository`) is optional; without
+it, `release.yml` publishes with the workflow's automatic token.
 
 ## Releases
 

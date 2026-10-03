@@ -1,9 +1,10 @@
 # Checks for every push and pull request: formatting, clippy (Linux and
 # Windows, with and without AnyTLS) and the test suite.
 #
-# Runs in the builder image (ci/builder.Dockerfile) on a runner with the
-# `docker` label. webjet-app is left out: GPUI needs X11/Wayland and Vulkan
-# development packages the image doesn't have.
+# Runs on the `ubuntu-latest` runner, in the builder image
+# (ci/builder.Dockerfile), which must be present in the runner's Docker
+# daemon (docs/development.md). webjet-app is left out: GPUI needs
+# X11/Wayland and Vulkan development packages the image doesn't have.
 name: ci
 
 on:
@@ -16,7 +17,7 @@ env:
 
 jobs:
   lint:
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8/webjet-builder:1
     steps:
@@ -38,7 +39,7 @@ jobs:
           --all-targets --no-default-features -- -D warnings
 
   test:
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8/webjet-builder:1
     steps:

@@ -29,7 +29,7 @@ FROM rust:1-bullseye
 ARG CMAKE_VERSION=3.31.6
 ARG LLVM_VERSION=18.1.8
 ARG NODE_VERSION=20.18.1
-ARG XWIN_VERSION=0.23.1
+ARG CARGO_XWIN_VERSION=0.23.1
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -82,7 +82,7 @@ ENV CARGO_HOME=/usr/local/cargo \
 
 RUN rustup component add rustfmt clippy \
  && rustup target add aarch64-unknown-linux-gnu x86_64-pc-windows-msvc \
- && cargo install --locked "cargo-xwin@${XWIN_VERSION}" \
+ && cargo install --locked "cargo-xwin@${CARGO_XWIN_VERSION}" \
  && rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git" \
  && cargo xwin cache xwin \
  && chmod -R a+rX /opt/xwin "$CARGO_HOME" "$RUSTUP_HOME"
