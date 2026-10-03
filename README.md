@@ -4,6 +4,13 @@ A Rust implementation of the Webjet overlay VPN described in
 [`docs/webjet-architecture.md`](docs/webjet-architecture.md) and
 [`docs/webjet-operations-guide.md`](docs/webjet-operations-guide.md).
 
+| Document | For |
+| --- | --- |
+| [docs/webjet-operations-guide.md](docs/webjet-operations-guide.md) | Runbooks: bootstrap, add relays and controllers, revoke, re-key, upgrades |
+| [docs/configuration.md](docs/configuration.md) | Every `webjetd.toml` setting |
+| [docs/docker.md](docs/docker.md) | Running nodes and controllers in containers |
+| [docs/development.md](docs/development.md) | Building, testing, conventions and pitfalls for contributors |
+
 ## Layout
 
 | Crate | What it holds |
@@ -101,9 +108,8 @@ webjetctl node revoke laptop;  webjetctl node rekey server-1
 webjetctl psk rotate;  webjetctl controller add-learner ctl-02 / promote / demote / remove
 ```
 
-The agent's configuration lives in `/etc/webjet/webjetd.toml` (see
-`crates/webjetd/src/config.rs`). It covers listen addresses, public
-addresses, tun, gateway routes, local limits and the controller role.
+The agent's configuration lives in `/etc/webjet/webjetd.toml`; every setting
+is described in [docs/configuration.md](docs/configuration.md).
 
 ## Platform notes
 
