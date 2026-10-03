@@ -181,7 +181,27 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
        dst: ["*"]
        ports: ["*"]
    ```
-   For a lab without a CA certificate, `webjetctl camouflage selfsign` creates a self-signed certificate and key (for `REFUSE` mode).
+   ```yaml
+   # transport.yaml
+   version: 1             # raise it on every later apply
+   defaults:              # priority 0–255 per transport; 0 = never use (§9.6)
+     kcp: 30              # UDP+KCP+FEC
+     anytls: 20           # TCP+AnyTLS
+     tls: 10              # TCP+TLS
+   overrides:             # checked in order, per transport
+     - select: ["tag:relay", "role:control"]
+       values:
+         tls: 40          # datacenter hosts: plain TLS is fine there
+   camouflage:
+     mode: website        # or refuse
+     domain: cdn.example.com
+     certificate: site.crt   # PEM chain, leaf first; relative to this file
+   ```
+   `defaults` and `overrides` are optional; without them every node uses the built-in priorities, which are the values in `defaults` above. For each transport, a node takes its priority from the first override that selects it and lists that transport, else from `defaults`; a `[transport]` section in the node's own `webjetd.toml` takes precedence over both. `select` takes the same selectors as policy rules (`tag:…`, `role:relay|data|control`, `node:<name>`, `owner:<account>`, `cidr:…`).
+
+   The camouflage certificate is what an outside visitor of a relay's AnyTLS port sees, so in `website` mode it should be a real CA certificate for `domain`, and `camouflage set-secret` supplies its private key and the website relays serve. For a lab without a CA certificate, `webjetctl camouflage selfsign --domain cdn.example.com --cert-out site.crt --key-out site.key` creates a self-signed one; use it with `mode: refuse`, which closes such connections instead of serving a site.
+
+   `webjetctl transport check transport.yaml` validates the file without submitting it.
 8. Grow the cluster: add two more controllers and promote them, so there are three voters, then continue to five (runbook 3). Add relays (runbook 2), and update the seed list to at least two entries.
 9. Set up monitoring. Set `[metrics] listen` on the controllers (for example their overlay address and port 9469). Each controller then serves every node's latest report as OpenMetrics text at `/metrics`, so Prometheus can scrape any one of them. There's no authentication on that endpoint, so don't expose it to the internet (§12.5).
 10. Enroll the admin's own device with `webjetup` and an enrollment string, and add a policy rule that lets admin devices reach the controllers. From then on, run `webjetctl` there against the device's own agent; the SSH forward from step 5 is no longer needed.
@@ -341,7 +361,7 @@ Clients pin the certificate's public key, so they need no change.
 1. Obtain the renewed certificate from the CA for the same key.
 2. Publish it.
    ```
-   [admin]    webjetctl transport apply transport.yaml     # with the new certificate chain
+   [admin]    webjetctl transport apply transport.yaml     # new chain in certificate:, version raised
    ```
 
 ### Replace the key
@@ -349,12 +369,12 @@ Clients pin the certificate's public key, so they need no change.
 1. Generate the new key and obtain a certificate for it.
 2. Announce the new key ahead of time, and wait at least as long as nodes are normally offline (for example 14 days).
    ```
-   [admin]    webjetctl transport apply transport.yaml     # sets next_spki
+   [admin]    webjetctl transport apply transport.yaml     # adds next_certificate: new-site.crt
    ```
 3. Switch.
    ```
    [admin]    webjetctl camouflage set-secret --key new-site.key --site ./site/
-   [admin]    webjetctl transport apply transport.yaml     # new chain as current, next_spki cleared
+   [admin]    webjetctl transport apply transport.yaml     # certificate: new-site.crt, next_certificate removed
    ```
 
 A node that was offline through the whole announcement period can't use AnyTLS until it has synced over another transport.
