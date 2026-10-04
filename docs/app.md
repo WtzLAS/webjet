@@ -34,8 +34,8 @@ passphrase. The app then checks the account against the network:
 - if the account is revoked or demoted while the app runs, you are signed out
   or lose admin rights at the next refresh (every 5 s).
 
-Accounts are created as before: `webjetctl account keygen`, then an admin
-adds the account (`webjetctl account create`).
+Accounts are created as before: `webjetctl network account keygen`, then an admin
+adds the account (`webjetctl network account create`).
 
 ## What each account sees
 

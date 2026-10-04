@@ -86,7 +86,7 @@ Control plane:
 | `DATA` | Sends and receives overlay traffic through its tun interface | An admin, through a signed operation (§13.3), in the NodeRecord's roles |
 | `RELAY` | Forwards traffic for other nodes and takes part in link-state routing. Requires a global public IP address | An admin, through a signed operation (§13.3), in the NodeRecord's roles |
 
-All three are assigned the same way, as the node's role set (`webjetctl node enroll|update --roles data,relay,control`). `CONTROL` needs one more thing, because a controller signs tree heads with its own online signing key, and nodes must be able to check that key without the tree: a **SigningKeyCert** (§6.5) binding the key to the node. A node has `CONTROL` if and only if its record holds the `control` role, it is valid (§6.1), and a valid, non-tombstoned SigningKeyCert names its `node_id` as `controller`. Records written before `control` was a role don't mention it; for them a root-signed cert alone decides, as it did then.
+All three are assigned the same way, as the node's role set (`webjetctl network node enroll|update --roles data,relay,control`). `CONTROL` needs one more thing, because a controller signs tree heads with its own online signing key, and nodes must be able to check that key without the tree: a **SigningKeyCert** (§6.5) binding the key to the node. A node has `CONTROL` if and only if its record holds the `control` role, it is valid (§6.1), and a valid, non-tombstoned SigningKeyCert names its `node_id` as `controller`. Records written before `control` was a role don't mention it; for them a root-signed cert alone decides, as it did then.
 
 A node whose record holds the `control` role starts the controller role by itself, creating its signing key; it needs no local setting. Removing the role takes `CONTROL` away even while the cert stays valid, but a node can't lose the role while it is a Raft member (§7.5).
 
@@ -254,7 +254,7 @@ SignedTreeHead {
 }
 ```
 
-- The tree's key space holds several kinds of leaf, keyed by `(kind, id)`: nodes (`node_id` → NodeRecord or Tombstone), accounts (`account_id` → AccountRecord or AccountTombstone, §6.10–6.11), one policy leaf (§6.12), one DNS configuration leaf (§6.13), one seed-list leaf (§6.14), one limits leaf (§6.15), one validity leaf (§6.16) and one transport configuration leaf (§6.17). Empty keys prove absence.
+- The tree's key space holds several kinds of leaf, keyed by `(kind, id)`: nodes (`node_id` → NodeRecord or Tombstone), accounts (`account_id` → AccountRecord or AccountTombstone, §6.10–6.11), one policy leaf (§6.12), one DNS configuration leaf (§6.13), one seed-list leaf (§6.14), one limits leaf (§6.15), one validity leaf (§6.16), one transport configuration leaf (§6.17) and, per node that has one, a node configuration leaf (`node_id` → NodeConfig, §6.19). Empty keys prove absence.
 - **Any** controller signs heads for the state it has applied (§7.3). Because the state is deterministic, heads from different honest controllers for the same `version` always have the same `root`.
 - Two heads with the same `version` and the same `root` but different `expires_at` are **not** equivocation. They are re-signings of the same state.
 
@@ -272,7 +272,7 @@ SigningKeyCert {
 
 - No expiry field: the key is permanent until tombstoned.
 - Nodes receive all certs during enrollment and through priority gossip.
-- **Who signs:** the root, offline (`webjetctl root controller sign`), or any admin (`webjetctl controller certify`). An admin's cert carries the admin's own root-signed AccountRecord, so a node verifies it with the root key alone, without the tree, which it needs before it can trust any tree head.
+- **Who signs:** the root, offline (`webjetctl root controller sign`), or any admin (`webjetctl network controller certify`). An admin's cert carries the admin's own root-signed AccountRecord, so a node verifies it with the root key alone, without the tree, which it needs before it can trust any tree head.
 - **An admin's cert is valid while** the admin's account isn't tombstoned and its current key is the one that signed. Certs aren't ordered by the log, so a cert signed with a stolen key after a revocation or key change couldn't be told apart from one signed before: **revoking an admin, or replacing an admin's key, voids every cert it signed.** The root or another admin re-signs the controllers concerned.
 - A root-signed cert replaces any admins' certs for the same key; one key is certified for one node only.
 - **Upgrading:** software from before `control` was a role rejects admin-signed certs (and heads from keys certified only that way), and its state machine doesn't know the `control` field. Upgrade every controller before the first operation that sets `control`, and every node before the first admin-signed cert; until then keep using root-signed certs.
@@ -404,7 +404,7 @@ Rule {
 }
 ```
 
-Set by `SetPolicy` (§7.2). Selectors and evaluation are in §14.
+Part of the network configuration (§6.18), set by `SetNetworkConfig` (§7.2). Selectors and evaluation are in §14.
 
 ### 6.13 DnsConfig (a single leaf of the network tree)
 
@@ -431,7 +431,7 @@ ForwardZone {
 }
 ```
 
-Set by `SetDns` (§7.2). Behavior is in §11.10.
+Part of the network configuration (§6.18). Behavior is in §11.10.
 
 ### 6.14 Seeds (a single leaf of the network tree)
 
@@ -449,7 +449,7 @@ Seeds {
 }
 ```
 
-Stable entry points for nodes that have lost track of the network. Set by `SetSeeds` (§7.2). Behavior is in §10.7.
+Stable entry points for nodes that have lost track of the network. Part of the network configuration (§6.18). Behavior is in §10.7.
 
 ### 6.15 Limits (a single leaf of the network tree)
 
@@ -464,7 +464,7 @@ Limits {
 }
 ```
 
-Set by `SetLimits` (§7.2). The limits and their defaults are in §16.
+Part of the network configuration (§6.18). The limits and their defaults are in §16.
 
 ### 6.16 Validity (a single leaf of the network tree)
 
@@ -497,7 +497,51 @@ TransportConfig {
 }
 ```
 
-Set by `SetTransport` (§7.2). The certificate's private key and the camouflage website are **not** in the tree; they are held in controller state and given only to nodes that accept AnyTLS connections (§9.7.2).
+Part of the network configuration (§6.18). The certificate's private key and the camouflage website are **not** in the tree; they are held in controller state and given only to nodes that accept AnyTLS connections (§9.7.2).
+
+### 6.18 NetworkConfig (the network scope of the configuration)
+
+```
+NetworkConfig {
+    version:   u64
+    policy:    Policy            // §6.12
+    dns:       DnsConfig         // §6.13
+    seeds:     Seeds             // §6.14
+    limits:    Limits            // §6.15
+    transport: TransportConfig   // §6.17
+}
+```
+
+The network's settings are one document with one version. `SetNetworkConfig` (§7.2) checks every part as before and writes the five leaves in **one log entry**, each carrying the document's version, so a node never sees half of a change, and one signed operation records who changed what. A part left out of the operation is written empty, which means its built-in defaults; admin tools send the whole document (the parts a file leaves out are taken from the tree first). The configuration's version is the highest version of the five leaves.
+
+- **Optimistic concurrency:** `version` must be above the one in force. `webjetctl network config apply` submits the file's version plus one and refuses a file made from an older version, so two admins can't overwrite each other's change unseen.
+- Admins edit it as TOML (`network.toml`; schema in [configuration.md](configuration.md)). The wire form stays FlatBuffers; TOML exists only in the tools.
+- The per-setting operations `SetPolicy`, `SetDns`, `SetSeeds`, `SetLimits` and `SetTransport` from before 0.4.0 are still applied when they are already in the log (so old logs replay identically), but a leader refuses to propose new ones.
+
+### 6.19 NodeConfig (the node scope of the configuration)
+
+```
+NodeConfig {
+    node_id:     NodeId
+    version:     u64
+    priorities:  { transport → u8 }   // replace the network's (§9.6)
+    limits:      { limit_name → value }   // replace the network's (§16.4)
+    seeds:       [SeedEntry]          // tried before the network's (§10.7)
+    dns_records: [DnsRecord]          // answered by this node's resolver only
+    dns_forward: [ForwardZone]        // forwarded by this node's resolver only
+}
+```
+
+One node's overrides of, and additions to, the network configuration: a leaf of kind NODE_CONFIG keyed by `node_id`, absent when the node has none.
+
+- **Who:** `SetNodeConfig` (§7.2) may be signed by the node's **owner** or by an admin (§13.3). Everything in it only affects how that node behaves or what it resolves for itself, which is why owners may set it; anything that decides access (policy, tags, routes, roles) stays admin-only.
+- **Precedence:** a node's value, then the network's matching overrides (§9.6, §16.4), then the network's value, then the built-in default. Seeds, records and zones are added in front of the network's.
+- **Validation** is the network's: limit names known and positive, seeds name valid RELAY or CONTROL nodes, records within the network's suffix or a forwarded zone and not shadowing magic DNS names.
+- **Version** must increase, as for the network configuration. A NodeConfig with nothing in it removes the leaf; tombstoning the node removes it too.
+- **Other nodes:** priorities matter to peers, and a node publishes its effective priorities in its EndpointRecord (§6.2), so peers use what the node uses even before their tree has its NodeConfig. Limits, seeds and DNS affect only the node itself.
+- Before 0.4.0 these lived in each machine's `webjetd.toml` (`[transport]`, `[limits]`). Keeping them in the tree makes them signed, auditable, settable remotely, and lets them survive a reinstall.
+
+**Upgrading to 0.4.0:** there is no StateVersion gate for the two new operations or the new leaf kind. Controllers from before 0.4.0 can't apply `SetNetworkConfig` or `SetNodeConfig`, so a leader that commits one makes old followers halt on divergence; upgrade every controller before the first apply. Nodes from before 0.4.0 can't decode a NODE_CONFIG leaf and so fail to sync any tree that has one; upgrade every node before the first node configuration is set. (0.4.0 nodes keep leaves of kinds they don't know without interpreting them, so later leaf kinds don't have this problem.)
 
 ---
 
@@ -530,11 +574,8 @@ Every controller applies committed operations to the same deterministic state ma
 | `RekeyNode { node_id, token_hash, expires_at, revoke_old_now }` | Adds a pending re-key for an existing node (§8.1) | ✓ |
 | `PutAccount { record }` | Stores a signed AccountRecord (§6.10) | |
 | `TombstoneAccount { tombstone }` | Stores a signed AccountTombstone (§6.11) | |
-| `SetPolicy { policy }` | Replaces the policy leaf (§14.5) | |
-| `SetDns { config }` | Replaces the DNS configuration leaf (§11.10.6) | |
-| `SetSeeds { seeds }` | Replaces the seed-list leaf (§10.7) | |
-| `SetLimits { limits }` | Replaces the limits leaf (§16.4) | |
-| `SetTransport { config }` | Replaces the transport configuration leaf (§9.6, §9.7) | |
+| `SetNetworkConfig { config }` | Replaces the policy, DNS, seed-list, limits and transport leaves together, all at the document's version (§6.18). Validated as in §14.5, §11.10.6, §10.7.2, §16.4 | |
+| `SetNodeConfig { config }` | Sets or removes one node's configuration leaf (§6.19) | ✓ |
 | `SetCamouflageSecret { private_key, site }` | Stores the camouflage certificate's private key and the website. Kept in controller state, encrypted at rest; never in the tree (§9.7.2) | |
 | `ChangeMembership { add learner / promote / demote / remove }` | Raft membership change (§7.5) | |
 | `RotatePsk { epoch_id }` | Starts a new network PSK epoch (§7.6) | |
@@ -567,7 +608,7 @@ Every controller validates each entry's shape before applying it. For example, a
 
 **Uniqueness checks** in the state machine: overlay IPs are never assigned to two non-tombstoned nodes, a `node_id` is enrolled at most once, no identity key is used by two nodes (or reused after being replaced), and node names and account names are each unique. `node_id`s are random, chosen by the leader when proposing `CreateEnrollment` (§15.5).
 
-**Reference checks:** a node's `owner` must be a valid, non-tombstoned account; a `SetPolicy` must parse and pass its own tests (§14.5).
+**Reference checks:** a node's `owner` must be a valid, non-tombstoned account; the policy in a `SetNetworkConfig` must parse and pass its own tests (§14.5).
 
 **Subnet route checks:** see §11.9.2. Published prefixes never overlap the overlay pool, each other (except identical grants for high availability), or any node's overlay IPs.
 
@@ -802,12 +843,12 @@ With relays, the last hop's TLS peer is a relay, not the source. So the check us
 Two nodes may be able to reach each other over several transports. **Priority** decides which transports are allowed and preferred; **measured cost** decides which one carries traffic.
 
 **Priority.** Every node has a priority from 0 to 255 for each transport. **0 means "never use"**. A node's priorities come from, first match wins:
-1. the node's local configuration
+1. the node's own configuration (NodeConfig, §6.19)
 2. the first matching override in the TransportConfig leaf (§6.17), by selector
 3. the TransportConfig defaults
 4. built-in defaults: UDP+KCP+FEC 30, TCP+AnyTLS 20, TCP+TLS 10
 
-Each node publishes its priorities in its EndpointRecord (§6.2).
+Each node publishes its priorities in its EndpointRecord (§6.2). For a peer, the published priorities come first: they are what the peer itself uses.
 
 **Eligible transports.** A transport is eligible between two nodes if both give it a priority above 0 and the side being dialed publishes an address for it. Hole-punched direct hops are UDP only (§11.7). The side being dialed accepts any transport to which it gives a priority above 0.
 
@@ -1059,7 +1100,7 @@ The node tries sources in order, several candidates in parallel, and stops at th
 
 #### 10.7.2 Managing seeds
 
-- `SetSeeds` is an admin-signed operation (§13.3); the committed list is a tree leaf (§6.14).
+- The seed list is part of the network configuration (`SetNetworkConfig`, admin-signed, §6.18); the committed list is a tree leaf (§6.14). A node's own configuration (§6.19) may add seeds it tries first, for example a nearby relay.
 - **Validation:** every entry names an existing, non-tombstoned node with `RELAY` or `CONTROL`, and every address parses.
 - **Warning:** fewer than 2 seeds, since one seed is a single point of failure for recovering nodes.
 
@@ -1220,7 +1261,7 @@ Each relay adds a `load` section to its LinkStateAdvert (§6.7), plus `util_pct`
 
 - **Relay load** `L` = the highest of `util_pct`, `cpu_pct` and `circuits_pct`; whichever resource runs out first is the one that matters.
 - **Smoothed and quantized:** each value is a 30-second average, rounded to 10% steps. A load change triggers an advert only when it crosses a step, and at most every 10 s, so load doesn't flood the mesh.
-- **Capacity:** **auto-estimated by default** from the highest throughput the relay has sustained and the bandwidth estimates of its KCP hops (§17.5). A value in the relay's local configuration takes precedence, and admins can override it per tag through the Limits leaf (`relay_capacity_mbps`, §16.4).
+- **Capacity:** **auto-estimated by default** from the highest throughput the relay has sustained and the bandwidth estimates of its KCP hops (§17.5). A value in the relay's node configuration (§6.19) takes precedence, and admins can also set it per tag through the Limits leaf (`relay_capacity_mbps`, §16.4).
 
 #### 11.8.2 Cost with load
 
@@ -1403,7 +1444,7 @@ A LAN's DNS server answers with LAN addresses (`192.168.1.20`), which aren't rea
 
 #### 11.10.6 Configuration and validation
 
-- `SetDns` is an admin-signed operation (§13.3). The committed DnsConfig is the tree's DNS leaf (§6.13), synced and authenticated like the policy.
+- The DnsConfig is part of the network configuration (`SetNetworkConfig`, admin-signed, §6.18), the tree's DNS leaf (§6.13), synced and authenticated like the policy. A node's own configuration (§6.19) may add records and forwarded zones that only its resolver answers; they are validated the same way, against the network's suffix and zones.
 - **Validation before commit:**
   - `suffix` and every record name are valid DNS names; record names fall within `suffix` or an explicitly listed zone
   - `resolver_ip` is in the overlay pool and not assigned to any node
@@ -1609,9 +1650,9 @@ signed by: that account's current account_key
 | Signer | Allowed operations |
 |---|---|
 | Admin account | Every operation in §7.2, on any node |
-| Normal account | `RenameNode`, `TombstoneNode` and `RekeyNode`, only for nodes whose `owner` is the signer |
+| Normal account | `RenameNode`, `TombstoneNode`, `RekeyNode` and `SetNodeConfig`, only for nodes whose `owner` is the signer |
 
-**Self-service.** A person can rename their own devices, revoke one themselves (for example a lost phone), and re-key one after a reinstall (§8.1), without waiting for an admin. They **cannot** enroll nodes, change tags, IPs, roles or owners, or touch anyone else's nodes, because those decide access. A node tombstoned by its owner is gone for good, like any tombstone; bringing the device back needs an admin to enroll it again.
+**Self-service.** A person can rename their own devices, revoke one themselves (for example a lost phone), re-key one after a reinstall (§8.1), and tune its own configuration (§6.19: transport priorities, limits, extra seeds and DNS entries for that node), without waiting for an admin. They **cannot** enroll nodes, change tags, IPs, roles or owners, or touch anyone else's nodes, because those decide access. A node tombstoned by its owner is gone for good, like any tombstone; bringing the device back needs an admin to enroll it again.
 
 **Signing:**
 - **Admin tool (`webjetctl`, §19.2):** holds the account key, builds the operation, signs it and submits it to any controller.
@@ -1785,7 +1826,7 @@ Admin access to the controllers' admin endpoints is an ordinary rule (for exampl
 
 ### 14.5 Distribution and validation
 
-- `SetPolicy` is a signed admin operation (§13.3). The committed policy is the tree's policy leaf (§6.12), so nodes receive it through the normal Merkle sync and authenticate it with an inclusion proof.
+- The policy is part of the network configuration (`SetNetworkConfig`, a signed admin operation, §6.18). The committed policy is the tree's policy leaf (§6.12), so nodes receive it through the normal Merkle sync and authenticate it with an inclusion proof.
 - **Validation before commit** (controllers reject the operation if any fails):
   - the policy parses, and `version` is higher than the current one
   - every test in `tests` gives its expected result
@@ -2002,23 +2043,23 @@ A flood of new connection attempts therefore pushes out other half-open attempts
 
 ### 16.4 Configuring limits
 
-The built-in defaults suit most nodes; busy gateways and relays need more than phones. Admins adjust them with the **Limits** tree leaf (§6.15), set by the admin-signed `SetLimits` operation:
+The built-in defaults suit most nodes; busy gateways and relays need more than phones. Admins adjust them in the `[limits]` part of the network configuration (the Limits leaf, §6.15, §6.18):
 
-```yaml
-version: 3
-defaults:
-  conntrack_per_peer: 4096
-overrides:
-  - select: [tag:gateway]
-    values:
-      conntrack_global: 1000000
-      snat_ports_per_source: 8192
-  - select: [role:relay]
-    values:
-      circuits_global: 200000
+```toml
+[limits.value]
+conntrack_per_peer = 4096
+
+[[limits.override]]
+select = ["tag:gateway"]
+value = { conntrack_global = 1000000, snat_ports_per_source = 8192 }
+
+[[limits.override]]
+select = ["role:relay"]
+value = { circuits_global = 200000 }
 ```
 
 - Selectors are the same as in the policy (§14.2). Where several overrides match a node, the **highest value** wins for each limit.
+- **Per node:** a node's own configuration (§6.19) sets a value for that node alone, ahead of every override; its owner may set it, for example `relay_capacity_mbps` for a relay they run.
 - Memory-dependent global caps are **clamped by the node itself** to what it can actually hold, so an override can't make a small device run out of memory.
 - **Validation:** limit names must be known and values positive; unknown names are rejected rather than ignored.
 - **Soft mode:** with no controller reachable, nodes keep the last Limits they have.
@@ -2074,7 +2115,7 @@ KCP's own congestion window is turned off. It backs off on every loss, which col
 - **Everything is paced together:** data, retransmissions and FEC parity share the one rate.
 - **KCP settings:** no-delay mode, 10 ms interval, fast retransmit after 2 duplicate acknowledgements.
 
-**Optional ceiling.** A node may set `rate_ceiling_mbps`, in its local configuration or through a Limits override (§16.4), for example to match a purchased uplink. The pacing rate never exceeds it. Unset by default.
+**Optional ceiling.** A node may have `rate_ceiling_mbps` set, in its node configuration (§6.19) or through a Limits override (§16.4), for example to match a purchased uplink. The pacing rate never exceeds it. Unset by default.
 
 The bandwidth estimates also feed the relay capacity estimate used by load-aware routing (§11.8.1).
 
@@ -2231,44 +2272,37 @@ This section says where things live and how the system is run. Step-by-step proc
 | Program | Runs on | Purpose |
 |---|---|---|
 | `webjetd` | Every node | The agent: data plane, gossip, local DNS resolver. On controllers it also runs Raft, the admin API and the web UI |
-| `webjet-signer` | Controllers | Holds the controller's online signing key, as a separate OS user; signs tree heads for `webjetd` (§4.1) |
-| `webjetctl` | Admins' machines and every node | Holds an account key and signs operations (§13.3). On a node, it also shows status and diagnostics (§19.5) |
-| `webjet-root` | The offline computer | Root and emergency key operations: controller certificates, admin accounts, tombstones, StateVersions (§5). Requests and signed results are carried on removable media |
+| `webjetd signer` | Controllers | Holds the controller's online signing key, as a separate OS user; signs tree heads for `webjetd` (§4.1) |
+| `webjetctl` | Admins' machines and every node | Three groups by scope: `network` (the network configuration and administration, signed with an account key, §13.3), `local` (setting up this machine, status and diagnostics §19.5, and the node's own configuration §6.19), `root` (the offline root and emergency keys, §5; run on the offline computer, requests and signed results are carried on removable media) |
 
 ### 19.3 Where settings live
 
-**Anything two nodes must agree on is in the tree; anything about one machine is in its local file.**
+**Anything about the network, or about how a node behaves in it, is in the tree; only how one machine runs the agent is in its local file.**
 
-- **In the tree**, set by signed admin operations: policy (§14), DNS (§11.10), seeds (§10.7), limits (§16.4), transport and camouflage settings (§9.6, §9.7), and each node's record.
+- **In the tree**, set by signed operations:
+  - the **network configuration** (§6.18): policy (§14), DNS (§11.10), seeds (§10.7), limits (§16.4), transport and camouflage settings (§9.6, §9.7); admins, `webjetctl network config`
+  - each node's **node configuration** (§6.19): its own transport priorities and limits, extra seeds, DNS records and zones; the node's owner or an admin, `webjetctl local config`
+  - each node's record (roles, tags, addresses, routes); admins
 - **Local file** `webjetd.toml`:
 
 ```toml
 data_dir  = "/var/lib/webjet"
-log_level = "info"
+log       = "info"
 
 [listen]                      # addresses this node accepts connections on
 kcp    = "0.0.0.0:4433"
 anytls = "0.0.0.0:443"
 tls    = "0.0.0.0:8443"
 
-[transport.priority]          # this node's priorities; override the tree's (§9.6)
-kcp    = 30
-anytls = 20
-tls    = 0
-
 [[gateway.route]]             # which granted subnet routes to serve (§11.9.2)
 published = "10.2.2.0/24"
 interface = "eth1"
-
-[limits]
-rate_ceiling_mbps   = 50      # §17.5
-relay_capacity_mbps = 200     # §11.8.1
 
 [time]
 ntp_check = "pool.ntp.org"    # optional, for the clock check (§18.6)
 ```
 
-- **Reload:** most local settings apply on a reload signal. Listen addresses and `data_dir` need a restart.
+- **Changes** to the local file take effect on a restart of the agent. Changes in the tree take effect as soon as the node has the new tree head.
 - A local setting can only narrow what the tree grants: it can't give the node a route, role or tag the tree doesn't.
 
 ### 19.4 Local state
@@ -2285,7 +2319,7 @@ The state directory is readable only by the agent's user, and `webjet-signer`'s 
 
 ### 19.5 Diagnostics
 
-`webjetctl` talks to the local agent over the control channel, whose file permissions decide who may use it.
+`webjetctl local` talks to the local agent over the control channel, whose file permissions decide who may use it.
 
 | Command | Shows |
 |---|---|
@@ -2309,7 +2343,7 @@ The state directory is readable only by the agent's user, and `webjet-signer`'s 
 Wherever this document says a node "raises an alarm", this is what happens:
 
 1. The alarm is logged as an error.
-2. It appears in `webjetctl status`.
+2. It appears in `webjetctl local status`.
 3. It is included in the node's metric reports while it stays active (§12.5), and reaches the metrics store as a gauge.
 4. **Prometheus alert rules** fire on it, and Grafana shows and routes the alerts. Rule files and dashboards ship with the software. There is no other alert channel.
 
@@ -2744,6 +2778,8 @@ No state has to be rebuilt: the remaining controllers already hold the full comm
 - **Evicting the oldest flows first, regardless of state:** a flood of new connection attempts would push out established connections. Half-open and one-way flows go first.
 - **Replying to refused flows (TCP RST or ICMP from the destination):** would let limits be used to make nodes send traffic. Refusals at the destination are silent.
 - **Only per-node local configuration of limits:** every busy gateway or relay would need manual tuning on the machine; tag-based overrides in the tree do it once.
+- **Per-node overrides in each machine's `webjetd.toml`** (as before 0.4.0): unsigned and unaudited, invisible to admins and other nodes, lost on a reinstall, and only changeable on the machine itself. They are node configurations in the tree now (§6.19).
+- **One operation and version per setting** (`SetPolicy`, `SetDns`, … before 0.4.0): a change touching two settings was two commits that nodes could see half of, and five versions had to be tracked and raised by hand. The network configuration is one document with one version (§6.18).
 
 **Gossip and discovery**
 
@@ -2867,8 +2903,8 @@ No state has to be rebuilt: the remaining controllers already hold the full comm
 | ECN through relays | Carried in two bits of the relay frame header; relays mark instead of dropping | §17.7 |
 | Control traffic | Separate priority queue per hop | §17.3 |
 | Platforms | Linux, macOS and Windows; controllers, relays and gateways on Linux; iOS and Android later | §19.1 |
-| Programs | `webjetd`, `webjet-signer`, `webjetctl`, `webjet-root` | §19.2 |
-| Local configuration | TOML; machine-specific settings only, everything shared is in the tree | §19.3 |
+| Programs | `webjetd` (agent; `signer`), `webjetctl` (`network`, `local`, `root`), `webjetup` | §19.2 |
+| Configuration | TOML throughout. `webjetd.toml`: how one machine runs the agent. In the tree: the network configuration (one versioned document, admins) and each node's configuration (its owner or an admin) | §6.18, §6.19, §19.3 |
 | Alarms | Logged, shown locally, carried in metric reports; alerting by Prometheus rules, viewed in Grafana | §19.7 |
 | Runbooks | In a separate Operations Guide | §19.10 |
 | Software updates | Left entirely to a small upgrade script kept in the git repository, run by operators in the documented order; no updater in the agent | §19.8 |

@@ -232,6 +232,24 @@ impl Selector {
     }
 }
 
+/// Whether any of `sels` picks the subject, the way a rule's `src` does.
+/// Used by the network configuration's `select` lists (§6.18).
+pub fn selects(sels: &[Selector], s: &Subject) -> bool {
+    let pol = Policy {
+        version: 0,
+        default: Decision::Deny,
+        rules: vec![Rule {
+            id: "select".into(),
+            action: Decision::Allow,
+            src: sels.to_vec(),
+            dst: vec![Selector::Any],
+            ports: PortSet::all(),
+        }],
+        tests: vec![],
+    };
+    pol.evaluate(s, Dest::Node(s), 6, 1).decision == Decision::Allow
+}
+
 /// What the policy needs to know about a node.
 #[derive(Clone, Debug, Default)]
 pub struct Subject {
@@ -636,24 +654,37 @@ pub fn pair_may_talk(
             .any(|p| !policy.allowed_prefix(b, p).is_empty())
 }
 
-// ---------------------------------------------------------------- YAML form (admin tool)
+// ---------------------------------------------------------------- file form (admin tool)
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// The `[policy]` section of the network configuration (§6.18):
+/// `default`, `[[policy.rule]]` and `[[policy.test]]`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyFile {
-    pub version: u64,
     #[serde(default = "default_deny")]
     pub default: String,
-    #[serde(default)]
+    #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RuleFile>,
-    #[serde(default)]
+    #[serde(default, rename = "test", skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<TestFile>,
+}
+
+impl Default for PolicyFile {
+    fn default() -> Self {
+        PolicyFile {
+            default: default_deny(),
+            rules: Vec::new(),
+            tests: Vec::new(),
+        }
+    }
 }
 
 fn default_deny() -> String {
     "deny".into()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuleFile {
     pub id: String,
     pub action: String,
@@ -663,7 +694,8 @@ pub struct RuleFile {
     pub ports: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestFile {
     pub src: String,
     pub dst: String,
@@ -680,9 +712,9 @@ fn parse_action(s: &str) -> Result<wp::Action> {
 }
 
 impl PolicyFile {
-    pub fn to_wire(&self) -> Result<wp::Policy> {
+    pub fn to_wire(&self, version: u64) -> Result<wp::Policy> {
         let p = wp::Policy {
-            version: self.version,
+            version,
             default_action: parse_action(&self.default)?,
             rules: Some(
                 self.rules
@@ -722,38 +754,60 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = r#"
-version: 7
-default: deny
-rules:
-  - id: admins-everywhere
-    action: allow
-    src: [tag:admin]
-    dst: ["*"]
-    ports: ["*"]
-  - id: own-devices
-    action: allow
-    src: [owner:alice]
-    dst: [owner:alice]
-    ports: ["*"]
-  - id: web-tier
-    action: allow
-    src: [tag:laptop]
-    dst: [tag:web]
-    ports: [tcp:80, tcp:443]
-  - id: app-to-db
-    action: allow
-    src: [tag:web]
-    dst: [tag:db]
-    ports: [tcp:5432]
-  - id: no-ssh-to-prod-db
-    action: deny
-    src: ["*"]
-    dst: [tag:db, tag:prod]
-    ports: [tcp:22]
-tests:
-  - { src: tag:laptop, dst: tag:db,  port: tcp:5432, expect: deny  }
-  - { src: tag:web,    dst: tag:db,  port: tcp:5432, expect: allow }
-  - { src: tag:admin,  dst: tag:db,  port: tcp:22,   expect: deny  }
+default = "deny"
+
+[[rule]]
+id = "admins-everywhere"
+action = "allow"
+src = ["tag:admin"]
+dst = ["*"]
+ports = ["*"]
+
+[[rule]]
+id = "own-devices"
+action = "allow"
+src = ["owner:alice"]
+dst = ["owner:alice"]
+ports = ["*"]
+
+[[rule]]
+id = "web-tier"
+action = "allow"
+src = ["tag:laptop"]
+dst = ["tag:web"]
+ports = ["tcp:80", "tcp:443"]
+
+[[rule]]
+id = "app-to-db"
+action = "allow"
+src = ["tag:web"]
+dst = ["tag:db"]
+ports = ["tcp:5432"]
+
+[[rule]]
+id = "no-ssh-to-prod-db"
+action = "deny"
+src = ["*"]
+dst = ["tag:db", "tag:prod"]
+ports = ["tcp:22"]
+
+[[test]]
+src = "tag:laptop"
+dst = "tag:db"
+port = "tcp:5432"
+expect = "deny"
+
+[[test]]
+src = "tag:web"
+dst = "tag:db"
+port = "tcp:5432"
+expect = "allow"
+
+[[test]]
+src = "tag:admin"
+dst = "tag:db"
+port = "tcp:22"
+expect = "deny"
 "#;
 
     fn subj(id: u8, tags: &[&str]) -> Subject {
@@ -767,8 +821,8 @@ tests:
     }
 
     fn policy() -> Policy {
-        let f: PolicyFile = serde_yaml::from_str(EXAMPLE).unwrap();
-        Policy::from_wire(&f.to_wire().unwrap()).unwrap()
+        let f: PolicyFile = toml::from_str(EXAMPLE).unwrap();
+        Policy::from_wire(&f.to_wire(7).unwrap()).unwrap()
     }
 
     #[test]

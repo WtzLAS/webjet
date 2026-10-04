@@ -133,6 +133,15 @@ pub fn before_0_3(version: &str) -> bool {
     major == 0 && minor < 3
 }
 
+/// Whether a version predates the 0.4.0 command layout (`webjetctl enroll`
+/// rather than `webjetctl local enroll`).
+pub fn before_0_4(version: &str) -> bool {
+    let v = version.trim().trim_start_matches('v');
+    let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    major == 0 && minor < 4
+}
+
 /// The release target of this build of webjetup, which is also the machine's
 /// (install.sh picks the matching webjetup).
 pub fn target() -> Option<&'static str> {
@@ -168,6 +177,8 @@ mod tests {
     fn version_layouts() {
         assert!(before_0_3("0.2.2") && before_0_3("v0.1.0"));
         assert!(!before_0_3("0.3.0") && !before_0_3("v0.10.1") && !before_0_3("1.0.0"));
+        assert!(before_0_4("0.3.0") && before_0_4("v0.2.2"));
+        assert!(!before_0_4("0.4.0") && !before_0_4("v0.10.0") && !before_0_4("1.0.0"));
     }
 
     #[test]

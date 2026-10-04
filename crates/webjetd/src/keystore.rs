@@ -154,7 +154,7 @@ pub fn load(path: &Path, cfg: &KeyCfg) -> Result<Option<(KeyPair, Backend)>> {
     }
     let raw =
         Zeroizing::new(std::fs::read(path).with_context(|| format!("read {}", path.display()))?);
-    let (seed, backend) = unseal(&raw, cfg).map_err(|e| anyhow!("{e:#}\nThe identity key can't be used on this machine. If it was copied or restored from another machine, re-key this node (§8.1): ask an admin for `webjetctl node rekey` and run `webjetup enroll` (or `webjetctl enroll`) with the new string."))?;
+    let (seed, backend) = unseal(&raw, cfg).map_err(|e| anyhow!("{e:#}\nThe identity key can't be used on this machine. If it was copied or restored from another machine, re-key this node (§8.1): ask an admin for `webjetctl network node rekey` and run `webjetup enroll` (or `webjetctl local enroll`) with the new string."))?;
     Ok(Some((KeyPair::from_seed(&seed), backend)))
 }
 

@@ -60,10 +60,10 @@ echo "== root key, admin account and genesis (offline steps)"
 # shellcheck disable=SC2086
 docker run --rm -v "$P-admin:/admin" $ADMIN_ENV "$IMG" sh -ec '
     webjetctl root --dir /admin/root init >/dev/null
-    webjetctl account keygen --name alice --pub-out /admin/alice.pub >/dev/null
+    webjetctl network account keygen --name alice --pub-out /admin/alice.pub >/dev/null
     webjetctl root --dir /admin/root admin sign --name alice --key /admin/alice.pub --out /admin/alice.account >/dev/null
     webjetctl root --dir /admin/root genesis --overlay-pool 10.7.0.0/16 --admin /admin/alice.account --out /admin/genesis.wj >/dev/null
-    webjetctl account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
+    webjetctl network account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
 
 echo "== first controller (WEBJET_GENESIS)"
 # shellcheck disable=SC2086
@@ -75,40 +75,37 @@ docker run -d --name "$P-ctl" --hostname ctl-01 --network "$NET" --ip "$CTL_IP" 
     "$IMG" >/dev/null
 W() { docker exec "$P-ctl" webjetctl --account alice "$@"; }
 i=0
-until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do
+until W network controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do
     sleep 0.5
     i=$((i + 1))
     [ $i -lt 60 ] || fail "controller did not start"
 done
-W account create --name infra --key /admin/infra.pub >/dev/null
-T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller "tls:$CTL_IP:443" 2>/dev/null)
-docker exec "$P-ctl" webjetctl enroll "$T" >/dev/null
-W controller cert-request --out /admin/ctl.req >/dev/null
+W network account create --name infra --key /admin/infra.pub >/dev/null
+T=$(W network node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller "tls:$CTL_IP:443" 2>/dev/null)
+docker exec "$P-ctl" webjetctl local enroll "$T" >/dev/null
+W network controller cert-request --out /admin/ctl.req >/dev/null
 docker exec -e WEBJET_ROOT_PASSPHRASE=root-pass "$P-ctl" webjetctl root --dir /admin/root controller sign /admin/ctl.req --out /admin/ctl.cert >/dev/null
-W submit /admin/ctl.cert >/dev/null 2>&1
-docker exec "$P-ctl" sh -c 'cat > /admin/policy.yaml <<EOT
-version: 1
-default: deny
-rules:
-  - id: everyone
-    action: allow
-    src: ["*"]
-    dst: ["*"]
-    ports: ["*"]
-EOT
-cat > /admin/seeds.yaml <<EOT
-version: 1
-seeds:
-  - node: ctl-01
-    addrs: [tls:'"$CTL_IP"':443, kcp:'"$CTL_IP"':443]
+W network submit /admin/ctl.cert >/dev/null 2>&1
+docker exec "$P-ctl" sh -c 'cat > /admin/network.toml <<EOT
+version = 0
+
+[[policy.rule]]
+id = "everyone"
+action = "allow"
+src = ["*"]
+dst = ["*"]
+ports = ["*"]
+
+[[seeds]]
+node = "ctl-01"
+addrs = ["tls:'"$CTL_IP"':443", "kcp:'"$CTL_IP"':443"]
 EOT'
-W policy apply /admin/policy.yaml >/dev/null
-W seeds apply /admin/seeds.yaml >/dev/null
+W network config apply /admin/network.toml >/dev/null
 wait_healthy "$P-ctl" 60
 echo "controller healthy"
 
 echo "== data node (WEBJET_ENROLL)"
-T=$(W node enroll --owner infra --name node-a --ip 10.7.0.10 --roles data --controller "tls:$CTL_IP:443" 2>/dev/null)
+T=$(W network node enroll --owner infra --name node-a --ip 10.7.0.10 --roles data --controller "tls:$CTL_IP:443" 2>/dev/null)
 docker run -d --name "$P-a" --hostname node-a --network "$NET" --ip "$A_IP" \
     --cap-add NET_ADMIN --device /dev/net/tun \
     -v "$P-a-state:/var/lib/webjet" -e WEBJET_ENROLL="$T" \
@@ -118,14 +115,14 @@ echo "node-a healthy"
 docker exec "$P-a" ip -o addr show | grep -q "10.7.0.10" || fail "node-a has no overlay address on its tun interface"
 
 echo "== ping node-a -> ctl-01 over the overlay"
-docker exec "$P-a" webjetctl ping ctl-01 -c 3 | tee /tmp/$P-ping.txt
+docker exec "$P-a" webjetctl local ping ctl-01 -c 3 | tee /tmp/$P-ping.txt
 grep -q "reply from" /tmp/$P-ping.txt || fail "no ping reply"
 
 echo "== restart keeps the node's state"
 docker restart "$P-a" >/dev/null
 wait_healthy "$P-a" 90
 [ "$(docker logs "$P-a" 2>&1 | grep -c 'enrolling this node')" = 1 ] || fail "node-a enrolled again after a restart"
-docker exec "$P-a" webjetctl ping ctl-01 -c 1 | grep -q "reply from" || fail "no ping reply after restart"
+docker exec "$P-a" webjetctl local ping ctl-01 -c 1 | grep -q "reply from" || fail "no ping reply after restart"
 echo "restart ok"
 
 echo "== clean stop on SIGTERM"

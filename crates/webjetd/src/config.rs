@@ -1,12 +1,13 @@
-//! `webjetd.toml` (§13.4): local, per-node settings. Everything that must be
-//! the same network-wide lives in the tree instead.
+//! `webjetd.toml` (§13.4): how this machine runs the agent (addresses,
+//! interface, key storage, logging). The network configuration and each
+//! node's overrides of it (transport priorities, limits, seeds, DNS) live in
+//! the signed tree instead (§6.18, §6.19) and are changed with
+//! `webjetctl network config` and `webjetctl local config`.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use webjet_proto::Transport;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,17 +26,19 @@ pub struct Config {
     pub dns: Dns,
     #[serde(default)]
     pub gateway: Gateway,
+    /// Removed in 0.4.0 (now node-scope configuration in the tree); kept
+    /// only to explain the move when an old file still has it.
     #[serde(default)]
-    pub limits: LocalLimits,
+    limits: Option<toml::Value>,
     /// Where the identity key is stored at rest (§8.3).
     #[serde(default)]
     pub key: crate::keystore::KeyCfg,
     /// OpenMetrics endpoint for Prometheus (§12.5).
     #[serde(default)]
     pub metrics: MetricsCfg,
-    /// Local transport priorities (§9.6); override the tree's.
+    /// Removed in 0.4.0, like `limits`.
     #[serde(default)]
-    pub transport: HashMap<String, u8>,
+    transport: Option<toml::Value>,
     #[serde(default)]
     pub controller: ControllerCfg,
     /// The control socket for `webjetctl` (§13.1).
@@ -115,24 +118,6 @@ pub struct GatewayRoute {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct LocalLimits {
-    pub relay_capacity_mbps: Option<u32>,
-    pub rate_ceiling_mbps: Option<u32>,
-    #[serde(flatten)]
-    pub other: HashMap<String, u64>,
-}
-
-impl LocalLimits {
-    pub fn get(&self, name: &str) -> Option<u64> {
-        match name {
-            "relay_capacity_mbps" => self.relay_capacity_mbps.map(|v| v as u64),
-            "rate_ceiling_mbps" => self.rate_ceiling_mbps.map(|v| v as u64),
-            _ => self.other.get(name).copied(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsCfg {
     /// `host:port` to serve `/metrics` on. On a controller it serves every
@@ -141,19 +126,28 @@ pub struct MetricsCfg {
     pub listen: Option<SocketAddr>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControllerCfg {
     /// The controller role runs when the network grants this node CONTROL
-    /// (the `control` role, §4). `false` keeps it from running here anyway;
-    /// `true` is accepted for older files and changes nothing.
-    #[serde(default)]
-    pub enabled: Option<bool>,
+    /// (the `control` role, §4). `false` keeps it from running here anyway.
+    #[serde(default = "yes")]
+    pub enabled: bool,
     /// `webjetd signer` socket; when absent an in-process key file is used.
     pub signer_socket: Option<PathBuf>,
     /// Tree head lifetime in hours (§7.3, §24: 24–72 h).
     #[serde(default = "default_head_hours")]
     pub head_lifetime_hours: u64,
+}
+
+impl Default for ControllerCfg {
+    fn default() -> Self {
+        ControllerCfg {
+            enabled: true,
+            signer_socket: None,
+            head_lifetime_hours: default_head_hours(),
+        }
+    }
 }
 
 fn yes() -> bool {
@@ -215,6 +209,8 @@ impl Config {
         }
         let s = std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?;
         let mut c: Config = toml::from_str(&s).with_context(|| format!("parse {}", p.display()))?;
+        c.check_removed()
+            .with_context(|| format!("in {}", p.display()))?;
         if c.control_socket.is_relative() {
             c.control_socket = c.data_dir.join(&c.control_socket);
         }
@@ -234,11 +230,29 @@ impl Config {
         }
     }
 
-    pub fn local_priority(&self, t: Transport) -> Option<u8> {
-        self.transport
-            .iter()
-            .find(|(k, _)| Transport::parse(k) == Some(t))
-            .map(|(_, v)| *v)
+    /// Sections that moved into the tree in 0.4.0: refuse to start with them
+    /// rather than silently ignore what the operator meant to set.
+    fn check_removed(&self) -> Result<()> {
+        let mut moved = Vec::new();
+        if let Some(t) = &self.transport {
+            moved.push(format!(
+                "[transport] -> `webjetctl local config set transport.priority.<kcp|anytls|tls> <0-255>` ({})",
+                t.to_string().trim()
+            ));
+        }
+        if let Some(l) = &self.limits {
+            moved.push(format!(
+                "[limits] -> `webjetctl local config set limits.value.<name> <value>` ({})",
+                l.to_string().trim()
+            ));
+        }
+        if moved.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "these sections moved to this node's configuration in the network tree (0.4.0); remove them here and set them with webjetctl:\n  {}",
+            moved.join("\n  ")
+        )
     }
 }
 
@@ -258,17 +272,26 @@ mtu = 1300
 [[gateway.route]]
 published = "10.2.2.0/24"
 interface = "eth1"
-[limits]
-relay_capacity_mbps = 900
-conntrack_per_peer = 100
-[transport]
-"tcp+tls" = 5
+[controller]
+enabled = false
 "#,
         )
         .unwrap();
         assert_eq!(c.tun.mtu, 1300);
-        assert_eq!(c.limits.get("conntrack_per_peer"), Some(100));
-        assert_eq!(c.local_priority(Transport::TcpTls), Some(5));
         assert_eq!(c.gateway.route.len(), 1);
+        assert!(!c.controller.enabled);
+        assert!(c.check_removed().is_ok());
+        assert!(Config::default().controller.enabled);
+    }
+
+    #[test]
+    fn moved_sections_are_refused() {
+        let c: Config =
+            toml::from_str("[transport]\nkcp = 0\n[limits]\nconntrack_per_peer = 9\n").unwrap();
+        let e = c.check_removed().unwrap_err().to_string();
+        assert!(
+            e.contains("transport.priority") && e.contains("limits."),
+            "{e}"
+        );
     }
 }

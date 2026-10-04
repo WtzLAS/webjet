@@ -305,18 +305,12 @@ pub fn local_openmetrics(n: &Arc<Node>) -> String {
     e.render()
 }
 
-/// The effective value of a limit for this node (§16.4): local config,
-/// then the tree's defaults and overrides, then the built-in default
-/// (`webjet_core::validate::LIMITS`). `None` for a limit that is unset by
-/// default (relay capacity, rate ceiling) and set nowhere.
+/// The effective value of a limit for this node (§16.4, `View::limit`):
+/// node scope, network overrides, network value, built-in default. `None`
+/// for a limit that is unset by default (relay capacity, rate ceiling) and
+/// set nowhere.
 pub fn limit_opt(n: &Node, name: &str) -> Option<u64> {
-    if let Some(v) = n.cfg.limits.get(name) {
-        return Some(v);
-    }
-    let s = n.store.read();
-    let v = s.view();
-    let me = v.nodes.get(&n.me).map(|x| v.subject(x));
-    v.limit(me.as_ref(), name)
+    n.store.read().view().limit(&n.me, name)
 }
 
 /// A limit with a built-in default; never below 1.

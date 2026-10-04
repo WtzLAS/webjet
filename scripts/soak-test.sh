@@ -18,7 +18,7 @@ rm -rf "$W"
 export WEBJET_KEYS=$W/keys WEBJET_ACCOUNT_PASSPHRASE=acct-pass
 # The nodes need a few seconds to learn about each other.
 i=0
-until to 20 "$B/webjetctl" --socket $W/node-02/control.sock ping node-03 -c 1 >/dev/null 2>&1; do
+until to 20 "$B/webjetctl" --socket $W/node-02/control.sock local ping node-03 -c 1 >/dev/null 2>&1; do
     i=$((i + 1))
     [ $i -lt 30 ] || { echo "FAIL: no initial ping"; exit 1; }
     sleep 1
@@ -30,13 +30,13 @@ while [ $t -lt "$SECS" ]; do
     sleep 10
     t=$((t + 10))
     for n in ctl-01 node-02 node-03; do
-        if ! to 5 "$B/webjetctl" --socket "$W/$n/control.sock" --json status >/dev/null 2>&1; then
+        if ! to 5 "$B/webjetctl" --socket "$W/$n/control.sock" --json local status >/dev/null 2>&1; then
             echo "FAIL: $n stopped answering after ${t} s"
             "$ROOT/scripts/local-net.sh" stop
             exit 1
         fi
     done
 done
-to 20 "$B/webjetctl" --socket $W/node-02/control.sock ping node-03 -c 2 >/dev/null || { echo "FAIL: no ping after $SECS s"; exit 1; }
+to 20 "$B/webjetctl" --socket $W/node-02/control.sock local ping node-03 -c 2 >/dev/null || { echo "FAIL: no ping after $SECS s"; exit 1; }
 "$ROOT/scripts/local-net.sh" stop
 echo "SOAK TEST PASSED"

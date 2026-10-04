@@ -51,7 +51,7 @@ agent:
 
 ```sh
 # On an admin machine
-webjetctl node enroll --owner infra --name relay-fra --roles data,relay --controller tls:ctl.example.net:443 > relay-fra.enroll
+webjetctl network node enroll --owner infra --name relay-fra --roles data,relay --controller tls:ctl.example.net:443 > relay-fra.enroll
 
 # On the Docker host
 docker run -d --name webjet --restart unless-stopped \
@@ -68,7 +68,7 @@ starts use the state in the volume. `WEBJET_ENROLL_FILE` reads it from a file
 instead, which works with Docker and Compose secrets.
 
 To re-key a node (runbook 9), stop the container, run
-`docker run --rm -v webjet-state:/var/lib/webjet webjet webjetctl enroll <string>`,
+`docker run --rm -v webjet-state:/var/lib/webjet webjet webjetctl local enroll <string>`,
 and start it again.
 
 ## The first controller of a new network
@@ -102,20 +102,20 @@ Add these to the `docker run` above:
 Then:
 
 ```sh
-docker exec -it webjet-ctl webjetctl --account alice account create --name infra --key /admin-keys/infra.pub
-docker exec -it webjet-ctl webjetctl --account alice node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.10:443
-docker exec -it webjet-ctl webjetctl enroll <string>
-docker exec -it webjet-ctl webjetctl --account alice controller certify ctl-01
+docker exec -it webjet-ctl webjetctl --account alice network account create --name infra --key /admin-keys/infra.pub
+docker exec -it webjet-ctl webjetctl --account alice network node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.10:443
+docker exec -it webjet-ctl webjetctl local enroll <string>
+docker exec -it webjet-ctl webjetctl --account alice network controller certify ctl-01
 ```
 
 `webjetctl` asks for the account passphrase. To have the root sign the
-certificate instead, write the request with `webjetctl controller cert-request
+certificate instead, write the request with `webjetctl network controller cert-request
 --out /var/lib/webjet/ctl-01.req`, copy it out with `docker cp`, sign it with
 `webjetctl root controller sign` on the offline machine, copy the certificate
-back in and run `webjetctl submit` on it.
+back in and run `webjetctl network submit` on it.
 
 Further controllers are ordinary enrolled containers whose node has the
-`control` role (`--roles data,relay,control`, or `webjetctl node update` later);
+`control` role (`--roles data,relay,control`, or `webjetctl network node update` later);
 they start the controller role by themselves. Runbook 4 continues from there.
 
 Once the network runs, recreate the container without the key directory, so
@@ -142,12 +142,14 @@ environment variables:
 | `WEBJET_HEAD_LIFETIME_HOURS` | | `controller.head_lifetime_hours`. |
 | `WEBJET_METRICS_LISTEN` | | `metrics.listen`. |
 | `WEBJET_KEY_STORAGE` | `auto` | `key.storage`. |
-| `WEBJET_RELAY_CAPACITY_MBPS`, `WEBJET_RATE_CEILING_MBPS` | | `limits.*`. |
 | `WEBJET_CONFIGURE_DNS` | `false` | `dns.configure_system`. |
 | `WEBJET_LOG`, `WEBJET_LOG_FORMAT` | `info` | `log`, `log_format` (`json` for JSON lines). |
 
 The file is regenerated on every start, so changing a variable and recreating
-the container is enough.
+the container is enough. A node's limits and transport priorities aren't
+`webjetd.toml` settings (since 0.4.0): set them in its node configuration,
+for example `webjetctl local config --node relay-fra set
+limits.value.relay_capacity_mbps 900`.
 
 For anything else, mount your own file at `/etc/webjet/webjetd.toml`; the
 variables above are then ignored, except for the enrollment ones.
@@ -184,8 +186,8 @@ on another machine: moving the volume to a new host means re-keying the node.
 
 The agent answers DNS for the overlay's names on the network's resolver
 address, through its tun interface: `resolver_ip` in the DNS configuration,
-or by default the top address of the overlay pool (`webjetctl dns show`
-prints the one in force). The examples below use 10.7.255.53.
+or by default the top address of the overlay pool (`webjetctl network config
+show` prints the one in force). The examples below use 10.7.255.53.
 It can't install split DNS from inside a container: that needs
 systemd-resolved, which the image doesn't include. So `WEBJET_CONFIGURE_DNS`
 is off by default, and the names are resolvable where the tun interface is:
@@ -199,11 +201,11 @@ is off by default, and the names are resolvable where the tun interface is:
 
 ## Health and logs
 
-The image's health check runs `webjetctl status` against the agent, so
+The image's health check runs `webjetctl local status` against the agent, so
 `docker ps` shows `healthy` once the agent answers. `docker logs` shows the
 agent's log; set `WEBJET_LOG_FORMAT=json` for JSON lines.
 
-Inspect a running node with `docker exec <name> webjetctl status`, `peers`,
+Inspect a running node with `docker exec <name> webjetctl local status`, `peers`,
 `sessions` or `ping <node>`.
 
 `docker stop` sends SIGTERM. The agent saves its state and exits, and the tun

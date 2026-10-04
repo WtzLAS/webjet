@@ -7,35 +7,17 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use webjet_core::crypto::Bytes32;
-use webjet_core::policy::{Dest, Selector};
 use webjet_net::hop::{self, Accepted, EnrollGate};
 use webjet_net::kcp::UdpEndpoint;
 use webjet_proto::{self as wp, Transport};
 
-/// Built-in transport priorities (§9.6).
-pub const BUILTIN: [(Transport, u8); 3] = [
-    (Transport::KcpFecTls, 30),
-    (Transport::AnyTls, 20),
-    (Transport::TcpTls, 10),
-];
-
-fn builtin(t: Transport) -> u8 {
-    BUILTIN
-        .iter()
-        .find(|(x, _)| *x == t)
-        .map(|x| x.1)
-        .unwrap_or(0)
-}
-
-/// A node's priority for a transport (§9.6): local config (for this node),
-/// the peer's published priorities (for others), the tree's first matching
-/// override, the tree defaults, then built-ins.
+/// A node's priority for a transport (§9.6). For this node: its node-scope
+/// configuration, the network's first matching override, the network's
+/// value, built-in (`View::priority`). For a peer, what it published in its
+/// EndpointRecord comes first: that is what the peer itself uses, also when
+/// this node's copy of the tree is older.
 pub fn priority(n: &Node, node: &Bytes32, t: Transport) -> u8 {
-    if *node == n.me {
-        if let Some(p) = n.cfg.local_priority(t) {
-            return p;
-        }
-    } else {
+    if *node != n.me {
         // Read the published priority and release the records lock before
         // taking the store lock below.
         let published = n.records.lock().endpoints.get(node).and_then(|(r, _)| {
@@ -47,58 +29,7 @@ pub fn priority(n: &Node, node: &Bytes32, t: Transport) -> u8 {
             return p;
         }
     }
-    let s = n.store.read();
-    let v = s.view();
-    if let Some(tc) = &v.transport {
-        if let Some(info) = v.nodes.get(node) {
-            let subj = v.subject(info);
-            for o in tc.overrides.clone().unwrap_or_default() {
-                let sels: Vec<Selector> = o
-                    .select
-                    .clone()
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|s| Selector::parse(s).ok())
-                    .collect();
-                if selects(&sels, &subj)
-                    && let Some(p) = o
-                        .values
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .find(|p| p.transport == t)
-                {
-                    return p.priority;
-                }
-            }
-        }
-        if let Some(p) = tc
-            .defaults
-            .clone()
-            .unwrap_or_default()
-            .iter()
-            .find(|p| p.transport == t)
-        {
-            return p.priority;
-        }
-    }
-    builtin(t)
-}
-
-pub fn selects(sels: &[Selector], s: &webjet_core::policy::Subject) -> bool {
-    let pol = webjet_core::policy::Policy {
-        version: 0,
-        default: webjet_core::policy::Decision::Deny,
-        rules: vec![webjet_core::policy::Rule {
-            id: "s".into(),
-            action: webjet_core::policy::Decision::Allow,
-            src: sels.to_vec(),
-            dst: vec![Selector::Any],
-            ports: webjet_core::policy::PortSet::all(),
-        }],
-        tests: vec![],
-    };
-    pol.evaluate(s, Dest::Node(s), 6, 1).decision == webjet_core::policy::Decision::Allow
+    n.store.read().view().priority(node, t)
 }
 
 /// This node's priorities for its EndpointRecord.

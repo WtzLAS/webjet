@@ -287,7 +287,7 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             };
             write_public(&out, &pick(&k, &with)?.sign_obj(mt::ACCOUNT_TOMBSTONE, &t))?;
             println!(
-                "account tombstone for {} → {} (submit with `webjetctl submit`, or inject on any node)",
+                "account tombstone for {} → {} (submit with `webjetctl network submit`, or inject on any node)",
                 p.name,
                 out.display()
             );
@@ -389,7 +389,7 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
         } => {
             let k = load_keys(dir)?;
             let id = crypto::parse_hex32(&node).ok_or_else(|| {
-                anyhow!("--node must be the node id (64 hex characters; see `webjetctl node list`)")
+                anyhow!("--node must be the node id (64 hex characters; see `webjetctl network node list`)")
             })?;
             // A high version beats any record version the controllers may hold.
             let t = wp::Tombstone {
@@ -399,7 +399,7 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             };
             write_public(&out, &pick(&k, &with)?.sign_obj(mt::TOMBSTONE, &t))?;
             println!(
-                "node tombstone → {} (inject on any node: `webjetctl inject`)",
+                "node tombstone → {} (inject on any node: `webjetctl local inject`)",
                 out.display()
             );
         }

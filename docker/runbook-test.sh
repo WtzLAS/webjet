@@ -137,116 +137,118 @@ install ctl-01 --no-start || fail "install on ctl-01"
 on ctl-01 'mkdir -p /offline /admin
 webjetctl root --dir /offline/root init >/dev/null
 webjetctl root --dir /offline/root backup --out /offline/root-backup.enc >/dev/null
-webjetctl --keys /admin/keys account keygen --name alice --pub-out /admin/alice.pub >/dev/null
+webjetctl --keys /admin/keys network account keygen --name alice --pub-out /admin/alice.pub >/dev/null
 webjetctl root --dir /offline/root admin sign --name alice --key /admin/alice.pub --out /offline/alice.account >/dev/null
 webjetctl root --dir /offline/root genesis --overlay-pool 10.7.0.0/16 --admin /offline/alice.account --out /offline/genesis.wj >/dev/null' ||
     fail "offline steps"
 # 4 [node] configure, init, start
 on ctl-01 "printf '%s\n' '$(public "$C1")' > /etc/webjet/webjetd.toml"
-on ctl-01 'webjetctl init --genesis /offline/genesis.wj >/dev/null && systemctl start webjetd' || fail "init"
-wait_for ctl-01 'webjetctl controller list | grep -q "valid_until: [1-9]"' "first controller did not start"
+on ctl-01 'webjetctl local init --genesis /offline/genesis.wj >/dev/null && systemctl start webjetd' || fail "init"
+wait_for ctl-01 'webjetctl network controller list | grep -q "valid_until: [1-9]"' "first controller did not start"
 on ctl-01 'stat -c %U /var/lib/webjet/node.json' | grep -qx webjet || fail "state not owned by the agent's user"
 # 5 [admin] infra account, enroll the controller's node
-on ctl-01 'webjetctl --keys /admin/keys account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
-admin "account create --name infra --key /admin/infra.pub" >/dev/null || fail "account create"
-T=$(admin "node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --tags tag:infra --controller tls:$C1:$PORT" 2>/dev/null) || fail "node enroll"
-on ctl-01 "webjetctl enroll '$T'" >/dev/null || fail "webjetctl enroll on the bootstrap controller"
+on ctl-01 'webjetctl --keys /admin/keys network account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
+admin "network account create --name infra --key /admin/infra.pub" >/dev/null || fail "account create"
+T=$(admin "network node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --tags tag:infra --controller tls:$C1:$PORT" 2>/dev/null) || fail "node enroll"
+on ctl-01 "webjetctl local enroll '$T'" >/dev/null || fail "webjetctl local enroll on the bootstrap controller"
 on ctl-01 'systemctl is-active webjetd' | grep -qx active || fail "agent stopped during the bootstrap enrollment"
 # 6 certificate, signed by the admin
-admin "controller certify ctl-01" | grep -q "certified ctl-01" || fail "certify ctl-01"
-wait_for ctl-01 'webjetctl node list | grep ctl-01 | grep -q "data,relay,control "' "ctl-01 doesn't show CONTROL"
+admin "network controller certify ctl-01" | grep -q "certified ctl-01" || fail "certify ctl-01"
+wait_for ctl-01 'webjetctl network node list | grep ctl-01 | grep -q "data,relay,control "' "ctl-01 doesn't show CONTROL"
 # 7 settings
-on ctl-01 "cat > /admin/policy.yaml <<EOT
-version: 1
-default: deny
-rules:
-  - id: everyone
-    action: allow
-    src: [\"*\"]
-    dst: [\"*\"]
-    ports: [\"*\"]
-EOT
-cat > /admin/dns.yaml <<EOT
-version: 1
-suffix: internal
-resolver_ip: [10.7.255.53]
-EOT
-cat > /admin/seeds.yaml <<EOT
-version: 1
-seeds:
-  - node: ctl-01
-    addrs: [tls:$C1:$PORT, kcp:$C1:$PORT]
+on ctl-01 "cat > /admin/network.toml <<EOT
+version = 0
+
+[policy]
+default = \"deny\"
+
+[[policy.rule]]
+id = \"everyone\"
+action = \"allow\"
+src = [\"*\"]
+dst = [\"*\"]
+ports = [\"*\"]
+
+[dns]
+suffix = \"internal\"
+resolver_ip = [\"10.7.255.53\"]
+
+[[seeds]]
+node = \"ctl-01\"
+addrs = [\"tls:$C1:$PORT\", \"kcp:$C1:$PORT\"]
 EOT"
-admin "psk rotate" >/dev/null || fail "psk rotate"
-for f in dns seeds policy; do admin "$f apply /admin/$f.yaml" >/dev/null || fail "$f apply"; done
-on ctl-01 'webjetctl status' | grep -q "name: ctl-01" || fail "ctl-01 status"
+admin "network psk rotate" >/dev/null || fail "psk rotate"
+admin "network config check /admin/network.toml" | grep -q "is valid" || fail "network config check"
+admin "network config apply /admin/network.toml" | grep -q "version 1 applied" || fail "network config apply"
+admin "network config show" | grep -q '^version = 1$' || fail "network config show"
+# A file made from an older version is refused (someone applied meanwhile).
+! admin "network config apply /admin/network.toml" >/dev/null 2>&1 || fail "stale network config applied"
+on ctl-01 'webjetctl local status' | grep -q "name: ctl-01" || fail "ctl-01 status"
 
 echo "== runbook 2: a device for a new person"
 # [person] makes the key on their own machine (/bob on ctl-01 here).
 bob() { docker exec -e WEBJET_ACCOUNT_PASSPHRASE=bob-pass "$P-ctl-01" sh -ec "webjetctl --keys /bob/keys --account bob $*"; }
-on ctl-01 'mkdir -p /bob' && bob "account keygen --name bob --pub-out /bob/bob.pub" >/dev/null || fail "bob keygen"
-admin "account create --name bob --key /bob/bob.pub" >/dev/null || fail "account create bob"
-admin "account list" | grep -E "^bob +false +true" >/dev/null || fail "bob not a valid normal account"
-on ctl-01 "cat > /admin/policy.yaml <<EOT
-version: 2
-default: deny
-rules:
-  - id: everyone
-    action: allow
-    src: [\"*\"]
-    dst: [\"*\"]
-    ports: [\"*\"]
-tests:
-  - {src: \"tag:laptop\", dst: \"tag:infra\", port: \"tcp:443\", expect: allow}
+on ctl-01 'mkdir -p /bob' && bob "network account keygen --name bob --pub-out /bob/bob.pub" >/dev/null || fail "bob keygen"
+admin "network account create --name bob --key /bob/bob.pub" >/dev/null || fail "account create bob"
+admin "network account list" | grep -E "^bob +false +true" >/dev/null || fail "bob not a valid normal account"
+admin "network config show" > /dev/null || fail "show"
+on ctl-01 "webjetctl --keys /admin/keys --account alice network config show > /admin/network.toml && cat >> /admin/network.toml <<EOT
+
+[[policy.test]]
+src = \"tag:laptop\"
+dst = \"tag:infra\"
+port = \"tcp:443\"
+expect = \"allow\"
 EOT"
-admin "policy check /admin/policy.yaml" | grep -q "tests pass" || fail "policy check"
-admin "policy apply /admin/policy.yaml" >/dev/null || fail "policy apply"
-T=$(admin "node enroll --owner bob --name node-03 --tags tag:laptop --controller tls:$C1:$PORT" 2>/dev/null) || fail "node-03 enroll"
+admin "network config check /admin/network.toml" | grep -q "is valid" || fail "policy test check"
+admin "network config apply /admin/network.toml" >/dev/null || fail "policy apply"
+admin "network config get policy.test.0.expect" | grep -qx allow || fail "policy test not stored"
+T=$(admin "network node enroll --owner bob --name node-03 --tags tag:laptop --controller tls:$C1:$PORT" 2>/dev/null) || fail "node-03 enroll"
 install node-03 "--enroll '$T'" || fail "install node-03"
-wait_for node-03 'webjetctl ping ctl-01 -c 1 | grep -q "reply from"' "node-03 can't reach ctl-01"
-on node-03 'webjetctl status' | grep -q "name: node-03" || fail "node-03 status"
-admin "node list" | grep -E "^node-03 .* data .*tag:laptop +bob +true" >/dev/null || fail "node-03 not listed with its owner"
-bob "node rename node-03 bob-laptop" >/dev/null || fail "owner rename"
-bob "node rename bob-laptop node-03" >/dev/null || fail "owner rename back"
-! bob "node update node-03 --tags tag:infra" >/dev/null 2>&1 || fail "the owner could change tags"
+wait_for node-03 'webjetctl local ping ctl-01 -c 1 | grep -q "reply from"' "node-03 can't reach ctl-01"
+on node-03 'webjetctl local status' | grep -q "name: node-03" || fail "node-03 status"
+admin "network node list" | grep -E "^node-03 .* data .*tag:laptop +bob +true" >/dev/null || fail "node-03 not listed with its owner"
+bob "network node rename node-03 bob-laptop" >/dev/null || fail "owner rename"
+bob "network node rename bob-laptop node-03" >/dev/null || fail "owner rename back"
+! bob "network node update node-03 --tags tag:infra" >/dev/null 2>&1 || fail "the owner could change tags"
 
 echo "== runbook 3: a relay"
-T=$(admin "node enroll --owner infra --name ctl-02 --roles data,relay --tags tag:relay --controller tls:$C1:$PORT" 2>/dev/null) || fail "relay enroll"
+T=$(admin "network node enroll --owner infra --name ctl-02 --roles data,relay --tags tag:relay --controller tls:$C1:$PORT" 2>/dev/null) || fail "relay enroll"
 install ctl-02 --no-start || fail "install on ctl-02"
 on ctl-02 "printf '%s\n' '$(public "$C2")' > /etc/webjet/webjetd.toml"
 on ctl-02 "webjetup enroll '$T'" >/dev/null || fail "relay enroll on host"
-wait_for ctl-02 'webjetctl ping ctl-01 -c 1 | grep -q "reply from"' "relay can't reach ctl-01"
-wait_for ctl-01 'webjetctl peers | grep -q ctl-02' "ctl-01 doesn't list the relay"
+wait_for ctl-02 'webjetctl local ping ctl-01 -c 1 | grep -q "reply from"' "relay can't reach ctl-01"
+wait_for ctl-01 'webjetctl local peers | grep -q ctl-02' "ctl-01 doesn't list the relay"
 
 echo "== runbook 4: make ctl-02 a controller"
-admin "node update ctl-02 --roles data,relay,control" >/dev/null || fail "grant the control role"
-admin "node list" | grep ctl-02 | grep -q "control(uncertified)" || fail "role not shown as uncertified"
-wait_for ctl-02 'webjetctl controller cert-request --out /tmp/ctl-02.req' "cert-request on ctl-02"
+admin "network node update ctl-02 --roles data,relay,control" >/dev/null || fail "grant the control role"
+admin "network node list" | grep ctl-02 | grep -q "control(uncertified)" || fail "role not shown as uncertified"
+wait_for ctl-02 'webjetctl network controller cert-request --out /tmp/ctl-02.req' "cert-request on ctl-02"
 docker cp "$P-ctl-02:/tmp/ctl-02.req" "$out/ctl-02.req" && docker cp "$out/ctl-02.req" "$P-ctl-01:/offline/ctl-02.req"
 on ctl-01 'webjetctl root --dir /offline/root controller sign /offline/ctl-02.req --out /offline/ctl-02.cert' | grep -q "key id" || fail "sign ctl-02"
-admin "submit /offline/ctl-02.cert" >/dev/null 2>&1 || fail "submit ctl-02 cert"
-admin "controller add-learner ctl-02" >/dev/null || fail "add-learner"
-wait_for ctl-02 'webjetctl controller list | grep -q "role: Learner"' "ctl-02 not a learner"
-admin "controller promote ctl-02" >/dev/null || fail "promote"
-wait_for ctl-01 'webjetctl controller list | grep -A3 "voters:" | grep -c "^  *- " | grep -qx 2' "two voters"
+admin "network submit /offline/ctl-02.cert" >/dev/null 2>&1 || fail "submit ctl-02 cert"
+admin "network controller add-learner ctl-02" >/dev/null || fail "add-learner"
+wait_for ctl-02 'webjetctl network controller list | grep -q "role: Learner"' "ctl-02 not a learner"
+admin "network controller promote ctl-02" >/dev/null || fail "promote"
+wait_for ctl-01 'webjetctl network controller list | grep -A3 "voters:" | grep -c "^  *- " | grep -qx 2' "two voters"
 
 echo "== runbook 6: rotate the PSK"
-before=$(on ctl-02 'webjetctl status' | sed -n 's/^psk_epoch: //p')
-admin "psk rotate" >/dev/null || fail "psk rotate"
-wait_for ctl-02 "webjetctl status | grep -q '^psk_epoch: $((before + 1))'" "new PSK epoch didn't arrive"
+before=$(on ctl-02 'webjetctl local status' | sed -n 's/^psk_epoch: //p')
+admin "network psk rotate" >/dev/null || fail "psk rotate"
+wait_for ctl-02 "webjetctl local status | grep -q '^psk_epoch: $((before + 1))'" "new PSK epoch didn't arrive"
 
 echo "== runbook 9: re-key a reinstalled node"
-old_ip=$(on node-03 'webjetctl status' | sed -n '/^ips:/{n;s/^- //p;}')
+old_ip=$(on node-03 'webjetctl local status' | sed -n '/^ips:/{n;s/^- //p;}')
 on node-03 'webjetup nuke --yes' >/dev/null || fail "nuke node-03"
-T=$(bob "node rekey node-03 --controller tls:$C1:$PORT" 2>/dev/null) || fail "rekey token from the owner"
+T=$(bob "network node rekey node-03 --controller tls:$C1:$PORT" 2>/dev/null) || fail "rekey token from the owner"
 install node-03 "--enroll '$T'" || fail "reinstall node-03"
-wait_for node-03 'webjetctl status | grep -q "name: node-03"' "re-keyed node-03 lost its name"
-[ "$(on node-03 'webjetctl status' | sed -n '/^ips:/{n;s/^- //p;}')" = "$old_ip" ] || fail "re-keyed node-03 lost its address"
+wait_for node-03 'webjetctl local status | grep -q "name: node-03"' "re-keyed node-03 lost its name"
+[ "$(on node-03 'webjetctl local status' | sed -n '/^ips:/{n;s/^- //p;}')" = "$old_ip" ] || fail "re-keyed node-03 lost its address"
 
 echo "== runbook 8: revoke a device; offline tombstone"
-admin "node revoke node-03 --reason lost" >/dev/null || fail "node revoke"
-wait_for ctl-02 '! webjetctl node list | grep -q "^node-03 "' "revocation didn't spread"
-id=$(admin "node show ctl-02" | sed -n 's/^id: //p')
+admin "network node revoke node-03 --reason lost" >/dev/null || fail "node revoke"
+wait_for ctl-02 '! webjetctl network node list | grep -q "^node-03 "' "revocation didn't spread"
+id=$(admin "network node show ctl-02" | sed -n 's/^id: //p')
 on ctl-01 "webjetctl root --dir /offline/root node revoke --node $id --out /offline/ctl-02.tomb" >/dev/null || fail "offline tombstone"
 on ctl-01 'test -s /offline/ctl-02.tomb' || fail "no tombstone file"
 

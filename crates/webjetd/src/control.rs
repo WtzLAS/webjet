@@ -162,6 +162,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             let s = n.store.read();
             let v = &admin_view(n);
             Ok(json!({
+                "network_version": v.network_version,
                 "policy_version": v.policy_version,
                 "dns": v.dns.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "seeds": v.seeds.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
@@ -172,6 +173,39 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 "suffix": v.suffix(),
                 "valid_until": v.valid_until,
                 "overlay_pool": s.overlay_pool.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+            }))
+        }
+        "node_config" => {
+            // A node's configuration (§6.19) and what is in force for it,
+            // for `webjetctl local config`. Default: this node.
+            let view = admin_view(n);
+            let id = match req.get("node").and_then(|v| v.as_str()) {
+                Some(h) => crypto::parse_hex32(h).ok_or_else(|| anyhow!("bad node id"))?,
+                None => n.me,
+            };
+            let info = view.nodes.get(&id).ok_or_else(|| anyhow!("unknown node"))?;
+            let s = n.store.read();
+            let priorities: serde_json::Map<String, Value> = wp::Transport::ALL
+                .iter()
+                .map(|t| (t.name().to_string(), json!(view.priority(&id, *t))))
+                .collect();
+            let limits: serde_json::Map<String, Value> = webjet_core::validate::LIMITS
+                .iter()
+                .map(|l| (l.name.to_string(), json!(view.limit(&id, l.name))))
+                .collect();
+            Ok(json!({
+                "node_id": hex::encode(id),
+                "name": info.name,
+                "config": view.node_config(&id).map(|c| serde_json::to_value(c).unwrap_or_default()),
+                "effective": {
+                    "priorities": priorities,
+                    "limits": limits,
+                    "seeds": view.seeds_for(&id),
+                    "dns_records": view.dns_records_for(&id),
+                    "dns_forward": view.dns_forward_for(&id),
+                    "suffix": view.suffix(),
+                    "resolver": view.resolver_ips(&s.overlay_pool).iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+                },
             }))
         }
         "submit_op" => {
@@ -253,7 +287,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             };
             if target == n.me {
                 let c = n.controller.get().ok_or_else(|| {
-                    anyhow!("this node doesn't run the controller role; it needs the control role first (`webjetctl node update <name> --roles ...,control`)")
+                    anyhow!("this node doesn't run the controller role; it needs the control role first (`webjetctl network node update <name> --roles ...,control`)")
                 })?;
                 return Ok(json!({"request": b64(&c.cert_request()?)}));
             }
@@ -427,7 +461,7 @@ pub async fn submit_signed(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
     Ok(Value::Object(out))
 }
 
-/// What `webjetctl node enroll` needs for an enrollment string.
+/// What `webjetctl network node enroll` needs for an enrollment string.
 fn enroll_info(n: &Arc<Node>) -> Value {
     let s = n.store.read();
     let v = &admin_view(n);

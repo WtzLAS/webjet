@@ -51,7 +51,7 @@ async fn resolve(host: &str, port: u16) -> Vec<SocketAddr> {
 
 // ---------------------------------------------------------------- init
 
-/// `webjetctl init --genesis`: create the data directory for a new node.
+/// `webjetctl local init --genesis`: create the data directory for a new node.
 pub fn init(cfg: &Config, genesis: &[u8], bootstrap: bool) -> Result<()> {
     let paths = Paths::new(&cfg.data_dir);
     webjet_core::store::open_genesis(genesis).context("genesis file")?;
@@ -82,7 +82,7 @@ pub fn init(cfg: &Config, genesis: &[u8], bootstrap: bool) -> Result<()> {
 
 // ---------------------------------------------------------------- enrollment client
 
-/// `webjetctl enroll <string>`: generate a fresh identity key, redeem the
+/// `webjetctl local enroll <string>`: generate a fresh identity key, redeem the
 /// token at a controller, verify everything against the root key and store
 /// the result. Also used for re-keying (§8.1).
 pub async fn enroll(cfg: &Config, ticket_str: &str) -> Result<()> {
@@ -297,7 +297,7 @@ fn control_granted(n: &Node) -> bool {
 /// the first controller of a new network, or a node granted CONTROL, unless
 /// `[controller] enabled = false` opts out.
 fn maybe_start_controller(n: &Arc<Node>, bootstrap: bool) -> Result<()> {
-    if n.controller.get().is_some() || n.cfg.controller.enabled == Some(false) {
+    if n.controller.get().is_some() || !n.cfg.controller.enabled {
         return Ok(());
     }
     if !bootstrap && !control_granted(n) {
@@ -347,7 +347,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     crate::keystore::harden_process();
     let kp = state::load_identity(&paths, &cfg.key)?.ok_or_else(|| {
         anyhow!(
-            "no identity key in {}; run `webjetctl init` or `webjetctl enroll` (or `webjetup enroll`) first",
+            "no identity key in {}; run `webjetctl local init` or `webjetctl local enroll` (or `webjetup enroll`) first",
             cfg.data_dir.display()
         )
     })?;
@@ -375,14 +375,9 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
         let enrolled = s.view().nodes.contains_key(&me);
         if !enrolled && !bootstrap {
             bail!(
-                "this node is not enrolled; run `webjetup enroll <enrollment string>` (or `webjetctl enroll`)"
+                "this node is not enrolled; run `webjetup enroll <enrollment string>` (or `webjetctl local enroll`)"
             );
         }
-    }
-    if n.cfg.controller.enabled == Some(true) {
-        tracing::warn!(
-            "[controller] enabled = true is no longer needed: the controller role starts when the node holds the control role (`webjetctl node update --roles ...,control`)"
-        );
     }
     maybe_start_controller(&n, bootstrap)?;
     tokio::spawn(watch_control_role(n.clone()));
@@ -471,21 +466,28 @@ async fn start_dataplane_when_ready(n: Arc<Node>) {
     }
 }
 
+/// Whether this node is a seed: named in the network's seed list or in any
+/// node's own seeds (§10.7.3, §6.19).
 fn is_seed(n: &Node) -> bool {
     let s = n.store.read();
     let v = s.view();
-    let Some(seeds) = &v.seeds else { return false };
     let my_name = v
         .nodes
         .get(&n.me)
         .map(|x| x.name.clone())
         .unwrap_or_default();
     let my_key = crypto::key_b64(&n.kp.public());
-    seeds.entries.clone().unwrap_or_default().iter().any(|e| {
-        let r = e.node.clone().unwrap_or_default();
-        let r = r.strip_prefix("node:").unwrap_or(&r).to_string();
-        r == my_name || r == my_key
-    })
+    let network = v.seeds.as_ref().and_then(|x| x.entries.clone());
+    let nodes = v.node_configs.values().map(|c| c.seeds.clone());
+    std::iter::once(network)
+        .chain(nodes)
+        .flatten()
+        .flatten()
+        .any(|e| {
+            let r = e.node.clone().unwrap_or_default();
+            let r = r.strip_prefix("node:").unwrap_or(&r).to_string();
+            r == my_name || r == my_key
+        })
 }
 
 /// Keys of all valid relays and controllers: acceptable when dialing an
@@ -507,11 +509,10 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
     let mut hints: Vec<SeedHint> = Vec::new();
     {
         let s = n.store.read();
-        if let Some(seeds) = &s.view().seeds {
-            for e in seeds.entries.clone().unwrap_or_default() {
-                for a in e.addrs.clone().unwrap_or_default() {
-                    hints.push(seed_hint(&a, e.node.clone()));
-                }
+        // This node's own seeds first, then the network's (§6.19).
+        for e in s.view().seeds_for(&n.me) {
+            for a in e.addrs.clone().unwrap_or_default() {
+                hints.push(seed_hint(&a, e.node.clone()));
             }
         }
     }

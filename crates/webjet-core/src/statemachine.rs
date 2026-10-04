@@ -103,6 +103,35 @@ fn rej<T>(e: impl std::fmt::Display) -> std::result::Result<T, ApplyError> {
 
 type LeafChange = (u8, Bytes32, Option<Vec<u8>>);
 
+/// New entries may not use the per-setting operations that 0.4.0 replaced
+/// with SetNetworkConfig (§6.18). Only the leader's `prepare` checks this:
+/// entries already in the log still apply as before.
+fn refuse_retired(payload: &EntryPayload) -> std::result::Result<(), ApplyError> {
+    let EntryPayload::OpEntry(o) = payload else {
+        return Ok(());
+    };
+    let Some(op) = o
+        .signed_op
+        .as_deref()
+        .and_then(|raw| open_envelope(raw).ok())
+        .and_then(|v| v.decode::<wp::SignedOp>().ok())
+        .and_then(|op| op.op)
+    else {
+        return Ok(());
+    };
+    let name = match op {
+        AccountOp::SetPolicy(_) => "SetPolicy",
+        AccountOp::SetDns(_) => "SetDns",
+        AccountOp::SetSeeds(_) => "SetSeeds",
+        AccountOp::SetLimits(_) => "SetLimits",
+        AccountOp::SetTransport(_) => "SetTransport",
+        _ => return Ok(()),
+    };
+    rej(format!(
+        "{name} is retired: the network configuration is one document now; use `webjetctl network config` (0.4.0 or later)"
+    ))
+}
+
 /// Side effects on controller-only state, computed together with the leaves.
 #[derive(Default)]
 struct Effects {
@@ -178,6 +207,7 @@ impl Machine {
         timestamp: u64,
         payload: EntryPayload,
     ) -> std::result::Result<wp::LogEntry, ApplyError> {
+        refuse_retired(&payload)?;
         let random = wp::EntryRandom {
             node_id: Some(crypto::k32(&crypto::random32())),
             psk: Some(crypto::k32(&crypto::random32())),
@@ -600,6 +630,9 @@ impl Machine {
                 };
                 fx.leaves
                     .push((kind::NODE, id, Some(leaf::encode_tombstone(&tomb))));
+                if self.tree.get(kind::NODE_CONFIG, &id).is_some() {
+                    fx.leaves.push((kind::NODE_CONFIG, id, None));
+                }
                 // Drop any pending re-key for it.
                 for (th, p) in &self.pending {
                     if p.is_rekey && p.node_id == id {
@@ -657,6 +690,8 @@ impl Machine {
                 need_admin()?;
                 self.tombstone_account(&t.tombstone.unwrap_or_default(), Some(signer_id), fx)?;
             }
+            // SetPolicy … SetTransport come from webjetctl before 0.4.0. They
+            // stay valid so logs written then replay the same (§15.5).
             AccountOp::SetPolicy(p) => {
                 need_admin()?;
                 let pol = p
@@ -667,24 +702,7 @@ impl Machine {
                 {
                     return rej("policy version must increase");
                 }
-                let parsed =
-                    Policy::from_wire(&pol).map_err(|e| ApplyError::Rejected(e.to_string()))?;
-                let view = &self.view;
-                parsed
-                    .run_tests(&|s: &Selector| match s {
-                        Selector::NodeName(n) => view
-                            .by_name
-                            .get(n)
-                            .and_then(|id| view.nodes.get(id))
-                            .map(|n| view.subject(n)),
-                        Selector::NodeKey(k) => view
-                            .by_key
-                            .get(k)
-                            .and_then(|id| view.nodes.get(id))
-                            .map(|n| view.subject(n)),
-                        _ => None,
-                    })
-                    .map_err(|e| ApplyError::Rejected(e.to_string()))?;
+                self.check_policy(&pol)?;
                 fx.leaves
                     .push((kind::POLICY, SINGLETON, Some(leaf::encode_policy(&pol))));
                 fx.outcome.description = format!("set policy version {}", pol.version);
@@ -706,27 +724,7 @@ impl Machine {
                     .seeds
                     .ok_or_else(|| ApplyError::Rejected("missing seeds".into()))?;
                 self.check_version(kind::SEEDS, seeds.version)?;
-                for e in seeds.entries.clone().unwrap_or_default() {
-                    let n = e.node.clone().unwrap_or_default();
-                    let id = self
-                        .resolve_node_ref(&n)
-                        .ok_or_else(|| ApplyError::Rejected(format!("seed {n} names no node")))?;
-                    let info = &self.view.nodes[&id];
-                    if !info.valid || !(info.relay || self.members.contains(&id)) {
-                        return rej(format!("seed {n} is not a valid RELAY or CONTROL node"));
-                    }
-                    for a in e.addrs.clone().unwrap_or_default() {
-                        let h = a.host.clone().unwrap_or_default();
-                        if h.parse::<std::net::IpAddr>().is_err()
-                            && !crate::validate::valid_dns_name(&h)
-                        {
-                            return rej(format!("seed address {h} doesn't parse"));
-                        }
-                        if a.port == 0 {
-                            return rej("seed port 0");
-                        }
-                    }
-                }
+                self.check_seeds(&seeds.entries.clone().unwrap_or_default())?;
                 fx.leaves
                     .push((kind::SEEDS, SINGLETON, Some(leaf::encode_seeds(&seeds))));
                 fx.outcome.description = format!("set seeds version {}", seeds.version);
@@ -766,6 +764,21 @@ impl Machine {
                 fx.camouflage = Some((k, c.site.unwrap_or_default()));
                 fx.outcome.description = "set camouflage secret".into();
             }
+            AccountOp::SetNetworkConfig(c) => {
+                need_admin()?;
+                let cfg = c
+                    .config
+                    .ok_or_else(|| ApplyError::Rejected("missing network config".into()))?;
+                self.set_network_config(*cfg, fx)?;
+            }
+            AccountOp::SetNodeConfig(c) => {
+                let cfg = c
+                    .config
+                    .ok_or_else(|| ApplyError::Rejected("missing node config".into()))?;
+                let id = opt_k32(&cfg.node_id);
+                owner_or_admin(&id)?;
+                self.set_node_config(*cfg, fx)?;
+            }
             AccountOp::ChangeMembership(c) => {
                 need_admin()?;
                 let id = opt_k32(&c.node_id);
@@ -779,7 +792,9 @@ impl Machine {
                             return rej("learner must be a valid enrolled node");
                         };
                         if node.rec.control != Some(true) {
-                            return rej("learner must hold the control role (node update --roles)");
+                            return rej(
+                                "learner must hold the control role (webjetctl network node update --roles)",
+                            );
                         }
                         m.learners.insert(id);
                     }
@@ -842,6 +857,154 @@ impl Machine {
         {
             return rej("version must increase");
         }
+        Ok(())
+    }
+
+    /// Policy tests run against the current nodes (§6.7).
+    fn check_policy(&self, pol: &wp::Policy) -> std::result::Result<(), ApplyError> {
+        let parsed = Policy::from_wire(pol).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        let view = &self.view;
+        parsed
+            .run_tests(&|s: &Selector| match s {
+                Selector::NodeName(n) => view
+                    .by_name
+                    .get(n)
+                    .and_then(|id| view.nodes.get(id))
+                    .map(|n| view.subject(n)),
+                Selector::NodeKey(k) => view
+                    .by_key
+                    .get(k)
+                    .and_then(|id| view.nodes.get(id))
+                    .map(|n| view.subject(n)),
+                _ => None,
+            })
+            .map_err(|e| ApplyError::Rejected(e.to_string()))
+    }
+
+    /// Seeds must name valid relays or controllers and parse (§6.8).
+    fn check_seeds(&self, entries: &[wp::SeedEntry]) -> std::result::Result<(), ApplyError> {
+        for e in entries {
+            let n = e.node.clone().unwrap_or_default();
+            let id = self
+                .resolve_node_ref(&n)
+                .ok_or_else(|| ApplyError::Rejected(format!("seed {n} names no node")))?;
+            let info = &self.view.nodes[&id];
+            if !info.valid || !(info.relay || self.members.contains(&id)) {
+                return rej(format!("seed {n} is not a valid RELAY or CONTROL node"));
+            }
+            for a in e.addrs.clone().unwrap_or_default() {
+                let h = a.host.clone().unwrap_or_default();
+                if h.parse::<std::net::IpAddr>().is_err() && !crate::validate::valid_dns_name(&h) {
+                    return rej(format!("seed address {h} doesn't parse"));
+                }
+                if a.port == 0 {
+                    return rej("seed port 0");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The network configuration (§6.18): one document, one version, written
+    /// as the five network leaves in one entry. A section left out is
+    /// written empty, which means its built-in defaults.
+    fn set_network_config(
+        &self,
+        cfg: wp::NetworkConfig,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let version = cfg.version;
+        if version <= self.view.network_version {
+            return rej(format!(
+                "network config version must be above {} (someone applied a newer one; start again from `webjetctl network config show`)",
+                self.view.network_version
+            ));
+        }
+        let mut pol = cfg.policy.map(|b| *b).unwrap_or_default();
+        pol.version = version;
+        self.check_policy(&pol)?;
+        let mut dns = cfg.dns.map(|b| *b).unwrap_or_default();
+        dns.version = version;
+        self.validate_dns(&dns)?;
+        let mut seeds = cfg.seeds.map(|b| *b).unwrap_or_default();
+        seeds.version = version;
+        self.check_seeds(&seeds.entries.clone().unwrap_or_default())?;
+        let mut lim = cfg.limits.map(|b| *b).unwrap_or_default();
+        lim.version = version;
+        crate::validate::limits(&lim).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        let mut tr = cfg.transport.map(|b| *b).unwrap_or_default();
+        tr.version = version;
+        crate::validate::transport(&tr).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        fx.leaves.extend([
+            (kind::POLICY, SINGLETON, Some(leaf::encode_policy(&pol))),
+            (kind::DNS, SINGLETON, Some(leaf::encode_dns(&dns))),
+            (kind::SEEDS, SINGLETON, Some(leaf::encode_seeds(&seeds))),
+            (kind::LIMITS, SINGLETON, Some(leaf::encode_limits(&lim))),
+            (
+                kind::TRANSPORT,
+                SINGLETON,
+                Some(leaf::encode_transport(&tr)),
+            ),
+        ]);
+        fx.outcome.description = format!("set network config version {version}");
+        Ok(())
+    }
+
+    /// One node's configuration (§6.19). An empty one removes the leaf.
+    fn set_node_config(
+        &self,
+        cfg: wp::NodeConfig,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let id = opt_k32(&cfg.node_id);
+        let rec = self.live_node(&id)?;
+        let current = self.view.node_configs.get(&id).map_or(0, |c| c.version);
+        if cfg.version <= current {
+            return rej(format!(
+                "node config version must be above {current} (someone changed it; start again from `webjetctl local config show`)"
+            ));
+        }
+        crate::validate::limits(&wp::Limits {
+            version: 0,
+            defaults: cfg.limits.clone(),
+            overrides: None,
+        })
+        .map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        self.check_seeds(&cfg.seeds.clone().unwrap_or_default())?;
+        // Node records and zones are checked like the network's, against
+        // the network's suffix and with the network's zones also allowed.
+        let net = self.view.dns.clone().unwrap_or_default();
+        let mut forward = cfg.dns_forward.clone().unwrap_or_default();
+        forward.extend(net.forward.clone().unwrap_or_default());
+        self.validate_dns(&wp::DnsConfig {
+            version: 0,
+            suffix: net.suffix.clone(),
+            resolver_ip: None,
+            records: cfg.dns_records.clone(),
+            forward: Some(forward),
+        })?;
+        let name = rec.name.unwrap_or_default();
+        let empty = [
+            cfg.priorities.as_ref().map(Vec::len),
+            cfg.limits.as_ref().map(Vec::len),
+            cfg.seeds.as_ref().map(Vec::len),
+            cfg.dns_records.as_ref().map(Vec::len),
+            cfg.dns_forward.as_ref().map(Vec::len),
+        ]
+        .iter()
+        .all(|n| n.unwrap_or(0) == 0);
+        if empty {
+            if current == 0 {
+                return rej("the node has no configuration to clear");
+            }
+            fx.leaves.push((kind::NODE_CONFIG, id, None));
+            fx.outcome.description = format!("clear node config of {name}");
+        } else {
+            fx.leaves
+                .push((kind::NODE_CONFIG, id, Some(leaf::encode_node_config(&cfg))));
+            fx.outcome.description = format!("set node config of {name} version {}", cfg.version);
+        }
+        fx.outcome.node_id = Some(id);
         Ok(())
     }
 
@@ -1106,7 +1269,7 @@ impl Machine {
         }
         if member_bootstrap && !p.create.as_ref().is_some_and(|c| c.control) {
             return rej(
-                "a controller cluster member's record needs the control role (node enroll --roles ...,control)",
+                "a controller cluster member's record needs the control role (webjetctl network node enroll --roles ...,control)",
             );
         }
         if p.is_rekey {
@@ -2390,5 +2553,331 @@ mod tests {
             })))
             .is_err()
         );
+    }
+
+    fn net_config(version: u64) -> wp::NetworkConfig {
+        wp::NetworkConfig {
+            version,
+            policy: Some(Box::new(wp::Policy {
+                version,
+                default_action: wp::Action::Deny,
+                rules: Some(vec![wp::Rule {
+                    id: Some("all".into()),
+                    action: wp::Action::Allow,
+                    src: Some(vec!["*".into()]),
+                    dst: Some(vec!["*".into()]),
+                    ports: Some(vec!["*".into()]),
+                }]),
+                tests: None,
+            })),
+            dns: None,
+            seeds: None,
+            limits: Some(Box::new(wp::Limits {
+                version,
+                defaults: Some(vec![wp::LimitValue {
+                    name: Some("circuits_global".into()),
+                    value: 100,
+                }]),
+                overrides: Some(vec![wp::LimitOverride {
+                    select: Some(vec!["tag:x".into()]),
+                    values: Some(vec![wp::LimitValue {
+                        name: Some("circuits_global".into()),
+                        value: 200,
+                    }]),
+                }]),
+            })),
+            transport: Some(Box::new(wp::TransportConfig {
+                version,
+                defaults: Some(vec![wp::TransportPriority {
+                    transport: wp::Transport::KcpFecTls,
+                    priority: 5,
+                }]),
+                overrides: Some(vec![wp::PriorityOverride {
+                    select: Some(vec!["tag:x".into()]),
+                    values: Some(vec![wp::TransportPriority {
+                        transport: wp::Transport::TcpTls,
+                        priority: 50,
+                    }]),
+                }]),
+                camouflage: None,
+                padding: None,
+            })),
+        }
+    }
+
+    fn set_network(h: &mut H, c: wp::NetworkConfig) -> std::result::Result<Outcome, ApplyError> {
+        h.admin_op(AccountOp::SetNetworkConfig(Box::new(
+            wp::SetNetworkConfig {
+                config: Some(Box::new(c)),
+            },
+        )))
+    }
+
+    #[test]
+    fn network_config_is_one_versioned_document() {
+        let mut h = H::new();
+        assert_eq!(h.m.view().network_version, 0);
+        set_network(&mut h, net_config(1)).unwrap();
+        let v = h.m.view();
+        assert_eq!(v.network_version, 1);
+        // Every network leaf carries the document's version, also the
+        // sections the document left out (written empty = built-in).
+        for k in [
+            kind::POLICY,
+            kind::DNS,
+            kind::SEEDS,
+            kind::LIMITS,
+            kind::TRANSPORT,
+        ] {
+            let e = h.m.tree.get(k, &SINGLETON).unwrap();
+            assert_eq!(
+                leaf::version(&leaf::decode(k, &SINGLETON, &e.bytes).unwrap()),
+                1
+            );
+        }
+        assert_eq!(v.policy.rules.len(), 1);
+        assert_eq!(v.suffix(), "internal");
+        // A document made from an older version is refused.
+        let e = set_network(&mut h, net_config(1)).unwrap_err().to_string();
+        assert!(e.contains("must be above 1"), "{e}");
+        set_network(&mut h, net_config(2)).unwrap();
+        // Bad content anywhere refuses the whole document.
+        let mut bad = net_config(3);
+        bad.limits.as_mut().unwrap().defaults = Some(vec![wp::LimitValue {
+            name: Some("no_such_limit".into()),
+            value: 1,
+        }]);
+        assert!(set_network(&mut h, bad).is_err());
+        assert_eq!(h.m.view().network_version, 2);
+    }
+
+    #[test]
+    fn retired_setting_ops_are_refused_for_new_entries() {
+        let mut h = H::new();
+        let e = h
+            .admin_op(AccountOp::SetPolicy(Box::new(wp::SetPolicy {
+                policy: Some(Box::new(wp::Policy {
+                    version: 1,
+                    default_action: wp::Action::Deny,
+                    rules: None,
+                    tests: None,
+                })),
+            })))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("retired") && e.contains("network config"), "{e}");
+    }
+
+    fn node_config(id: &Bytes32, version: u64) -> wp::NodeConfig {
+        wp::NodeConfig {
+            node_id: Some(crypto::k32(id)),
+            version,
+            priorities: Some(vec![wp::TransportPriority {
+                transport: wp::Transport::KcpFecTls,
+                priority: 0,
+            }]),
+            limits: Some(vec![wp::LimitValue {
+                name: Some("circuits_global".into()),
+                value: 7,
+            }]),
+            seeds: None,
+            dns_records: None,
+            dns_forward: None,
+        }
+    }
+
+    #[test]
+    fn node_config_overrides_the_network_for_one_node() {
+        let mut h = H::new();
+        let a = enroll(&mut h, "a", "10.7.0.5", &KeyPair::generate());
+        let b = enroll(&mut h, "b", "10.7.0.6", &KeyPair::generate());
+        set_network(&mut h, net_config(1)).unwrap();
+        let tls = wp::Transport::TcpTls;
+        let kcp = wp::Transport::KcpFecTls;
+        let any = wp::Transport::AnyTls;
+        {
+            let v = h.m.view();
+            // Both carry tag:x: the override, then the network's value,
+            // then the built-in.
+            assert_eq!(
+                (
+                    v.priority(&a, tls),
+                    v.priority(&a, kcp),
+                    v.priority(&a, any)
+                ),
+                (50, 5, 20)
+            );
+            assert_eq!(v.limit(&a, "circuits_global"), Some(200));
+            assert_eq!(v.limit(&a, "circuits_per_source"), Some(64));
+            assert_eq!(v.limit(&a, "rate_ceiling_mbps"), None);
+        }
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(node_config(&a, 1))),
+        })))
+        .unwrap();
+        {
+            let v = h.m.view();
+            assert_eq!(v.priority(&a, kcp), 0);
+            assert_eq!(v.priority(&a, tls), 50);
+            assert_eq!(v.limit(&a, "circuits_global"), Some(7));
+            // Node b is untouched.
+            assert_eq!(v.priority(&b, kcp), 5);
+            assert_eq!(v.limit(&b, "circuits_global"), Some(200));
+        }
+        // Stale version refused; an empty configuration removes the leaf.
+        assert!(
+            h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                config: Some(Box::new(node_config(&a, 1))),
+            })))
+            .is_err()
+        );
+        let empty = wp::NodeConfig {
+            node_id: Some(crypto::k32(&a)),
+            version: 2,
+            ..Default::default()
+        };
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(empty.clone())),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_none());
+        assert_eq!(h.m.view().priority(&a, kcp), 5);
+        assert!(
+            h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                config: Some(Box::new(wp::NodeConfig {
+                    version: 3,
+                    ..empty
+                })),
+            })))
+            .is_err(),
+            "nothing to clear"
+        );
+        // Tombstoning the node removes its configuration.
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(node_config(&b, 1))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &b).is_some());
+        h.admin_op(AccountOp::TombstoneNode(Box::new(wp::TombstoneNode {
+            node_id: Some(crypto::k32(&b)),
+            reason: None,
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &b).is_none());
+    }
+
+    #[test]
+    fn node_config_seeds_and_dns_are_checked_and_added() {
+        let mut h = H::new();
+        let a = enroll(&mut h, "a", "10.7.0.5", &KeyPair::generate());
+        let r = enroll(&mut h, "relay-1", "10.7.0.9", &KeyPair::generate());
+        let set = |h: &mut H, c: wp::NodeConfig| {
+            h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                config: Some(Box::new(c)),
+            })))
+        };
+        let seed = |node: &str| wp::SeedEntry {
+            node: Some(node.into()),
+            addrs: Some(vec![wp::SeedAddr {
+                host: Some("198.51.100.7".into()),
+                port: 443,
+                transport: wp::Transport::TcpTls,
+            }]),
+        };
+        // relay-1 is a data node: not a valid seed.
+        let mut c = node_config(&a, 1);
+        c.seeds = Some(vec![seed("relay-1")]);
+        assert!(set(&mut h, c.clone()).is_err());
+        h.admin_op(AccountOp::UpdateNode(Box::new(wp::UpdateNode {
+            node_id: Some(crypto::k32(&r)),
+            set_roles: true,
+            roles: Some(vec![wp::Role::Relay]),
+            ..Default::default()
+        })))
+        .unwrap();
+        // A record shadowing a magic DNS name is refused like the network's.
+        c.dns_records = Some(vec![wp::DnsRecord {
+            name: Some("relay-1.internal".into()),
+            rtype: wp::DnsType::A,
+            value: Some("10.7.0.5".into()),
+            ttl: 0,
+        }]);
+        assert!(set(&mut h, c.clone()).is_err());
+        c.dns_records = Some(vec![wp::DnsRecord {
+            name: Some("db.internal".into()),
+            rtype: wp::DnsType::A,
+            value: Some("10.7.0.5".into()),
+            ttl: 0,
+        }]);
+        set(&mut h, c).unwrap();
+        let v = h.m.view();
+        assert_eq!(v.seeds_for(&a)[0].node.as_deref(), Some("relay-1"));
+        assert!(v.seeds_for(&r).is_empty());
+        assert_eq!(v.dns_records_for(&a).len(), 1);
+        assert!(v.dns_records_for(&r).is_empty());
+    }
+
+    #[test]
+    fn node_owner_may_set_its_node_config_others_may_not() {
+        let mut h = H::new();
+        let bob = KeyPair::generate();
+        let bob_id = crypto::random32();
+        let rec = wp::AccountRecord {
+            account_id: Some(crypto::k32(&bob_id)),
+            account_key: Some(crypto::k32(&bob.public())),
+            name: Some("bob".into()),
+            admin: false,
+            issuer_root: false,
+            issuer: Some(crypto::k32(&h.net.admin_id)),
+            version: 1,
+        };
+        let signed = h.net.admin.sign_obj(mt::ACCOUNT_RECORD, &rec);
+        h.admin_op(AccountOp::PutAccount(Box::new(wp::PutAccount {
+            record: Some(signed),
+        })))
+        .unwrap();
+        let mine = h
+            .admin_op(AccountOp::CreateEnrollment(Box::new(
+                wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&bob_id)),
+                    name: Some("bobs-laptop".into()),
+                    overlay_ips: Some(vec![super::ops::ip("10.7.0.20").unwrap()]),
+                    roles: Some(vec![wp::Role::Data]),
+                    identity_key: Some(crypto::k32(&KeyPair::generate().public())),
+                    ..Default::default()
+                },
+            )))
+            .unwrap()
+            .node_id
+            .unwrap();
+        let other = enroll(&mut h, "server", "10.7.0.21", &KeyPair::generate());
+        let as_bob = |h: &mut H, seq: u64, c: wp::NodeConfig| {
+            let s = sign_op(
+                &bob,
+                &bob_id,
+                seq,
+                now_ms(),
+                AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                    config: Some(Box::new(c)),
+                })),
+            );
+            h.run(op_entry(s))
+        };
+        as_bob(&mut h, 1, node_config(&mine, 1)).unwrap();
+        let e = as_bob(&mut h, 2, node_config(&other, 1))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("owner or an admin"), "{e}");
+        // But not the network's configuration.
+        let s = sign_op(
+            &bob,
+            &bob_id,
+            3,
+            now_ms(),
+            AccountOp::SetNetworkConfig(Box::new(wp::SetNetworkConfig {
+                config: Some(Box::new(net_config(1))),
+            })),
+        );
+        assert!(h.run(op_entry(s)).is_err());
     }
 }

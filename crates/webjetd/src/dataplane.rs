@@ -518,28 +518,21 @@ impl Dataplane {
             let v = s.view();
             let me = v.nodes.get(&n.me);
             let resolver: Vec<IpAddr> = v.resolver_ips(&s.overlay_pool);
-            let zones: Vec<String> = v
-                .dns
-                .as_ref()
-                .map(|d| {
-                    let mut z: Vec<String> = d
-                        .forward
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .filter_map(|f| f.zone.clone())
-                        .collect();
-                    z.extend(
-                        d.records
-                            .clone()
-                            .unwrap_or_default()
-                            .iter()
-                            .filter_map(|r| r.name.clone())
-                            .filter_map(|nm| nm.split_once('.').map(|x| x.1.to_string())),
-                    );
-                    z
-                })
-                .unwrap_or_default();
+            // The zones this node's resolver answers: forwarded zones and the
+            // parents of admin records, the network's and its own (§6.19).
+            let mut zones: Vec<String> = v
+                .dns_forward_for(&n.me)
+                .iter()
+                .filter_map(|f| f.zone.clone())
+                .collect();
+            zones.extend(
+                v.dns_records_for(&n.me)
+                    .iter()
+                    .filter_map(|r| r.name.clone())
+                    .filter_map(|nm| nm.split_once('.').map(|x| x.1.to_string())),
+            );
+            zones.sort();
+            zones.dedup();
             (
                 me.map(|m| m.ips.clone()).unwrap_or_default(),
                 me.map(|m| m.routes.clone()).unwrap_or_default(),

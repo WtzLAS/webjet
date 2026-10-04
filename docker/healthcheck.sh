@@ -5,7 +5,7 @@ set -eu
 role=$(cat /run/webjet-role 2>/dev/null || echo agent)
 case "$role" in
     agent)
-        webjetctl --json status > /dev/null
+        webjetctl --json local status > /dev/null
         ;;
     signer)
         [ -S "${WEBJET_SIGNER_SOCKET:-/run/webjet/signer.sock}" ]

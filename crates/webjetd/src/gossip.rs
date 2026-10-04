@@ -25,6 +25,8 @@ struct Walk {
     hop: u64,
     head_raw: Vec<u8>,
     root: Bytes32,
+    /// The buckets that differ from ours, asked for with GetBucketIndex.
+    buckets: Vec<u8>,
     removals: Vec<(u8, Bytes32)>,
     fetched: Vec<(u8, Bytes32, Vec<u8>)>,
     batches_left: usize,
@@ -400,6 +402,7 @@ fn start_walk(n: &Arc<Node>, hop: &Arc<Hop>, head_raw: Vec<u8>) -> Result<()> {
         hop: hop.id,
         head_raw,
         root,
+        buckets: Vec::new(),
         removals: Vec::new(),
         fetched: Vec::new(),
         batches_left: 0,
@@ -460,6 +463,7 @@ fn on_buckets(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::Buckets) -> Result<()> {
         drop(w);
         return finish(n, &raw, Vec::new());
     }
+    walk.buckets = diff.clone();
     hop.send_control(HopMsg::GetBucketIndex(Box::new(wp::GetBucketIndex {
         root: b.root,
         buckets: Some(diff),
@@ -478,7 +482,10 @@ fn on_bucket_index(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::BucketIndex) -> Result<
         .iter()
         .map(|e| (opt_k32(&e.path), opt_k32(&e.hash)))
         .collect();
-    let buckets: HashSet<u8> = theirs.keys().map(|p| p[0]).collect();
+    // The buckets we asked about, also those now empty on their side (a
+    // leaf removed was the only one in its bucket): our leaves there that
+    // they don't have are removed.
+    let buckets: HashSet<u8> = walk.buckets.iter().copied().collect();
     let s = n.store.read();
     let mut want = Vec::new();
     for (p, h) in &theirs {
@@ -490,7 +497,7 @@ fn on_bucket_index(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::BucketIndex) -> Result<
     // Leaves we hold in the differing buckets that the target doesn't have.
     let mut removals = Vec::new();
     for (p, e) in s.tree().iter() {
-        if !theirs.contains_key(p) && (buckets.contains(&p[0]) || theirs.is_empty()) {
+        if !theirs.contains_key(p) && buckets.contains(&p[0]) {
             removals.push((e.kind, e.key));
         }
     }

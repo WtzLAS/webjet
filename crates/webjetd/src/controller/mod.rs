@@ -365,7 +365,7 @@ impl Controller {
             n.alarm(
                 "no_signing_cert",
                 "warning",
-                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl controller certify`, runbook 4)".into(),
+                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl network controller certify`, runbook 4)".into(),
             );
             return;
         }

@@ -1,7 +1,8 @@
 //! Tree leaf encodings (§6.4, §15.3).
 //!
 //! Controller-built leaves (NodeRecord, committed Tombstone, Policy, DnsConfig,
-//! Seeds, Limits, Validity, TransportConfig) are unsigned `Leaf` wrappers.
+//! Seeds, Limits, Validity, TransportConfig, NodeConfig) are unsigned `Leaf`
+//! wrappers.
 //! Account leaves keep their own signature: their bytes are the `Signed`
 //! envelope of the AccountRecord or AccountTombstone (§6.10).
 
@@ -33,6 +34,10 @@ pub enum LeafValue {
     Limits(wp::Limits),
     Validity(wp::Validity),
     Transport(wp::TransportConfig),
+    NodeConfig(wp::NodeConfig),
+    /// A leaf kind this software doesn't know (added by a later release):
+    /// kept and hashed, otherwise ignored, so the tree still syncs (§15.7).
+    Unknown,
 }
 
 fn unwrap_leaf(bytes: &[u8]) -> Result<(u16, Vec<u8>)> {
@@ -88,7 +93,23 @@ pub fn decode(k: u8, key: &Bytes32, bytes: &[u8]) -> Result<LeafValue> {
                 _ => bail!("unexpected leaf type {} for an account", mt::name(v.ty)),
             }
         }
-        _ => {
+        kind::NODE_CONFIG => {
+            let (ty, body) = unwrap_leaf(bytes)?;
+            if ty != mt::NODE_CONFIG {
+                bail!("unexpected leaf type {} for a node config", mt::name(ty));
+            }
+            let c = wp::NodeConfig::decode_bytes(&body)?;
+            if c.node_id.map(|k| k.to_bytes()) != Some(*key) {
+                bail!("node config leaf under the wrong key");
+            }
+            LeafValue::NodeConfig(c)
+        }
+        kind::POLICY
+        | kind::DNS
+        | kind::SEEDS
+        | kind::LIMITS
+        | kind::VALIDITY
+        | kind::TRANSPORT => {
             if *key != SINGLETON {
                 bail!("singleton leaf with a non-zero key");
             }
@@ -107,6 +128,7 @@ pub fn decode(k: u8, key: &Bytes32, bytes: &[u8]) -> Result<LeafValue> {
                 _ => bail!("leaf kind {k} with type {}", mt::name(ty)),
             }
         }
+        _ => LeafValue::Unknown,
     };
     Ok(v)
 }
@@ -124,6 +146,8 @@ pub fn version(v: &LeafValue) -> u64 {
         LeafValue::Limits(l) => l.version,
         LeafValue::Validity(v) => v.valid_until,
         LeafValue::Transport(t) => t.version,
+        LeafValue::NodeConfig(c) => c.version,
+        LeafValue::Unknown => 0,
     }
 }
 
@@ -150,4 +174,7 @@ pub fn encode_validity(v: &wp::Validity) -> Vec<u8> {
 }
 pub fn encode_transport(t: &wp::TransportConfig) -> Vec<u8> {
     wrap(mt::TRANSPORT_CONFIG, t.encode_bytes())
+}
+pub fn encode_node_config(c: &wp::NodeConfig) -> Vec<u8> {
+    wrap(mt::NODE_CONFIG, c.encode_bytes())
 }

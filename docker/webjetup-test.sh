@@ -91,10 +91,10 @@ ADMIN_ENV="-e WEBJET_ROOT_PASSPHRASE=root-pass -e WEBJET_ACCOUNT_PASSPHRASE=acct
 # shellcheck disable=SC2086
 docker run --rm -v "$P-admin:/admin" $ADMIN_ENV "$IMG" sh -ec '
     webjetctl root --dir /admin/root init >/dev/null
-    webjetctl account keygen --name alice --pub-out /admin/alice.pub >/dev/null
+    webjetctl network account keygen --name alice --pub-out /admin/alice.pub >/dev/null
     webjetctl root --dir /admin/root admin sign --name alice --key /admin/alice.pub --out /admin/alice.account >/dev/null
     webjetctl root --dir /admin/root genesis --overlay-pool 10.7.0.0/16 --admin /admin/alice.account --out /admin/genesis.wj >/dev/null
-    webjetctl account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
+    webjetctl network account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
 # shellcheck disable=SC2086
 docker run -d --name "$P-ctl" --hostname ctl-01 --network "$NET" --ip "$CTL_IP" \
     --cap-add NET_ADMIN --device /dev/net/tun -v "$P-admin:/admin" $ADMIN_ENV \
@@ -102,22 +102,20 @@ docker run -d --name "$P-ctl" --hostname ctl-01 --network "$NET" --ip "$CTL_IP" 
     -e WEBJET_PUBLIC="tls:$CTL_IP:443,kcp:$CTL_IP:443" "$IMG" >/dev/null
 W() { docker exec "$P-ctl" webjetctl --account alice "$@"; }
 i=0
-until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do
+until W network controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do
     sleep 0.5
     i=$((i + 1))
     [ $i -lt 60 ] || fail "controller did not start"
 done
-W account create --name infra --key /admin/infra.pub >/dev/null
-T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller "tls:$CTL_IP:443" 2>/dev/null)
-docker exec "$P-ctl" webjetctl enroll "$T" >/dev/null
-W controller cert-request --out /admin/ctl.req >/dev/null
+W network account create --name infra --key /admin/infra.pub >/dev/null
+T=$(W network node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller "tls:$CTL_IP:443" 2>/dev/null)
+docker exec "$P-ctl" webjetctl local enroll "$T" >/dev/null
+W network controller cert-request --out /admin/ctl.req >/dev/null
 docker exec -e WEBJET_ROOT_PASSPHRASE=root-pass "$P-ctl" webjetctl root --dir /admin/root controller sign /admin/ctl.req --out /admin/ctl.cert >/dev/null
-W submit /admin/ctl.cert >/dev/null 2>&1
-docker exec "$P-ctl" sh -c 'printf "version: 1\ndefault: allow\nrules: []\n" > /admin/policy.yaml
-printf "version: 1\nseeds:\n  - node: ctl-01\n    addrs: [tls:'"$CTL_IP"':443, kcp:'"$CTL_IP"':443]\n" > /admin/seeds.yaml'
-W policy apply /admin/policy.yaml >/dev/null
-W seeds apply /admin/seeds.yaml >/dev/null
-T=$(W node enroll --owner infra --name laptop --ip 10.7.0.20 --roles data --controller "tls:$CTL_IP:443" 2>/dev/null)
+W network submit /admin/ctl.cert >/dev/null 2>&1
+W network config set policy.default allow >/dev/null
+W network config set seeds '[{node = "ctl-01", addrs = ["tls:'"$CTL_IP"':443", "kcp:'"$CTL_IP"':443"]}]' >/dev/null
+T=$(W network node enroll --owner infra --name laptop --ip 10.7.0.20 --roles data --controller "tls:$CTL_IP:443" 2>/dev/null)
 
 echo "== systemd host"
 docker run -d --name "$P-host" --hostname laptop --network "$NET" --ip "$HOST_IP" \
@@ -137,7 +135,7 @@ echo "== 2. the agent runs under systemd and reaches the controller"
 on_host 'systemctl is-active webjetd' | grep -qx active || fail "webjetd is not active"
 on_host 'systemctl show -p MainPID --value webjetd | xargs -I{} stat -c %U /proc/{}' | grep -qx webjet || fail "webjetd does not run as user webjet"
 i=0
-until on_host 'webjetctl ping ctl-01 -c 1' 2>/dev/null | grep -q "reply from"; do
+until on_host 'webjetctl local ping ctl-01 -c 1' 2>/dev/null | grep -q "reply from"; do
     sleep 1
     i=$((i + 1))
     [ $i -lt 60 ] || fail "no ping reply from ctl-01"
@@ -160,7 +158,7 @@ echo "== 5. install again: no new enrollment needed"
 on_host "webjetup --repo $REPO install" >/dev/null || fail "reinstall after remove"
 on_host 'systemctl is-active webjetd' | grep -qx active || fail "webjetd not active after reinstall"
 i=0
-until on_host 'webjetctl ping ctl-01 -c 1' 2>/dev/null | grep -q "reply from"; do
+until on_host 'webjetctl local ping ctl-01 -c 1' 2>/dev/null | grep -q "reply from"; do
     sleep 1
     i=$((i + 1))
     [ $i -lt 60 ] || fail "no ping reply after reinstall"

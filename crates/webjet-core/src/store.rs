@@ -93,12 +93,18 @@ pub struct View {
     pub tombstoned_accounts: HashSet<Bytes32>,
     pub policy: Policy,
     pub policy_version: u64,
-    /// The policy as committed (for `policy show`).
+    /// The policy as committed (for `network config show`).
     pub policy_wire: Option<wp::Policy>,
     pub dns: Option<wp::DnsConfig>,
     pub seeds: Option<wp::Seeds>,
     pub limits: Option<wp::Limits>,
     pub transport: Option<wp::TransportConfig>,
+    /// The network configuration's version (§6.18): the highest version of
+    /// the Policy, DnsConfig, Seeds, Limits and TransportConfig leaves
+    /// (0 = nothing applied yet).
+    pub network_version: u64,
+    /// Node-scope configurations by node id (§6.19).
+    pub node_configs: HashMap<Bytes32, wp::NodeConfig>,
     pub valid_until: u64,
     /// Controllers: node_id → valid signing key ids, for nodes that hold the
     /// `control` role and are valid (§4).
@@ -187,60 +193,147 @@ impl View {
             .unwrap_or_else(|| "internal".into())
     }
 
-    /// Effective value of a limit for a node (§16.4): built-in default
-    /// (`validate::LIMITS`), then tree defaults, then the highest matching
-    /// override. `None` for a limit that is unset by default and not set.
-    pub fn limit(&self, me: Option<&Subject>, name: &str) -> Option<u64> {
+    /// The node-scope configuration of a node (§6.19), if it has one.
+    pub fn node_config(&self, id: &Bytes32) -> Option<&wp::NodeConfig> {
+        self.node_configs.get(id)
+    }
+
+    /// Whether a list of selectors picks a node (the network config's
+    /// `select`, §6.18). Unparsable selectors match nothing.
+    fn selected(&self, select: &Option<Vec<String>>, node: &Bytes32) -> bool {
+        let Some(subj) = self.nodes.get(node).map(|n| self.subject(n)) else {
+            return false;
+        };
+        let sels: Vec<crate::policy::Selector> = select
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| crate::policy::Selector::parse(s).ok())
+            .collect();
+        crate::policy::selects(&sels, &subj)
+    }
+
+    /// Effective value of a limit for a node (§16.4), first found: the
+    /// node's own configuration, the highest value among the network's
+    /// matching overrides, the network's value, the built-in default
+    /// (`validate::LIMITS`). `None` for a limit that is unset by default and
+    /// set nowhere.
+    pub fn limit(&self, node: &Bytes32, name: &str) -> Option<u64> {
+        let find = |v: &Option<Vec<wp::LimitValue>>| {
+            v.clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|x| x.name.as_deref() == Some(name))
+                .map(|x| x.value)
+                .next_back()
+        };
+        if let Some(v) = self.node_configs.get(node).and_then(|c| find(&c.limits)) {
+            return Some(v);
+        }
         let builtin = crate::validate::limit_default(name);
         let Some(l) = &self.limits else {
             return builtin;
         };
-        let mut v = builtin;
-        for d in l.defaults.clone().unwrap_or_default() {
-            if d.name.as_deref() == Some(name) {
-                v = Some(d.value);
-            }
+        let best = l
+            .overrides
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .filter(|o| self.selected(&o.select, node))
+            .filter_map(|o| find(&o.values))
+            .max();
+        best.or_else(|| find(&l.defaults)).or(builtin)
+    }
+
+    /// Effective priority of a transport for a node (§9.6), first found:
+    /// the node's own configuration, the first of the network's matching
+    /// overrides that names the transport, the network's value, built-in.
+    pub fn priority(&self, node: &Bytes32, t: wp::Transport) -> u8 {
+        let find = |v: &Option<Vec<wp::TransportPriority>>| {
+            v.clone()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|p| p.transport == t)
+                .map(|p| p.priority)
+        };
+        if let Some(p) = self
+            .node_configs
+            .get(node)
+            .and_then(|c| find(&c.priorities))
+        {
+            return p;
         }
-        if let Some(me) = me {
-            let mut best: Option<u64> = None;
-            for o in l.overrides.clone().unwrap_or_default() {
-                let sels: Vec<_> = o
-                    .select
-                    .clone()
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|s| crate::policy::Selector::parse(s).ok())
-                    .collect();
-                let pol = Policy {
-                    version: 0,
-                    default: crate::policy::Decision::Deny,
-                    rules: vec![crate::policy::Rule {
-                        id: "x".into(),
-                        action: crate::policy::Decision::Allow,
-                        src: sels,
-                        dst: vec![crate::policy::Selector::Any],
-                        ports: crate::policy::PortSet::all(),
-                    }],
-                    tests: vec![],
-                };
-                if pol
-                    .evaluate(me, crate::policy::Dest::Node(me), 6, 1)
-                    .decision
-                    == crate::policy::Decision::Allow
+        if let Some(tc) = &self.transport {
+            for o in tc.overrides.clone().unwrap_or_default() {
+                if self.selected(&o.select, node)
+                    && let Some(p) = find(&o.values)
                 {
-                    for x in o.values.clone().unwrap_or_default() {
-                        if x.name.as_deref() == Some(name) {
-                            best = Some(best.map_or(x.value, |b: u64| b.max(x.value)));
-                        }
-                    }
+                    return p;
                 }
             }
-            if let Some(b) = best {
-                v = Some(b);
+            if let Some(p) = find(&tc.defaults) {
+                return p;
             }
         }
-        v
+        builtin_priority(t)
     }
+
+    /// The seed list a node uses (§10.7.1): its own seeds first, then the
+    /// network's.
+    pub fn seeds_for(&self, node: &Bytes32) -> Vec<wp::SeedEntry> {
+        let mut out = self
+            .node_configs
+            .get(node)
+            .and_then(|c| c.seeds.clone())
+            .unwrap_or_default();
+        if let Some(s) = &self.seeds {
+            out.extend(s.entries.clone().unwrap_or_default());
+        }
+        out
+    }
+
+    /// The DNS records a node's resolver answers (§11.10): its own first,
+    /// then the network's.
+    pub fn dns_records_for(&self, node: &Bytes32) -> Vec<wp::DnsRecord> {
+        let mut out = self
+            .node_configs
+            .get(node)
+            .and_then(|c| c.dns_records.clone())
+            .unwrap_or_default();
+        if let Some(d) = &self.dns {
+            out.extend(d.records.clone().unwrap_or_default());
+        }
+        out
+    }
+
+    /// The zones a node's resolver forwards (§11.10.6): its own first (they
+    /// win for the same zone), then the network's.
+    pub fn dns_forward_for(&self, node: &Bytes32) -> Vec<wp::ForwardZone> {
+        let mut out = self
+            .node_configs
+            .get(node)
+            .and_then(|c| c.dns_forward.clone())
+            .unwrap_or_default();
+        if let Some(d) = &self.dns {
+            out.extend(d.forward.clone().unwrap_or_default());
+        }
+        out
+    }
+}
+
+/// Built-in transport priorities (§9.6): UDP+KCP+FEC 30, TCP+AnyTLS 20,
+/// TCP+TLS 10.
+pub const BUILTIN_PRIORITIES: [(wp::Transport, u8); 3] = [
+    (wp::Transport::KcpFecTls, 30),
+    (wp::Transport::AnyTls, 20),
+    (wp::Transport::TcpTls, 10),
+];
+
+pub fn builtin_priority(t: wp::Transport) -> u8 {
+    BUILTIN_PRIORITIES
+        .iter()
+        .find(|(x, _)| *x == t)
+        .map_or(0, |x| x.1)
 }
 
 /// What happened to an offered tree head.
@@ -606,6 +699,7 @@ impl Store {
                             bail!("a tombstone can't be replaced");
                         }
                         if *k != kind::VALIDITY
+                            && !matches!(new, LeafValue::Unknown)
                             && leaf::version(&new) <= leaf::version(&oldv)
                             && old.bytes != *b
                         {
@@ -1001,18 +1095,34 @@ pub fn build_view(
             }
             LeafValue::Policy(p) => match Policy::from_wire(&p) {
                 Ok(pol) => {
+                    v.network_version = v.network_version.max(p.version);
                     v.policy_version = p.version;
                     v.policy = pol;
                     v.policy_wire = Some(p);
                 }
                 Err(e) => tracing::error!("policy in the tree does not parse: {e}"),
             },
-            LeafValue::Dns(d) => v.dns = Some(d),
-            LeafValue::Seeds(s) => v.seeds = Some(s),
-            LeafValue::Limits(l) => v.limits = Some(l),
-            LeafValue::Transport(t) => v.transport = Some(t),
+            LeafValue::Dns(d) => {
+                v.network_version = v.network_version.max(d.version);
+                v.dns = Some(d);
+            }
+            LeafValue::Seeds(s) => {
+                v.network_version = v.network_version.max(s.version);
+                v.seeds = Some(s);
+            }
+            LeafValue::Limits(l) => {
+                v.network_version = v.network_version.max(l.version);
+                v.limits = Some(l);
+            }
+            LeafValue::Transport(t) => {
+                v.network_version = v.network_version.max(t.version);
+                v.transport = Some(t);
+            }
+            LeafValue::NodeConfig(c) => {
+                v.node_configs.insert(crypto::opt_k32(&c.node_id), c);
+            }
             LeafValue::Validity(val) => v.valid_until = val.valid_until,
-            LeafValue::Account(..) | LeafValue::AccountTombstone(..) => {}
+            LeafValue::Account(..) | LeafValue::AccountTombstone(..) | LeafValue::Unknown => {}
         }
     }
     for n in v.nodes.values() {

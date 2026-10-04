@@ -4,9 +4,9 @@
 # For `webjetd run` it prepares the configuration: a mounted
 # /etc/webjet/webjetd.toml is used as is, otherwise one is generated from
 # WEBJET_* variables. On a fresh data volume it first enrolls the node
-# (WEBJET_ENROLL / WEBJET_ENROLL_FILE, with `webjetctl enroll`) or
+# (WEBJET_ENROLL / WEBJET_ENROLL_FILE, with `webjetctl local enroll`) or
 # initializes the first controller of a new network (WEBJET_GENESIS, with
-# `webjetctl init`).
+# `webjetctl local init`).
 #
 # Any other command (`webjetd signer`, webjetctl, sh) runs as given.
 set -eu
@@ -79,6 +79,10 @@ listen_line() { # key value-or-off
 }
 
 generate_config() {
+    # 0.4.0 moved limits into each node's configuration in the network tree.
+    if [ -n "${WEBJET_RELAY_CAPACITY_MBPS:-}" ] || [ -n "${WEBJET_RATE_CEILING_MBPS:-}" ]; then
+        die "WEBJET_RELAY_CAPACITY_MBPS and WEBJET_RATE_CEILING_MBPS are gone (0.4.0): set them as the node's configuration, e.g. \`webjetctl local config --node <name> set limits.value.relay_capacity_mbps 900\`, and remove the variables"
+    fi
     {
         echo "$MARK"
         printf 'data_dir = "%s"\n' "$(safe WEBJET_DATA_DIR "$DATA")"
@@ -113,12 +117,6 @@ generate_config() {
         if [ -n "${WEBJET_CONTROLLER:-}" ] && ! is_true "$WEBJET_CONTROLLER"; then echo "enabled = false"; fi
         [ -z "${WEBJET_SIGNER_SOCKET:-}" ] || printf 'signer_socket = "%s"\n' "$(safe WEBJET_SIGNER_SOCKET "$WEBJET_SIGNER_SOCKET")"
         [ -z "${WEBJET_HEAD_LIFETIME_HOURS:-}" ] || printf 'head_lifetime_hours = %d\n' "$WEBJET_HEAD_LIFETIME_HOURS"
-        if [ -n "${WEBJET_RELAY_CAPACITY_MBPS:-}" ] || [ -n "${WEBJET_RATE_CEILING_MBPS:-}" ]; then
-            echo
-            echo "[limits]"
-            [ -z "${WEBJET_RELAY_CAPACITY_MBPS:-}" ] || printf 'relay_capacity_mbps = %d\n' "$WEBJET_RELAY_CAPACITY_MBPS"
-            [ -z "${WEBJET_RATE_CEILING_MBPS:-}" ] || printf 'rate_ceiling_mbps = %d\n' "$WEBJET_RATE_CEILING_MBPS"
-        fi
         if [ -n "${WEBJET_PUBLIC:-}" ]; then
             echo
             old_ifs=$IFS; IFS=,
@@ -170,13 +168,13 @@ first_run() {
     if [ -n "${WEBJET_GENESIS:-}" ]; then
         [ -r "$WEBJET_GENESIS" ] || die "WEBJET_GENESIS $WEBJET_GENESIS is not readable"
         log "initializing the first controller of a new network from $WEBJET_GENESIS"
-        webjetctl init --genesis "$WEBJET_GENESIS"
+        webjetctl local init --genesis "$WEBJET_GENESIS"
         return 0
     fi
     ticket=$(enrollment_string)
     [ -n "$ticket" ] || die "this node is not enrolled: set WEBJET_ENROLL (or WEBJET_ENROLL_FILE) to its enrollment string, or WEBJET_GENESIS for the first controller of a new network"
     log "enrolling this node"
-    webjetctl enroll "$ticket"
+    webjetctl local enroll "$ticket"
 }
 
 case "${1:-}" in

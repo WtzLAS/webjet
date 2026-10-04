@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use webjetd::config::Config;
 
-/// The Webjet agent. Setting up a node (`webjetctl init`, `webjetctl enroll`)
+/// The Webjet agent. Setting up a node (`webjetctl local init`, `webjetctl local enroll`)
 /// and installing the service (`webjetup`) are done by the other programs.
 #[derive(Parser)]
 #[command(name = "webjetd", version, about = "The Webjet agent")]

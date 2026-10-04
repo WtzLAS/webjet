@@ -200,6 +200,31 @@ table TransportConfig {
     padding: PaddingScheme;
 }
 
+// The network-scope configuration as one document (§6.18). Applying it
+// writes the Policy, DnsConfig, Seeds, Limits and TransportConfig leaves in
+// one log entry, each with the document's version.
+table NetworkConfig {
+    version: uint64;
+    policy: Policy;
+    dns: DnsConfig;
+    seeds: Seeds;
+    limits: Limits;
+    transport: TransportConfig;
+}
+
+// Node-scope configuration (§6.19): one node's overrides of the network
+// configuration, set by the node's owner or an admin. Leaf kind NODE_CONFIG,
+// keyed by node_id.
+table NodeConfig {
+    node_id: Key32;
+    version: uint64;
+    priorities: [TransportPriority];   // replace the network's priorities
+    limits: [LimitValue];              // replace the network's limits
+    seeds: [SeedEntry];                // tried before the network's seeds
+    dns_records: [DnsRecord];          // answered by this node's resolver only
+    dns_forward: [ForwardZone];        // forwarded by this node's resolver only
+}
+
 // ---------------------------------------------------------------- controller certificates (§6.4-6.6)
 
 table SignedTreeHead {
@@ -441,12 +466,16 @@ table RekeyNode {
 
 table PutAccount { record: [ubyte]; }              // Signed(AccountRecord)
 table TombstoneAccount { tombstone: [ubyte]; }     // Signed(AccountTombstone)
+// SetPolicy … SetTransport are superseded by SetNetworkConfig (0.4.0) and
+// rejected by controllers; they stay for the union's numbering.
 table SetPolicy { policy: Policy; }
 table SetDns { config: DnsConfig; }
 table SetSeeds { seeds: Seeds; }
 table SetLimits { limits: Limits; }
 table SetTransport { config: TransportConfig; }
 table SetCamouflageSecret { private_key: [ubyte]; site: [ubyte]; }
+table SetNetworkConfig { config: NetworkConfig; }
+table SetNodeConfig { config: NodeConfig; }
 
 enum MembershipChange : ubyte { AddLearner = 1, Promote = 2, Demote = 3, Remove = 4 }
 table ChangeMembership { change: MembershipChange = AddLearner; node_id: Key32; }
@@ -469,6 +498,8 @@ union AccountOp {
     SetCamouflageSecret,
     ChangeMembership,
     RotatePsk,
+    SetNetworkConfig,
+    SetNodeConfig,
 }
 
 table SignedOp {

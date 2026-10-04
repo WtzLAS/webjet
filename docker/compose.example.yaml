@@ -82,6 +82,6 @@ volumes:
 
 secrets:
   node_enroll:
-    file: ./node.enroll       # the string from `webjetctl node enroll`
+    file: ./node.enroll       # the string from `webjetctl network node enroll`
   genesis:
     file: ./genesis.wj        # from `webjetctl root genesis`

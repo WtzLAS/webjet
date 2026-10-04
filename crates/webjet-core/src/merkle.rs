@@ -21,6 +21,8 @@ pub mod kind {
     pub const LIMITS: u8 = 6;
     pub const VALIDITY: u8 = 7;
     pub const TRANSPORT: u8 = 8;
+    /// Node-scope configuration, keyed by node_id (§6.19).
+    pub const NODE_CONFIG: u8 = 9;
 }
 
 pub fn path_of(kind: u8, key: &Bytes32) -> Bytes32 {

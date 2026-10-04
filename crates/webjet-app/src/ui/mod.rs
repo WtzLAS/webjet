@@ -287,7 +287,7 @@ impl WebjetApp {
         if self.accounts_on_disk.is_empty() {
             list = list.child(
                 div().text_color(rgb(theme::MUTED)).child(format!(
-                    "No account keys in {}. Create one with `webjetctl account keygen` and have an admin add it.",
+                    "No account keys in {}. Create one with `webjetctl network account keygen` and have an admin add it.",
                     self.keys.display()
                 )),
             );

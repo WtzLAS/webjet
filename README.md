@@ -20,7 +20,7 @@ A Rust implementation of the Webjet overlay VPN described in
 | `crates/webjet-core` | Pure logic: Ed25519 envelopes and BLAKE3 derivations, sparse Merkle tree, trust store and merge rules, deterministic controller state machine, policy engine, routing (k-shortest paths, load, hysteresis), e2e frames and replay window, packet parsing/NAT/ICMP, conntrack, FQ-CoDel hop queue with ECN |
 | `crates/webjet-net` | Transports: PSK gate and UDP obfuscation, raw-public-key TLS 1.3 with X25519MLKEM768 only, KCP + adaptive Reed–Solomon FEC with BBR-style pacing, AnyTLS (BoringSSL, Chrome-like ClientHello, camouflage website) |
 | `crates/webjetd` | The agent: hop sessions, gossip and Merkle anti-entropy, circuits (label switching), end-to-end sessions, path probing, hole punching, tun data plane, gateway, magic DNS, metrics, controller role (Raft, signing, enrollment), local control socket |
-| `crates/webjet-tools` | `webjetctl`: node setup (`init`, `enroll`), admin and node commands, and the offline root keys (`webjetctl root`) |
+| `crates/webjet-tools` | `webjetctl`: `network` (configuration and administration), `local` (this machine and node), `root` (offline keys); the TOML configuration documents |
 | `crates/webjet-app` | `webjet-app`, a GPUI desktop app: network overview, nodes, accounts; admin or read-only by account |
 
 ## Programs
@@ -29,8 +29,12 @@ A Rust implementation of the Webjet overlay VPN described in
 | --- | --- |
 | `webjetup` | `install` / `upgrade`, `enroll`, `status`, `list`, `remove`, `nuke`: installs and removes Webjet, including the system service (systemd, launchd, Windows service) |
 | `webjetd` | `run`: the agent. `signer`: holds a controller's signing key in a separate process (§19.2) |
-| `webjetctl` | This machine: `init` (first controller), `enroll` (join or re-key). This node: `status`, `peers`, `sessions`, `metrics`, `ping`, `inject`. Administration, signed with an account key: `account`, `node`, `policy`, `dns`, `seeds`, `limits`, `transport`, `psk`, `camouflage`, `controller`, `submit`. Offline: `root` (root and emergency keys: `init`, `backup`, `restore`, `show`, `genesis`, `admin`, `controller`, `account`, `node`, `state-version`) |
+| `webjetctl` | `network` — the whole network, signed with an account key: `config` (policy, DNS, seeds, transport, limits as one TOML document), `account`, `node`, `controller`, `psk`, `camouflage`, `submit`. `local` — this machine and its node: `init` (first controller), `enroll` (join or re-key), `status`, `peers`, `sessions`, `metrics`, `ping`, `inject`, and `config` (the node's own overrides of the network configuration). `root` — offline root and emergency keys: `init`, `backup`, `restore`, `show`, `genesis`, `admin`, `controller`, `account`, `node`, `state-version` |
 
+In 0.4.0 `webjetctl` was regrouped into `network`, `local` and `root`, and the
+five YAML settings files (`policy`, `dns`, `seeds`, `limits`, `transport`)
+became one TOML network configuration; `[transport]` and `[limits]` moved out
+of `webjetd.toml` into each node's configuration (`webjetctl local config`).
 Before 0.3.0, `webjetctl root` was a separate `webjet-root`, `webjetd signer`
 was `webjet-signer`, and `webjetctl init`/`enroll` were `webjetd init`/`enroll`;
 `webjetup` removes the old programs when it upgrades.
@@ -60,7 +64,7 @@ docker run -d --name webjet --restart unless-stopped \
   -v webjet-state:/var/lib/webjet \
   -e WEBJET_ENROLL="<enrollment string>" \
   webjet
-docker exec webjet webjetctl status
+docker exec webjet webjetctl local status
 ```
 
 [docs/docker.md](docs/docker.md) covers relays and published ports, the first
@@ -79,8 +83,8 @@ data plane answers pings itself.
 cargo build --workspace
 scripts/local-net.sh 3
 export WEBJET_KEYS=/tmp/webjet-local/keys WEBJET_ACCOUNT_PASSPHRASE=acct-pass
-target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock peers
-target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock ping node-03
+target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local peers
+target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local ping node-03
 scripts/local-net.sh stop
 ```
 
@@ -109,17 +113,18 @@ webjetctl root --dir ./root genesis --overlay-pool 10.7.0.0/16 --admin alice.acc
 webjetctl root --dir ./root controller sign ctl.req --out ctl.cert   # optional: admins can certify controllers
 
 # First controller
-webjetctl init --genesis genesis.wj && webjetd run
-webjetctl account keygen --name alice --pub-out alice.pub
-webjetctl node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.5:443
-webjetctl enroll 'wj1:…'
-webjetctl controller certify ctl-01     # admin-signed; or cert-request + root sign + submit
+webjetctl local init --genesis genesis.wj && webjetd run
+webjetctl network account keygen --name alice --pub-out alice.pub
+webjetctl network node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.5:443
+webjetctl local enroll 'wj1:…'
+webjetctl network controller certify ctl-01     # admin-signed; or cert-request + root sign + submit
 
 # Everyday administration
-webjetctl policy apply policy.yaml      # dns / seeds / limits / transport likewise
-webjetctl node enroll --owner bob --name laptop --tags tag:laptop
-webjetctl node revoke laptop;  webjetctl node rekey server-1
-webjetctl psk rotate;  webjetctl controller add-learner ctl-02 / promote / demote / remove
+webjetctl network config edit           # policy, DNS, seeds, transport, limits: one TOML document
+webjetctl local config --node relay-1 set limits.value.relay_capacity_mbps 900   # one node's override
+webjetctl network node enroll --owner bob --name laptop --tags tag:laptop
+webjetctl network node revoke laptop;  webjetctl network node rekey server-1
+webjetctl network psk rotate;  webjetctl network controller add-learner ctl-02 / promote / demote / remove
 ```
 
 The agent's configuration lives in `/etc/webjet/webjetd.toml`; every setting
@@ -136,8 +141,8 @@ macOS (x86_64 and aarch64) and Windows (x86_64).
 root:
 
 ```sh
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh | sudo sh
-sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl node enroll`
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.0/install.sh | sudo sh
+sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl network node enroll`
 ```
 
 Any release's `install.sh` works: it installs the latest release unless told
@@ -145,13 +150,13 @@ otherwise (Forgejo has no "latest" download link, so the URL names a tag).
 It downloads `webjetup` for the machine, checks it against its `.sha256` and
 runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
-`… | sudo sh -s -- v0.3.0` picks a version.
+`… | sudo sh -s -- v0.4.0` picks a version.
 
 On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
 release page and, in an Administrator prompt:
 
 ```powershell
-.\webjetup-v0.3.0-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
+.\webjetup-v0.4.0-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
 ```
 
 Then, on any platform:
@@ -210,7 +215,7 @@ On a controller, `GET /metrics` returns the latest report of **every** node
 in OpenMetrics text. Reports are shared between controllers, so any of them
 is a complete scrape target. Elsewhere it returns the node's own metrics, and
 a relay leaves out per-route series. Samples carry the report's timestamp.
-`webjetctl metrics [--all]` prints the same text.
+`webjetctl local metrics [--all]` prints the same text.
 
 ```yaml
 scrape_configs:

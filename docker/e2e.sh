@@ -30,59 +30,68 @@ x() { c=$1; shift; docker exec $c "$@"; }
 bg() { c=$1; shift; docker exec -d $c sh -c "$* > /var/log/webjetd.log 2>&1"; }
 CTL_IP=$(x $P-ctl hostname -i | awk '{print $1}')
 echo "== bootstrap on ctl-01 ($CTL_IP)"
-x $P-ctl sh -c 'cd /root && webjetctl root --dir root init >/dev/null && webjetctl account keygen --name alice --pub-out alice.pub >/dev/null &&
+x $P-ctl sh -c 'cd /root && webjetctl root --dir root init >/dev/null && webjetctl network account keygen --name alice --pub-out alice.pub >/dev/null &&
   webjetctl root --dir root admin sign --name alice --key alice.pub --out alice.account >/dev/null &&
   webjetctl root --dir root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj >/dev/null &&
-  webjetctl init --genesis genesis.wj >/dev/null'
+  webjetctl local init --genesis genesis.wj >/dev/null'
 bg $P-ctl webjetd run
 W() { x $P-ctl webjetctl --account alice "$@"; }
-i=0; until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do sleep 0.5; i=$((i+1)); [ $i -lt 60 ] || { echo "controller did not start"; x $P-ctl cat /var/log/webjetd.log; exit 1; }; done
-x $P-ctl sh -c 'cd /root && webjetctl account keygen --name infra --pub-out infra.pub >/dev/null'
-W account create --name infra --key /root/infra.pub
-T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller tls:$CTL_IP:443 2>/dev/null)
-x $P-ctl webjetctl enroll "$T" >/dev/null
-W controller certify ctl-01 >/dev/null
-x $P-ctl sh -c 'cat > /root/policy.yaml <<EOT
-version: 1
-default: deny
-rules:
-  - id: infra
-    action: allow
-    src: ["*"]
-    dst: ["node:ctl-01"]
-    ports: ["*"]
-  - id: a-to-b
-    action: allow
-    src: ["node:node-a"]
-    dst: ["node:node-b"]
-    ports: [icmp, "tcp:8080"]
-  - id: a-to-lan
-    action: allow
-    src: ["node:node-a"]
-    dst: ["cidr:192.168.50.0/24"]
-    ports: [icmp]
-tests:
-  - { src: node:node-b, dst: node:node-a, port: icmp, expect: deny }
-EOT
-cat > /root/dns.yaml <<EOT
-version: 1
-suffix: internal
-resolver_ip: [10.7.255.53]
-records:
-  - { name: web.internal, type: CNAME, value: node:node-b }
-EOT
-cat > /root/seeds.yaml <<EOT
-version: 1
-seeds:
-  - node: ctl-01
-    addrs: [tls:'"$CTL_IP"':443, kcp:'"$CTL_IP"':443]
+i=0; until W network controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do sleep 0.5; i=$((i+1)); [ $i -lt 60 ] || { echo "controller did not start"; x $P-ctl cat /var/log/webjetd.log; exit 1; }; done
+x $P-ctl sh -c 'cd /root && webjetctl network account keygen --name infra --pub-out infra.pub >/dev/null'
+W network account create --name infra --key /root/infra.pub
+T=$(W network node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller tls:$CTL_IP:443 2>/dev/null)
+x $P-ctl webjetctl local enroll "$T" >/dev/null
+W network controller certify ctl-01 >/dev/null
+x $P-ctl sh -c 'cat > /root/network.toml <<EOT
+version = 0
+
+[policy]
+default = "deny"
+
+[[policy.rule]]
+id = "infra"
+action = "allow"
+src = ["*"]
+dst = ["node:ctl-01"]
+ports = ["*"]
+
+[[policy.rule]]
+id = "a-to-b"
+action = "allow"
+src = ["node:node-a"]
+dst = ["node:node-b"]
+ports = ["icmp", "tcp:8080"]
+
+[[policy.rule]]
+id = "a-to-lan"
+action = "allow"
+src = ["node:node-a"]
+dst = ["cidr:192.168.50.0/24"]
+ports = ["icmp"]
+
+[[policy.test]]
+src = "node:node-b"
+dst = "node:node-a"
+port = "icmp"
+expect = "deny"
+
+[dns]
+suffix = "internal"
+resolver_ip = ["10.7.255.53"]
+
+[[dns.record]]
+name = "web.internal"
+type = "CNAME"
+value = "node:node-b"
+
+[[seeds]]
+node = "ctl-01"
+addrs = ["tls:'"$CTL_IP"':443", "kcp:'"$CTL_IP"':443"]
 EOT'
-W policy apply /root/policy.yaml
-W dns apply /root/dns.yaml
-W seeds apply /root/seeds.yaml
+W network config apply /root/network.toml
 enroll() { # container name ip [routes]
-  T=$(W node enroll --owner infra --name $2 --ip $3 --roles data $4 --controller tls:$CTL_IP:443 2>/dev/null)
-  x $1 webjetctl enroll "$T"
+  T=$(W network node enroll --owner infra --name $2 --ip $3 --roles data $4 --controller tls:$CTL_IP:443 2>/dev/null)
+  x $1 webjetctl local enroll "$T"
   bg $1 webjetd run
 }
 enroll $P-a node-a 10.7.0.10 ""
@@ -90,7 +99,7 @@ enroll $P-b node-b 10.7.0.11 ""
 enroll $P-gw gw 10.7.0.20 "--route 192.168.50.0/24"
 sleep 8
 echo "== node-a: peers and routes"
-x $P-a webjetctl peers
+x $P-a webjetctl local peers
 x $P-a ip route | grep webjet || true
 echo "== kernel ping node-a -> node-b over the overlay"
 x $P-a ping -c 3 -W 2 10.7.0.11
@@ -102,5 +111,5 @@ if x $P-b ping -c 2 -W 1 10.7.0.10 >/dev/null 2>&1; then echo "FAIL: deny not en
 echo "== gateway: node-a -> lanhost 192.168.50.10 via gw"
 x $P-a ping -c 3 -W 2 192.168.50.10
 echo "== sessions on node-a"
-x $P-a webjetctl sessions | grep -E "peer:|established|hops" | head -20
+x $P-a webjetctl local sessions | grep -E "peer:|established|hops" | head -20
 echo "E2E TEST PASSED"

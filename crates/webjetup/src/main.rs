@@ -58,7 +58,7 @@ enum Cmd {
         #[arg(long)]
         no_start: bool,
     },
-    /// Enroll this node with an enrollment string from `webjetctl node enroll`
+    /// Enroll this node with an enrollment string from `webjetctl network node enroll`
     /// and (re)start the agent. Also used to re-key a node.
     Enroll {
         /// The enrollment string (`wj1:…`); `-` reads it from stdin.
@@ -377,20 +377,25 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
     if !s.starts_with("wj1:") {
         bail!("that doesn't look like an enrollment string (they start with wj1:)");
     }
-    // Releases before 0.3.0 enrolled with `webjetd enroll`.
-    let legacy = installed_version(l).is_some_and(|v| layout::before_0_3(&v));
+    // Releases before 0.3.0 enrolled with `webjetd enroll`, 0.3.x with
+    // `webjetctl enroll`, later ones with `webjetctl local enroll`.
+    let version = installed_version(l);
+    let legacy = version.as_deref().is_some_and(layout::before_0_3);
+    let flat = version.as_deref().is_some_and(layout::before_0_4);
     let exe = l.program(if legacy { "webjetd" } else { "webjetctl" });
     if !exe.exists() && !sys.dry {
         bail!("Webjet isn't installed: run `webjetup install` first");
     }
     println!("==> Enrolling this node");
     let config = l.config.to_string_lossy();
-    let args: [&str; 4] = if legacy {
-        ["--config", &config, "enroll", s]
+    let args: Vec<&str> = if legacy {
+        vec!["--config", &config, "enroll", s]
+    } else if flat {
+        vec!["enroll", "--config", &config, s]
     } else {
-        ["enroll", "--config", &config, s]
+        vec!["local", "enroll", "--config", &config, s]
     };
-    // The first controller of a new network (`webjetctl init`) enrolls its
+    // The first controller of a new network (`webjetctl local init`) enrolls its
     // own node through its running agent, so it must not be stopped.
     if bootstrapping(l) {
         sys.run(&exe.to_string_lossy(), &args)?;
@@ -404,13 +409,13 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
     }
     system::setup_service(sys, l, start)?;
     if start {
-        println!("==> Enrolled; the agent is running. Check with `webjetctl status`.");
+        println!("==> Enrolled; the agent is running. Check with `webjetctl local status`.");
     }
     Ok(())
 }
 
 /// Whether this is a bootstrap controller that hasn't enrolled its node yet
-/// (`"bootstrap": true` in node.json, written by `webjetctl init`).
+/// (`"bootstrap": true` in node.json, written by `webjetctl local init`).
 fn bootstrapping(l: &Layout) -> bool {
     std::fs::read(l.data_dir.join("node.json"))
         .ok()

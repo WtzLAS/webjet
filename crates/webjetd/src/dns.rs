@@ -60,22 +60,26 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
     };
     let name = query.name().to_ascii();
     let qtype = query.query_type();
-    let (suffix, cfg) = {
+    // This node's own records and zones come first, then the network's
+    // (§6.19).
+    let (suffix, records, forwards) = {
         let s = n.store.read();
-        (s.view().suffix(), s.view().dns.clone())
+        let v = s.view();
+        (
+            v.suffix(),
+            v.dns_records_for(&n.me),
+            v.dns_forward_for(&n.me),
+        )
     };
     // Forwarded zones first: they never cover the suffix (§11.10.6).
-    if let Some(cfg) = &cfg {
-        for f in cfg.forward.clone().unwrap_or_default() {
-            let zone = f.zone.clone().unwrap_or_default();
-            if in_zone(&name, &zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, &f))
-            {
-                return forward(n, q, &f).await.unwrap_or_else(|| {
-                    let mut e = r.clone();
-                    e.set_response_code(ResponseCode::ServFail);
-                    e
-                });
-            }
+    for f in &forwards {
+        let zone = f.zone.clone().unwrap_or_default();
+        if in_zone(&name, &zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, f)) {
+            return forward(n, q, f).await.unwrap_or_else(|| {
+                let mut e = r.clone();
+                e.set_response_code(ResponseCode::ServFail);
+                e
+            });
         }
     }
     let mut answered = false;
@@ -95,10 +99,6 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
             answered = true;
         }
     }
-    let records = cfg
-        .as_ref()
-        .map(|c| c.records.clone().unwrap_or_default())
-        .unwrap_or_default();
     if !answered {
         answered = resolve(n, &name, qtype, &suffix, &records, &mut r, 0);
     }

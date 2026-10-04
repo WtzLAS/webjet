@@ -13,7 +13,7 @@ comments refer to it.
 | `webjet-core` | proto | Pure, deterministic logic: no I/O, no clocks except where passed in. |
 | `webjet-net` | core, proto | Transports. Feature `anytls` (default) pulls in BoringSSL. |
 | `webjetd` | core, net, proto | The agent (library + binary). Feature `anytls` forwards to `webjet-net`. |
-| `webjet-tools` | webjetd, core, net, proto | `webjetctl` (including `root`, `init`, `enroll`); also the shared account-key code (`Account::unlock`, `sign`). |
+| `webjet-tools` | webjetd, core, net, proto | `webjetctl` (`network`, `local`, `root`); `config.rs` is the TOML network/node configuration document (parse, scope checks, wire conversion, show, get/set/unset); also the shared account-key code (`Account::unlock`, `sign`). |
 | `webjet-app` | webjetd, tools, core, proto | GPUI desktop app. `model` and `client` are GUI-free and unit-tested; `ui` is the GPUI front end. |
 
 Edition 2024, `rust-version = "1.88"`.
@@ -158,7 +158,7 @@ Notes:
 - `local-net.sh` uses fixed passphrases from the environment
   (`WEBJET_ROOT_PASSPHRASE`, `WEBJET_ACCOUNT_PASSPHRASE`) and keys in
   `/tmp/webjet-local/keys`. Query a node with
-  `target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock status`.
+  `target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local status`.
 - macOS has no `timeout`; use `perl -e 'alarm shift; exec @ARGV' 5 <cmd>`.
 - `docker/e2e.sh` uses the `test` image: `docker build --target test -t webjet:test .`
 - `docker/tpm-test.sh` sets `TPM2TOOLS_TCTI` to the software TPM and runs

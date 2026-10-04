@@ -36924,10 +36924,1191 @@ mod root {
             }
         }
 
+        /// The table `NetworkConfig` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:206`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct NetworkConfig {
+            /// The field `version` in the table `NetworkConfig`
+            pub version: u64,
+            /// The field `policy` in the table `NetworkConfig`
+            pub policy: ::core::option::Option<::planus::alloc::boxed::Box<self::Policy>>,
+            /// The field `dns` in the table `NetworkConfig`
+            pub dns: ::core::option::Option<::planus::alloc::boxed::Box<self::DnsConfig>>,
+            /// The field `seeds` in the table `NetworkConfig`
+            pub seeds: ::core::option::Option<::planus::alloc::boxed::Box<self::Seeds>>,
+            /// The field `limits` in the table `NetworkConfig`
+            pub limits: ::core::option::Option<::planus::alloc::boxed::Box<self::Limits>>,
+            /// The field `transport` in the table `NetworkConfig`
+            pub transport:
+                ::core::option::Option<::planus::alloc::boxed::Box<self::TransportConfig>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for NetworkConfig {
+            fn default() -> Self {
+                Self {
+                    version: 0,
+                    policy: ::core::default::Default::default(),
+                    dns: ::core::default::Default::default(),
+                    seeds: ::core::default::Default::default(),
+                    limits: ::core::default::Default::default(),
+                    transport: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl NetworkConfig {
+            /// Creates a [NetworkConfigBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> NetworkConfigBuilder<()> {
+                NetworkConfigBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_version: impl ::planus::WriteAsDefault<u64, u64>,
+                field_policy: impl ::planus::WriteAsOptional<::planus::Offset<self::Policy>>,
+                field_dns: impl ::planus::WriteAsOptional<::planus::Offset<self::DnsConfig>>,
+                field_seeds: impl ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
+                field_limits: impl ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
+                field_transport: impl ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_version = field_version.prepare(builder, &0);
+                let prepared_policy = field_policy.prepare(builder);
+                let prepared_dns = field_dns.prepare(builder);
+                let prepared_seeds = field_seeds.prepare(builder);
+                let prepared_limits = field_limits.prepare(builder);
+                let prepared_transport = field_transport.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<16> =
+                    ::core::default::Default::default();
+                if prepared_version.is_some() {
+                    table_writer.write_entry::<u64>(0);
+                }
+                if prepared_policy.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::Policy>>(1);
+                }
+                if prepared_dns.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::DnsConfig>>(2);
+                }
+                if prepared_seeds.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::Seeds>>(3);
+                }
+                if prepared_limits.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::Limits>>(4);
+                }
+                if prepared_transport.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::TransportConfig>>(5);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_version) = prepared_version {
+                            object_writer.write::<_, _, 8>(&prepared_version);
+                        }
+                        if let ::core::option::Option::Some(prepared_policy) = prepared_policy {
+                            object_writer.write::<_, _, 4>(&prepared_policy);
+                        }
+                        if let ::core::option::Option::Some(prepared_dns) = prepared_dns {
+                            object_writer.write::<_, _, 4>(&prepared_dns);
+                        }
+                        if let ::core::option::Option::Some(prepared_seeds) = prepared_seeds {
+                            object_writer.write::<_, _, 4>(&prepared_seeds);
+                        }
+                        if let ::core::option::Option::Some(prepared_limits) = prepared_limits {
+                            object_writer.write::<_, _, 4>(&prepared_limits);
+                        }
+                        if let ::core::option::Option::Some(prepared_transport) = prepared_transport
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_transport);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<NetworkConfig>> for NetworkConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<NetworkConfig>> for NetworkConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NetworkConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<NetworkConfig> for NetworkConfig {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig> {
+                NetworkConfig::create(
+                    builder,
+                    self.version,
+                    &self.policy,
+                    &self.dns,
+                    &self.seeds,
+                    &self.limits,
+                    &self.transport,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [NetworkConfig] type.
+        ///
+        /// Can be created using the [NetworkConfig::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct NetworkConfigBuilder<State>(State);
+
+        impl NetworkConfigBuilder<()> {
+            /// Setter for the [`version` field](NetworkConfig#structfield.version).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version<T0>(self, value: T0) -> NetworkConfigBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<u64, u64>,
+            {
+                NetworkConfigBuilder((value,))
+            }
+
+            /// Sets the [`version` field](NetworkConfig#structfield.version) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version_as_default(self) -> NetworkConfigBuilder<(::planus::DefaultValue,)> {
+                self.version(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> NetworkConfigBuilder<(T0,)> {
+            /// Setter for the [`policy` field](NetworkConfig#structfield.policy).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn policy<T1>(self, value: T1) -> NetworkConfigBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::Policy>>,
+            {
+                let (v0,) = self.0;
+                NetworkConfigBuilder((v0, value))
+            }
+
+            /// Sets the [`policy` field](NetworkConfig#structfield.policy) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn policy_as_null(self) -> NetworkConfigBuilder<(T0, ())> {
+                self.policy(())
+            }
+        }
+
+        impl<T0, T1> NetworkConfigBuilder<(T0, T1)> {
+            /// Setter for the [`dns` field](NetworkConfig#structfield.dns).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dns<T2>(self, value: T2) -> NetworkConfigBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<::planus::Offset<self::DnsConfig>>,
+            {
+                let (v0, v1) = self.0;
+                NetworkConfigBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`dns` field](NetworkConfig#structfield.dns) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dns_as_null(self) -> NetworkConfigBuilder<(T0, T1, ())> {
+                self.dns(())
+            }
+        }
+
+        impl<T0, T1, T2> NetworkConfigBuilder<(T0, T1, T2)> {
+            /// Setter for the [`seeds` field](NetworkConfig#structfield.seeds).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn seeds<T3>(self, value: T3) -> NetworkConfigBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
+            {
+                let (v0, v1, v2) = self.0;
+                NetworkConfigBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`seeds` field](NetworkConfig#structfield.seeds) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn seeds_as_null(self) -> NetworkConfigBuilder<(T0, T1, T2, ())> {
+                self.seeds(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> NetworkConfigBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`limits` field](NetworkConfig#structfield.limits).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn limits<T4>(self, value: T4) -> NetworkConfigBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                NetworkConfigBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`limits` field](NetworkConfig#structfield.limits) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn limits_as_null(self) -> NetworkConfigBuilder<(T0, T1, T2, T3, ())> {
+                self.limits(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> NetworkConfigBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`transport` field](NetworkConfig#structfield.transport).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn transport<T5>(self, value: T5) -> NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                NetworkConfigBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`transport` field](NetworkConfig#structfield.transport) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn transport_as_null(self) -> NetworkConfigBuilder<(T0, T1, T2, T3, T4, ())> {
+                self.transport(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NetworkConfig].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig>
+            where
+                Self: ::planus::WriteAsOffset<NetworkConfig>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::Policy>>,
+                T2: ::planus::WriteAsOptional<::planus::Offset<self::DnsConfig>>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+            > ::planus::WriteAs<::planus::Offset<NetworkConfig>>
+            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+        {
+            type Prepared = ::planus::Offset<NetworkConfig>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::Policy>>,
+                T2: ::planus::WriteAsOptional<::planus::Offset<self::DnsConfig>>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+            > ::planus::WriteAsOptional<::planus::Offset<NetworkConfig>>
+            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+        {
+            type Prepared = ::planus::Offset<NetworkConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NetworkConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::Policy>>,
+                T2: ::planus::WriteAsOptional<::planus::Offset<self::DnsConfig>>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+            > ::planus::WriteAsOffset<NetworkConfig>
+            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig> {
+                let (v0, v1, v2, v3, v4, v5) = &self.0;
+                NetworkConfig::create(builder, v0, v1, v2, v3, v4, v5)
+            }
+        }
+
+        /// Reference to a deserialized [NetworkConfig].
+        #[derive(Copy, Clone)]
+        pub struct NetworkConfigRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> NetworkConfigRef<'a> {
+            /// Getter for the [`version` field](NetworkConfig#structfield.version).
+            #[inline]
+            pub fn version(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(0, "NetworkConfig", "version")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`policy` field](NetworkConfig#structfield.policy).
+            #[inline]
+            pub fn policy(&self) -> ::planus::Result<::core::option::Option<self::PolicyRef<'a>>> {
+                self.0.access(1, "NetworkConfig", "policy")
+            }
+
+            /// Getter for the [`dns` field](NetworkConfig#structfield.dns).
+            #[inline]
+            pub fn dns(&self) -> ::planus::Result<::core::option::Option<self::DnsConfigRef<'a>>> {
+                self.0.access(2, "NetworkConfig", "dns")
+            }
+
+            /// Getter for the [`seeds` field](NetworkConfig#structfield.seeds).
+            #[inline]
+            pub fn seeds(&self) -> ::planus::Result<::core::option::Option<self::SeedsRef<'a>>> {
+                self.0.access(3, "NetworkConfig", "seeds")
+            }
+
+            /// Getter for the [`limits` field](NetworkConfig#structfield.limits).
+            #[inline]
+            pub fn limits(&self) -> ::planus::Result<::core::option::Option<self::LimitsRef<'a>>> {
+                self.0.access(4, "NetworkConfig", "limits")
+            }
+
+            /// Getter for the [`transport` field](NetworkConfig#structfield.transport).
+            #[inline]
+            pub fn transport(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::TransportConfigRef<'a>>>
+            {
+                self.0.access(5, "NetworkConfig", "transport")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for NetworkConfigRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("NetworkConfigRef");
+                f.field("version", &self.version());
+                if let ::core::option::Option::Some(field_policy) = self.policy().transpose() {
+                    f.field("policy", &field_policy);
+                }
+                if let ::core::option::Option::Some(field_dns) = self.dns().transpose() {
+                    f.field("dns", &field_dns);
+                }
+                if let ::core::option::Option::Some(field_seeds) = self.seeds().transpose() {
+                    f.field("seeds", &field_seeds);
+                }
+                if let ::core::option::Option::Some(field_limits) = self.limits().transpose() {
+                    f.field("limits", &field_limits);
+                }
+                if let ::core::option::Option::Some(field_transport) = self.transport().transpose()
+                {
+                    f.field("transport", &field_transport);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<NetworkConfigRef<'a>> for NetworkConfig {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: NetworkConfigRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    version: ::core::convert::TryInto::try_into(value.version()?)?,
+                    policy: if let ::core::option::Option::Some(policy) = value.policy()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(policy)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    dns: if let ::core::option::Option::Some(dns) = value.dns()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(dns)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    seeds: if let ::core::option::Option::Some(seeds) = value.seeds()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(seeds)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    limits: if let ::core::option::Option::Some(limits) = value.limits()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(limits)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    transport: if let ::core::option::Option::Some(transport) = value.transport()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(transport)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for NetworkConfigRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for NetworkConfigRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[NetworkConfigRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<NetworkConfig>> for NetworkConfig {
+            type Value = ::planus::Offset<NetworkConfig>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<NetworkConfig>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for NetworkConfigRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[NetworkConfigRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `NodeConfig` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `NodeConfig` in the file `schema/webjet.fbs:218`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct NodeConfig {
+            /// The field `node_id` in the table `NodeConfig`
+            pub node_id: ::core::option::Option<self::Key32>,
+            /// The field `version` in the table `NodeConfig`
+            pub version: u64,
+            /// The field `priorities` in the table `NodeConfig`
+            pub priorities:
+                ::core::option::Option<::planus::alloc::vec::Vec<self::TransportPriority>>,
+            /// The field `limits` in the table `NodeConfig`
+            pub limits: ::core::option::Option<::planus::alloc::vec::Vec<self::LimitValue>>,
+            /// The field `seeds` in the table `NodeConfig`
+            pub seeds: ::core::option::Option<::planus::alloc::vec::Vec<self::SeedEntry>>,
+            /// The field `dns_records` in the table `NodeConfig`
+            pub dns_records: ::core::option::Option<::planus::alloc::vec::Vec<self::DnsRecord>>,
+            /// The field `dns_forward` in the table `NodeConfig`
+            pub dns_forward: ::core::option::Option<::planus::alloc::vec::Vec<self::ForwardZone>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for NodeConfig {
+            fn default() -> Self {
+                Self {
+                    node_id: ::core::default::Default::default(),
+                    version: 0,
+                    priorities: ::core::default::Default::default(),
+                    limits: ::core::default::Default::default(),
+                    seeds: ::core::default::Default::default(),
+                    dns_records: ::core::default::Default::default(),
+                    dns_forward: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl NodeConfig {
+            /// Creates a [NodeConfigBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> NodeConfigBuilder<()> {
+                NodeConfigBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_node_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_version: impl ::planus::WriteAsDefault<u64, u64>,
+                field_priorities: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
+                >,
+                field_limits: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::LimitValue>]>,
+                >,
+                field_seeds: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::SeedEntry>]>,
+                >,
+                field_dns_records: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::DnsRecord>]>,
+                >,
+                field_dns_forward: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::ForwardZone>]>,
+                >,
+            ) -> ::planus::Offset<Self> {
+                let prepared_node_id = field_node_id.prepare(builder);
+                let prepared_version = field_version.prepare(builder, &0);
+                let prepared_priorities = field_priorities.prepare(builder);
+                let prepared_limits = field_limits.prepare(builder);
+                let prepared_seeds = field_seeds.prepare(builder);
+                let prepared_dns_records = field_dns_records.prepare(builder);
+                let prepared_dns_forward = field_dns_forward.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
+                    ::core::default::Default::default();
+                if prepared_node_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+                if prepared_version.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+                if prepared_priorities.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[::planus::Offset<self::TransportPriority>]>>(2);
+                }
+                if prepared_limits.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::LimitValue>]>>(3);
+                }
+                if prepared_seeds.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>(4);
+                }
+                if prepared_dns_records.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>(5);
+                }
+                if prepared_dns_forward.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>(6);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_node_id) = prepared_node_id {
+                            object_writer.write::<_, _, 32>(&prepared_node_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_version) = prepared_version {
+                            object_writer.write::<_, _, 8>(&prepared_version);
+                        }
+                        if let ::core::option::Option::Some(prepared_priorities) =
+                            prepared_priorities
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_priorities);
+                        }
+                        if let ::core::option::Option::Some(prepared_limits) = prepared_limits {
+                            object_writer.write::<_, _, 4>(&prepared_limits);
+                        }
+                        if let ::core::option::Option::Some(prepared_seeds) = prepared_seeds {
+                            object_writer.write::<_, _, 4>(&prepared_seeds);
+                        }
+                        if let ::core::option::Option::Some(prepared_dns_records) =
+                            prepared_dns_records
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_dns_records);
+                        }
+                        if let ::core::option::Option::Some(prepared_dns_forward) =
+                            prepared_dns_forward
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_dns_forward);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<NodeConfig>> for NodeConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<NodeConfig>> for NodeConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NodeConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<NodeConfig> for NodeConfig {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
+                NodeConfig::create(
+                    builder,
+                    self.node_id,
+                    self.version,
+                    &self.priorities,
+                    &self.limits,
+                    &self.seeds,
+                    &self.dns_records,
+                    &self.dns_forward,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [NodeConfig] type.
+        ///
+        /// Can be created using the [NodeConfig::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct NodeConfigBuilder<State>(State);
+
+        impl NodeConfigBuilder<()> {
+            /// Setter for the [`node_id` field](NodeConfig#structfield.node_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id<T0>(self, value: T0) -> NodeConfigBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                NodeConfigBuilder((value,))
+            }
+
+            /// Sets the [`node_id` field](NodeConfig#structfield.node_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id_as_null(self) -> NodeConfigBuilder<((),)> {
+                self.node_id(())
+            }
+        }
+
+        impl<T0> NodeConfigBuilder<(T0,)> {
+            /// Setter for the [`version` field](NodeConfig#structfield.version).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version<T1>(self, value: T1) -> NodeConfigBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                NodeConfigBuilder((v0, value))
+            }
+
+            /// Sets the [`version` field](NodeConfig#structfield.version) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version_as_default(self) -> NodeConfigBuilder<(T0, ::planus::DefaultValue)> {
+                self.version(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> NodeConfigBuilder<(T0, T1)> {
+            /// Setter for the [`priorities` field](NodeConfig#structfield.priorities).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn priorities<T2>(self, value: T2) -> NodeConfigBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
+                >,
+            {
+                let (v0, v1) = self.0;
+                NodeConfigBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`priorities` field](NodeConfig#structfield.priorities) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn priorities_as_null(self) -> NodeConfigBuilder<(T0, T1, ())> {
+                self.priorities(())
+            }
+        }
+
+        impl<T0, T1, T2> NodeConfigBuilder<(T0, T1, T2)> {
+            /// Setter for the [`limits` field](NodeConfig#structfield.limits).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn limits<T3>(self, value: T3) -> NodeConfigBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::LimitValue>]>,
+                >,
+            {
+                let (v0, v1, v2) = self.0;
+                NodeConfigBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`limits` field](NodeConfig#structfield.limits) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn limits_as_null(self) -> NodeConfigBuilder<(T0, T1, T2, ())> {
+                self.limits(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> NodeConfigBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`seeds` field](NodeConfig#structfield.seeds).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn seeds<T4>(self, value: T4) -> NodeConfigBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::SeedEntry>]>,
+                >,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                NodeConfigBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`seeds` field](NodeConfig#structfield.seeds) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn seeds_as_null(self) -> NodeConfigBuilder<(T0, T1, T2, T3, ())> {
+                self.seeds(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> NodeConfigBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`dns_records` field](NodeConfig#structfield.dns_records).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dns_records<T5>(self, value: T5) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::DnsRecord>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                NodeConfigBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`dns_records` field](NodeConfig#structfield.dns_records) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dns_records_as_null(self) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, ())> {
+                self.dns_records(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`dns_forward` field](NodeConfig#structfield.dns_forward).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dns_forward<T6>(
+                self,
+                value: T6,
+            ) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::ForwardZone>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                NodeConfigBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`dns_forward` field](NodeConfig#structfield.dns_forward) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dns_forward_as_null(self) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, ())> {
+                self.dns_forward(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NodeConfig].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig>
+            where
+                Self: ::planus::WriteAsOffset<NodeConfig>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
+                >,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LimitValue>]>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
+            > ::planus::WriteAs<::planus::Offset<NodeConfig>>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+        {
+            type Prepared = ::planus::Offset<NodeConfig>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
+                >,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LimitValue>]>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
+            > ::planus::WriteAsOptional<::planus::Offset<NodeConfig>>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+        {
+            type Prepared = ::planus::Offset<NodeConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NodeConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
+                >,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LimitValue>]>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
+            > ::planus::WriteAsOffset<NodeConfig>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6)
+            }
+        }
+
+        /// Reference to a deserialized [NodeConfig].
+        #[derive(Copy, Clone)]
+        pub struct NodeConfigRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> NodeConfigRef<'a> {
+            /// Getter for the [`node_id` field](NodeConfig#structfield.node_id).
+            #[inline]
+            pub fn node_id(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "NodeConfig", "node_id")
+            }
+
+            /// Getter for the [`version` field](NodeConfig#structfield.version).
+            #[inline]
+            pub fn version(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(1, "NodeConfig", "version")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`priorities` field](NodeConfig#structfield.priorities).
+            #[inline]
+            pub fn priorities(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::TransportPriorityRef<'a>>>,
+                >,
+            > {
+                self.0.access(2, "NodeConfig", "priorities")
+            }
+
+            /// Getter for the [`limits` field](NodeConfig#structfield.limits).
+            #[inline]
+            pub fn limits(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::LimitValueRef<'a>>>,
+                >,
+            > {
+                self.0.access(3, "NodeConfig", "limits")
+            }
+
+            /// Getter for the [`seeds` field](NodeConfig#structfield.seeds).
+            #[inline]
+            pub fn seeds(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::SeedEntryRef<'a>>>,
+                >,
+            > {
+                self.0.access(4, "NodeConfig", "seeds")
+            }
+
+            /// Getter for the [`dns_records` field](NodeConfig#structfield.dns_records).
+            #[inline]
+            pub fn dns_records(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::DnsRecordRef<'a>>>,
+                >,
+            > {
+                self.0.access(5, "NodeConfig", "dns_records")
+            }
+
+            /// Getter for the [`dns_forward` field](NodeConfig#structfield.dns_forward).
+            #[inline]
+            pub fn dns_forward(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::ForwardZoneRef<'a>>>,
+                >,
+            > {
+                self.0.access(6, "NodeConfig", "dns_forward")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for NodeConfigRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("NodeConfigRef");
+                if let ::core::option::Option::Some(field_node_id) = self.node_id().transpose() {
+                    f.field("node_id", &field_node_id);
+                }
+                f.field("version", &self.version());
+                if let ::core::option::Option::Some(field_priorities) =
+                    self.priorities().transpose()
+                {
+                    f.field("priorities", &field_priorities);
+                }
+                if let ::core::option::Option::Some(field_limits) = self.limits().transpose() {
+                    f.field("limits", &field_limits);
+                }
+                if let ::core::option::Option::Some(field_seeds) = self.seeds().transpose() {
+                    f.field("seeds", &field_seeds);
+                }
+                if let ::core::option::Option::Some(field_dns_records) =
+                    self.dns_records().transpose()
+                {
+                    f.field("dns_records", &field_dns_records);
+                }
+                if let ::core::option::Option::Some(field_dns_forward) =
+                    self.dns_forward().transpose()
+                {
+                    f.field("dns_forward", &field_dns_forward);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<NodeConfigRef<'a>> for NodeConfig {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: NodeConfigRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    node_id: value.node_id()?.map(::core::convert::Into::into),
+                    version: ::core::convert::TryInto::try_into(value.version()?)?,
+                    priorities: if let ::core::option::Option::Some(priorities) =
+                        value.priorities()?
+                    {
+                        ::core::option::Option::Some(priorities.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    limits: if let ::core::option::Option::Some(limits) = value.limits()? {
+                        ::core::option::Option::Some(limits.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    seeds: if let ::core::option::Option::Some(seeds) = value.seeds()? {
+                        ::core::option::Option::Some(seeds.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    dns_records: if let ::core::option::Option::Some(dns_records) =
+                        value.dns_records()?
+                    {
+                        ::core::option::Option::Some(dns_records.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    dns_forward: if let ::core::option::Option::Some(dns_forward) =
+                        value.dns_forward()?
+                    {
+                        ::core::option::Option::Some(dns_forward.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for NodeConfigRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for NodeConfigRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[NodeConfigRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<NodeConfig>> for NodeConfig {
+            type Value = ::planus::Offset<NodeConfig>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<NodeConfig>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for NodeConfigRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[NodeConfigRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `SignedTreeHead` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:205`
+        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:230`
         #[derive(
             Clone,
             Debug,
@@ -37453,7 +38634,7 @@ mod root {
         /// The table `SigningKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:214`
+        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:239`
         #[derive(
             Clone,
             Debug,
@@ -37932,7 +39113,7 @@ mod root {
         /// The table `SigningKeyTombstone` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:222`
+        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:247`
         #[derive(
             Clone,
             Debug,
@@ -38330,7 +39511,7 @@ mod root {
         /// The table `EmergencyKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:229`
+        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:254`
         #[derive(
             Clone,
             Debug,
@@ -38613,7 +39794,7 @@ mod root {
         /// The table `TypeSchema` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchema` in the file `schema/webjet.fbs:233`
+        /// * Table `TypeSchema` in the file `schema/webjet.fbs:258`
         #[derive(
             Clone,
             Debug,
@@ -38917,7 +40098,7 @@ mod root {
         /// The table `TypeSchemas` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:234`
+        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:259`
         #[derive(
             Clone,
             Debug,
@@ -39235,7 +40416,7 @@ mod root {
         /// The table `StateVersion` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `StateVersion` in the file `schema/webjet.fbs:236`
+        /// * Table `StateVersion` in the file `schema/webjet.fbs:261`
         #[derive(
             Clone,
             Debug,
@@ -39795,7 +40976,7 @@ mod root {
         /// The table `Genesis` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Genesis` in the file `schema/webjet.fbs:246`
+        /// * Table `Genesis` in the file `schema/webjet.fbs:271`
         #[derive(
             Clone,
             Debug,
@@ -40268,7 +41449,7 @@ mod root {
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:256`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:281`
         #[derive(
             Clone,
             Debug,
@@ -40678,7 +41859,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:263`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:288`
         #[derive(
             Clone,
             Debug,
@@ -41520,7 +42701,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:277`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:302`
         #[derive(
             Clone,
             Debug,
@@ -41975,7 +43156,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:285`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:310`
         #[derive(
             Clone,
             Debug,
@@ -42434,7 +43615,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:293`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:318`
         #[derive(
             Clone,
             Debug,
@@ -42982,7 +44163,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:302`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:327`
         #[derive(
             Clone,
             Debug,
@@ -43418,7 +44599,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:309`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:334`
         #[derive(
             Clone,
             Debug,
@@ -43922,7 +45103,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:317`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:342`
         #[derive(
             Clone,
             Debug,
@@ -44432,7 +45613,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:328`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:353`
         #[derive(
             Clone,
             Debug,
@@ -44794,7 +45975,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:336`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:361`
         #[derive(
             Copy,
             Clone,
@@ -44967,7 +46148,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:338`
+        /// * Table `Counter` in the file `schema/webjet.fbs:363`
         #[derive(
             Clone,
             Debug,
@@ -45276,7 +46457,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:340`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:365`
         #[derive(
             Clone,
             Debug,
@@ -45575,7 +46756,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:342`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:367`
         #[derive(
             Clone,
             Debug,
@@ -45973,7 +47154,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:349`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:374`
         #[derive(
             Clone,
             Debug,
@@ -46839,7 +48020,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:364`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:389`
         #[derive(
             Clone,
             Debug,
@@ -47864,7 +49045,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:381`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:406`
         #[derive(
             Clone,
             Debug,
@@ -48220,7 +49401,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:383`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:408`
         #[derive(
             Clone,
             Debug,
@@ -48575,7 +49756,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:385`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:410`
         #[derive(
             Clone,
             Debug,
@@ -49545,7 +50726,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:403`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:428`
         #[derive(
             Clone,
             Debug,
@@ -50394,7 +51575,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:417`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:442`
         #[derive(
             Clone,
             Debug,
@@ -50710,7 +51891,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:419`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:444`
         #[derive(
             Clone,
             Debug,
@@ -51521,7 +52702,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:433`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:458`
         #[derive(
             Clone,
             Debug,
@@ -51838,7 +53019,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:435`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:460`
         #[derive(
             Clone,
             Debug,
@@ -52263,7 +53444,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:442`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:467`
         #[derive(
             Clone,
             Debug,
@@ -52529,7 +53710,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:443`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:468`
         #[derive(
             Clone,
             Debug,
@@ -52814,7 +53995,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:444`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:471`
         #[derive(
             Clone,
             Debug,
@@ -53086,7 +54267,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:445`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:472`
         #[derive(
             Clone,
             Debug,
@@ -53356,7 +54537,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:446`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:473`
         #[derive(
             Clone,
             Debug,
@@ -53624,7 +54805,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:447`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:474`
         #[derive(
             Clone,
             Debug,
@@ -53896,7 +55077,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:448`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:475`
         #[derive(
             Clone,
             Debug,
@@ -54172,7 +55353,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:449`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:476`
         #[derive(
             Clone,
             Debug,
@@ -54506,10 +55687,576 @@ mod root {
             }
         }
 
+        /// The table `SetNetworkConfig` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:477`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct SetNetworkConfig {
+            /// The field `config` in the table `SetNetworkConfig`
+            pub config: ::core::option::Option<::planus::alloc::boxed::Box<self::NetworkConfig>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for SetNetworkConfig {
+            fn default() -> Self {
+                Self {
+                    config: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl SetNetworkConfig {
+            /// Creates a [SetNetworkConfigBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> SetNetworkConfigBuilder<()> {
+                SetNetworkConfigBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_config: impl ::planus::WriteAsOptional<::planus::Offset<self::NetworkConfig>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_config = field_config.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_config.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::NetworkConfig>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_config) = prepared_config {
+                            object_writer.write::<_, _, 4>(&prepared_config);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<SetNetworkConfig>> for SetNetworkConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SetNetworkConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<SetNetworkConfig>> for SetNetworkConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SetNetworkConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<SetNetworkConfig> for SetNetworkConfig {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SetNetworkConfig> {
+                SetNetworkConfig::create(builder, &self.config)
+            }
+        }
+
+        /// Builder for serializing an instance of the [SetNetworkConfig] type.
+        ///
+        /// Can be created using the [SetNetworkConfig::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct SetNetworkConfigBuilder<State>(State);
+
+        impl SetNetworkConfigBuilder<()> {
+            /// Setter for the [`config` field](SetNetworkConfig#structfield.config).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn config<T0>(self, value: T0) -> SetNetworkConfigBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<self::NetworkConfig>>,
+            {
+                SetNetworkConfigBuilder((value,))
+            }
+
+            /// Sets the [`config` field](SetNetworkConfig#structfield.config) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn config_as_null(self) -> SetNetworkConfigBuilder<((),)> {
+                self.config(())
+            }
+        }
+
+        impl<T0> SetNetworkConfigBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [SetNetworkConfig].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SetNetworkConfig>
+            where
+                Self: ::planus::WriteAsOffset<SetNetworkConfig>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<self::NetworkConfig>>>
+            ::planus::WriteAs<::planus::Offset<SetNetworkConfig>>
+            for SetNetworkConfigBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<SetNetworkConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SetNetworkConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<self::NetworkConfig>>>
+            ::planus::WriteAsOptional<::planus::Offset<SetNetworkConfig>>
+            for SetNetworkConfigBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<SetNetworkConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SetNetworkConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<self::NetworkConfig>>>
+            ::planus::WriteAsOffset<SetNetworkConfig> for SetNetworkConfigBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SetNetworkConfig> {
+                let (v0,) = &self.0;
+                SetNetworkConfig::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [SetNetworkConfig].
+        #[derive(Copy, Clone)]
+        pub struct SetNetworkConfigRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> SetNetworkConfigRef<'a> {
+            /// Getter for the [`config` field](SetNetworkConfig#structfield.config).
+            #[inline]
+            pub fn config(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::NetworkConfigRef<'a>>> {
+                self.0.access(0, "SetNetworkConfig", "config")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for SetNetworkConfigRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("SetNetworkConfigRef");
+                if let ::core::option::Option::Some(field_config) = self.config().transpose() {
+                    f.field("config", &field_config);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<SetNetworkConfigRef<'a>> for SetNetworkConfig {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: SetNetworkConfigRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    config: if let ::core::option::Option::Some(config) = value.config()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(config)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for SetNetworkConfigRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for SetNetworkConfigRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[SetNetworkConfigRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<SetNetworkConfig>> for SetNetworkConfig {
+            type Value = ::planus::Offset<SetNetworkConfig>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<SetNetworkConfig>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for SetNetworkConfigRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[SetNetworkConfigRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `SetNodeConfig` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:478`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct SetNodeConfig {
+            /// The field `config` in the table `SetNodeConfig`
+            pub config: ::core::option::Option<::planus::alloc::boxed::Box<self::NodeConfig>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for SetNodeConfig {
+            fn default() -> Self {
+                Self {
+                    config: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl SetNodeConfig {
+            /// Creates a [SetNodeConfigBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> SetNodeConfigBuilder<()> {
+                SetNodeConfigBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_config: impl ::planus::WriteAsOptional<::planus::Offset<self::NodeConfig>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_config = field_config.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_config.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::NodeConfig>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_config) = prepared_config {
+                            object_writer.write::<_, _, 4>(&prepared_config);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<SetNodeConfig>> for SetNodeConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SetNodeConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<SetNodeConfig>> for SetNodeConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SetNodeConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<SetNodeConfig> for SetNodeConfig {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SetNodeConfig> {
+                SetNodeConfig::create(builder, &self.config)
+            }
+        }
+
+        /// Builder for serializing an instance of the [SetNodeConfig] type.
+        ///
+        /// Can be created using the [SetNodeConfig::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct SetNodeConfigBuilder<State>(State);
+
+        impl SetNodeConfigBuilder<()> {
+            /// Setter for the [`config` field](SetNodeConfig#structfield.config).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn config<T0>(self, value: T0) -> SetNodeConfigBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<self::NodeConfig>>,
+            {
+                SetNodeConfigBuilder((value,))
+            }
+
+            /// Sets the [`config` field](SetNodeConfig#structfield.config) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn config_as_null(self) -> SetNodeConfigBuilder<((),)> {
+                self.config(())
+            }
+        }
+
+        impl<T0> SetNodeConfigBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [SetNodeConfig].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<SetNodeConfig>
+            where
+                Self: ::planus::WriteAsOffset<SetNodeConfig>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<self::NodeConfig>>>
+            ::planus::WriteAs<::planus::Offset<SetNodeConfig>> for SetNodeConfigBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<SetNodeConfig>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SetNodeConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<self::NodeConfig>>>
+            ::planus::WriteAsOptional<::planus::Offset<SetNodeConfig>>
+            for SetNodeConfigBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<SetNodeConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SetNodeConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<self::NodeConfig>>>
+            ::planus::WriteAsOffset<SetNodeConfig> for SetNodeConfigBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SetNodeConfig> {
+                let (v0,) = &self.0;
+                SetNodeConfig::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [SetNodeConfig].
+        #[derive(Copy, Clone)]
+        pub struct SetNodeConfigRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> SetNodeConfigRef<'a> {
+            /// Getter for the [`config` field](SetNodeConfig#structfield.config).
+            #[inline]
+            pub fn config(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::NodeConfigRef<'a>>> {
+                self.0.access(0, "SetNodeConfig", "config")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for SetNodeConfigRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("SetNodeConfigRef");
+                if let ::core::option::Option::Some(field_config) = self.config().transpose() {
+                    f.field("config", &field_config);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<SetNodeConfigRef<'a>> for SetNodeConfig {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: SetNodeConfigRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    config: if let ::core::option::Option::Some(config) = value.config()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(config)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for SetNodeConfigRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for SetNodeConfigRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[SetNodeConfigRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<SetNodeConfig>> for SetNodeConfig {
+            type Value = ::planus::Offset<SetNodeConfig>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<SetNodeConfig>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for SetNodeConfigRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[SetNodeConfigRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:451`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:480`
         #[derive(
             Copy,
             Clone,
@@ -54687,7 +56434,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:452`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:481`
         #[derive(
             Clone,
             Debug,
@@ -55023,7 +56770,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:454`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:483`
         #[derive(
             Clone,
             Debug,
@@ -55285,7 +57032,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:456`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:485`
         #[derive(
             Clone,
             Debug,
@@ -55342,6 +57089,12 @@ mod root {
 
             /// The variant of type `RotatePsk` in the union `AccountOp`
             RotatePsk(::planus::alloc::boxed::Box<self::RotatePsk>),
+
+            /// The variant of type `SetNetworkConfig` in the union `AccountOp`
+            SetNetworkConfig(::planus::alloc::boxed::Box<self::SetNetworkConfig>),
+
+            /// The variant of type `SetNodeConfig` in the union `AccountOp`
+            SetNodeConfig(::planus::alloc::boxed::Box<self::SetNodeConfig>),
         }
 
         impl AccountOp {
@@ -55470,6 +57223,22 @@ mod root {
             ) -> ::planus::UnionOffset<Self> {
                 ::planus::UnionOffset::new(15, value.prepare(builder).downcast())
             }
+
+            #[inline]
+            pub fn create_set_network_config(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::SetNetworkConfig>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(16, value.prepare(builder).downcast())
+            }
+
+            #[inline]
+            pub fn create_set_node_config(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::SetNodeConfig>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(17, value.prepare(builder).downcast())
+            }
         }
 
         impl ::planus::WriteAsUnion<AccountOp> for AccountOp {
@@ -55493,6 +57262,10 @@ mod root {
                     }
                     Self::ChangeMembership(value) => Self::create_change_membership(builder, value),
                     Self::RotatePsk(value) => Self::create_rotate_psk(builder, value),
+                    Self::SetNetworkConfig(value) => {
+                        Self::create_set_network_config(builder, value)
+                    }
+                    Self::SetNodeConfig(value) => Self::create_set_node_config(builder, value),
                 }
             }
         }
@@ -55664,6 +57437,30 @@ mod root {
             pub fn rotate_psk<T>(self, value: T) -> AccountOpBuilder<::planus::Initialized<15, T>>
             where
                 T: ::planus::WriteAsOffset<self::RotatePsk>,
+            {
+                AccountOpBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`SetNetworkConfig` variant](AccountOp#variant.SetNetworkConfig).
+            #[inline]
+            pub fn set_network_config<T>(
+                self,
+                value: T,
+            ) -> AccountOpBuilder<::planus::Initialized<16, T>>
+            where
+                T: ::planus::WriteAsOffset<self::SetNetworkConfig>,
+            {
+                AccountOpBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`SetNodeConfig` variant](AccountOp#variant.SetNodeConfig).
+            #[inline]
+            pub fn set_node_config<T>(
+                self,
+                value: T,
+            ) -> AccountOpBuilder<::planus::Initialized<17, T>>
+            where
+                T: ::planus::WriteAsOffset<self::SetNodeConfig>,
             {
                 AccountOpBuilder(::planus::Initialized(value))
             }
@@ -56010,6 +57807,50 @@ mod root {
                 ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
             }
         }
+        impl<T> ::planus::WriteAsUnion<AccountOp> for AccountOpBuilder<::planus::Initialized<16, T>>
+        where
+            T: ::planus::WriteAsOffset<self::SetNetworkConfig>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<AccountOp> {
+                ::planus::UnionOffset::new(16, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<AccountOp> for AccountOpBuilder<::planus::Initialized<16, T>>
+        where
+            T: ::planus::WriteAsOffset<self::SetNetworkConfig>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<AccountOp>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
+        impl<T> ::planus::WriteAsUnion<AccountOp> for AccountOpBuilder<::planus::Initialized<17, T>>
+        where
+            T: ::planus::WriteAsOffset<self::SetNodeConfig>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<AccountOp> {
+                ::planus::UnionOffset::new(17, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<AccountOp> for AccountOpBuilder<::planus::Initialized<17, T>>
+        where
+            T: ::planus::WriteAsOffset<self::SetNodeConfig>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<AccountOp>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
 
         /// Reference to a deserialized [AccountOp].
         #[derive(Copy, Clone, Debug)]
@@ -56029,6 +57870,8 @@ mod root {
             SetCamouflageSecret(self::SetCamouflageSecretRef<'a>),
             ChangeMembership(self::ChangeMembershipRef<'a>),
             RotatePsk(self::RotatePskRef<'a>),
+            SetNetworkConfig(self::SetNetworkConfigRef<'a>),
+            SetNodeConfig(self::SetNodeConfigRef<'a>),
         }
 
         impl<'a> ::core::convert::TryFrom<AccountOpRef<'a>> for AccountOp {
@@ -56123,6 +57966,18 @@ mod root {
                             ::core::convert::TryFrom::try_from(value)?,
                         ))
                     }
+
+                    AccountOpRef::SetNetworkConfig(value) => {
+                        Self::SetNetworkConfig(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
+
+                    AccountOpRef::SetNodeConfig(value) => {
+                        Self::SetNodeConfig(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
                 })
             }
         }
@@ -56179,6 +58034,12 @@ mod root {
                     15 => ::core::result::Result::Ok(Self::RotatePsk(
                         ::planus::TableRead::from_buffer(buffer, field_offset)?,
                     )),
+                    16 => ::core::result::Result::Ok(Self::SetNetworkConfig(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
+                    17 => ::core::result::Result::Ok(Self::SetNodeConfig(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
                     _ => {
                         ::core::result::Result::Err(::planus::errors::ErrorKind::UnknownUnionTag {
                             tag,
@@ -56195,7 +58056,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:474`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:505`
         #[derive(
             Clone,
             Debug,
@@ -56600,7 +58461,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:483`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:514`
         #[derive(
             Clone,
             Debug,
@@ -56864,7 +58725,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:484`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:515`
         #[derive(
             Clone,
             Debug,
@@ -57147,7 +59008,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:485`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:516`
         #[derive(
             Clone,
             Debug,
@@ -57436,7 +59297,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:486`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:517`
         #[derive(
             Clone,
             Debug,
@@ -57832,7 +59693,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:487`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:518`
         #[derive(
             Clone,
             Debug,
@@ -58115,7 +59976,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:488`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:519`
         #[derive(
             Clone,
             Debug,
@@ -58404,7 +60265,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:489`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:520`
         #[derive(
             Clone,
             Debug,
@@ -58695,7 +60556,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:490`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:521`
         #[derive(
             Clone,
             Debug,
@@ -58957,7 +60818,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:491`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:522`
         #[derive(
             Clone,
             Debug,
@@ -59224,7 +61085,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:492`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:523`
         #[derive(
             Clone,
             Debug,
@@ -59568,7 +61429,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:494`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:525`
         #[derive(
             Clone,
             Debug,
@@ -60274,7 +62135,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:508`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:539`
         #[derive(
             Clone,
             Debug,
@@ -60588,7 +62449,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:513`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:544`
         #[derive(
             Clone,
             Debug,
@@ -60944,7 +62805,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:519`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:550`
         #[derive(
             Clone,
             Debug,
