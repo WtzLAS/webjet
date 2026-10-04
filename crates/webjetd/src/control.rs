@@ -136,11 +136,14 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 .map(|s| {
                     let mut j = crate::e2e::summary(s);
                     j["peer"] = json!(n.name_of(&s.peer));
+                    j["peer_id"] = json!(hex::encode(s.peer));
                     j
                 })
                 .collect();
             Ok(json!({"sessions": v, "circuits": crate::circuit::summary(n)}))
         }
+        "conntrack" => Ok(crate::dataplane::flows(n)),
+        "topology" => Ok(crate::gossip::topology(n)),
         "nodes" => {
             let view = admin_view(n);
             let mut v: Vec<Value> = view.nodes.keys().map(|id| node_json(&view, id)).collect();

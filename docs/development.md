@@ -14,7 +14,7 @@ comments refer to it.
 | `webjet-net` | core, proto | Transports. Feature `anytls` (default) pulls in BoringSSL. |
 | `webjetd` | core, net, proto | The agent (library + binary). Feature `anytls` forwards to `webjet-net`. |
 | `webjet-tools` | webjetd, core, net, proto | `webjetctl` (`network`, `local`, `root`); `config.rs` is the TOML network/node configuration document (parse, scope checks, wire conversion, show, get/set/unset); also the shared account-key code (`Account::unlock`, `sign`). |
-| `webjet-app` | webjetd, tools, core, proto | GPUI desktop app. `model` and `client` are GUI-free and unit-tested; `ui` is the GPUI front end. |
+| `webjet-app` | webjetd, tools, core, proto | GPUI desktop app. `model`, `client`, `graph` (network graph and layout) and `openmetrics` are GUI-free and unit-tested; `ui` is the GPUI front end, one file per tab, rendered headless in a test. |
 
 Edition 2024, `rust-version = "1.88"`.
 
@@ -147,7 +147,7 @@ common bug. Rules:
 | `scripts/local-net.sh [N]` | nothing (no root) | A full network on 127.0.0.1 by operations guide 2.1, tun disabled. `scripts/local-net.sh stop` ends it. |
 | `scripts/cluster-test.sh` | nothing | Three controllers, leader failover, writes still commit. |
 | `scripts/soak-test.sh [s]` | nothing | Runs the local network past the e2e re-key interval (120 s) and checks every agent still answers. Catches timer-driven deadlocks. |
-| `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account). Skipped without a network. |
+| `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account), and the data behind its tabs. Skipped without a network. |
 | `docker/e2e.sh` | Docker, image `webjet:test` | Real tun interfaces: kernel ping, magic DNS, policy, subnet gateway. |
 | `docker/deploy-test.sh` | Docker | The deployment image as documented in docs/docker.md. |
 | `docker/tpm-test.sh` | Docker | TPM key sealing against a software TPM (swtpm), refusal by another TPM. |

@@ -144,6 +144,11 @@ enum LocalCmd {
     Peers,
     /// End-to-end sessions and circuits.
     Sessions,
+    /// Tracked flows (connection tracking) and the circuit each one takes.
+    Conntrack,
+    /// The network graph as this node sees it: nodes, relay links,
+    /// attachments and this node's hops.
+    Topology,
     /// This node's metrics in OpenMetrics text (`--all` on a controller:
     /// every node's latest report, as Prometheus scrapes it).
     Metrics {
@@ -1024,6 +1029,8 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
             }
         }
         LocalCmd::Sessions => print(cli, &call(cli, json!({"cmd": "sessions"})).await?),
+        LocalCmd::Conntrack => print(cli, &call(cli, json!({"cmd": "conntrack"})).await?),
+        LocalCmd::Topology => print(cli, &call(cli, json!({"cmd": "topology"})).await?),
         LocalCmd::Ping { target, count } => {
             let v = call(
                 cli,

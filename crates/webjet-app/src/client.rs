@@ -3,7 +3,7 @@
 //! path `webjetctl` uses, §13.1). The agent forwards operations to a
 //! controller, which checks the signature and the account's rights.
 
-use crate::model::{Account, Node, Peer, Session, Snapshot, Status, Tree};
+use crate::model::{Account, Node, Peer, Session, Sessions, Snapshot, Status, Tree};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -45,21 +45,55 @@ impl Client {
         serde_json::from_value(v).with_context(|| format!("unexpected answer to {cmd}"))
     }
 
-    /// Everything the views need, in one go.
-    pub async fn snapshot(&self) -> Result<Snapshot> {
+    /// Everything the views need, in one go. `metrics_all`: on a
+    /// controller, fetch every node's latest metric report instead of this
+    /// node's own.
+    pub async fn snapshot(&self, metrics_all: bool) -> Result<Snapshot> {
         let status: Status = self.get("status").await?;
         let mut nodes: Vec<Node> = self.get("nodes").await?;
         nodes.sort_by(|a, b| a.name.cmp(&b.name));
         let mut accounts: Vec<Account> = self.get("accounts").await?;
         accounts.sort_by(|a, b| a.name.cmp(&b.name));
-        let peers: Vec<Peer> = self.get("peers").await?;
+        let mut peers: Vec<Peer> = self.get("peers").await?;
+        peers.sort_by(|a, b| a.peer.cmp(&b.peer).then(a.transport.cmp(&b.transport)));
         let tree: Tree = self.get("tree").await?;
+        // Newer commands: an older agent answers "unknown command".
+        fn opt<T>(r: Result<T>) -> Result<T, String> {
+            r.map_err(|e| format!("{e:#}"))
+        }
+        let mut sessions: Result<Sessions, String> = opt(self.get("sessions").await);
+        if let Ok(s) = &mut sessions {
+            s.sessions.sort_by(|a, b| a.peer.cmp(&b.peer));
+            s.circuits.local.sort_by(|a, b| {
+                (&a.peer, !a.primary, a.label).cmp(&(&b.peer, !b.primary, b.label))
+            });
+            s.circuits
+                .routes
+                .sort_by(|a, b| (&a.src, &a.dst).cmp(&(&b.src, &b.dst)));
+        }
+        let conntrack = opt(self.get("conntrack").await);
+        let topology = opt(self.get("topology").await);
+        let all = metrics_all && status.controller.as_ref().is_some_and(|c| !c.is_null());
+        let metrics = opt(self
+            .call(json!({"cmd": "metrics", "all": all}))
+            .await
+            .and_then(|v| {
+                v.get("openmetrics")
+                    .and_then(|t| t.as_str())
+                    .map(String::from)
+                    .ok_or_else(|| anyhow!("no metrics in the answer"))
+            }));
         Ok(Snapshot {
             status,
             nodes,
             accounts,
             peers,
             tree,
+            sessions,
+            conntrack,
+            topology,
+            metrics,
+            metrics_all: all,
         })
     }
 

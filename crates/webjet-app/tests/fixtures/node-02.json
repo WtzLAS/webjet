@@ -1,0 +1,673 @@
+{
+ "accounts": [
+  {
+   "admin": true,
+   "id": "d4123318a2a198cb56300dfe2432e4dabb9f57bd935fbf98c53d794a7a9c83f9",
+   "key": "nPd8EJ/Lf8oMgeQI+4VHvtbysBfyXdhDzlyBEh05bPA=",
+   "name": "alice",
+   "record": "BAAAAJT///+IPk3EY0py7U4+cjrYl2D0DUh1Z7+8RYtyT0VaR4d2fu4RVcbX8bhlvum0mk7AcC40mAbv+1j9slyeW08VjyyShtp8O2wE1GuakLGnIXx8j/qyzGd325FRja6FG90qogQYAAAACgABABAAbABoAGoAZAAEAAAAJAByAAAABAAAAK7////UEjMYoqGYy1YwDf4kMuTau59XvZNfv5jFPXlKepyD+Zz3fBCfy3/KDIHkCPuFR77W8rAX8l3YQ85cgRIdOWzwUc7WCKEBAAAYAAAAAQESAFIABAAkAEwAUABRAAAARAAFAAAAYWxpY2UA",
+   "valid": true,
+   "version": 1791149657681
+  },
+  {
+   "admin": false,
+   "id": "e1d47f86c381da87e739cc1b02c13464500de2f456286891ea7637ceb821978f",
+   "key": "O7hYVGwbzFgDRYs9MEx3q3Ff8a6MeqJM0Cs6rZ1kjmI=",
+   "name": "infra",
+   "record": "BAAAAJT///+c93wQn8t/ygyB5Aj7hUe+1vKwF/Jd2EPOXIESHTls8G+j07nhrvmtabZZ8RMRiLl7uz0y65SDXBBgCmf27TkCilwoTs1t09/GkjazL4Q3Mhg9lHovTbQdOr4c7E63XAsYAAAACgABABAAbABoAGoAZAAEAAAAJACSAAAABAAAAI7////h1H+Gw4Hah+c5zBsCwTRkUA3i9FYoaJHqdjfOuCGXjzu4WFRsG8xYA0WLPTBMd6txX/GujHqiTNArOq2dZI5i1BIzGKKhmMtWMA3+JDLk2rufV72TX7+YxT15Snqcg/lx5dYIoQEAABgAAAAAABIAcAAEACQAbAAAAAAARABkAAUAAABpbmZyYQA=",
+   "valid": true,
+   "version": 1791149663601
+  }
+ ],
+ "conntrack": {
+  "flows": [
+   {
+    "circuit": {
+     "direct": true,
+     "hops": [],
+     "label": 575596363,
+     "rtt_ms": 0.0
+    },
+    "dport": 24883,
+    "dst": "10.7.0.1",
+    "expires_s": 9,
+    "gateway": false,
+    "idle_s": 0,
+    "outbound": true,
+    "peer": "ctl-01",
+    "peer_id": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "proto": "icmp",
+    "replied": true,
+    "rule": "everyone",
+    "sport": 24883,
+    "src": "10.7.0.2",
+    "state": "icmp echo"
+   },
+   {
+    "circuit": {
+     "direct": false,
+     "hops": [
+      "ctl-01"
+     ],
+     "label": 3890096375,
+     "rtt_ms": 0.0
+    },
+    "dport": 6783,
+    "dst": "10.7.0.5",
+    "expires_s": 9,
+    "gateway": false,
+    "idle_s": 0,
+    "outbound": true,
+    "peer": "node-05",
+    "peer_id": "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007",
+    "proto": "icmp",
+    "replied": true,
+    "rule": "everyone",
+    "sport": 6783,
+    "src": "10.7.0.2",
+    "state": "icmp echo"
+   }
+  ],
+  "gateway": 0,
+  "limits": {
+   "evictions": 0,
+   "global": 262144,
+   "new_per_sec": 500,
+   "per_peer": 4096
+  },
+  "live": 2,
+  "running": true,
+  "total": 2,
+  "truncated": false
+ },
+ "metrics": "# TYPE webjet_limit_hits counter\n# HELP webjet_limit_hits Packets or flows refused by a limit or check, by kind.\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"acl_denied\"} 0 1791149766.330\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"conntrack_limit\"} 0 1791149766.330\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"snat_exhausted\"} 0 1791149766.330\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"no_route\"} 0 1791149766.330\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"cryptokey_dropped\"} 0 1791149766.330\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"aqm_dropped\"} 0 1791149766.330\nwebjet_limit_hits_total{node=\"node-02\",owner=\"infra\",limit=\"ecn_marked\"} 0 1791149766.330\n# TYPE webjet_link_bw_estimate_mbps gauge\n# HELP webjet_link_bw_estimate_mbps Bandwidth estimate of a KCP hop.\nwebjet_link_bw_estimate_mbps{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 1 1791149766.330\n# TYPE webjet_link_fec_parity_bytes counter\n# HELP webjet_link_fec_parity_bytes FEC parity bytes sent on a KCP hop.\nwebjet_link_fec_parity_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 0 1791149766.330\n# TYPE webjet_link_fec_ratio gauge\n# HELP webjet_link_fec_ratio Current FEC parity ratio of a hop.\nwebjet_link_fec_ratio{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 0 1791149766.330\n# TYPE webjet_link_fec_recovered counter\n# HELP webjet_link_fec_recovered Packets recovered by FEC on a hop.\nwebjet_link_fec_recovered_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 0 1791149766.330\n# TYPE webjet_link_kcp_retransmits counter\n# HELP webjet_link_kcp_retransmits KCP retransmissions on a hop.\nwebjet_link_kcp_retransmits_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 0 1791149766.330\n# TYPE webjet_link_loss_ratio gauge\n# HELP webjet_link_loss_ratio Hop loss (effective, including long-term history).\nwebjet_link_loss_ratio{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\"} 0 1791149766.330\nwebjet_link_loss_ratio{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 0 1791149766.330\n# TYPE webjet_link_payload_bytes counter\n# HELP webjet_link_payload_bytes Hop record bytes carried on a hop.\nwebjet_link_payload_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\",direction=\"tx\"} 78408 1791149766.330\nwebjet_link_payload_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\",direction=\"rx\"} 140137 1791149766.330\nwebjet_link_payload_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\",direction=\"tx\"} 42580 1791149766.330\nwebjet_link_payload_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\",direction=\"rx\"} 59339 1791149766.330\n# TYPE webjet_link_queue_delay_ms gauge\n# HELP webjet_link_queue_delay_ms Hop queue delay.\nwebjet_link_queue_delay_ms{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\"} 0 1791149766.330\nwebjet_link_queue_delay_ms{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 0 1791149766.330\n# TYPE webjet_link_rtt_ms gauge\n# HELP webjet_link_rtt_ms Hop RTT (effective, including long-term history).\nwebjet_link_rtt_ms{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\"} 1 1791149766.330\nwebjet_link_rtt_ms{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\"} 19 1791149766.330\n# TYPE webjet_link_wire_bytes counter\n# HELP webjet_link_wire_bytes Bytes on the wire of a hop, including transport overhead.\nwebjet_link_wire_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\",direction=\"tx\"} 78408 1791149766.330\nwebjet_link_wire_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"ctl-01\",transport=\"tls\",direction=\"rx\"} 140137 1791149766.330\nwebjet_link_wire_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\",direction=\"tx\"} 104231 1791149766.330\nwebjet_link_wire_bytes_total{node=\"node-02\",owner=\"infra\",peer=\"node-04\",transport=\"kcp\",direction=\"rx\"} 83073 1791149766.330\n# TYPE webjet_load_circuits_ratio gauge\n# HELP webjet_load_circuits_ratio Transit circuits against the circuit cap.\nwebjet_load_circuits_ratio{node=\"node-02\",owner=\"infra\"} 0 1791149766.330\n# TYPE webjet_load_cpu_ratio gauge\n# HELP webjet_load_cpu_ratio Agent CPU use as a share of all cores, 30 s average.\nwebjet_load_cpu_ratio{node=\"node-02\",owner=\"infra\"} 0 1791149766.330\n# TYPE webjet_load_queue_ratio gauge\n# HELP webjet_load_queue_ratio Hop queue delay against its budget, 30 s average.\nwebjet_load_queue_ratio{node=\"node-02\",owner=\"infra\"} 0 1791149766.330\n# TYPE webjet_load_ratio gauge\n# HELP webjet_load_ratio Advertised relay load: the highest of the load figures, in 10% steps.\nwebjet_load_ratio{node=\"node-02\",owner=\"infra\"} 0 1791149766.330\n# TYPE webjet_load_util_ratio gauge\n# HELP webjet_load_util_ratio Forwarding utilization against relay capacity, 30 s average.\nwebjet_load_util_ratio{node=\"node-02\",owner=\"infra\"} 0 1791149766.330\n# TYPE webjet_node_info gauge\n# HELP webjet_node_info Software and identity of a reporting node.\nwebjet_node_info{node=\"node-02\",owner=\"infra\",node_id=\"b78409768a09f9a9\",software=\"webjetd/0.4.3\"} 1 1791149766.330\n# TYPE webjet_policy_version gauge\n# HELP webjet_policy_version Policy version the node enforces.\nwebjet_policy_version{node=\"node-02\",owner=\"infra\"} 1 1791149766.330\n# TYPE webjet_relay_capacity_mbps gauge\n# HELP webjet_relay_capacity_mbps Configured or estimated relay capacity.\nwebjet_relay_capacity_mbps{node=\"node-02\",owner=\"infra\"} 100 1791149766.330\n# TYPE webjet_report_seq gauge\n# HELP webjet_report_seq Sequence number of the node's latest metric report.\nwebjet_report_seq{node=\"node-02\",owner=\"infra\"} 19 1791149766.330\n# TYPE webjet_route_bytes counter\n# HELP webjet_route_bytes Bytes carried on a route, by direction.\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\",direction=\"fwd\"} 2313 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\",direction=\"rev\"} 2116 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\",direction=\"fwd\"} 5828 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\",direction=\"rev\"} 5828 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\",direction=\"fwd\"} 14100 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\",direction=\"rev\"} 14100 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\",direction=\"fwd\"} 31256 1791149766.330\nwebjet_route_bytes_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\",direction=\"rev\"} 23671 1791149766.330\n# TYPE webjet_route_circuit_setups counter\n# HELP webjet_route_circuit_setups Circuit (re)builds for a route; shows flapping.\nwebjet_route_circuit_setups_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\"} 1 1791149766.330\nwebjet_route_circuit_setups_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\"} 1 1791149766.330\nwebjet_route_circuit_setups_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\"} 2 1791149766.330\nwebjet_route_circuit_setups_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\"} 1 1791149766.330\n# TYPE webjet_route_dropped counter\n# HELP webjet_route_dropped Frames dropped on a route, by reason.\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\",reason=\"queue\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\",reason=\"hop_limit\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\",reason=\"queue\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\",reason=\"hop_limit\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\",reason=\"queue\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\",reason=\"hop_limit\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\",reason=\"queue\"} 0 1791149766.330\nwebjet_route_dropped_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\",reason=\"hop_limit\"} 0 1791149766.330\n# TYPE webjet_route_ecn_marked counter\n# HELP webjet_route_ecn_marked Frames marked Congestion Experienced on a route.\nwebjet_route_ecn_marked_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\"} 0 1791149766.330\nwebjet_route_ecn_marked_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\"} 0 1791149766.330\nwebjet_route_ecn_marked_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\"} 0 1791149766.330\nwebjet_route_ecn_marked_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\"} 0 1791149766.330\n# TYPE webjet_route_frames counter\n# HELP webjet_route_frames Frames carried on a route, by direction.\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\",direction=\"fwd\"} 5 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2e80cf2d02c9b82d\",src=\"node-02\",dst=\"node-05\",direction=\"rev\"} 6 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\",direction=\"fwd\"} 62 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"36b3bc6d91327b06\",src=\"node-02\",dst=\"node-04\",direction=\"rev\"} 62 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\",direction=\"fwd\"} 150 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"2230f35fb8a1bbaf\",src=\"node-02\",dst=\"node-04\",direction=\"rev\"} 150 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\",direction=\"fwd\"} 231 1791149766.330\nwebjet_route_frames_total{node=\"node-02\",owner=\"infra\",role=\"source\",route_id=\"8ffe5618b2f1e182\",src=\"node-02\",dst=\"ctl-01\",direction=\"rev\"} 231 1791149766.330\n# TYPE webjet_rule_flows counter\n# HELP webjet_rule_flows New flows decided by a policy rule.\nwebjet_rule_flows_total{node=\"node-02\",owner=\"infra\",rule_id=\"everyone\",decision=\"allow\"} 3 1791149766.330\n# EOF\n",
+ "nodes": [
+  {
+   "control": true,
+   "control_role": true,
+   "data": true,
+   "id": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+   "ips": [
+    "10.7.0.1/32"
+   ],
+   "key": "KQqjJVov5FCiYKMKmcV3+6/4Ibb8CGLvkZBg6R+kUvU=",
+   "name": "ctl-01",
+   "owner": "infra",
+   "owner_id": "e1d47f86c381da87e739cc1b02c13464500de2f456286891ea7637ceb821978f",
+   "relay": true,
+   "routes": [],
+   "tags": [
+    "tag:infra"
+   ],
+   "valid": true,
+   "version": 1
+  },
+  {
+   "control": false,
+   "control_role": false,
+   "data": true,
+   "id": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+   "ips": [
+    "10.7.0.2/32"
+   ],
+   "key": "SqSeGH62pHwF7ymHCDt2KW6wz4PPzQ3lgJAf+iUrFdc=",
+   "name": "node-02",
+   "owner": "infra",
+   "owner_id": "e1d47f86c381da87e739cc1b02c13464500de2f456286891ea7637ceb821978f",
+   "relay": false,
+   "routes": [],
+   "tags": [],
+   "valid": true,
+   "version": 1
+  },
+  {
+   "control": false,
+   "control_role": false,
+   "data": true,
+   "id": "30326fc0fc121125ad9fb274ed0e642bd370b2317743c18bf15276ffba3aead3",
+   "ips": [
+    "10.7.0.3/32"
+   ],
+   "key": "OMtQpZYTJTE7DWmqZUTj2VZGhU3QDaxuF0GFihB3c5c=",
+   "name": "node-03",
+   "owner": "infra",
+   "owner_id": "e1d47f86c381da87e739cc1b02c13464500de2f456286891ea7637ceb821978f",
+   "relay": false,
+   "routes": [],
+   "tags": [
+    "tag:app-test"
+   ],
+   "valid": true,
+   "version": 10
+  },
+  {
+   "control": false,
+   "control_role": false,
+   "data": true,
+   "id": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+   "ips": [
+    "10.7.0.4/32"
+   ],
+   "key": "V2PgXp1baflf7iYcytQNNFS1A3QSWaC0fV1no35oaEY=",
+   "name": "node-04",
+   "owner": "infra",
+   "owner_id": "e1d47f86c381da87e739cc1b02c13464500de2f456286891ea7637ceb821978f",
+   "relay": false,
+   "routes": [],
+   "tags": [],
+   "valid": true,
+   "version": 1
+  },
+  {
+   "control": false,
+   "control_role": false,
+   "data": true,
+   "id": "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007",
+   "ips": [
+    "10.7.0.5/32"
+   ],
+   "key": "tYcz6do0xcBDvpP4U1y6LYsBWffuphCnEek7ndO7UN8=",
+   "name": "node-05",
+   "owner": "infra",
+   "owner_id": "e1d47f86c381da87e739cc1b02c13464500de2f456286891ea7637ceb821978f",
+   "relay": false,
+   "routes": [],
+   "tags": [],
+   "valid": true,
+   "version": 1
+  }
+ ],
+ "peers": [
+  {
+   "age_s": 101,
+   "cost": 0.8953883801316722,
+   "flaps": 0.0,
+   "id": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+   "jitter_ms": 0.21161234954454708,
+   "long_term_loss": 0.0,
+   "loss": 0.0,
+   "min_rtt_ms": 0.209,
+   "outbound": true,
+   "peer": "ctl-01",
+   "remote": "127.0.0.1:17001",
+   "restricted": false,
+   "rtt_ms": 0.7895822053593987,
+   "rx_bytes": 140137,
+   "transport": "tls",
+   "tx_bytes": 78408
+  },
+  {
+   "age_s": 76,
+   "cost": 18.12568747421716,
+   "flaps": 0.0,
+   "id": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+   "jitter_ms": 5.343315919530709,
+   "long_term_loss": 0.0,
+   "loss": 0.0,
+   "min_rtt_ms": 7.388,
+   "outbound": true,
+   "peer": "node-04",
+   "remote": "127.0.0.1:17004",
+   "restricted": false,
+   "rtt_ms": 15.454029514451804,
+   "rx_bytes": 59339,
+   "transport": "kcp",
+   "tx_bytes": 42580
+  }
+ ],
+ "sessions": {
+  "circuits": {
+   "local": [
+    {
+     "age_s": 31,
+     "direct": false,
+     "hop_ids": [
+      "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03"
+     ],
+     "hops": [
+      "ctl-01"
+     ],
+     "label": 609957251,
+     "loss": 0.7941088679053511,
+     "next": "ctl-01",
+     "open": true,
+     "peer": "node-04",
+     "peer_id": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+     "primary": false,
+     "probes": 0,
+     "route_id": "36b3bc6d91327b06",
+     "rtt_ms": 0.0,
+     "source": true
+    },
+    {
+     "age_s": 0,
+     "direct": false,
+     "hop_ids": [
+      "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03"
+     ],
+     "hops": [
+      "ctl-01"
+     ],
+     "label": 3890096375,
+     "loss": 0.0,
+     "next": "ctl-01",
+     "open": true,
+     "peer": "node-05",
+     "peer_id": "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007",
+     "primary": true,
+     "probes": 0,
+     "route_id": "2e80cf2d02c9b82d",
+     "rtt_ms": 0.0,
+     "source": true
+    },
+    {
+     "age_s": 100,
+     "direct": true,
+     "hop_ids": [],
+     "hops": [],
+     "label": 575596363,
+     "loss": 0.9998566588802033,
+     "next": "ctl-01",
+     "open": true,
+     "peer": "ctl-01",
+     "peer_id": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+     "primary": true,
+     "probes": 0,
+     "route_id": "8ffe5618b2f1e182",
+     "rtt_ms": 0.0,
+     "source": true
+    },
+    {
+     "age_s": 30,
+     "direct": true,
+     "hop_ids": [],
+     "hops": [],
+     "label": 53429653,
+     "loss": 0.7712320754503901,
+     "next": "node-04",
+     "open": true,
+     "peer": "node-04",
+     "peer_id": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+     "primary": false,
+     "probes": 0,
+     "route_id": "2230f35fb8a1bbaf",
+     "rtt_ms": 0.0,
+     "source": true
+    }
+   ],
+   "refused": {},
+   "routes": [
+    {
+     "active_since": 1791149766236,
+     "circuits": 1,
+     "dropped_hop_limit": 0,
+     "dropped_queue": 0,
+     "dst": "node-05",
+     "ecn_marked": 0,
+     "fwd_bytes": 2313,
+     "fwd_frames": 5,
+     "path": [
+      "node-02",
+      "ctl-01",
+      "node-05"
+     ],
+     "path_ids": [
+      "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+      "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+      "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007"
+     ],
+     "rev_bytes": 2116,
+     "rev_frames": 6,
+     "role": "source",
+     "route_id": "2e80cf2d02c9b82d",
+     "setups": 1,
+     "src": "node-02"
+    },
+    {
+     "active_since": 1791149734849,
+     "circuits": 1,
+     "dropped_hop_limit": 0,
+     "dropped_queue": 0,
+     "dst": "node-04",
+     "ecn_marked": 0,
+     "fwd_bytes": 5828,
+     "fwd_frames": 62,
+     "path": [
+      "node-02",
+      "ctl-01",
+      "node-04"
+     ],
+     "path_ids": [
+      "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+      "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+      "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c"
+     ],
+     "rev_bytes": 5828,
+     "rev_frames": 62,
+     "role": "source",
+     "route_id": "36b3bc6d91327b06",
+     "setups": 1,
+     "src": "node-02"
+    },
+    {
+     "active_since": 0,
+     "circuits": 1,
+     "dropped_hop_limit": 0,
+     "dropped_queue": 0,
+     "dst": "node-04",
+     "ecn_marked": 0,
+     "fwd_bytes": 14100,
+     "fwd_frames": 150,
+     "path": [
+      "node-02",
+      "node-04"
+     ],
+     "path_ids": [
+      "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+      "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c"
+     ],
+     "rev_bytes": 14100,
+     "rev_frames": 150,
+     "role": "source",
+     "route_id": "2230f35fb8a1bbaf",
+     "setups": 2,
+     "src": "node-02"
+    },
+    {
+     "active_since": 1791149665899,
+     "circuits": 1,
+     "dropped_hop_limit": 0,
+     "dropped_queue": 0,
+     "dst": "ctl-01",
+     "ecn_marked": 0,
+     "fwd_bytes": 31256,
+     "fwd_frames": 231,
+     "path": [
+      "node-02",
+      "ctl-01"
+     ],
+     "path_ids": [
+      "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+      "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03"
+     ],
+     "rev_bytes": 23671,
+     "rev_frames": 231,
+     "role": "source",
+     "route_id": "8ffe5618b2f1e182",
+     "setups": 1,
+     "src": "node-02"
+    }
+   ],
+   "transit": 0
+  },
+  "sessions": [
+   {
+    "established": true,
+    "handshaking": false,
+    "key_age_s": 0,
+    "path_switches": 0,
+    "peer": "node-05",
+    "peer_id": "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007",
+    "primary_circuit": 3890096375,
+    "queued": 0,
+    "rx_packets": 4,
+    "tx_packets": 3
+   },
+   {
+    "established": true,
+    "handshaking": false,
+    "key_age_s": 76,
+    "path_switches": 0,
+    "peer": "node-04",
+    "peer_id": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+    "primary_circuit": null,
+    "queued": 0,
+    "rx_packets": 304,
+    "tx_packets": 5
+   },
+   {
+    "established": true,
+    "handshaking": false,
+    "key_age_s": 100,
+    "path_switches": 0,
+    "peer": "ctl-01",
+    "peer_id": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "primary_circuit": 575596363,
+    "queued": 0,
+    "rx_packets": 229,
+    "tx_packets": 28
+   }
+  ]
+ },
+ "status": {
+  "alarms": [],
+  "controller": null,
+  "controllers": 1,
+  "head_expires": 1791236121002,
+  "ips": [
+   "10.7.0.2/32"
+  ],
+  "key": "SqSeGH62pHwF7ymHCDt2KW6wz4PPzQ3lgJAf+iUrFdc=",
+  "name": "node-02",
+  "node_id": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+  "nodes": 5,
+  "peers": 2,
+  "psk_epoch": 0,
+  "roles": {
+   "control": false,
+   "control_role": false,
+   "data": true,
+   "relay": false
+  },
+  "sessions": 3,
+  "tree_root": "14b9927a1bc1885ef99f74a83d15029434fac3ec6c9aecc1d3ea3205f8624cc3",
+  "tree_version": 23,
+  "uptime_s": 101,
+  "valid": true,
+  "valid_until": 1793741663021,
+  "version": "0.4.3"
+ },
+ "topology": {
+  "edges": [
+   {
+    "a": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+    "age_s": 8,
+    "b": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "kind": "attachment",
+    "loss": 0.0,
+    "rtt_ms": 1,
+    "transport": "tls"
+   },
+   {
+    "a": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+    "age_s": 9,
+    "b": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "kind": "attachment",
+    "loss": 0.0,
+    "rtt_ms": 1,
+    "transport": "tls"
+   },
+   {
+    "a": "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007",
+    "age_s": 13,
+    "b": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "kind": "attachment",
+    "loss": 0.0,
+    "rtt_ms": 1,
+    "transport": "tls"
+   },
+   {
+    "a": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+    "age_s": 101,
+    "b": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "kind": "hop",
+    "loss": 0.0,
+    "outbound": true,
+    "remote": "127.0.0.1:17001",
+    "rtt_ms": 0.7895822053593987,
+    "rx_bytes": 140137,
+    "transport": "tls",
+    "tx_bytes": 78408
+   },
+   {
+    "a": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+    "age_s": 76,
+    "b": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+    "kind": "hop",
+    "loss": 0.0,
+    "outbound": true,
+    "remote": "127.0.0.1:17004",
+    "rtt_ms": 15.454029514451804,
+    "rx_bytes": 59339,
+    "transport": "kcp",
+    "tx_bytes": 42580
+   }
+  ],
+  "me": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+  "nodes": [
+   {
+    "control": false,
+    "data": true,
+    "id": "30326fc0fc121125ad9fb274ed0e642bd370b2317743c18bf15276ffba3aead3",
+    "ips": [
+     "10.7.0.3/32"
+    ],
+    "load": null,
+    "me": false,
+    "name": "node-03",
+    "relay": false
+   },
+   {
+    "control": true,
+    "data": true,
+    "id": "a73986badae5aa1dc8eeed9543af4047c2a3e857950edc0f2eec93d670826d03",
+    "ips": [
+     "10.7.0.1/32"
+    ],
+    "load": {
+     "capacity_mbps": 100,
+     "circuits_pct": 0,
+     "cpu_pct": 1,
+     "queue_pct": 0,
+     "util_pct": 0
+    },
+    "me": false,
+    "name": "ctl-01",
+    "relay": true
+   },
+   {
+    "control": false,
+    "data": true,
+    "id": "b78409768a09f9a921c0855fbf887fb22292f21549c49d8a57a5928c126bc4ad",
+    "ips": [
+     "10.7.0.2/32"
+    ],
+    "load": null,
+    "me": true,
+    "name": "node-02",
+    "relay": false
+   },
+   {
+    "control": false,
+    "data": true,
+    "id": "b7869aabd6662b9aad2dd6a5cd8167fcae3facb3439c2e6556d6160f7a08491c",
+    "ips": [
+     "10.7.0.4/32"
+    ],
+    "load": null,
+    "me": false,
+    "name": "node-04",
+    "relay": false
+   },
+   {
+    "control": false,
+    "data": true,
+    "id": "21368fc12c5340da6650b99da55a747f1df2a6d4302d06c5064d08f61ef03007",
+    "ips": [
+     "10.7.0.5/32"
+    ],
+    "load": null,
+    "me": false,
+    "name": "node-05",
+    "relay": false
+   }
+  ]
+ },
+ "tree": {
+  "dns": {
+   "forward": [],
+   "records": [],
+   "resolver_ip": [
+    {
+     "a0": 905905930,
+     "a1": 0,
+     "family": 4
+    }
+   ],
+   "suffix": "internal",
+   "version": 1
+  },
+  "limits": {
+   "defaults": [],
+   "overrides": [],
+   "version": 1
+  },
+  "network_version": 1,
+  "overlay_pool": [
+   "10.7.0.0/16"
+  ],
+  "policy": {
+   "default_action": "Deny",
+   "rules": [
+    {
+     "action": "Allow",
+     "dst": [
+      "*"
+     ],
+     "id": "everyone",
+     "ports": [
+      "*"
+     ],
+     "src": [
+      "*"
+     ]
+    }
+   ],
+   "tests": [],
+   "version": 1
+  },
+  "policy_version": 1,
+  "resolver": [
+   "10.7.255.53"
+  ],
+  "seeds": {
+   "entries": [
+    {
+     "addrs": [
+      {
+       "host": "127.0.0.1",
+       "port": 17001,
+       "transport": "TcpTls"
+      },
+      {
+       "host": "127.0.0.1",
+       "port": 17001,
+       "transport": "KcpFecTls"
+      }
+     ],
+     "node": "ctl-01"
+    }
+   ],
+   "version": 1
+  },
+  "suffix": "internal",
+  "transport": {
+   "camouflage": null,
+   "defaults": [],
+   "overrides": [],
+   "padding": null,
+   "version": 1
+  },
+  "valid_until": 1793741663021
+ }
+}

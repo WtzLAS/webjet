@@ -29,3 +29,7 @@ gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Render the views headless in tests.
+gpui = { version = "0.2.2", features = ["runtime_shaders", "test-support"] }

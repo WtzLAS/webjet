@@ -99,12 +99,50 @@ async fn admin_and_member_against_a_live_network() {
     assert!(fin.nodes.iter().any(|n| n.name == "node-03"));
 }
 
+#[tokio::test]
+async fn tabs_data_from_a_live_network() {
+    let Some((c, _)) = net() else { return };
+    // The agent's hop to its relay and a session over a circuit.
+    let s = wait_for(&c, |s| {
+        !s.peers.is_empty()
+            && s.sessions
+                .as_ref()
+                .is_ok_and(|x| x.sessions.iter().any(|e| e.established))
+    })
+    .await;
+    let ss = s.sessions.as_ref().unwrap();
+    assert!(!ss.circuits.local.is_empty(), "circuits are listed");
+    assert!(ss.circuits.local.iter().all(|c| !c.peer_id.is_empty()));
+
+    // Every node is in the graph; this agent's hops are edges.
+    let g = webjet_app::graph::Graph::from_snapshot(&s);
+    assert_eq!(g.vertices.len(), s.nodes.iter().filter(|n| n.valid).count());
+    assert!(g.vertices.iter().any(|v| v.me));
+    assert!(g.edges.iter().any(|e| e.mine()), "hops are edges");
+
+    // The data plane tracks flows.
+    let ct = s.conntrack.as_ref().unwrap();
+    assert!(ct.running);
+    assert!(ct.limits.global > 0);
+
+    // The agent's own metrics parse into families.
+    let fams = webjet_app::openmetrics::parse(s.metrics.as_ref().unwrap());
+    assert!(
+        fams.iter().any(|f| f.name.starts_with("webjet_")),
+        "{fams:?}"
+    );
+    assert!(!s.metrics_all, "node-02 isn't a controller");
+
+    let sum = s.summary();
+    assert!(sum.nodes_active >= 3 && sum.hops >= 1 && sum.sessions_established >= 1);
+}
+
 async fn wait_for(
     c: &Client,
     ok: impl Fn(&webjet_app::model::Snapshot) -> bool,
 ) -> webjet_app::model::Snapshot {
     for _ in 0..100 {
-        let s = c.snapshot().await.expect("snapshot");
+        let s = c.snapshot(false).await.expect("snapshot");
         if ok(&s) {
             return s;
         }

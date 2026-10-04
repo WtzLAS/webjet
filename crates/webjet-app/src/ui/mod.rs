@@ -1,23 +1,32 @@
-//! The GPUI front end: a sign-in screen, then tabs for the network, its
-//! nodes, accounts and this agent's peers. What the account may change
+//! The GPUI front end: a sign-in screen, then five tabs — Dashboard,
+//! Connections, Nodes, Metrics and Accounts. What the account may change
 //! comes from `model::Session::may`; everything else is shown read-only.
 
+mod accounts;
+mod connections;
+mod dashboard;
 mod field;
+mod metrics;
+mod nodes;
 
 use crate::client::{self, Client, SignedIn};
-use crate::model::{self, Action, Node, Snapshot};
+use crate::graph::Graph;
+use crate::model::{self, Flow, Level, Snapshot, Traffic};
+use crate::openmetrics::{self, Family};
 use field::Field;
 use gpui::{
     AnyElement, App, AsyncApp, Context, Entity, SharedString, WeakEntity, Window, div, prelude::*,
     px, rgb,
 };
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub mod theme {
     pub const BG: u32 = 0x1e1f22;
     pub const PANEL: u32 = 0x2b2d31;
+    pub const RAISED: u32 = 0x35373c;
     pub const INPUT: u32 = 0x1a1b1e;
     pub const BORDER: u32 = 0x3f4147;
     pub const TEXT: u32 = 0xe6e6e6;
@@ -26,17 +35,38 @@ pub mod theme {
     pub const OK: u32 = 0x3ba55d;
     pub const WARN: u32 = 0xe0a030;
     pub const BAD: u32 = 0xe5484d;
+    pub const RELAY: u32 = 0x9b6cff;
+    pub const CONTROL: u32 = 0xe07b39;
+    pub const TX: u32 = 0x4c8dff;
+    pub const RX: u32 = 0x3ba55d;
+
+    pub fn level(l: crate::model::Level) -> u32 {
+        match l {
+            crate::model::Level::Ok => OK,
+            crate::model::Level::Warn => WARN,
+            crate::model::Level::Bad => BAD,
+        }
+    }
 }
 
 const REFRESH: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
-    Overview,
+    Dashboard,
+    Connections,
     Nodes,
+    Metrics,
     Accounts,
-    Peers,
 }
+
+const TABS: [(Tab, &str); 5] = [
+    (Tab::Dashboard, "Dashboard"),
+    (Tab::Connections, "Connections"),
+    (Tab::Nodes, "Nodes"),
+    (Tab::Metrics, "Metrics"),
+    (Tab::Accounts, "Accounts"),
+];
 
 /// A confirmation waiting for a second click.
 #[derive(Clone, PartialEq, Eq)]
@@ -57,14 +87,32 @@ pub struct WebjetApp {
     signed_in: Option<SignedIn>,
     sign_in_error: Option<String>,
     tab: Tab,
-    filter: Entity<Field>,
-    selected: Option<String>,
-    rename: Entity<Field>,
-    tags: Entity<Field>,
-    reason: Entity<Field>,
     confirm: Option<Confirm>,
     busy: bool,
     notice: Option<(bool, String)>,
+    /// Bytes on this agent's hops over time.
+    traffic: Traffic,
+    // Nodes tab
+    graph: Graph,
+    node_filter: Entity<Field>,
+    selected: Option<String>,
+    /// The circuit (by this node's label) highlighted in the graph.
+    circuit: Option<u32>,
+    rename: Entity<Field>,
+    tags: Entity<Field>,
+    reason: Entity<Field>,
+    // Connections tab
+    flow_filter: Entity<Field>,
+    /// The flows shown, after the filter (shared with the virtual list).
+    flows_shown: Rc<Vec<Flow>>,
+    flow_selected: Option<String>,
+    // Metrics tab
+    families: Rc<Vec<Family>>,
+    metric_filter: Entity<Field>,
+    family: Option<String>,
+    metrics_all: bool,
+    // Accounts tab
+    account: Option<String>,
 }
 
 impl WebjetApp {
@@ -90,15 +138,33 @@ impl WebjetApp {
             passphrase: cx.new(|cx| Field::new(cx, "passphrase", true)),
             signed_in: None,
             sign_in_error: None,
-            tab: Tab::Overview,
-            filter: cx.new(|cx| Field::new(cx, "filter: name, address, tag, owner, role", false)),
-            selected: None,
-            rename: cx.new(|cx| Field::new(cx, "new name", false)),
-            tags: cx.new(|cx| Field::new(cx, "tag:a, tag:b", false)),
-            reason: cx.new(|cx| Field::new(cx, "reason (optional)", false)),
+            tab: Tab::Dashboard,
             confirm: None,
             busy: false,
             notice: None,
+            traffic: Traffic::default(),
+            graph: Graph::default(),
+            node_filter: cx
+                .new(|cx| Field::new(cx, "find: name, address, tag, owner, role", false)),
+            selected: None,
+            circuit: None,
+            rename: cx.new(|cx| Field::new(cx, "new name", false)),
+            tags: cx.new(|cx| Field::new(cx, "tag:a, tag:b", false)),
+            reason: cx.new(|cx| Field::new(cx, "reason (optional)", false)),
+            flow_filter: cx.new(|cx| {
+                Field::new(
+                    cx,
+                    "filter: peer, address, port, proto, state, rule, relay",
+                    false,
+                )
+            }),
+            flows_shown: Rc::new(Vec::new()),
+            flow_selected: None,
+            families: Rc::new(Vec::new()),
+            metric_filter: cx.new(|cx| Field::new(cx, "filter: name, help, label value", false)),
+            family: None,
+            metrics_all: false,
+            account: None,
         };
         // Refresh now and then periodically while the window exists.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -116,32 +182,48 @@ impl WebjetApp {
     /// Fetch a fresh snapshot from the agent.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let client = self.client.clone();
-        let job = self.rt.spawn(async move { client.snapshot().await });
+        let all = self.metrics_all;
+        let job = self.rt.spawn(async move { client.snapshot(all).await });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let r = job.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = this.update(cx, |app, cx| {
                 match r {
-                    Ok(s) => {
-                        // An account revoked or demoted meanwhile loses its rights.
-                        if let Some(si) = &mut app.signed_in {
-                            let key = webjet_core::crypto::key_b64(&si.account.kp.public());
-                            match model::Session::new(&s, &si.session.name, &si.session.id, &key) {
-                                Ok(sess) => si.session = sess,
-                                Err(e) => {
-                                    app.signed_in = None;
-                                    app.sign_in_error = Some(format!("signed out: {e}"));
-                                }
-                            }
-                        }
-                        app.snapshot = Some(s);
-                        app.load_error = None;
-                    }
+                    Ok(s) => app.loaded(s),
                     Err(e) => app.load_error = Some(format!("{e:#}")),
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    fn loaded(&mut self, s: Snapshot) {
+        // An account revoked or demoted meanwhile loses its rights.
+        if let Some(si) = &mut self.signed_in {
+            let key = webjet_core::crypto::key_b64(&si.account.kp.public());
+            match model::Session::new(&s, &si.session.name, &si.session.id, &key) {
+                Ok(sess) => si.session = sess,
+                Err(e) => {
+                    self.signed_in = None;
+                    self.sign_in_error = Some(format!("signed out: {e}"));
+                }
+            }
+        }
+        let sum = s.summary();
+        self.traffic.push(now_ms(), sum.tx_bytes, sum.rx_bytes);
+        self.graph = Graph::from_snapshot(&s);
+        self.families = Rc::new(match &s.metrics {
+            Ok(t) => openmetrics::parse(t),
+            Err(_) => Vec::new(),
+        });
+        // A selected circuit that closed is no longer highlighted.
+        if let (Some(l), Ok(ss)) = (self.circuit, &s.sessions)
+            && !ss.circuits.local.iter().any(|c| c.label == l)
+        {
+            self.circuit = None;
+        }
+        self.snapshot = Some(s);
+        self.load_error = None;
     }
 
     fn sign_in(&mut self, cx: &mut Context<Self>) {
@@ -168,8 +250,9 @@ impl WebjetApp {
     fn sign_out(&mut self, cx: &mut Context<Self>) {
         self.signed_in = None;
         self.selected = None;
+        self.account = None;
         self.confirm = None;
-        self.tab = Tab::Overview;
+        self.tab = Tab::Dashboard;
         cx.notify();
     }
 
@@ -209,14 +292,18 @@ impl WebjetApp {
         .detach();
     }
 
-    fn selected_node(&self) -> Option<Node> {
-        let id = self.selected.as_ref()?;
-        self.snapshot
-            .as_ref()?
-            .nodes
-            .iter()
-            .find(|n| &n.id == id)
-            .cloned()
+    fn is_admin(&self) -> bool {
+        self.signed_in
+            .as_ref()
+            .is_some_and(|s| s.session.is_admin())
+    }
+
+    /// Show a node in the Nodes tab.
+    fn show_node(&mut self, id: String, cx: &mut Context<Self>) {
+        self.tab = Tab::Nodes;
+        self.selected = Some(id);
+        self.confirm = None;
+        cx.notify();
     }
 }
 
@@ -244,17 +331,46 @@ fn button(
     }
 }
 
-fn label_value(label: &str, value: impl Into<SharedString>) -> impl IntoElement {
+/// A two-state switch drawn as a pair of segments.
+fn segmented(id: &str, options: &[&str], chosen: usize) -> Vec<gpui::Stateful<gpui::Div>> {
+    options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            div()
+                .id(SharedString::from(format!("{id}-{i}")))
+                .px_2()
+                .py(px(2.))
+                .rounded_md()
+                .cursor_pointer()
+                .bg(rgb(if i == chosen {
+                    theme::ACCENT
+                } else {
+                    theme::RAISED
+                }))
+                .text_color(rgb(if i == chosen { 0xffffff } else { theme::MUTED }))
+                .child(o.to_string())
+        })
+        .collect()
+}
+
+fn label_value(label: &str, value: impl Into<SharedString>) -> gpui::Div {
     div()
         .flex()
         .gap_2()
         .child(
             div()
-                .w(px(150.))
+                .w(px(130.))
+                .flex_shrink_0()
                 .text_color(rgb(theme::MUTED))
                 .child(label.to_string()),
         )
-        .child(div().text_color(rgb(theme::TEXT)).child(value.into()))
+        .child(
+            div()
+                .min_w(px(0.))
+                .text_color(rgb(theme::TEXT))
+                .child(value.into()),
+        )
 }
 
 fn panel() -> gpui::Div {
@@ -267,12 +383,106 @@ fn panel() -> gpui::Div {
         .gap_1()
 }
 
-fn heading(t: &str) -> impl IntoElement {
+fn heading(t: &str) -> gpui::Div {
     div()
-        .text_lg()
+        .text_base()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(theme::TEXT))
         .mb_1()
         .child(t.to_string())
+}
+
+fn muted(t: impl Into<SharedString>) -> gpui::Div {
+    div().text_color(rgb(theme::MUTED)).child(t.into())
+}
+
+/// A small colored label.
+fn chip(t: &str, color: u32) -> gpui::Div {
+    div()
+        .px(px(6.))
+        .rounded_sm()
+        .text_xs()
+        .border_1()
+        .border_color(rgb(color))
+        .text_color(rgb(color))
+        .child(t.to_string())
+}
+
+fn dot(color: u32) -> gpui::Div {
+    div()
+        .w(px(8.))
+        .h(px(8.))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(rgb(color))
+}
+
+/// A table cell of fixed width that cuts long text.
+fn cell(w: f32, t: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .w(px(w))
+        .flex_shrink_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .child(t.into())
+}
+
+/// A table header row.
+fn header_row(cols: &[(f32, &str)]) -> gpui::Div {
+    let mut r = div()
+        .flex()
+        .gap_2()
+        .px_2()
+        .pb_1()
+        .border_b_1()
+        .border_color(rgb(theme::BORDER))
+        .text_xs()
+        .text_color(rgb(theme::MUTED));
+    for (w, t) in cols {
+        r = r.child(cell(*w, t.to_string()));
+    }
+    r
+}
+
+/// A scrolling column that takes the remaining height.
+fn scroll(id: &str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(SharedString::from(id.to_string()))
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h(px(0.))
+        .overflow_y_scroll()
+}
+
+/// The color for a link's quality: round-trip time and loss.
+fn link_level(rtt_ms: f64, loss: f64) -> Level {
+    if loss >= 0.05 || rtt_ms >= 300.0 {
+        Level::Bad
+    } else if loss >= 0.01 || rtt_ms >= 120.0 {
+        Level::Warn
+    } else {
+        Level::Ok
+    }
+}
+
+fn rtt_text(ms: f64) -> String {
+    if ms <= 0.0 {
+        "—".into()
+    } else if ms < 10.0 {
+        format!("{ms:.2} ms")
+    } else {
+        format!("{ms:.0} ms")
+    }
+}
+
+fn loss_text(l: f64) -> String {
+    format!("{:.1}%", l * 100.0)
+}
+
+fn rate_text(bps: f64) -> String {
+    format!("{}/s", model::bytes(bps.max(0.0) as u64))
 }
 
 fn now_ms() -> u64 {
@@ -363,7 +573,7 @@ impl WebjetApp {
             .into_any_element()
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, s: &Snapshot, cx: &mut Context<Self>) -> impl IntoElement {
         let (name, role) = match &self.signed_in {
             Some(s) => (
                 s.session.name.clone(),
@@ -375,17 +585,22 @@ impl WebjetApp {
             ),
             None => (String::new(), ""),
         };
-        let mut tabs = div().flex().gap_1();
-        let mut all = vec![(Tab::Overview, "Network"), (Tab::Nodes, "Nodes")];
-        if self
-            .signed_in
-            .as_ref()
-            .is_some_and(|s| s.session.is_admin())
-        {
-            all.push((Tab::Accounts, "Accounts"));
-        }
-        all.push((Tab::Peers, "This agent"));
-        for (i, (t, label)) in all.into_iter().enumerate() {
+        let health = model::health(s, now_ms());
+        let mut tabs = div().flex().gap_1().items_center();
+        tabs = tabs.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .pr_3()
+                .child(dot(theme::level(health.level)))
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(s.status.name.clone().unwrap_or_else(|| "Webjet".into())),
+                ),
+        );
+        for (i, (t, label)) in TABS.into_iter().enumerate() {
             let on = self.tab == t;
             tabs = tabs.child(
                 div()
@@ -395,6 +610,7 @@ impl WebjetApp {
                     .rounded_md()
                     .cursor_pointer()
                     .bg(rgb(if on { theme::ACCENT } else { theme::PANEL }))
+                    .text_color(rgb(if on { 0xffffff } else { theme::TEXT }))
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab = t;
@@ -427,448 +643,6 @@ impl WebjetApp {
                     ),
             )
     }
-
-    fn render_overview(&self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
-        let st = &s.status;
-        let now = now_ms();
-        let valid_nodes = s.nodes.iter().filter(|n| n.valid).count();
-        let relays = s.nodes.iter().filter(|n| n.valid && n.relay).count();
-        let mut net = panel()
-            .child(heading("Network"))
-            .child(label_value("Overlay pool", s.tree.overlay_pool.join(", ")))
-            .child(label_value(
-                "Nodes",
-                format!(
-                    "{valid_nodes} active, {} total, {relays} relays",
-                    s.nodes.len()
-                ),
-            ))
-            .child(label_value("Controllers", st.controllers.to_string()))
-            .child(label_value(
-                "Tree version",
-                st.tree_version
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "none yet".into()),
-            ))
-            .child(label_value(
-                "Tree root",
-                st.tree_root
-                    .as_deref()
-                    .map(model::short)
-                    .unwrap_or("—")
-                    .to_string(),
-            ))
-            .child(label_value(
-                "Head expires",
-                st.head_expires
-                    .map(|t| model::relative(t, now))
-                    .unwrap_or_else(|| "—".into()),
-            ))
-            .child(label_value(
-                "Valid until",
-                if s.tree.valid_until > 0 {
-                    model::relative(s.tree.valid_until, now)
-                } else {
-                    "—".into()
-                },
-            ))
-            .child(label_value(
-                "Policy version",
-                s.tree.policy_version.to_string(),
-            ))
-            .child(label_value("PSK epoch", st.psk_epoch.to_string()));
-        if let Some(si) = &self.signed_in
-            && si.session.may(&Action::RotatePsk, None)
-        {
-            let confirming = self.confirm == Some(Confirm::RotatePsk);
-            let epoch = st.psk_epoch;
-            net = net.child(
-                div().pt_2().flex().gap_2().child(
-                    button(
-                        "rotate-psk",
-                        if confirming {
-                            "Click again to rotate the PSK"
-                        } else {
-                            "Rotate PSK"
-                        },
-                        !self.busy,
-                        if confirming {
-                            theme::BAD
-                        } else {
-                            theme::ACCENT
-                        },
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.confirm == Some(Confirm::RotatePsk) {
-                            this.run_op(
-                                "Rotate PSK".into(),
-                                |a| client::ops::rotate_psk(a, epoch),
-                                cx,
-                            );
-                        } else {
-                            this.confirm = Some(Confirm::RotatePsk);
-                            cx.notify();
-                        }
-                    })),
-                ),
-            );
-        }
-        let mut alarms = panel().child(heading("Alarms on this agent"));
-        if st.alarms.is_empty() {
-            alarms = alarms.child(div().text_color(rgb(theme::OK)).child("none"));
-        }
-        for a in &st.alarms {
-            let color = if a.severity == "critical" {
-                theme::BAD
-            } else {
-                theme::WARN
-            };
-            alarms = alarms.child(div().text_color(rgb(color)).child(format!(
-                "{} ({}, since {})",
-                a.name,
-                a.severity,
-                model::relative(a.since, now)
-            )));
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(net)
-            .child(alarms)
-            .into_any_element()
-    }
-
-    fn render_nodes(&self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
-        let filter = self.filter.read(cx).text().to_string();
-        let shown: Vec<&Node> = s.nodes.iter().filter(|n| n.matches(&filter)).collect();
-        let mut list = div()
-            .id("node-list")
-            .flex()
-            .flex_col()
-            .gap_1()
-            .overflow_y_scroll()
-            .h_full();
-        for n in &shown {
-            let sel = self.selected.as_deref() == Some(n.id.as_str());
-            let id = n.id.clone();
-            let status_color = if n.valid { theme::OK } else { theme::BAD };
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("node-{}", n.id)))
-                    .flex()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(rgb(if sel { theme::INPUT } else { theme::PANEL }))
-                    .border_1()
-                    .border_color(rgb(if sel { theme::ACCENT } else { theme::PANEL }))
-                    .child(
-                        div()
-                            .w(px(8.))
-                            .h(px(8.))
-                            .mt(px(6.))
-                            .rounded_full()
-                            .bg(rgb(status_color)),
-                    )
-                    .child(div().w(px(170.)).child(n.name.clone()))
-                    .child(
-                        div()
-                            .w(px(150.))
-                            .text_color(rgb(theme::MUTED))
-                            .child(n.ips.join(", ")),
-                    )
-                    .child(div().text_color(rgb(theme::MUTED)).child(n.roles()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected = Some(id.clone());
-                        this.confirm = None;
-                        cx.notify();
-                    })),
-            );
-        }
-        let left = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .w(px(520.))
-            .h_full()
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.filter.clone())
-                    .child(div().text_color(rgb(theme::MUTED)).child(format!(
-                        "{} of {}",
-                        shown.len(),
-                        s.nodes.len()
-                    ))),
-            )
-            .child(list);
-        let right = match self.selected_node() {
-            Some(n) => self.render_node_detail(&n, cx),
-            None => div()
-                .text_color(rgb(theme::MUTED))
-                .child("Select a node to see its details.")
-                .into_any_element(),
-        };
-        div()
-            .flex()
-            .gap_3()
-            .h_full()
-            .child(left)
-            .child(div().flex_1().child(right))
-            .into_any_element()
-    }
-
-    fn render_node_detail(&self, n: &Node, cx: &mut Context<Self>) -> AnyElement {
-        let mut d = panel()
-            .child(heading(&n.name))
-            .child(label_value(
-                "Status",
-                if n.valid {
-                    "active"
-                } else {
-                    "revoked or replaced"
-                },
-            ))
-            .child(label_value("Node id", model::short(&n.id).to_string()))
-            .child(label_value("Key", n.key.clone()))
-            .child(label_value("Addresses", n.ips.join(", ")))
-            .child(label_value("Roles", n.roles()))
-            .child(label_value(
-                "Tags",
-                if n.tags.is_empty() {
-                    "—".into()
-                } else {
-                    n.tags.join(", ")
-                },
-            ))
-            .child(label_value(
-                "Subnet routes",
-                if n.routes.is_empty() {
-                    "—".into()
-                } else {
-                    n.routes.join(", ")
-                },
-            ))
-            .child(label_value("Owner", n.owner.clone()))
-            .child(label_value("Record version", n.version.to_string()));
-        let Some(si) = &self.signed_in else {
-            return d.into_any_element();
-        };
-        let may_rename = si.session.may(&Action::RenameNode, Some(n));
-        let may_revoke = si.session.may(&Action::RevokeNode, Some(n));
-        let may_update = si.session.may(&Action::UpdateNode, Some(n)) && n.valid;
-        if !(may_rename || may_revoke || may_update) {
-            d = d.child(div().pt_2().text_color(rgb(theme::MUTED)).child(
-                if si.session.is_admin() {
-                    "This node is revoked; nothing can be changed."
-                } else {
-                    "Read-only: you can change only nodes your account owns."
-                },
-            ));
-            return d.into_any_element();
-        }
-        let mut actions = div()
-            .pt_2()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(heading("Change"));
-        let busy = self.busy;
-        if may_rename {
-            let node = n.clone();
-            actions =
-                actions.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(self.rename.clone())
-                        .child(button("rename", "Rename", !busy, theme::ACCENT).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                let new = this.rename.read(cx).text().trim().to_string();
-                                let node = node.clone();
-                                this.run_op(
-                                    format!("Rename {} to {new}", node.name),
-                                    move |a| client::ops::rename(a, &node, &new),
-                                    cx,
-                                );
-                                this.rename.update(cx, |f, cx| f.clear(cx));
-                            }),
-                        )),
-                );
-        }
-        if may_update {
-            let node = n.clone();
-            actions =
-                actions.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(self.tags.clone())
-                        .child(button("tags", "Set tags", !busy, theme::ACCENT).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                let tags = this.tags.read(cx).text().to_string();
-                                let node = node.clone();
-                                this.run_op(
-                                    format!("Set tags on {}", node.name),
-                                    move |a| client::ops::set_tags(a, &node, &tags),
-                                    cx,
-                                );
-                            }),
-                        )),
-                );
-        }
-        if may_revoke {
-            let node = n.clone();
-            let confirming = self.confirm == Some(Confirm::Revoke(n.id.clone()));
-            actions = actions.child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.reason.clone())
-                    .child(
-                        button(
-                            "revoke",
-                            if confirming {
-                                "Click again to revoke"
-                            } else {
-                                "Revoke node"
-                            },
-                            !busy,
-                            theme::BAD,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.confirm == Some(Confirm::Revoke(node.id.clone())) {
-                                let reason = this.reason.read(cx).text().to_string();
-                                let node = node.clone();
-                                this.run_op(
-                                    format!("Revoke {}", node.name),
-                                    move |a| client::ops::revoke(a, &node, &reason),
-                                    cx,
-                                );
-                                this.reason.update(cx, |f, cx| f.clear(cx));
-                            } else {
-                                this.confirm = Some(Confirm::Revoke(node.id.clone()));
-                                cx.notify();
-                            }
-                        })),
-                    ),
-            );
-        }
-        d.child(actions).into_any_element()
-    }
-
-    fn render_accounts(&self, s: &Snapshot) -> AnyElement {
-        let mut p = panel().child(heading("Accounts"));
-        for a in &s.accounts {
-            let owned = s
-                .nodes
-                .iter()
-                .filter(|n| n.owner_id == a.id && n.valid)
-                .count();
-            p = p.child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .text_color(rgb(if a.valid { theme::TEXT } else { theme::MUTED }))
-                            .child(a.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .w(px(90.))
-                            .child(if a.admin { "admin" } else { "member" }),
-                    )
-                    .child(
-                        div()
-                            .w(px(90.))
-                            .text_color(rgb(if a.valid { theme::OK } else { theme::BAD }))
-                            .child(if a.valid { "active" } else { "revoked" }),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(theme::MUTED))
-                            .child(format!("{owned} nodes")),
-                    ),
-            );
-        }
-        p.into_any_element()
-    }
-
-    fn render_peers(&self, s: &Snapshot) -> AnyElement {
-        let st = &s.status;
-        let mut me = panel()
-            .child(heading("This agent"))
-            .child(label_value(
-                "Name",
-                st.name.clone().unwrap_or_else(|| "not enrolled".into()),
-            ))
-            .child(label_value(
-                "Addresses",
-                st.ips.clone().unwrap_or_default().join(", "),
-            ))
-            .child(label_value("Version", st.version.clone()))
-            .child(label_value("Up for", model::duration(st.uptime_s)))
-            .child(label_value("Sessions", st.sessions.to_string()));
-        if !st.valid {
-            me = me.child(
-                div()
-                    .text_color(rgb(theme::WARN))
-                    .child("This agent's own node record isn't valid."),
-            );
-        }
-        let mut peers = panel().child(heading("Hop sessions"));
-        if s.peers.is_empty() {
-            peers = peers.child(div().text_color(rgb(theme::MUTED)).child("none"));
-        }
-        for p in &s.peers {
-            peers = peers.child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(div().w(px(160.)).child(p.peer.clone()))
-                    .child(
-                        div()
-                            .w(px(70.))
-                            .text_color(rgb(theme::MUTED))
-                            .child(p.transport.clone()),
-                    )
-                    .child(
-                        div()
-                            .w(px(180.))
-                            .text_color(rgb(theme::MUTED))
-                            .child(p.remote.clone()),
-                    )
-                    .child(div().w(px(90.)).child(format!("{:.1} ms", p.rtt_ms)))
-                    .child(
-                        div()
-                            .w(px(80.))
-                            .child(format!("{:.1}% loss", p.loss * 100.0)),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(theme::MUTED))
-                            .child(model::duration(p.age_s)),
-                    ),
-            );
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(me)
-            .child(peers)
-            .into_any_element()
-    }
 }
 
 impl Render for WebjetApp {
@@ -886,19 +660,12 @@ impl Render for WebjetApp {
         let Some(s) = self.snapshot.clone() else {
             return root.child(self.render_sign_in(cx));
         };
-        if self.tab == Tab::Accounts
-            && !self
-                .signed_in
-                .as_ref()
-                .is_some_and(|s| s.session.is_admin())
-        {
-            self.tab = Tab::Overview;
-        }
         let body = match self.tab {
-            Tab::Overview => self.render_overview(&s, cx),
+            Tab::Dashboard => self.render_dashboard(&s, cx),
+            Tab::Connections => self.render_connections(&s, cx),
             Tab::Nodes => self.render_nodes(&s, cx),
-            Tab::Accounts => self.render_accounts(&s),
-            Tab::Peers => self.render_peers(&s),
+            Tab::Metrics => self.render_metrics(&s, cx),
+            Tab::Accounts => self.render_accounts(&s, cx),
         };
         let mut footer = div()
             .px_3()
@@ -917,10 +684,23 @@ impl Render for WebjetApp {
             Some(e) => div()
                 .text_color(rgb(theme::WARN))
                 .child(format!("agent unreachable: {e}")),
-            None => div().child(format!("connected · {}", self.client.socket.display())),
+            None => div().child(format!(
+                "connected · {} · webjetd {}",
+                self.client.socket.display(),
+                s.status.version
+            )),
         });
-        root.child(self.render_header(cx))
-            .child(div().flex_1().p_3().overflow_hidden().child(body))
+        root.child(self.render_header(&s, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .p_3()
+                    .overflow_hidden()
+                    .child(body),
+            )
             .child(footer)
     }
 }
@@ -932,7 +712,7 @@ pub fn open(
     socket: PathBuf,
     keys: PathBuf,
 ) -> anyhow::Result<()> {
-    let bounds = gpui::Bounds::centered(None, gpui::size(px(1100.), px(720.)), cx);
+    let bounds = gpui::Bounds::centered(None, gpui::size(px(1280.), px(820.)), cx);
     cx.open_window(
         gpui::WindowOptions {
             window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
@@ -947,4 +727,154 @@ pub fn open(
     .map_err(|e| anyhow::anyhow!("opening the window: {e}"))?;
     cx.activate(true);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Every tab renders headless from a real agent's answers
+    //! (`tests/fixtures/node-02.json`, taken from `scripts/local-net.sh 4`).
+
+    use super::*;
+    use crate::model::{Account, Conntrack, Session, Sessions, Status, Topology, Tree};
+    use gpui::{TestAppContext, point, size};
+    use serde_json::Value;
+    use webjet_core::crypto::{self, KeyPair};
+
+    fn fixture() -> Snapshot {
+        let v: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/node-02.json")).unwrap();
+        let get = |k: &str| v[k].clone();
+        Snapshot {
+            status: serde_json::from_value::<Status>(get("status")).unwrap(),
+            nodes: serde_json::from_value(get("nodes")).unwrap(),
+            accounts: serde_json::from_value(get("accounts")).unwrap(),
+            peers: serde_json::from_value(get("peers")).unwrap(),
+            tree: serde_json::from_value::<Tree>(get("tree")).unwrap(),
+            sessions: Ok(serde_json::from_value::<Sessions>(get("sessions")).unwrap()),
+            conntrack: Ok(serde_json::from_value::<Conntrack>(get("conntrack")).unwrap()),
+            topology: Ok(serde_json::from_value::<Topology>(get("topology")).unwrap()),
+            metrics: Ok(v["metrics"].as_str().unwrap().to_string()),
+            metrics_all: false,
+        }
+    }
+
+    /// An admin account to sign in with, added to the snapshot.
+    fn admin(s: &mut Snapshot) -> client::SignedIn {
+        let dir = std::env::temp_dir().join(format!("wj-ui-{}", hex::encode(crypto::random16())));
+        std::fs::create_dir_all(&dir).unwrap();
+        let kp = KeyPair::generate();
+        let id = crypto::random32();
+        let key = crypto::key_b64(&kp.public());
+        let p = webjet_tools::AccountPub {
+            name: "tester".into(),
+            account_id: hex::encode(id),
+            key: key.clone(),
+        };
+        std::fs::write(dir.join("tester.pub"), serde_json::to_vec(&p).unwrap()).unwrap();
+        std::fs::write(
+            dir.join("tester.key"),
+            webjet_tools::seal("pw", &kp.seed()[..]).unwrap(),
+        )
+        .unwrap();
+        s.accounts.push(Account {
+            id: hex::encode(id),
+            name: "tester".into(),
+            admin: true,
+            valid: true,
+            key: key.clone(),
+            version: 1,
+        });
+        let account = webjet_tools::Account::unlock(&dir, "tester", "pw").unwrap();
+        let session = Session::new(s, "tester", &hex::encode(id), &key).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        client::SignedIn { account, session }
+    }
+
+    #[gpui::test]
+    fn every_tab_renders(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        let node = snap.nodes.iter().find(|n| n.relay).unwrap().id.clone();
+        let account = snap.accounts[0].id.clone();
+        let flow = snap.conntrack.as_ref().unwrap().flows[0].clone();
+        let relayed = snap
+            .sessions
+            .as_ref()
+            .unwrap()
+            .circuits
+            .local
+            .iter()
+            .find(|c| !c.direct)
+            .map(|c| c.label);
+        view.update(cx, |app, _| {
+            app.loaded(snap.clone());
+            app.signed_in = Some(si);
+        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            let v = view.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                size(px(1280.), px(820.)),
+                move |_, _| v.into_any_element(),
+            );
+            cx.run_until_parked();
+        };
+        // Each tab bare, then with something selected.
+        for (tab, _) in TABS {
+            view.update(cx, |app, _| app.tab = tab);
+            draw(cx);
+        }
+        view.update(cx, |app, _| {
+            app.tab = Tab::Nodes;
+            app.selected = Some(node.clone());
+            app.circuit = relayed;
+        });
+        draw(cx);
+        view.update(cx, |app, _| {
+            app.tab = Tab::Connections;
+            app.flow_selected = Some(connections::flow_key(&flow));
+        });
+        draw(cx);
+        view.update(cx, |app, _| {
+            app.tab = Tab::Metrics;
+            app.family = app.families.first().map(|f| f.name.clone());
+        });
+        draw(cx);
+        view.update(cx, |app, _| {
+            app.tab = Tab::Accounts;
+            app.account = Some(account.clone());
+        });
+        draw(cx);
+
+        view.update(cx, |app, _| {
+            assert!(app.graph.vertices.len() >= 5, "every node is a vertex");
+            assert!(!app.graph.edges.is_empty());
+            assert!(!app.families.is_empty(), "the metrics parse");
+            assert_eq!(app.flows_shown.len(), 2, "the flows are listed");
+            assert!(app.signed_in.is_some(), "still signed in");
+        });
+
+        // An older agent without the new commands still renders.
+        view.update(cx, |app, _| {
+            let mut old = snap.clone();
+            old.sessions = Err("unknown command".into());
+            old.conntrack = Err("unknown command".into());
+            old.topology = Err("unknown command".into());
+            old.metrics = Err("unknown command".into());
+            app.loaded(old);
+        });
+        for (tab, _) in TABS {
+            view.update(cx, |app, _| app.tab = tab);
+            draw(cx);
+        }
+    }
 }

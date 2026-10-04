@@ -2326,6 +2326,9 @@ The state directory is readable only by the agent's user, and `webjet-signer`'s 
 | `status` | The node's own record, home relays, tree version and age, clock offset, active alarms |
 | `peers` | Neighbors, with the transport in use and each transport's measured cost (§9.6) |
 | `route <node>` | The path in use and backups, with end-to-end cost (§11.4) |
+| `sessions` | End-to-end sessions, the circuits ending here with their hops, round trip and the one in use, and the traffic of each route this node carries (§11.5, §12.3) |
+| `conntrack` | Tracked flows (§14.4) with their state, the rule that admitted them and the circuit the peer's traffic takes |
+| `topology` | The network graph as this node knows it: every node, and the links relays advertise, edge nodes' attachments and this node's own hops (§11.4) |
 | `explain <src> <dst> <port>` | Which policy rule allows or denies the flow (§14.3) |
 | `ping`, `trace <node>` | Reachability through the overlay, hop by hop |
 | `dns <name>` | How the local resolver answers a name, and from which source (§11.10) |

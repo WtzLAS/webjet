@@ -774,3 +774,109 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
 
 #[allow(dead_code)]
 fn _parsed(_: &Parsed) {}
+
+/// At most this many flows go into one `conntrack` answer.
+const FLOWS_SHOWN: usize = 2000;
+
+fn proto_name(p: u8) -> String {
+    use webjet_core::policy::{PROTO_ICMP, PROTO_ICMPV6, PROTO_TCP, PROTO_UDP};
+    match p {
+        PROTO_TCP => "tcp".into(),
+        PROTO_UDP => "udp".into(),
+        PROTO_ICMP => "icmp".into(),
+        PROTO_ICMPV6 => "icmpv6".into(),
+        p => p.to_string(),
+    }
+}
+
+/// The tracked flows (§14.4) with the circuit each peer's traffic currently
+/// takes, for the control channel (`conntrack`). Most recently active first.
+pub fn flows(n: &Node) -> serde_json::Value {
+    use serde_json::json;
+    use webjet_core::conntrack::State;
+    let Some(dp) = n.dataplane.get() else {
+        return json!({"running": false, "total": 0, "flows": [], "limits": {}});
+    };
+    let now = Instant::now();
+    let (mut rows, total, gateway, limits) = {
+        let ct = dp.conntrack.lock();
+        let rows: Vec<_> = ct
+            .entries()
+            .filter(|(_, e)| now.duration_since(e.last) < e.state.timeout())
+            .map(|(k, e)| (*k, e.clone()))
+            .collect();
+        (
+            rows,
+            ct.len(),
+            ct.gateway_len(),
+            json!({
+                "per_peer": ct.per_peer_quota,
+                "new_per_sec": ct.new_per_sec,
+                "global": ct.global_cap,
+                "evictions": ct.evictions,
+            }),
+        )
+    };
+    rows.sort_by_key(|(_, e)| std::cmp::Reverse(e.last));
+    let shown = rows.len().min(FLOWS_SHOWN);
+    // The circuit each peer's session sends on: its hops, or direct.
+    let mut circuit_of: HashMap<Bytes32, Option<serde_json::Value>> = HashMap::new();
+    let mut out = Vec::with_capacity(shown);
+    for (k, e) in rows.iter().take(FLOWS_SHOWN) {
+        let circuit = circuit_of
+            .entry(k.peer)
+            .or_insert_with(|| {
+                let label = n.e2e.get(&k.peer)?.primary()?;
+                let c = n
+                    .circuits
+                    .lock()
+                    .local_circuits(&k.peer)
+                    .into_iter()
+                    .find(|c| c.label == label)?;
+                let rtt_ms = c.probes.lock().srtt_ms;
+                Some(json!({
+                    "label": label,
+                    "direct": c.direct(),
+                    "hops": c.hops.iter().map(|h| n.name_of(h)).collect::<Vec<_>>(),
+                    "rtt_ms": rtt_ms,
+                }))
+            })
+            .clone();
+        let state = match e.state {
+            State::TcpOpening => "tcp opening",
+            State::TcpEstablished => "tcp established",
+            State::TcpClosing => "tcp closing",
+            State::UdpOneWay => "udp one-way",
+            State::UdpBoth => "udp",
+            State::IcmpEcho => "icmp echo",
+            State::Other => "other",
+        };
+        let idle = now.duration_since(e.last);
+        out.push(json!({
+            "peer": n.name_of(&k.peer),
+            "peer_id": hex::encode(k.peer),
+            "proto": proto_name(k.flow.proto),
+            "src": k.flow.src.to_string(),
+            "sport": k.flow.sport,
+            "dst": k.flow.dst.to_string(),
+            "dport": k.flow.dport,
+            "state": state,
+            "outbound": e.outbound,
+            "replied": e.saw_reply,
+            "gateway": e.gateway,
+            "rule": e.rule,
+            "idle_s": idle.as_secs(),
+            "expires_s": e.state.timeout().saturating_sub(idle).as_secs(),
+            "circuit": circuit,
+        }));
+    }
+    json!({
+        "running": true,
+        "total": total,
+        "live": rows.len(),
+        "gateway": gateway,
+        "truncated": rows.len() > shown,
+        "limits": limits,
+        "flows": out,
+    })
+}

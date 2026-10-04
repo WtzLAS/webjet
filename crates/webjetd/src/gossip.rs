@@ -1148,3 +1148,86 @@ pub async fn run(n: Arc<Node>) {
         }
     }
 }
+
+/// The network graph as this node knows it (§11.4), for the control
+/// channel (`topology`): every node, and an edge per relay link (from
+/// LinkStateAdverts), per attachment of an edge node to a relay, and per
+/// live hop of this agent. Edges are listed once per direction reported.
+pub fn topology(n: &Node) -> serde_json::Value {
+    use serde_json::json;
+    let now = now_ms();
+    let mut edges: Vec<serde_json::Value> = Vec::new();
+    let (lsas, atts) = {
+        let recs = n.records.lock();
+        (
+            recs.lsas
+                .iter()
+                .map(|(k, (l, _))| (*k, l.clone()))
+                .collect::<Vec<_>>(),
+            recs.attachments
+                .iter()
+                .map(|(k, (a, _))| (*k, a.clone()))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let mut loads = serde_json::Map::new();
+    for (id, l) in &lsas {
+        if l.expires_at + SKEW_SHORT_RECORD < now {
+            continue;
+        }
+        if let Some(x) = &l.load {
+            loads.insert(
+                hex::encode(id),
+                json!({"util_pct": x.util_pct, "cpu_pct": x.cpu_pct, "circuits_pct": x.circuits_pct, "queue_pct": x.queue_pct, "capacity_mbps": x.capacity_mbps}),
+            );
+        }
+        for e in l.links.clone().unwrap_or_default() {
+            edges.push(json!({
+                "a": hex::encode(id), "b": hex::encode(opt_k32(&e.peer)), "kind": "relay",
+                "transport": e.transport.name(), "rtt_ms": e.rtt_ms, "loss": e.loss_pct as f64 / 100.0,
+                "util_pct": e.util_pct, "age_s": now.saturating_sub(l.issued_at) / 1000,
+            }));
+        }
+    }
+    for (id, a) in &atts {
+        if a.expires_at + SKEW_SHORT_RECORD < now {
+            continue;
+        }
+        for e in a.relays.clone().unwrap_or_default() {
+            edges.push(json!({
+                "a": hex::encode(id), "b": hex::encode(opt_k32(&e.relay)), "kind": "attachment",
+                "transport": e.transport.name(), "rtt_ms": e.rtt_ms, "loss": e.loss_pct as f64 / 100.0,
+                "age_s": now.saturating_sub(a.issued_at) / 1000,
+            }));
+        }
+    }
+    let hops: Vec<Arc<Hop>> = n.hops.lock().values().cloned().collect();
+    for h in hops.iter().filter(|h| h.alive()) {
+        let st = h.stats.lock().clone();
+        edges.push(json!({
+            "a": hex::encode(n.me), "b": hex::encode(h.peer), "kind": "hop",
+            "transport": h.transport.name(), "rtt_ms": st.srtt_ms, "loss": st.loss,
+            "remote": h.remote.to_string(), "outbound": h.outbound,
+            "tx_bytes": h.tx_bytes.load(std::sync::atomic::Ordering::Relaxed),
+            "rx_bytes": h.rx_bytes.load(std::sync::atomic::Ordering::Relaxed),
+            "age_s": h.created.elapsed().as_secs(),
+        }));
+    }
+    let s = n.store.read();
+    let v = s.view();
+    let nodes: Vec<serde_json::Value> = v
+        .nodes
+        .values()
+        .filter(|x| x.valid)
+        .map(|x| {
+            json!({
+                "id": hex::encode(x.id), "name": x.name,
+                "ips": x.ips.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+                "relay": x.relay, "data": x.data, "control": x.control,
+                "me": x.id == n.me,
+                "load": loads.get(&hex::encode(x.id)),
+            })
+        })
+        .collect();
+    json!({"me": hex::encode(n.me), "nodes": nodes, "edges": edges})
+}

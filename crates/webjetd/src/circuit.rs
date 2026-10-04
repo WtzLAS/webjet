@@ -880,23 +880,108 @@ pub fn sweep(n: &Arc<Node>) {
     }
 }
 
+/// One circuit ending here, copied out of the table so names can be looked
+/// up without holding the circuit lock.
+struct LocalSummary {
+    peer: Bytes32,
+    label: u32,
+    next: Bytes32,
+    hops: Vec<Bytes32>,
+    source: bool,
+    open: bool,
+    rtt_ms: f64,
+    loss: f64,
+    samples: u64,
+    age_s: u64,
+    route_id: Bytes32,
+}
+
+/// Circuits ending at this node and routes this node carries, for the
+/// control channel (`sessions`, `webjetctl local sessions`, the app).
 pub fn summary(n: &Node) -> serde_json::Value {
-    let t = n.circuits.lock();
-    let locals: Vec<serde_json::Value> = t
-        .entries
-        .values()
-        .filter_map(|e| match &e.kind {
-            Kind::Local(c) => Some(serde_json::json!({
+    let (locals, routes, transit, refused) = {
+        let t = n.circuits.lock();
+        let locals: Vec<LocalSummary> = t
+            .entries
+            .values()
+            .filter_map(|e| match &e.kind {
+                Kind::Local(c) => {
+                    let p = c.probes.lock();
+                    Some(LocalSummary {
+                        peer: c.peer,
+                        label: c.label,
+                        next: c.next,
+                        hops: c.hops.clone(),
+                        source: c.is_source,
+                        open: c.out_label.lock().is_some(),
+                        rtt_ms: p.srtt_ms,
+                        loss: p.loss,
+                        samples: p.samples,
+                        age_s: c.created.elapsed().as_secs(),
+                        route_id: c.route_id,
+                    })
+                }
+                Kind::Transit(_) => None,
+            })
+            .collect();
+        let routes: Vec<(Bytes32, Arc<RouteAcct>)> =
+            t.routes.iter().map(|(k, r)| (*k, r.clone())).collect();
+        (locals, routes, t.transit_count(), t.refused.clone())
+    };
+    // Which circuit each end-to-end session sends on.
+    let primary: HashMap<Bytes32, u32> = n
+        .e2e
+        .all()
+        .iter()
+        .filter_map(|s| s.primary().map(|l| (s.peer, l)))
+        .collect();
+    let locals: Vec<serde_json::Value> = locals
+        .iter()
+        .map(|c| {
+            serde_json::json!({
                 "peer": n.name_of(&c.peer),
+                "peer_id": hex::encode(c.peer),
+                "label": c.label,
+                "next": n.name_of(&c.next),
                 "hops": c.hops.iter().map(|h| n.name_of(h)).collect::<Vec<_>>(),
-                "source": c.is_source,
-                "open": c.out_label.lock().is_some(),
-                "rtt_ms": c.probes.lock().srtt_ms,
-                "loss": c.probes.lock().loss,
-                "age_s": c.created.elapsed().as_secs(),
-            })),
-            _ => None,
+                "hop_ids": c.hops.iter().map(hex::encode).collect::<Vec<_>>(),
+                "direct": c.hops.is_empty(),
+                "source": c.source,
+                "open": c.open,
+                "primary": primary.get(&c.peer) == Some(&c.label),
+                "rtt_ms": c.rtt_ms,
+                "loss": c.loss,
+                "probes": c.samples,
+                "age_s": c.age_s,
+                "route_id": hex::encode(&c.route_id[..8]),
+            })
         })
         .collect();
-    serde_json::json!({ "local": locals, "transit": t.transit_count(), "refused": t.refused })
+    let routes: Vec<serde_json::Value> = routes
+        .iter()
+        .map(|(id, r)| {
+            let role = if r.src == n.me {
+                "source"
+            } else if r.dst == n.me {
+                "destination"
+            } else {
+                "transit"
+            };
+            let ld = |a: &AtomicU64| a.load(Ordering::Relaxed);
+            serde_json::json!({
+                "route_id": hex::encode(&id[..8]),
+                "role": role,
+                "src": n.name_of(&r.src),
+                "dst": n.name_of(&r.dst),
+                "path": std::iter::once(&r.src).chain(r.hops.iter()).chain(std::iter::once(&r.dst)).map(|h| n.name_of(h)).collect::<Vec<_>>(),
+                "path_ids": std::iter::once(&r.src).chain(r.hops.iter()).chain(std::iter::once(&r.dst)).map(hex::encode).collect::<Vec<_>>(),
+                "fwd_bytes": ld(&r.fwd.bytes), "fwd_frames": ld(&r.fwd.frames),
+                "rev_bytes": ld(&r.rev.bytes), "rev_frames": ld(&r.rev.frames),
+                "dropped_queue": ld(&r.dropped_queue), "dropped_hop_limit": ld(&r.dropped_hop_limit),
+                "ecn_marked": ld(&r.ecn_marked), "setups": ld(&r.setups),
+                "circuits": ld(&r.circuits), "active_since": ld(&r.active_since),
+            })
+        })
+        .collect();
+    serde_json::json!({ "local": locals, "routes": routes, "transit": transit, "refused": refused })
 }
