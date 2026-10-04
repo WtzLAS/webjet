@@ -8,7 +8,7 @@ its accounts. It talks to the `webjetd` agent on the same machine, like
 
 ```sh
 cargo run --release -p webjet-app
-webjet-app --socket /run/webjet/control.sock --keys ~/.config/webjet/accounts
+webjet-app --socket /var/run/webjet/control.sock --keys ~/.config/webjet/accounts
 ```
 
 | Option | Default | Meaning |

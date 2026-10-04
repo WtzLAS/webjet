@@ -30,7 +30,7 @@ struct Cli {
         long,
         global = true,
         env = "WEBJET_SOCKET",
-        default_value = "/run/webjet/control.sock"
+        default_value_os_t = webjetd::ipc::default_control()
     )]
     socket: PathBuf,
     /// Directory with account keys.

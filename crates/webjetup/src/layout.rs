@@ -124,6 +124,12 @@ impl Layout {
     pub fn enrolled(&self) -> bool {
         self.data_dir.join("node.json").exists()
     }
+
+    /// Like `enrolled`, but `None` when the state directory can't be read
+    /// (it is private to the agent's user, so without root).
+    pub fn enrolled_checked(&self) -> Option<bool> {
+        self.data_dir.join("node.json").try_exists().ok()
+    }
 }
 
 /// Whether a version (`0.2.2`, `v0.2.2`) predates the 0.3.0 command layout

@@ -29,7 +29,7 @@ Files move to and from the offline computer on removable media only.
 On every Linux or macOS machine that joins the network, as root:
 
 ```
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.2/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.3/install.sh | sudo sh
 ```
 
 This installs `webjetd`, `webjetctl` and `webjetup` into `/usr/local/bin` and sets up the `webjetd` service (systemd on Linux, running as the `webjet` user; launchd on macOS). On Windows, download `webjetup-<version>-x86_64-pc-windows-msvc.exe` from the release page and run `webjetup install` in an Administrator prompt. `sudo webjetup status` shows what is installed and running. Upgrades are `sudo webjetup upgrade`, and `webjetup remove` or `webjetup nuke` take Webjet off a machine again.
@@ -38,7 +38,7 @@ The offline computer gets no network. Copy the release archive for its platform 
 
 ### Running `webjetctl`
 
-`webjetctl` talks to the Webjet agent on the machine where it runs, through the agent's control socket (`/run/webjet/control.sock`; a named pipe on Windows). Only root (Administrator on Windows) can open it, so run `webjetctl` with `sudo`. Operations are signed on that machine with your account key and sent to the controllers by the agent. Use either your own enrolled machine, or a controller's agent reached over SSH (see runbook 1, step 5).
+`webjetctl` talks to the Webjet agent on the machine where it runs, through the agent's control socket (`/var/run/webjet/control.sock`; a named pipe on Windows). Only root (Administrator on Windows) can open it, so run `webjetctl` with `sudo`. Operations are signed on that machine with your account key and sent to the controllers by the agent. Use either your own enrolled machine, or a controller's agent reached over SSH (see runbook 1, step 5).
 
 Account keys live in `~/.config/webjet/accounts` (macOS: `~/Library/Application Support/webjet/accounts`; Windows: `%APPDATA%\webjet\accounts`). Run `webjetctl network account keygen` as yourself, without `sudo`. `sudo` on Linux changes the home directory, so point `webjetctl` at your key directory when signing:
 
@@ -114,7 +114,7 @@ Times in `webjetctl local status` and `webjetctl network controller list` (`vali
    ```
 4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it. A node initialized with the genesis file runs the controller role from the start; every later controller gets it from the `control` role (runbook 4).
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.2/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.3/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml
    ```
    ```toml
@@ -134,10 +134,10 @@ Times in `webjetctl local status` and `webjetctl network controller list` (`vali
    [node]     sudo systemctl start webjetd
    [node]     sudo webjetctl network controller list      # wait for a non-zero valid_until
    ```
-   The controller's signing key is created on first start, as `signing.key` in `/var/lib/webjet`. To keep it out of the agent's process, run `webjetd signer --socket /run/webjet-signer/signer.sock --key /var/lib/webjet-signer/signing.key` as its own service before the first start, and set `signer_socket = "/run/webjet-signer/signer.sock"` in the `[controller]` section. The signer's socket is private to the user it runs as, so on Linux run the signer as the `webjet` user too. There is no ready-made service file for it.
+   The controller's signing key is created on first start, as `signing.key` in `/var/lib/webjet`. To keep it out of the agent's process, run `webjetd signer --socket /var/run/webjet-signer/signer.sock --key /var/lib/webjet-signer/signing.key` as its own service before the first start, and set `signer_socket = "/var/run/webjet-signer/signer.sock"` in the `[controller]` section. The signer's socket is private to the user it runs as, so on Linux run the signer as the `webjet` user too. There is no ready-made service file for it.
 5. Create an account to own infrastructure nodes, and enroll the controller's own node. The overlay doesn't exist yet, so the admin's operations go through the controller's agent. Either run them on the controller with the admin's key directory copied there for the bootstrap (remove it afterwards), or forward the controller's control socket to the admin's machine over SSH and point `webjetctl` at it:
    ```
-   [admin]    ssh -N -L /tmp/ctl-01.sock:/run/webjet/control.sock root@ctl-01 &
+   [admin]    ssh -N -L /tmp/ctl-01.sock:/var/run/webjet/control.sock root@ctl-01 &
    [admin]    export WEBJET_SOCKET=/tmp/ctl-01.sock
    ```
    Then:
@@ -284,12 +284,12 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    The string is valid for 24 hours (`--expires-hours` changes that) and can be used once. Treat it like a password until then: whoever redeems it first gets the device's place in the network. Send it to the person over a channel you trust.
 4. On the device, install Webjet and enroll it in one step. On Linux and macOS:
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.2/install.sh \
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.3/install.sh \
                   | sudo sh -s -- --enroll '<enrollment string>'
    ```
-   On Windows, download `webjetup-v0.4.2-x86_64-pc-windows-msvc.exe` from the release page and run, in an Administrator prompt:
+   On Windows, download `webjetup-v0.4.3-x86_64-pc-windows-msvc.exe` from the release page and run, in an Administrator prompt:
    ```
-   [node]     webjetup-v0.4.2-x86_64-pc-windows-msvc.exe install --enroll "<enrollment string>"
+   [node]     webjetup-v0.4.3-x86_64-pc-windows-msvc.exe install --enroll "<enrollment string>"
    ```
    On a device that already has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same. A device doesn't need a public address or open ports: it reaches the network through relays, and connects directly to other nodes where NAT allows (§10).
 5. If the person will administer their own devices from it (rename, revoke, re-key), they run `webjetctl` there with their key; see "Running `webjetctl`" above.
@@ -322,7 +322,7 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    ```
 3. On the host, install Webjet without starting it. In `/etc/webjet/webjetd.toml`, set the addresses others reach it on and the listen addresses. Then enroll.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.2/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.3/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml       # [[public]], [listen]
    [node]     sudo webjetup enroll '<enrollment string>'
    ```
@@ -546,7 +546,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
    Add `--revoke-old-now` if the old machine was lost or stolen: the old key stops working at once, and the node is offline until step 2.
 2. On the new installation, redeem it.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.2/install.sh | sudo sh -s -- --enroll '<enrollment string>'
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.3/install.sh | sudo sh -s -- --enroll '<enrollment string>'
    ```
    On a machine that still has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same.
 

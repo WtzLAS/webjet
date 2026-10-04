@@ -347,6 +347,8 @@ WantedBy=multi-user.target
     )
 }
 
+/// The launchd daemon. webjetd logs to stdout (tracing) and panics to stderr:
+/// both go to the log file.
 fn launchd_plist(l: &Layout) -> String {
     let log = l
         .log
@@ -362,6 +364,7 @@ fn launchd_plist(l: &Layout) -> String {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>{log}</string>
   <key>StandardErrorPath</key><string>{log}</string>
 </dict></plist>
 "#,
@@ -412,8 +415,11 @@ pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
             .service_file
             .clone()
             .unwrap_or_else(|| PathBuf::from("/Library/LaunchDaemons/net.webjet.webjetd.plist"));
-        if !plist.exists() {
-            sys.write(&plist, &launchd_plist(l), 0o644)?;
+        // Rewrite an outdated plist (up to 0.4.2 it didn't capture stdout,
+        // where webjetd logs); launchd reads it again on bootstrap.
+        let want = launchd_plist(l);
+        if std::fs::read_to_string(&plist).ok().as_deref() != Some(want.as_str()) {
+            sys.write(&plist, &want, 0o644)?;
         }
         if start {
             sys.try_run(
@@ -741,6 +747,14 @@ mod tests {
         assert!(systemd_unit(&l, true).contains("User=webjet\nSupplementaryGroups=tss\n"));
         let plist = launchd_plist(&l);
         assert!(plist.contains("<string>net.webjet.webjetd</string>"));
+        for key in ["StandardOutPath", "StandardErrorPath"] {
+            assert!(
+                plist.contains(&format!(
+                    "<key>{key}</key><string>/var/log/webjetd.log</string>"
+                )),
+                "webjetd logs to stdout: {key}"
+            );
+        }
         assert!(plist.contains(&format!(
             "<string>{}</string><string>run</string>",
             l.program("webjetd").display()

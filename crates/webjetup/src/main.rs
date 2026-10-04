@@ -436,7 +436,15 @@ fn status(l: &Layout) -> Result<()> {
         if l.config.exists() { "" } else { " (missing)" }
     );
     println!("state     {}", l.data_dir.display());
-    println!("enrolled  {}", if l.enrolled() { "yes" } else { "no" });
+    let enrolled = l.enrolled_checked();
+    println!(
+        "enrolled  {}",
+        match enrolled {
+            Some(true) => "yes",
+            Some(false) => "no",
+            None => "unknown (can't read the state; run as root)",
+        }
+    );
     println!("service   {}", system::service_state(l));
     if let Some(log) = &l.log {
         println!("log       {}", log.display());
@@ -444,8 +452,16 @@ fn status(l: &Layout) -> Result<()> {
         println!("log       journalctl -u webjetd");
     }
     let ctl = l.program("webjetctl");
-    if have.is_some() && l.enrolled() && ctl.exists() {
-        match system::query(&ctl.to_string_lossy(), &["--json", "status"]) {
+    if let Some(v) = have.as_deref()
+        && enrolled == Some(true)
+        && ctl.exists()
+    {
+        let args: &[&str] = if layout::before_0_4(v) {
+            &["--json", "status"]
+        } else {
+            &["--json", "local", "status"]
+        };
+        match system::query(&ctl.to_string_lossy(), args) {
             Some(out) => {
                 let v: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
                 if let Some(name) = v.get("name").and_then(|n| n.as_str()) {

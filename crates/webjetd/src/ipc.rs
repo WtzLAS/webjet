@@ -9,20 +9,23 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
-/// Default path of the control channel.
+/// Default path of the control channel, shared by webjetd, `webjetctl` and
+/// webjet-app. Unix uses `/var/run`: macOS has no `/run` (its root volume is
+/// sealed read-only), and on Linux `/var/run` is a symlink to `/run`.
 pub fn default_control() -> PathBuf {
     if cfg!(windows) {
         PathBuf::from(r"\\.\pipe\webjet")
     } else {
-        PathBuf::from("/run/webjet/control.sock")
+        PathBuf::from("/var/run/webjet/control.sock")
     }
 }
 
+/// Default path of the signer's socket (`webjetd signer --socket`).
 pub fn default_signer() -> PathBuf {
     if cfg!(windows) {
         PathBuf::from(r"\\.\pipe\webjet-signer")
     } else {
-        PathBuf::from("/run/webjet/signer.sock")
+        PathBuf::from("/var/run/webjet/signer.sock")
     }
 }
 
@@ -119,6 +122,15 @@ mod win {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[cfg(unix)]
+    #[test]
+    fn default_sockets_avoid_run() {
+        // macOS has no /run (sealed read-only root volume).
+        for p in [default_control(), default_signer()] {
+            assert!(p.starts_with("/var/run/webjet"), "{}", p.display());
+        }
+    }
 
     #[tokio::test]
     async fn roundtrip() {

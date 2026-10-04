@@ -31,7 +31,7 @@ enum Cmd {
         #[arg(long, default_value = default_signer_key())]
         key: PathBuf,
         /// Unix socket, or named pipe on Windows.
-        #[arg(long, default_value = default_signer_socket())]
+        #[arg(long, default_value_os_t = webjetd::ipc::default_signer())]
         socket: PathBuf,
     },
     /// Run under the Windows service manager (the installed service's entry
@@ -46,14 +46,6 @@ fn default_signer_key() -> &'static str {
         r"C:\ProgramData\webjet-signer\signing.key"
     } else {
         "/var/lib/webjet-signer/signing.key"
-    }
-}
-
-fn default_signer_socket() -> &'static str {
-    if cfg!(windows) {
-        r"\\.\pipe\webjet-signer"
-    } else {
-        "/run/webjet/signer.sock"
     }
 }
 

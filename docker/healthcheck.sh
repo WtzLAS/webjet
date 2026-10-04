@@ -8,7 +8,7 @@ case "$role" in
         webjetctl --json local status > /dev/null
         ;;
     signer)
-        [ -S "${WEBJET_SIGNER_SOCKET:-/run/webjet/signer.sock}" ]
+        [ -S "${WEBJET_SIGNER_SOCKET:-/var/run/webjet/signer.sock}" ]
         ;;
     *)
         exit 0

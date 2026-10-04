@@ -281,3 +281,11 @@ running the system tools (`ip`, `route`, `resolvectl`, `netsh`, PowerShell
 for NRPT, `iptables`). `ipc.rs` abstracts the control channel (Unix socket or
 named pipe), `winsec.rs` builds Windows ACLs, `keystore.rs` the key storage
 backends, `service.rs` the Windows service and signal handling.
+
+Unix paths must also work on macOS, whose root volume is sealed read-only:
+there is no `/run` and nothing can create it. That's why the default sockets
+are under `/var/run` (`ipc::default_control`/`default_signer`, on Linux a
+symlink to `/run`). `webjetctl` and `webjet-app` take their default from
+`ipc::default_control` rather than spelling out a path. webjetd logs to stdout,
+so the launchd plist that webjetup writes sends both stdout and stderr to
+`/var/log/webjetd.log`.
