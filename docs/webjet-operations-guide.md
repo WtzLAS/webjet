@@ -82,6 +82,7 @@ Times in `webjetctl local status` and `webjetctl network controller list` (`vali
 10. Retire a controller's signing key
 11. Roll out a release with a schema change
 12. A majority of voters is lost
+13. Add an admin
 
 ---
 
@@ -228,6 +229,7 @@ Times in `webjetctl local status` and `webjetctl network controller list` (`vali
 **Notes:**
 - Until step 6 is done, no node trusts the tree.
 - Until there are three voters, losing the one controller stops all changes.
+- Add more admins with runbook 13, so the network doesn't depend on one person's key.
 
 ---
 
@@ -247,7 +249,7 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    [admin]    webjetctl network account create --name bob --key bob.pub
    [admin]    webjetctl network account list                  # bob, VALID true, ADMIN false
    ```
-   Account names are 1–32 lowercase letters, digits and `-`, unique in the network. The account can only manage its own devices; admin accounts are made offline with the root key (`webjetctl root admin sign`, runbook 1).
+   Account names are 1–32 lowercase letters, digits and `-`, unique in the network. The account can only manage its own devices; admin accounts are made offline with the root key (runbook 13).
 2. Choose the tags the device gets. Tags are how the policy decides what it may reach (§14), and the device's owner can't change them. Check what the current rules allow those tags, and if needed add a rule and apply the policy again. For example, to let laptops reach the web servers on HTTPS:
    ```toml
    # network.toml (excerpt): the [policy] section of `network config show`
@@ -659,6 +661,38 @@ The validity horizon is the hard deadline. Check how much time is left:
 
 ---
 
+## 13. Add an admin
+
+**When:** another person needs to administer the network, or an existing account should become an admin. References: §13.5, §6.10.
+
+Admins can't create admins, only the root key can, so the account record is signed on the offline computer. An admin can do everything a normal account can, and also enroll and change any node, create and revoke normal accounts, change the network configuration and camouflage secret, rotate the PSK, and certify and manage controllers.
+
+**You need:** the offline computer, and the new admin's public key file.
+
+**Steps:**
+
+1. **New person only:** the person creates their account key on their own machine, where it stays, and sends you only the public file. To make an existing account an admin instead, use its existing `.pub`. Its record is replaced, and it keeps its devices.
+   ```
+   [person]   webjetctl network account keygen --name carol --pub-out carol.pub
+   ```
+2. Sign it as an admin account with the root key.
+   ```
+   [offline]  webjetctl root admin sign --name carol --key carol.pub --out carol.account
+   ```
+3. Submit it through any enrolled node. It is signed by the root, so no account key is needed to submit it.
+   ```
+   [admin]    webjetctl network submit carol.account
+   ```
+
+**Check:** `webjetctl network account list` shows `carol` with `ADMIN true` and `VALID true`. The new admin can then sign operations, for example `webjetctl network account create`, from their own machine (see "Running `webjetctl`"; with several keys there, `webjetctl network account use carol`).
+
+**Notes:**
+- The account ID comes from the `.pub` file, the name from `--name`. Signing an existing account's `.pub` under a new name renames that account. Signing an existing name with a different person's `.pub` is refused (`account name … is taken`). The name of a revoked account can't be used again.
+- Submitting the same `.account` file twice is refused (`account version must increase`). Each `root admin sign` makes a new version.
+- Only the root or emergency key can revoke an admin or replace its key (runbook 8). Revoking an admin also voids the controller certificates it signed.
+
+---
+
 ## Testing this guide
 
-`docker/runbook-test.sh` runs runbooks 1, 2, 3, 4, 6, 8 and 9 with these commands on systemd machines (containers) installed with `webjetup`, from a local copy of the release files built from the checkout.
+`docker/runbook-test.sh` runs runbooks 1, 2, 3, 4, 6, 8, 9 and 13 with these commands on systemd machines (containers) installed with `webjetup`, from a local copy of the release files built from the checkout.

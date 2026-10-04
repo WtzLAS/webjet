@@ -14,6 +14,8 @@
 #   runbook 6   PSK rotation
 #   runbook 9   re-key a reinstalled node (the owner issues the token)
 #   runbook 8   revoke a device, offline node tombstone
+#   runbook 13  add an admin: a new person, and a normal account promoted;
+#               submitted without an account key; the new admins act as admins
 #
 # The offline computer and the admin's machine are directories on ctl-01
 # (/offline, /admin); the hosts run as root, so `sudo` is left out.
@@ -251,6 +253,24 @@ wait_for ctl-02 '! webjetctl network node list | grep -q "^node-03 "' "revocatio
 id=$(admin "network node show ctl-02" | sed -n 's/^id: //p')
 on ctl-01 "webjetctl root --dir /offline/root node revoke --node $id --out /offline/ctl-02.tomb" >/dev/null || fail "offline tombstone"
 on ctl-01 'test -s /offline/ctl-02.tomb' || fail "no tombstone file"
+
+echo "== runbook 13: add an admin"
+# 1 [person] carol's key on her own machine (/carol on ctl-01 here)
+carol() { docker exec -e WEBJET_ACCOUNT_PASSPHRASE=carol-pass "$P-ctl-01" sh -ec "webjetctl --keys /carol/keys --account carol $*"; }
+on ctl-01 'mkdir -p /carol' && carol "network account keygen --name carol --pub-out /carol/carol.pub" >/dev/null || fail "carol keygen"
+# 2 [offline] root-signed admin record
+on ctl-01 'webjetctl root --dir /offline/root admin sign --name carol --key /carol/carol.pub --out /offline/carol.account' >/dev/null || fail "root admin sign"
+# 3 submitted through another node, without any account key
+docker cp "$P-ctl-01:/offline/carol.account" "$out/carol.account" && docker cp "$out/carol.account" "$P-ctl-02:/tmp/carol.account"
+on ctl-02 'webjetctl --keys /nonexistent network submit /tmp/carol.account' >/dev/null 2>&1 || fail "submit the admin record"
+wait_for ctl-01 'webjetctl --keys /admin/keys --account alice network account list | grep -qE "^carol +true +true"' "carol not a valid admin"
+! on ctl-02 'webjetctl --keys /nonexistent network submit /tmp/carol.account' >/dev/null 2>&1 || fail "the same record was accepted twice"
+carol "network account keygen --name dave --pub-out /carol/dave.pub" >/dev/null && carol "network account create --name dave --key /carol/dave.pub" >/dev/null || fail "the new admin can't create an account"
+# an existing account becomes an admin, from its own .pub
+on ctl-01 'webjetctl root --dir /offline/root admin sign --name bob --key /bob/bob.pub --out /offline/bob.account' >/dev/null || fail "root admin sign bob"
+admin "network submit /offline/bob.account" >/dev/null 2>&1 || fail "submit bob's admin record"
+wait_for ctl-01 'webjetctl --keys /admin/keys --account alice network account list | grep -qE "^bob +true +true"' "bob not promoted"
+bob "network node update ctl-02 --tags tag:relay,tag:infra" >/dev/null || fail "bob can't act as an admin"
 
 cleanup
 echo "RUNBOOK TEST PASSED"
