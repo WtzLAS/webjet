@@ -110,7 +110,7 @@ enum NetworkCmd {
 
 #[derive(Subcommand)]
 enum LocalCmd {
-    /// Make this machine the first controller of a new network (runbook 1):
+    /// Make this machine the first controller of a new network (ops guide 2.1):
     /// creates the agent's data directory from the genesis file. Start the
     /// agent afterwards.
     Init {
@@ -227,6 +227,15 @@ enum AccountCmd {
         #[arg(long)]
         key: PathBuf,
     },
+    /// Give a normal account a new key (lost or compromised key). The account
+    /// keeps its name, devices and policy; only the old key stops working.
+    /// Admin accounts get a new key from the root (`root admin sign --replaces`).
+    Rekey {
+        name: String,
+        /// The new key's public file, from `network account keygen`.
+        #[arg(long)]
+        key: PathBuf,
+    },
     /// Revoke an account and with it all its nodes.
     Revoke {
         name: String,
@@ -305,7 +314,7 @@ enum NodeCmd {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Issue a re-key token for a reinstalled node (runbook 9).
+    /// Issue a re-key token for a reinstalled node (ops guide 2.7).
     Rekey {
         name: String,
         #[arg(long)]
@@ -382,14 +391,46 @@ fn key_dir(cli: &Cli) -> PathBuf {
     cli.keys.clone().unwrap_or_else(default_key_dir)
 }
 
-fn load_account(cli: &Cli) -> Result<Account> {
+/// Unlock the account key to sign with. The account it signs for is the one
+/// the network holds this key under: after `network account rekey` (or a
+/// root-signed key change) the new key's `.pub` still carries the random
+/// account ID `keygen` gave it, so the network's ID is used, and written
+/// back to the `.pub` once.
+async fn load_account(cli: &Cli) -> Result<Account> {
     let dir = key_dir(cli);
     let name = pick_account(&dir, cli.account.as_deref())?;
     let pass = passphrase(
         "WEBJET_ACCOUNT_PASSPHRASE",
         &format!("passphrase for account {name}"),
     )?;
-    Account::unlock(&dir, &name, &pass)
+    let mut a = Account::unlock(&dir, &name, &pass)?;
+    // Without an agent the command fails at submit anyway, with its own error.
+    let Ok(accts) = call(cli, json!({"cmd": "accounts"})).await else {
+        return Ok(a);
+    };
+    let key = crypto::key_b64(&a.kp.public());
+    let held = accts
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|x| x["key"].as_str() == Some(key.as_str()));
+    if let Some(x) = held
+        && let Some(id) = x["id"].as_str().and_then(crypto::parse_hex32)
+        && id != a.id
+    {
+        a.id = id;
+        let path = dir.join(format!("{name}.pub"));
+        let mut p = AccountPub::load(&path)?;
+        p.account_id = hex::encode(id);
+        if write_public(&path, &serde_json::to_vec_pretty(&p)?).is_ok() {
+            eprintln!(
+                "note: this key belongs to account {}; {} updated with its account ID",
+                x["name"].as_str().unwrap_or("?"),
+                path.display()
+            );
+        }
+    }
+    Ok(a)
 }
 
 // ---------------------------------------------------------------- talking to webjetd
@@ -703,7 +744,7 @@ async fn apply_network(cli: &Cli, f: &ConfigFile, base: &Path, what: Option<&str
     }
     let merged = f.over(&network_from_tree(&t, false)?);
     let mut w = network_wire(&merged, now + 1, base)?;
-    let a = load_account(cli)?;
+    let a = load_account(cli).await?;
     let current: Option<wp::TransportConfig> = from_json(&t["transport"])?;
     let current_cam = current.as_ref().and_then(|c| c.camouflage.as_deref());
     if let Some(key_pem) = fill_refuse_certificate(&mut w, current_cam)? {
@@ -840,7 +881,7 @@ async fn apply_node(cli: &Cli, n: &NodeConf, f: &ConfigFile) -> Result<()> {
         );
         return Ok(());
     }
-    let a = load_account(cli)?;
+    let a = load_account(cli).await?;
     let op = AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
         config: Some(Box::new(w)),
     }));
@@ -1060,7 +1101,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 );
             }
             AccountCmd::Create { name, key } => {
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let mut p = AccountPub::load(key)?;
                 p.name = name.clone();
                 let rec = account_record(&p, false, Some(a.id))?;
@@ -1074,12 +1115,56 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 .await?;
                 println!("account {name} created (entry {})", r["index"]);
             }
+            AccountCmd::Rekey { name, key } => {
+                let a = load_account(cli).await?;
+                let accts = call(cli, json!({"cmd": "accounts"})).await?;
+                let cur = accts
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|x| {
+                        x["name"].as_str() == Some(name) && x["valid"].as_bool() == Some(true)
+                    })
+                    .ok_or_else(|| anyhow!("no valid account named {name}"))?;
+                if cur["admin"].as_bool() == Some(true) {
+                    bail!(
+                        "{name} is an admin: only the root gives it a new key (`webjetctl root admin sign --name {name} --key <new>.pub --replaces <old>.pub`)"
+                    );
+                }
+                let id = cur["id"]
+                    .as_str()
+                    .and_then(crypto::parse_hex32)
+                    .ok_or_else(|| anyhow!("bad id"))?;
+                let mut p = AccountPub::load(key)?;
+                if p.key()? == a.kp.public() {
+                    bail!("that is your own key");
+                }
+                p.name = name.clone();
+                p.account_id = hex::encode(id);
+                let rec = account_record(&p, false, Some(a.id))?;
+                let signed = a.kp.sign_obj(wp::msg_type::ACCOUNT_RECORD, &rec);
+                let r = submit(
+                    cli,
+                    a.sign(AccountOp::PutAccount(Box::new(wp::PutAccount {
+                        record: Some(signed),
+                    })))?,
+                )
+                .await?;
+                // The public file now names the account it belongs to, so
+                // later uses of it (`root admin sign`) find the account.
+                write_public(key, &serde_json::to_vec_pretty(&p)?)?;
+                println!(
+                    "account {name} has a new key (entry {}); the old key no longer signs. {} now carries the account's ID",
+                    r["index"],
+                    key.display()
+                );
+            }
             AccountCmd::Revoke {
                 name,
                 reason,
                 revoke_issued,
             } => {
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let id = account_id(cli, name).await?;
                 let t = wp::AccountTombstone {
                     account_id: Some(crypto::k32(&id)),
@@ -1170,7 +1255,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 controller,
             } => {
                 let roles = parse_roles(roles)?;
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let owner_id = account_id(cli, owner).await?;
                 let ips = if ip.is_empty() {
                     vec![pick_ip(&call(cli, json!({"cmd": "enroll_info"})).await?)?]
@@ -1266,7 +1351,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 owner,
             } => {
                 let roles = roles.as_deref().map(parse_roles).transpose()?;
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let id = node_id(cli, name).await?;
                 let owner = match owner {
                     Some(o) => Some(crypto::k32(&account_id(cli, o).await?)),
@@ -1293,7 +1378,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 println!("{name} updated (entry {})", r["index"]);
             }
             NodeCmd::Rename { name, new_name } => {
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let id = node_id(cli, name).await?;
                 let r = submit(
                     cli,
@@ -1306,7 +1391,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 println!("{name} is now {new_name} (entry {})", r["index"]);
             }
             NodeCmd::Revoke { name, reason } => {
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let id = node_id(cli, name).await?;
                 let r = submit(
                     cli,
@@ -1324,7 +1409,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 expires_hours,
                 controller,
             } => {
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let id = node_id(cli, name).await?;
                 let token = crypto::random32();
                 let op = wp::RekeyNode {
@@ -1344,7 +1429,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
         NetworkCmd::Psk {
             cmd: PskCmd::Rotate,
         } => {
-            let a = load_account(cli)?;
+            let a = load_account(cli).await?;
             let st = call(cli, json!({"cmd": "status"})).await?;
             let cur = st["psk_epoch"].as_u64().unwrap_or(0) as u16;
             let r = submit(
@@ -1362,7 +1447,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
         }
         NetworkCmd::Camouflage { cmd } => match cmd {
             CamouflageCmd::SetSecret { key, site } => {
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let k = read(key)?;
                 if !String::from_utf8_lossy(&k).contains("PRIVATE KEY") {
                     bail!("{} is not a PEM private key", key.display());
@@ -1408,7 +1493,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     Some(p) => read(p)?,
                     None => cert_request(cli, Some(id)).await?,
                 };
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let accts = call(cli, json!({"cmd": "accounts"})).await?;
                 let record = accts
                     .as_array()
@@ -1450,7 +1535,7 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     ControllerCmd::Demote { .. } => wp::MembershipChange::Demote,
                     _ => wp::MembershipChange::Remove,
                 };
-                let a = load_account(cli)?;
+                let a = load_account(cli).await?;
                 let id = node_id(cli, name).await?;
                 let r = submit(
                     cli,

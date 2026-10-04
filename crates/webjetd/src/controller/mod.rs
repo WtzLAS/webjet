@@ -365,7 +365,7 @@ impl Controller {
             n.alarm(
                 "no_signing_cert",
                 "warning",
-                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl network controller certify`, runbook 4)".into(),
+                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl network controller certify`, ops guide 2.4)".into(),
             );
             return;
         }
@@ -830,7 +830,7 @@ impl Controller {
         Ok((i, o, node_id))
     }
 
-    /// Redeem for this controller itself (bootstrap, runbook 1 step 5).
+    /// Redeem for this controller itself (bootstrap, ops guide 2.1 step 5).
     pub async fn redeem_self(self: &Arc<Self>, token: &[u8]) -> Result<Bytes32> {
         let n = self.node().ok_or_else(|| anyhow!("shutting down"))?;
         let th = crypto::token_hash(token);
@@ -960,7 +960,7 @@ impl Controller {
 
     // ------------------------------------------------------------ certificates
 
-    /// A certificate request for this controller's signing key (runbook 1
+    /// A certificate request for this controller's signing key (ops guide 2.1
     /// step 6): a SigningKeyCert body signed by the signing key itself.
     pub fn cert_request(&self) -> Result<Vec<u8>> {
         let n = self.node().ok_or_else(|| anyhow!("shutting down"))?;

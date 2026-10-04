@@ -2,20 +2,25 @@
 # Runs the operations guide (docs/webjet-operations-guide.md) on systemd
 # machines installed with webjetup, with the guide's commands:
 #
-#   runbook 1   bootstrap: root keys, admin, genesis, first controller from
-#               an empty install, its own enrollment (control role) and
-#               admin-signed certificate, the first settings
-#   runbook 2   a person's device: new account, policy with tests,
-#               enrollment, install with --enroll; owner renames it, can't
-#               retag it
-#   runbook 3   a relay
-#   runbook 4   the relay becomes a controller: control role, root-signed
-#               certificate (the offline alternative), learner, then voter
-#   runbook 6   PSK rotation
-#   runbook 9   re-key a reinstalled node (the owner issues the token)
-#   runbook 8   revoke a device, offline node tombstone
-#   runbook 13  add an admin: a new person, and a normal account promoted;
-#               submitted without an account key; the new admins act as admins
+#   2.1  bootstrap: root keys, admin, genesis, first controller from an empty
+#        install, its own enrollment (control role) and admin-signed
+#        certificate, the first network configuration
+#   1.1  a member account;  2.2  a device for it: policy with tests,
+#        enrollment, install with --enroll; the owner renames it, can't
+#        retag it
+#   2.3  a relay;  2.4  the relay becomes a controller: control role,
+#        root-signed certificate (the offline alternative), learner, voter
+#   3.1  PSK rotation;  3.5  one network setting;  3.6  one node's setting;
+#        3.7  an admin changes a node's tags
+#   2.7  re-key a reinstalled node (the owner issues the token)
+#   1.4  a member's new key: the old key is refused, the new one works
+#   2.6  revoke a device;  4.2  an offline node tombstone
+#   1.2  admins: a new person, and a member promoted (from the .pub that
+#        1.4 rewrote); submitted without an account key
+#   1.3  a member account revoked by an admin; an admin revoked by the root
+#        without --revoke-issued (the accounts it made stay)
+#   1.4  an admin's new key from the root (--replaces): its controller
+#        certificate becomes void and is certified again with the new key
 #
 # The offline computer and the admin's machine are directories on ctl-01
 # (/offline, /admin); the hosts run as root, so `sudo` is left out.
@@ -66,8 +71,12 @@ fail() {
 }
 on() { h=$1; shift; docker exec -e WEBJET_ROOT_PASSPHRASE=root-pass -e WEBJET_ACCOUNT_PASSPHRASE=acct-pass -e WEBJET_BACKUP_PASSPHRASE=backup-pass "$P-$h" sh -ec "$*"; }
 # [admin] commands: webjetctl with the admin's keys, against ctl-01's agent.
-admin() { on ctl-01 "webjetctl --keys /admin/keys --account alice $*"; }
+# Section 1.4 gives alice a new key in /admin/keys2 at the end.
+AKEYS=/admin/keys
+admin() { on ctl-01 "webjetctl --keys $AKEYS --account alice $*"; }
 ip_of() { case $1 in ctl-01) echo "$SUBNET.10" ;; ctl-02) echo "$SUBNET.11" ;; node-03) echo "$SUBNET.12" ;; esac; }
+# The key in an account's .pub file on ctl-01.
+pubkey() { on ctl-01 "sed -n 's/.*\"key\": \"\\(.*\\)\".*/\\1/p' $1"; }
 wait_for() { # host command what
     i=0
     until on "$1" "$2" >/dev/null 2>&1; do
@@ -126,12 +135,12 @@ for h in $HOSTS; do
 done
 for h in $HOSTS; do wait_for "$h" 'systemctl is-system-running | grep -qE "running|degraded"' "systemd did not boot on $h"; done
 install() { on "$1" "curl -fsSL $REPO/releases/download/$TAG/install.sh | WEBJET_REPO=$REPO sh -s -- $2" >/dev/null; }
-# [listen] and [[public]] as in runbooks 1 and 3.
+# [listen] and [[public]] as in sections 2.1 and 2.3.
 public() { printf '[listen]\ntls = "0.0.0.0:%s"\nkcp = "0.0.0.0:%s"\n\n[[public]]\naddr = "%s:%s"\ntransport = "tls"\n[[public]]\naddr = "%s:%s"\ntransport = "kcp"\n\n' "$PORT" "$PORT" "$1" "$PORT" "$1" "$PORT"; }
 C1=$(ip_of ctl-01)
 C2=$(ip_of ctl-02)
 
-echo "== runbook 1: bootstrap"
+echo "== 2.1: bootstrap"
 # The offline computer and the admin's machine are directories on ctl-01, so
 # install the programs there first (step 4's install, without starting).
 install ctl-01 --no-start || fail "install on ctl-01"
@@ -187,7 +196,7 @@ admin "network config show" | grep -q '^version = 1$' || fail "network config sh
 ! admin "network config apply /admin/network.toml" >/dev/null 2>&1 || fail "stale network config applied"
 on ctl-01 'webjetctl local status' | grep -q "name: ctl-01" || fail "ctl-01 status"
 
-echo "== runbook 2: a device for a new person"
+echo "== 1.1, 2.2: a member account and a device for it"
 # [person] makes the key on their own machine (/bob on ctl-01 here).
 bob() { docker exec -e WEBJET_ACCOUNT_PASSPHRASE=bob-pass "$P-ctl-01" sh -ec "webjetctl --keys /bob/keys --account bob $*"; }
 on ctl-01 'mkdir -p /bob' && bob "network account keygen --name bob --pub-out /bob/bob.pub" >/dev/null || fail "bob keygen"
@@ -214,7 +223,7 @@ bob "network node rename node-03 bob-laptop" >/dev/null || fail "owner rename"
 bob "network node rename bob-laptop node-03" >/dev/null || fail "owner rename back"
 ! bob "network node update node-03 --tags tag:infra" >/dev/null 2>&1 || fail "the owner could change tags"
 
-echo "== runbook 3: a relay"
+echo "== 2.3: a relay"
 T=$(admin "network node enroll --owner infra --name ctl-02 --roles data,relay --tags tag:relay --controller tls:$C1:$PORT" 2>/dev/null) || fail "relay enroll"
 install ctl-02 --no-start || fail "install on ctl-02"
 on ctl-02 "printf '%s\n' '$(public "$C2")' > /etc/webjet/webjetd.toml"
@@ -222,7 +231,7 @@ on ctl-02 "webjetup enroll '$T'" >/dev/null || fail "relay enroll on host"
 wait_for ctl-02 'webjetctl local ping ctl-01 -c 1 | grep -q "reply from"' "relay can't reach ctl-01"
 wait_for ctl-01 'webjetctl local peers | grep -q ctl-02' "ctl-01 doesn't list the relay"
 
-echo "== runbook 4: make ctl-02 a controller"
+echo "== 2.4: make ctl-02 a controller"
 admin "network node update ctl-02 --roles data,relay,control" >/dev/null || fail "grant the control role"
 admin "network node list" | grep ctl-02 | grep -q "control(uncertified)" || fail "role not shown as uncertified"
 wait_for ctl-02 'webjetctl network controller cert-request --out /tmp/ctl-02.req' "cert-request on ctl-02"
@@ -234,12 +243,20 @@ wait_for ctl-02 'webjetctl network controller list | grep -q "role: Learner"' "c
 admin "network controller promote ctl-02" >/dev/null || fail "promote"
 wait_for ctl-01 'webjetctl network controller list | grep -A3 "voters:" | grep -c "^  *- " | grep -qx 2' "two voters"
 
-echo "== runbook 6: rotate the PSK"
+echo "== 3.1: rotate the PSK"
 before=$(on ctl-02 'webjetctl local status' | sed -n 's/^psk_epoch: //p')
 admin "network psk rotate" >/dev/null || fail "psk rotate"
 wait_for ctl-02 "webjetctl local status | grep -q '^psk_epoch: $((before + 1))'" "new PSK epoch didn't arrive"
 
-echo "== runbook 9: re-key a reinstalled node"
+echo "== 3.5, 3.6, 3.7: network setting, node setting, tags"
+admin "network config set dns.record '[{name = \"web.internal\", type = \"CNAME\", value = \"node:ctl-01\"}]'" >/dev/null || fail "network config set"
+admin "network config get dns.record.0.value" | grep -qx node:ctl-01 || fail "dns record not stored"
+admin "local config --node ctl-02 set limits.value.relay_capacity_mbps 1000" >/dev/null || fail "local config set"
+admin "local config --node ctl-02 show --effective" | grep -q "relay_capacity_mbps = 1000" || fail "node setting not in effect"
+admin "network node update node-03 --tags tag:laptop,tag:dev" >/dev/null || fail "tag change"
+admin "network node list" | grep -E "^node-03 .*tag:dev,tag:laptop" >/dev/null || fail "new tags not shown"
+
+echo "== 2.7: re-key a reinstalled node"
 old_ip=$(on node-03 'webjetctl local status' | sed -n '/^ips:/{n;s/^- //p;}')
 on node-03 'webjetup nuke --yes' >/dev/null || fail "nuke node-03"
 T=$(bob "network node rekey node-03 --controller tls:$C1:$PORT" 2>/dev/null) || fail "rekey token from the owner"
@@ -247,14 +264,25 @@ install node-03 "--enroll '$T'" || fail "reinstall node-03"
 wait_for node-03 'webjetctl local status | grep -q "name: node-03"' "re-keyed node-03 lost its name"
 [ "$(on node-03 'webjetctl local status' | sed -n '/^ips:/{n;s/^- //p;}')" = "$old_ip" ] || fail "re-keyed node-03 lost its address"
 
-echo "== runbook 8: revoke a device; offline tombstone"
+echo "== 1.4: a member's new key"
+# The person keeps the old key aside here, to show it is refused.
+on ctl-01 'mkdir -p /bob/old && mv /bob/keys/bob.key /bob/keys/bob.pub /bob/old/ && cp /bob/keys/bob.seq /bob/old/ 2>/dev/null; true'
+bob "network account keygen --name bob --pub-out /bob/bob.pub" >/dev/null || fail "bob's new key"
+admin "network account rekey bob --key /bob/bob.pub" | grep -q "has a new key" || fail "account rekey"
+k=$(pubkey /bob/bob.pub)
+wait_for ctl-01 "webjetctl network account list | grep '^bob ' | grep -qF '$k'" "bob's new key not committed"
+! docker exec -e WEBJET_ACCOUNT_PASSPHRASE=bob-pass "$P-ctl-01" webjetctl --keys /bob/old --account bob network node rename node-03 bob-laptop >/dev/null 2>&1 || fail "the old key still signs"
+bob "network node rename node-03 bob-laptop" >/dev/null 2>&1 || fail "the new key doesn't sign"
+bob "network node rename bob-laptop node-03" >/dev/null || fail "rename back"
+
+echo "== 2.6, 4.2: revoke a device; offline tombstone"
 admin "network node revoke node-03 --reason lost" >/dev/null || fail "node revoke"
 wait_for ctl-02 '! webjetctl network node list | grep -q "^node-03 "' "revocation didn't spread"
 id=$(admin "network node show ctl-02" | sed -n 's/^id: //p')
 on ctl-01 "webjetctl root --dir /offline/root node revoke --node $id --out /offline/ctl-02.tomb" >/dev/null || fail "offline tombstone"
 on ctl-01 'test -s /offline/ctl-02.tomb' || fail "no tombstone file"
 
-echo "== runbook 13: add an admin"
+echo "== 1.2: add an admin"
 # 1 [person] carol's key on her own machine (/carol on ctl-01 here)
 carol() { docker exec -e WEBJET_ACCOUNT_PASSPHRASE=carol-pass "$P-ctl-01" sh -ec "webjetctl --keys /carol/keys --account carol $*"; }
 on ctl-01 'mkdir -p /carol' && carol "network account keygen --name carol --pub-out /carol/carol.pub" >/dev/null || fail "carol keygen"
@@ -266,11 +294,34 @@ on ctl-02 'webjetctl --keys /nonexistent network submit /tmp/carol.account' >/de
 wait_for ctl-01 'webjetctl --keys /admin/keys --account alice network account list | grep -qE "^carol +true +true"' "carol not a valid admin"
 ! on ctl-02 'webjetctl --keys /nonexistent network submit /tmp/carol.account' >/dev/null 2>&1 || fail "the same record was accepted twice"
 carol "network account keygen --name dave --pub-out /carol/dave.pub" >/dev/null && carol "network account create --name dave --key /carol/dave.pub" >/dev/null || fail "the new admin can't create an account"
-# an existing account becomes an admin, from its own .pub
+# an existing account becomes an admin, from its own .pub (rewritten by
+# `account rekey` in 1.4 with the account's ID, so it names bob's account)
 on ctl-01 'webjetctl root --dir /offline/root admin sign --name bob --key /bob/bob.pub --out /offline/bob.account' >/dev/null || fail "root admin sign bob"
 admin "network submit /offline/bob.account" >/dev/null 2>&1 || fail "submit bob's admin record"
 wait_for ctl-01 'webjetctl --keys /admin/keys --account alice network account list | grep -qE "^bob +true +true"' "bob not promoted"
 bob "network node update ctl-02 --tags tag:relay,tag:infra" >/dev/null || fail "bob can't act as an admin"
+
+echo "== 1.3: revoke accounts"
+# carol made dave; the root revokes carol without --revoke-issued: dave stays.
+on ctl-01 'webjetctl root --dir /offline/root admin revoke --key /carol/carol.pub --reason left --out /offline/carol.tomb' >/dev/null || fail "root admin revoke"
+admin "network submit /offline/carol.tomb" >/dev/null 2>&1 || fail "submit carol's tombstone"
+wait_for ctl-01 '! webjetctl --keys /admin/keys --account alice network account list | grep -q "^carol "' "carol not revoked"
+admin "network account list" | grep -E "^dave +false +true" >/dev/null || fail "dave went with carol"
+admin "network account revoke dave --reason left" >/dev/null || fail "account revoke"
+wait_for ctl-01 '! webjetctl --keys /admin/keys --account alice network account list | grep -q "^dave "' "dave not revoked"
+
+echo "== 1.4: an admin's new key"
+on ctl-01 'webjetctl --keys /admin/keys2 network account keygen --name alice --pub-out /admin/alice-new.pub' >/dev/null || fail "alice's new key"
+on ctl-01 'webjetctl root --dir /offline/root admin sign --name alice --key /admin/alice-new.pub --replaces /admin/alice.pub --out /offline/alice2.account' | grep -q "new key" || fail "root admin sign --replaces"
+on ctl-01 'webjetctl --keys /nonexistent network submit /offline/alice2.account' >/dev/null 2>&1 || fail "submit alice's new key"
+AKEYS=/admin/keys2
+k=$(pubkey /admin/alice-new.pub)
+wait_for ctl-01 "webjetctl network account list | grep '^alice ' | grep -qF '$k'" "alice's new key not committed"
+# ctl-01's certificate was signed with alice's old key: void now.
+wait_for ctl-01 'webjetctl network node list | grep "^ctl-01 " | grep -q "control(uncertified)"' "ctl-01's certificate still valid"
+! on ctl-01 'webjetctl --keys /admin/keys --account alice network node update ctl-02 --tags tag:relay' >/dev/null 2>&1 || fail "alice's old key still signs"
+admin "network controller certify ctl-01" | grep -q "certified ctl-01" || fail "certify ctl-01 with the new key"
+wait_for ctl-01 'webjetctl network node list | grep "^ctl-01 " | grep -q "data,relay,control "' "ctl-01 not certified again"
 
 cleanup
 echo "RUNBOOK TEST PASSED"

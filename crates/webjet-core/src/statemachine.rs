@@ -1191,7 +1191,7 @@ impl Machine {
         let fixed_id = c.node_id.map(|k| k.to_bytes()).filter(|k| *k != [0; 32]);
         if let Some(f) = fixed_id {
             // Only a controller that is a Raft member but has no record yet
-            // (bootstrap, runbook 1) may be enrolled under a fixed id.
+            // (bootstrap, ops guide 2.1) may be enrolled under a fixed id.
             if !self.members.contains(&f) {
                 return rej("a fixed node_id is only allowed for a Raft member without a record");
             }
@@ -1258,7 +1258,7 @@ impl Machine {
             return rej("identity key already used");
         }
         // The node id is the pending one, except that a Raft member without a
-        // record (a bootstrapping controller) keeps its own id (runbook 1).
+        // record (a bootstrapping controller) keeps its own id (ops guide 2.1).
         let node_id = opt_k32(&r.node_id);
         let member_bootstrap = !p.is_rekey
             && node_id != p.node_id
@@ -2440,6 +2440,127 @@ mod tests {
         .unwrap();
         let n = &h.m.view().nodes[&plain];
         assert!(n.control_role && n.data && !n.relay);
+    }
+
+    /// §13.4: revoking an admin without `revoke_issued` keeps the normal
+    /// accounts it created; with it, they go too. A normal account given a
+    /// new key by an admin stays valid and only the new key signs.
+    #[test]
+    fn admin_revocation_and_account_rekey() {
+        for revoke_issued in [false, true] {
+            let mut h = H::new();
+            // carol: a second admin (root-signed); dave: created by carol.
+            let carol = KeyPair::generate();
+            let carol_id = crypto::random32();
+            let crec = wp::AccountRecord {
+                account_id: Some(crypto::k32(&carol_id)),
+                account_key: Some(crypto::k32(&carol.public())),
+                name: Some("carol".into()),
+                admin: true,
+                issuer_root: true,
+                issuer: None,
+                version: 1,
+            };
+            h.run(EntryPayload::RootAccountEntry(Box::new(
+                wp::RootAccountEntry {
+                    record: Some(h.net.root.sign_obj(mt::ACCOUNT_RECORD, &crec)),
+                },
+            )))
+            .unwrap();
+            let dave = KeyPair::generate();
+            let dave_id = crypto::random32();
+            let drec = wp::AccountRecord {
+                account_id: Some(crypto::k32(&dave_id)),
+                account_key: Some(crypto::k32(&dave.public())),
+                name: Some("dave".into()),
+                admin: false,
+                issuer_root: false,
+                issuer: Some(crypto::k32(&carol_id)),
+                version: 1,
+            };
+            let s = sign_op(
+                &carol,
+                &carol_id,
+                1,
+                now_ms(),
+                AccountOp::PutAccount(Box::new(wp::PutAccount {
+                    record: Some(carol.sign_obj(mt::ACCOUNT_RECORD, &drec)),
+                })),
+            );
+            h.run(op_entry(s)).unwrap();
+            assert!(h.m.view().accounts[&dave_id].valid);
+            // alice gives dave a new key.
+            let dave2 = KeyPair::generate();
+            let drec2 = wp::AccountRecord {
+                account_key: Some(crypto::k32(&dave2.public())),
+                issuer: Some(crypto::k32(&h.net.admin_id)),
+                version: 2,
+                ..drec
+            };
+            h.admin_op(AccountOp::PutAccount(Box::new(wp::PutAccount {
+                record: Some(h.net.admin.sign_obj(mt::ACCOUNT_RECORD, &drec2)),
+            })))
+            .unwrap();
+            assert!(h.m.view().accounts[&dave_id].valid);
+            let rename = |k: &KeyPair, seq| {
+                op_entry(sign_op(
+                    k,
+                    &dave_id,
+                    seq,
+                    now_ms(),
+                    AccountOp::RenameNode(Box::new(wp::RenameNode {
+                        node_id: Some(crypto::k32(&crypto::random32())),
+                        name: Some("x".into()),
+                    })),
+                ))
+            };
+            let e = h.run(rename(&dave, 1)).unwrap_err();
+            assert!(e.to_string().contains("current key"), "{e}");
+            let e = h.run(rename(&dave2, 1)).unwrap_err();
+            assert!(!e.to_string().contains("current key"), "{e}");
+            // The root revokes carol. dave was re-issued by alice, so only
+            // a fresh account of carol's shows the cascade: eve.
+            let eve_id = crypto::random32();
+            let erec = wp::AccountRecord {
+                account_id: Some(crypto::k32(&eve_id)),
+                account_key: Some(crypto::k32(&KeyPair::generate().public())),
+                name: Some("eve".into()),
+                admin: false,
+                issuer_root: false,
+                issuer: Some(crypto::k32(&carol_id)),
+                version: 1,
+            };
+            let s = sign_op(
+                &carol,
+                &carol_id,
+                2,
+                now_ms(),
+                AccountOp::PutAccount(Box::new(wp::PutAccount {
+                    record: Some(carol.sign_obj(mt::ACCOUNT_RECORD, &erec)),
+                })),
+            );
+            h.run(op_entry(s)).unwrap();
+            let t = wp::AccountTombstone {
+                account_id: Some(crypto::k32(&carol_id)),
+                version: 2,
+                revoke_issued,
+                reason: None,
+            };
+            h.run(EntryPayload::RootAccountEntry(Box::new(
+                wp::RootAccountEntry {
+                    record: Some(h.net.root.sign_obj(mt::ACCOUNT_TOMBSTONE, &t)),
+                },
+            )))
+            .unwrap();
+            let v = h.m.view();
+            assert!(!v.accounts.get(&carol_id).is_some_and(|a| a.valid));
+            assert_eq!(
+                v.accounts.get(&eve_id).is_some_and(|a| a.valid),
+                !revoke_issued,
+                "revoke_issued={revoke_issued}"
+            );
+            assert!(v.accounts[&dave_id].valid);
+        }
     }
 
     #[test]

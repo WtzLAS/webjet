@@ -1,5 +1,5 @@
 #!/bin/sh
-# Bring up a small Webjet network on this machine, following runbook 1 of the
+# Bring up a small Webjet network on this machine, following section 2.1 of the
 # operations guide: a bootstrap controller (also a relay) and N other nodes,
 # all on 127.0.0.1 with the tun interface disabled (no root needed).
 #

@@ -144,7 +144,7 @@ common bug. Rules:
 
 | Script | Needs | What it checks |
 | --- | --- | --- |
-| `scripts/local-net.sh [N]` | nothing (no root) | A full network on 127.0.0.1 by runbook 1, tun disabled. `scripts/local-net.sh stop` ends it. |
+| `scripts/local-net.sh [N]` | nothing (no root) | A full network on 127.0.0.1 by operations guide 2.1, tun disabled. `scripts/local-net.sh stop` ends it. |
 | `scripts/cluster-test.sh` | nothing | Three controllers, leader failover, writes still commit. |
 | `scripts/soak-test.sh [s]` | nothing | Runs the local network past the e2e re-key interval (120 s) and checks every agent still answers. Catches timer-driven deadlocks. |
 | `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account). Skipped without a network. |
@@ -241,8 +241,9 @@ it, `release.yml` publishes with the workflow's automatic token.
 4. Check the published release the way hosts install it:
    `docker/release-test.sh vX.Y.Z` runs `install.sh` and `webjetup` in fresh
    Debian 11, Ubuntu 20.04 and Debian 12 containers on amd64 and arm64, and
-   `RELEASE=vX.Y.Z docker/runbook-test.sh` runs the operations guide's
-   runbooks 1, 2, 3, 4, 6, 8 and 9 on systemd hosts installed from it.
+   `RELEASE=vX.Y.Z docker/runbook-test.sh` runs most of the operations
+   guide (its "Testing this guide" section lists which sections) on systemd
+   hosts installed from it.
 
 `scripts/release.sh` without `--targets` still builds everything on a Mac
 (Linux in Docker with `docker/release.Dockerfile`, Windows with cargo-xwin),

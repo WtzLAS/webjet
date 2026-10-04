@@ -267,7 +267,7 @@ table StateVersion {
     min_node_software: string;
 }
 
-// The genesis file of a network (operations guide, runbook 1).
+// The genesis file of a network (operations guide, section 2.1).
 table Genesis {
     root_key: Key32;
     emergency_cert: [ubyte];  // Signed(EmergencyKeyCert)

@@ -132,7 +132,7 @@ pub struct CamouflageFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub certificate: Option<String>,
     /// The next key's certificate (PEM text or file), announced for a key
-    /// change (runbook 7). Website mode only.
+    /// change (ops guide 3.2). Website mode only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_certificate: Option<String>,
     /// The announced next key as a hex SPKI pin, as `show` prints it;

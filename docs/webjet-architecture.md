@@ -2377,10 +2377,25 @@ A node that can't reach any controller can't deliver its alarms. The metrics sto
 
 ### 19.10 Runbooks
 
-The Operations Guide has a step-by-step procedure for each of these:
+The Operations Guide has a step-by-step procedure for each of these, grouped into accounts, nodes, maintenance and emergencies:
 
 | Runbook | Main references |
 |---|---|
+| Create, revoke and re-key accounts (members and admins) | §13.1, §13.4, §13.5, §13.6 |
+| Bootstrap a new network | §13.5, §7.5 |
+| Add data, relay, control and gateway nodes | §8, §4, §7.5, §11.9 |
+| Revoke or re-key a node | §22, §8.1 |
+| Replace a lost voter | §7.4, §7.5 |
+| Retire a controller's signing key | §22.1 |
+| Rotate the PSK | §7.6 |
+| Renew or replace the camouflage certificate | §9.7.2 |
+| Upgrades, and a release with a schema change | §19.8, §15.7 |
+| Change the network or a node's configuration, tags and roles | §6.7, §6.19, §14 |
+| A majority of voters is lost: what to do, and by when | §7.4, §6.16 |
+| Revoke without a controller majority | §22 |
+| A compromised controller, admin account or root key | §21.18, §13.6, §5 |
+
+---|---|
 | Bootstrap a new network | §13.5, §7.5 |
 | Add a relay | §8, §4 |
 | Add a controller and promote it to voter | §7.5 |

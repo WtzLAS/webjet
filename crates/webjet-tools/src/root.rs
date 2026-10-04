@@ -58,11 +58,21 @@ pub enum RootCmd {
         #[command(subcommand)]
         cmd: NodeCmd,
     },
-    /// Sign a StateVersion for a release (runbook 11).
+    /// Sign a StateVersion for a release (ops guide 3.4).
     StateVersion {
         #[command(subcommand)]
         cmd: StateVersionCmd,
     },
+}
+
+/// An account named by its public file or by its account ID (hex): the
+/// ID is what tombstones and key changes refer to.
+fn account_ref(r: &Path) -> Result<(String, crypto::Bytes32)> {
+    if let Some(id) = r.to_str().and_then(crypto::parse_hex32) {
+        return Ok((hex::encode(id), id));
+    }
+    let p = AccountPub::load(r)?;
+    Ok((p.name.clone(), p.id()?))
 }
 
 #[derive(Subcommand, Clone)]
@@ -73,11 +83,18 @@ pub enum AdminCmd {
         name: String,
         #[arg(long)]
         key: PathBuf,
+        /// Give an existing account this new key instead (lost or
+        /// compromised key): its old `.pub` file or its account ID (hex,
+        /// `webjetctl --json network account list`). It keeps its name,
+        /// devices and the accounts it created.
+        #[arg(long)]
+        replaces: Option<String>,
         #[arg(long)]
         out: PathBuf,
     },
     /// Revoke an admin account (root- or emergency-signed).
     Revoke {
+        /// The account's public file, or its account ID (hex).
         #[arg(long)]
         key: PathBuf,
         #[arg(long)]
@@ -99,7 +116,7 @@ pub enum ControllerCmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Retire a controller signing key (runbook 10).
+    /// Retire a controller signing key (ops guide 2.9).
     Retire {
         #[arg(long)]
         key_id: String,
@@ -116,9 +133,9 @@ pub enum ControllerCmd {
 
 #[derive(Subcommand, Clone)]
 pub enum AccountCmd {
-    /// Revoke an account (runbook 8, admin unavailable or compromised).
+    /// Revoke an account (ops guide 1.3, 4.2: no admin, or a compromised one).
     Revoke {
-        /// The account's public file.
+        /// The account's public file, or its account ID (hex).
         #[arg(long)]
         key: PathBuf,
         #[arg(long)]
@@ -134,7 +151,7 @@ pub enum AccountCmd {
 
 #[derive(Subcommand, Clone)]
 pub enum NodeCmd {
-    /// An offline node tombstone (runbook 8, no controller majority).
+    /// An offline node tombstone (ops guide 4.2, no controller majority).
     Revoke {
         /// Node id (hex).
         #[arg(long)]
@@ -248,14 +265,33 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             println!("emergency key: {}", crypto::key_b64(&k.emergency.public()));
         }
         RootCmd::Admin {
-            cmd: AdminCmd::Sign { name, key, out },
+            cmd:
+                AdminCmd::Sign {
+                    name,
+                    key,
+                    replaces,
+                    out,
+                },
         } => {
             let k = load_keys(dir)?;
             let mut p = AccountPub::load(&key)?;
             p.name = name;
+            if let Some(r) = &replaces {
+                p.account_id = hex::encode(account_ref(Path::new(r))?.1);
+            }
             let rec = account_record(&p, true, None)?;
             write_public(&out, &k.root.sign_obj(mt::ACCOUNT_RECORD, &rec))?;
-            println!("signed admin account {} → {}", p.name, out.display());
+            if replaces.is_some() {
+                write_public(&key, &serde_json::to_vec_pretty(&p)?)?;
+                println!(
+                    "signed a new key for admin account {} → {} ({} now carries the account's ID)",
+                    p.name,
+                    out.display(),
+                    key.display()
+                );
+            } else {
+                println!("signed admin account {} → {}", p.name, out.display());
+            }
         }
         RootCmd::Admin {
             cmd:
@@ -278,9 +314,9 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
                 },
         } => {
             let k = load_keys(dir)?;
-            let p = AccountPub::load(&key)?;
+            let (who, id) = account_ref(&key)?;
             let t = wp::AccountTombstone {
-                account_id: Some(crypto::k32(&p.id()?)),
+                account_id: Some(crypto::k32(&id)),
                 version: now_ms(),
                 revoke_issued,
                 reason,
@@ -288,7 +324,7 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             write_public(&out, &pick(&k, &with)?.sign_obj(mt::ACCOUNT_TOMBSTONE, &t))?;
             println!(
                 "account tombstone for {} → {} (submit with `webjetctl network submit`, or inject on any node)",
-                p.name,
+                who,
                 out.display()
             );
         }

@@ -134,7 +134,7 @@ chain, leaf first, as a file name relative to the configuration file or as
 PEM text). `show` prints the chain as PEM text, so the printed file applies
 again unchanged. For a key change, `next_certificate` (file or PEM) or
 `next_spki` (hex pin, as `show` prints it) announces the next key
-(runbook 7). The private key and the website are set separately with
+(operations guide 3.2). The private key and the website are set separately with
 `webjetctl network camouflage set-secret`.
 
 ### Node scope
@@ -310,7 +310,7 @@ re-key the node: an admin runs `webjetctl network node rekey`, and you run
 too.
 
 TPM, Keychain and DPAPI keys are bound to the machine: a copied or restored
-`identity.key` is refused with a message to re-key the node (runbook 9).
+`identity.key` is refused with a message to re-key the node (operations guide 2.7).
 The backend is chosen when the key is written (`webjetctl local init`, enrollment or
 re-key); changing `storage` later doesn't move an existing key.
 
@@ -324,7 +324,7 @@ re-key); changing `storage` later doesn't move an existing key.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | The controller role runs when the network gives this node the `control` role (`webjetctl network node update <name> --roles ...,control`, runbook 4), and on the first controller of a new network. `false` keeps it from running here even then. Acting as a controller also needs a SigningKeyCert signed by an admin or the root, and Raft membership. |
+| `enabled` | `true` | The controller role runs when the network gives this node the `control` role (`webjetctl network node update <name> --roles ...,control`, operations guide 2.4), and on the first controller of a new network. `false` keeps it from running here even then. Acting as a controller also needs a SigningKeyCert signed by an admin or the root, and Raft membership. |
 | `signer_socket` | none | Socket (Windows: named pipe) of `webjetd signer`, which holds the signing key in a separate process (§19.2). Without it the key is a file in `data_dir`. |
 | `head_lifetime_hours` | `48` | How long signed tree heads stay valid (§7.3; 24–72 h recommended). |
 

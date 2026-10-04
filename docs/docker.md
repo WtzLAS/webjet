@@ -67,13 +67,13 @@ The enrollment string is single-use and only needed on the first start; later
 starts use the state in the volume. `WEBJET_ENROLL_FILE` reads it from a file
 instead, which works with Docker and Compose secrets.
 
-To re-key a node (runbook 9), stop the container, run
+To re-key a node (operations guide 2.7), stop the container, run
 `docker run --rm -v webjet-state:/var/lib/webjet webjet webjetctl local enroll <string>`,
 and start it again.
 
 ## The first controller of a new network
 
-Runbook 1, with the controller in a container. Create the root key, the admin
+Operations guide section 2.1, with the controller in a container. Create the root key, the admin
 account and the genesis on the offline machine as usual, then start the
 controller with the genesis:
 
@@ -88,7 +88,7 @@ docker run -d --name webjet-ctl --restart unless-stopped \
   webjet
 ```
 
-Then continue the runbook inside the container. `webjetctl` there talks to the
+Then continue section 2.1 inside the container. `webjetctl` there talks to the
 agent's control socket. It needs the admin's account key, the one whose
 account is in the genesis, so mount the admin's key directory for the
 bootstrap and point `WEBJET_KEYS` at it. The directory must be writable,
@@ -118,7 +118,7 @@ back in and run `webjetctl network submit` on it.
 
 Further controllers are ordinary enrolled containers whose node has the
 `control` role (`--roles data,relay,control`, or `webjetctl network node update` later);
-they start the controller role by themselves. Runbook 4 continues from there.
+they start the controller role by themselves. Operations guide section 2.4 continues from there.
 
 Once the network runs, recreate the container without the key directory, so
 account keys don't stay on the controller.

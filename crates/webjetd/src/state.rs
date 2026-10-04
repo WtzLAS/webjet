@@ -169,7 +169,7 @@ pub struct NodeFile {
     pub camouflage_domain: Option<String>,
     #[serde(default)]
     pub camouflage_pin: Option<String>,
-    /// The first controller of a new network (runbook 1): it proposes the
+    /// The first controller of a new network (ops guide 2.1): it proposes the
     /// genesis entry and enrolls itself through the control channel.
     #[serde(default)]
     pub bootstrap: bool,

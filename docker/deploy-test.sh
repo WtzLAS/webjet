@@ -4,7 +4,7 @@
 # variables. It
 #   1. creates the root key, an admin account and the genesis in a volume,
 #   2. starts the first controller with WEBJET_GENESIS and bootstraps it
-#      (runbook 1) through `docker exec`,
+#      (ops guide 2.1) through `docker exec`,
 #   3. starts a data node with WEBJET_ENROLL and waits for it to be healthy,
 #   4. pings across the overlay,
 #   5. restarts the node (state survives, no second enrollment),

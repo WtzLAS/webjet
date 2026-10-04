@@ -6,7 +6,7 @@ A Rust implementation of the Webjet overlay VPN described in
 
 | Document | For |
 | --- | --- |
-| [docs/webjet-operations-guide.md](docs/webjet-operations-guide.md) | Runbooks: bootstrap, add relays and controllers, revoke, re-key, upgrades |
+| [docs/webjet-operations-guide.md](docs/webjet-operations-guide.md) | Operations guide: accounts, nodes (bootstrap, relays, controllers, gateways, revoke, re-key), maintenance, emergencies |
 | [docs/configuration.md](docs/configuration.md) | Every `webjetd.toml` setting |
 | [docs/docker.md](docs/docker.md) | Running nodes and controllers in containers |
 | [docs/app.md](docs/app.md) | The desktop app (`webjet-app`) |
@@ -75,7 +75,7 @@ starting point.
 ## Try it
 
 No root needed. `scripts/local-net.sh 3` builds a whole network on 127.0.0.1
-by following runbook 1: root key, admin account, genesis, a bootstrap
+by following section 2.1 of the operations guide: root key, admin account, genesis, a bootstrap
 controller/relay and three data nodes. The tun interface is disabled, and the
 data plane answers pings itself.
 
@@ -103,7 +103,7 @@ uses it: a first controller from `WEBJET_GENESIS`, a node enrolled with
 
 ## Deploying
 
-The operations guide's runbooks map to these commands:
+The operations guide maps to these commands:
 
 ```sh
 # Root key holder (offline machine)
@@ -124,6 +124,7 @@ webjetctl network config edit           # policy, DNS, seeds, transport, limits:
 webjetctl local config --node relay-1 set limits.value.relay_capacity_mbps 900   # one node's override
 webjetctl network node enroll --owner bob --name laptop --tags tag:laptop
 webjetctl network node revoke laptop;  webjetctl network node rekey server-1
+webjetctl network account rekey bob --key bob-new.pub   # a lost account key; admins: root admin sign --replaces
 webjetctl network psk rotate;  webjetctl network controller add-learner ctl-02 / promote / demote / remove
 ```
 
@@ -164,7 +165,7 @@ Then, on any platform:
 | Command | What it does |
 | --- | --- |
 | `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS) or the service, PATH and folder ACLs (Windows). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. |
-| `webjetup enroll <STRING>` | Enroll this node (or re-key it, runbook 9) and start the agent. |
+| `webjetup enroll <STRING>` | Enroll this node (or re-key it, operations guide 2.7) and start the agent. |
 | `webjetup status` | Installed version, service state, enrollment, this node's name and addresses. |
 | `webjetup list` | Published releases. |
 | `webjetup remove` (alias `uninstall`) | Stop the agent and remove the programs and service. The node's identity and state stay, so `webjetup install` brings it back as the same node. |

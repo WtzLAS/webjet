@@ -997,11 +997,15 @@ pub fn build_view(
                 valid &= ver.signer == *root;
             } else {
                 let issuer = crypto::opt_k32(&r.issuer);
-                let iss = v.accounts.get(&issuer);
-                let issuer_ok = iss
-                    .map(|a| a.admin && (a.valid || !revoke_issuers.contains(&issuer)))
-                    .unwrap_or(false)
-                    && !revoke_issuers.contains(&issuer);
+                // A tombstone replaces the issuer's record leaf, so a revoked
+                // admin is no longer among the accounts. Only admins issue
+                // records, so a tombstoned issuer was one: its accounts stay
+                // valid unless the tombstone said `revoke_issued` (§13.4).
+                let issuer_ok = !revoke_issuers.contains(&issuer)
+                    && match v.accounts.get(&issuer) {
+                        Some(a) => a.admin,
+                        None => v.tombstoned_accounts.contains(&issuer),
+                    };
                 valid &= issuer_ok && !r.admin;
             }
             v.accounts.insert(
