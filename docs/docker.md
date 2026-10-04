@@ -92,7 +92,8 @@ Then continue the runbook inside the container. `webjetctl` there talks to the
 agent's control socket. It needs the admin's account key, the one whose
 account is in the genesis, so mount the admin's key directory for the
 bootstrap and point `WEBJET_KEYS` at it. The directory must be writable,
-because `webjetctl` keeps the account's operation counter next to the key.
+because `webjetctl` keeps the account's operation counter next to the key
+(and `network account use` writes the default account there).
 Add these to the `docker run` above:
 
 ```sh
@@ -102,10 +103,11 @@ Add these to the `docker run` above:
 Then:
 
 ```sh
-docker exec -it webjet-ctl webjetctl --account alice network account create --name infra --key /admin-keys/infra.pub
-docker exec -it webjet-ctl webjetctl --account alice network node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.10:443
+docker exec -it webjet-ctl webjetctl network account use alice   # sign as alice by default
+docker exec -it webjet-ctl webjetctl network account create --name infra --key /admin-keys/infra.pub
+docker exec -it webjet-ctl webjetctl network node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.10:443
 docker exec -it webjet-ctl webjetctl local enroll <string>
-docker exec -it webjet-ctl webjetctl --account alice network controller certify ctl-01
+docker exec -it webjet-ctl webjetctl network controller certify ctl-01
 ```
 
 `webjetctl` asks for the account passphrase. To have the root sign the

@@ -36,7 +36,8 @@ struct Cli {
     /// Directory with account keys.
     #[arg(long, global = true, env = "WEBJET_KEYS")]
     keys: Option<PathBuf>,
-    /// The account to sign with (defaults to the only key in the key directory).
+    /// The account to sign with. Defaults to the one chosen with
+    /// `network account use`, else the only key in the key directory.
     #[arg(long, global = true, env = "WEBJET_ACCOUNT")]
     account: Option<String>,
     /// Print raw JSON.
@@ -234,7 +235,19 @@ enum AccountCmd {
         #[arg(long)]
         revoke_issued: bool,
     },
+    /// List the network's accounts; `*` marks the one this machine signs
+    /// with by default, `key` the others with a key here.
     List,
+    /// Sign with this account when --account isn't given (recorded in the
+    /// key directory). Without a name, show the current choice.
+    Use {
+        /// An account with a key in the key directory.
+        #[arg(conflicts_with = "clear")]
+        name: Option<String>,
+        /// Forget the default (back to: the only key, or --account).
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -371,20 +384,7 @@ fn key_dir(cli: &Cli) -> PathBuf {
 
 fn load_account(cli: &Cli) -> Result<Account> {
     let dir = key_dir(cli);
-    let name = match &cli.account {
-        Some(n) => n.clone(),
-        None => {
-            let mut names = account_names(&dir)?;
-            match names.len() {
-                1 => names.remove(0),
-                0 => bail!("no account keys in {}", dir.display()),
-                _ => bail!(
-                    "several account keys; choose one with --account ({})",
-                    names.join(", ")
-                ),
-            }
-        }
-    };
+    let name = pick_account(&dir, cli.account.as_deref())?;
     let pass = passphrase(
         "WEBJET_ACCOUNT_PASSPHRASE",
         &format!("passphrase for account {name}"),
@@ -1104,21 +1104,57 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 if cli.json {
                     print(cli, &v);
                 } else {
+                    // Which accounts this machine can sign as.
+                    let dir = key_dir(cli);
+                    let local = account_names(&dir).unwrap_or_default();
+                    let default = pick_account(&dir, cli.account.as_deref()).ok();
                     let mut rows = vec![vec![
                         "NAME".into(),
                         "ADMIN".into(),
                         "VALID".into(),
+                        "HERE".into(),
                         "KEY".into(),
                     ]];
                     for a in v.as_array().cloned().unwrap_or_default() {
+                        let name = a["name"].as_str().unwrap_or("").to_string();
+                        let here = if default.as_ref() == Some(&name) {
+                            "*"
+                        } else if local.contains(&name) {
+                            "key"
+                        } else {
+                            ""
+                        };
                         rows.push(vec![
-                            a["name"].as_str().unwrap_or("").into(),
+                            name,
                             a["admin"].to_string(),
                             a["valid"].to_string(),
+                            here.into(),
                             a["key"].as_str().unwrap_or("").into(),
                         ]);
                     }
                     print_table(&rows);
+                }
+            }
+            AccountCmd::Use { name, clear } => {
+                let dir = key_dir(cli);
+                let file = dir.join(DEFAULT_ACCOUNT_FILE);
+                if *clear {
+                    set_default_account(&dir, None)?;
+                    println!("no default account ({} removed)", file.display());
+                } else if let Some(n) = name {
+                    set_default_account(&dir, Some(n))?;
+                    println!("default account: {n} ({})", file.display());
+                } else {
+                    if let Some(a) = &cli.account {
+                        println!("--account / WEBJET_ACCOUNT overrides it here: {a}");
+                    }
+                    match default_account(&dir)? {
+                        Some(n) => println!("default account: {n} ({})", file.display()),
+                        None => match pick_account(&dir, None) {
+                            Ok(n) => println!("no default set; using the only key: {n}"),
+                            Err(e) => println!("no default account: {e}"),
+                        },
+                    }
                 }
             }
         },

@@ -112,6 +112,75 @@ pub fn account_names(dir: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// The file in a key directory naming the account to sign with when none is
+/// given (`webjetctl network account use`).
+pub const DEFAULT_ACCOUNT_FILE: &str = "default";
+
+/// The default account recorded in `dir`, if any.
+pub fn default_account(dir: &Path) -> Result<Option<String>> {
+    let path = dir.join(DEFAULT_ACCOUNT_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => {
+            let name = s.trim();
+            Ok((!name.is_empty()).then(|| name.to_string()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+/// Record `name` as the default account in `dir` (`None` clears it). The
+/// account's key must be in `dir`.
+pub fn set_default_account(dir: &Path, name: Option<&str>) -> Result<()> {
+    let path = dir.join(DEFAULT_ACCOUNT_FILE);
+    match name {
+        Some(n) => {
+            if !account_names(dir)?.iter().any(|a| a == n) {
+                bail!("no key for account {n} in {}", dir.display());
+            }
+            write_public(&path, format!("{n}\n").as_bytes())
+        }
+        None => match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("remove {}", path.display()))
+            }
+            _ => Ok(()),
+        },
+    }
+}
+
+/// The account to sign with: `given` (`--account` / `WEBJET_ACCOUNT`), else
+/// the default recorded in `dir`, else the only key in `dir`.
+pub fn pick_account(dir: &Path, given: Option<&str>) -> Result<String> {
+    if let Some(n) = given {
+        return Ok(n.to_string());
+    }
+    let names = account_names(dir)?;
+    if let Some(n) = default_account(dir)? {
+        if !names.contains(&n) {
+            bail!(
+                "the default account {n} ({}) has no key in {}; choose another with \
+                 `webjetctl network account use <name>`",
+                dir.join(DEFAULT_ACCOUNT_FILE).display(),
+                dir.display()
+            );
+        }
+        return Ok(n);
+    }
+    match names.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => bail!(
+            "no account keys in {} (webjetctl network account keygen)",
+            dir.display()
+        ),
+        _ => bail!(
+            "several account keys ({}); choose one with --account, or set a default with \
+             `webjetctl network account use <name>`",
+            names.join(", ")
+        ),
+    }
+}
+
 /// An unlocked account key, ready to sign operations.
 pub struct Account {
     pub name: String,
@@ -363,6 +432,41 @@ pub fn tags(v: &[String]) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_selection() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path();
+        let key = |n: &str| std::fs::write(dir.join(format!("{n}.key")), b"x").unwrap();
+        assert!(pick_account(dir, None).is_err(), "no keys");
+        key("alice");
+        assert_eq!(pick_account(dir, None).unwrap(), "alice", "the only key");
+        key("infra");
+        let e = pick_account(dir, None).unwrap_err().to_string();
+        assert!(
+            e.contains("alice, infra") && e.contains("account use"),
+            "{e}"
+        );
+        assert!(
+            set_default_account(dir, Some("bob")).is_err(),
+            "no such key"
+        );
+        set_default_account(dir, Some("infra")).unwrap();
+        assert_eq!(default_account(dir).unwrap().as_deref(), Some("infra"));
+        assert_eq!(pick_account(dir, None).unwrap(), "infra");
+        assert_eq!(
+            pick_account(dir, Some("alice")).unwrap(),
+            "alice",
+            "--account wins"
+        );
+        std::fs::remove_file(dir.join("infra.key")).unwrap();
+        let e = pick_account(dir, None).unwrap_err().to_string();
+        assert!(e.contains("default account infra"), "{e}");
+        set_default_account(dir, None).unwrap();
+        set_default_account(dir, None).unwrap();
+        assert_eq!(default_account(dir).unwrap(), None);
+        assert_eq!(pick_account(dir, None).unwrap(), "alice");
+    }
     #[test]
     fn seal_roundtrip() {
         let s = seal("pw", b"secret").unwrap();

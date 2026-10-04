@@ -7261,7 +7261,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-app"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7278,7 +7278,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7302,7 +7302,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-net"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7327,7 +7327,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-proto"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "planus",
  "serde",
@@ -7336,7 +7336,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-tools"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7351,6 +7351,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "tokio",
  "toml 0.8.23",
  "tracing",
@@ -7364,7 +7365,7 @@ dependencies = [
 
 [[package]]
 name = "webjetd"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7403,7 +7404,7 @@ dependencies = [
 
 [[package]]
 name = "webjetup"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
