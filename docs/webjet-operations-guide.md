@@ -57,16 +57,17 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 ## Contents
 
 1. Bootstrap a new network
-2. Add a relay
-3. Add a controller and promote it to voter
-4. Replace a lost voter
-5. Rotate the PSK
-6. Renew or replace the camouflage certificate
-7. Revoke a lost device or an account
-8. Re-key a reinstalled node
-9. Retire a controller's signing key
-10. Roll out a release with a schema change
-11. A majority of voters is lost
+2. Add a device for a person (a data node), with a new account if needed
+3. Add a relay
+4. Add a controller and promote it to voter
+5. Replace a lost voter
+6. Rotate the PSK
+7. Renew or replace the camouflage certificate
+8. Revoke a lost device or an account
+9. Re-key a reinstalled node
+10. Retire a controller's signing key
+11. Roll out a release with a schema change
+12. A majority of voters is lost
 
 ---
 
@@ -137,8 +138,8 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
               → prints an enrollment string
    [node]     sudo webjetctl enroll '<enrollment string>'
    ```
-   The first controller enrolls its own node through its running agent, so leave the agent running here; `webjetctl enroll` talks to it. Every other node is enrolled with `webjetup enroll` (runbooks 2 and 8), which stops the agent, enrolls and starts it again. The enrollment string is valid for 24 hours (`--expires-hours`).
-6. Make the node a controller: request a certificate for its signing key, sign it offline, and submit it. `webjetctl root controller sign` prints the key ID; note it for runbook 9.
+   The first controller enrolls its own node through its running agent, so leave the agent running here; `webjetctl enroll` talks to it. Every other node is enrolled with `webjetup enroll` (runbooks 3 and 9), which stops the agent, enrolls and starts it again. The enrollment string is valid for 24 hours (`--expires-hours`).
+6. Make the node a controller: request a certificate for its signing key, sign it offline, and submit it. `webjetctl root controller sign` prints the key ID; note it for runbook 10.
    ```
    [controller]  webjetctl controller cert-request --out ctl-01.req
    [offline]     webjetctl root controller sign ctl-01.req --out ctl-01.cert
@@ -207,7 +208,7 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
      The certificate file must exist when you apply: it is read from disk and sent with the setting. `camouflage set-secret` supplies the certificate's private key and the website relays serve. `webjetctl camouflage selfsign --domain cdn.example.com --cert-out site.crt --key-out site.key` makes a self-signed certificate for testing website mode in a lab.
 
    Without a `camouflage:` section the priorities still apply, and relays don't offer AnyTLS. `webjetctl transport check transport.yaml` validates the file without submitting it.
-8. Grow the cluster: add two more controllers and promote them, so there are three voters, then continue to five (runbook 3). Add relays (runbook 2), and update the seed list to at least two entries.
+8. Grow the cluster: add two more controllers and promote them, so there are three voters, then continue to five (runbook 4). Add relays (runbook 3), and update the seed list to at least two entries.
 9. Set up monitoring. Set `[metrics] listen` on the controllers (for example their overlay address and port 9469). Each controller then serves every node's latest report as OpenMetrics text at `/metrics`, so Prometheus can scrape any one of them. There's no authentication on that endpoint, so don't expose it to the internet (§12.5).
 10. Enroll the admin's own device with `webjetup` and an enrollment string, and add a policy rule that lets admin devices reach the controllers. From then on, run `webjetctl` there against the device's own agent; the SSH forward from step 5 is no longer needed.
 
@@ -221,7 +222,75 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 
 ---
 
-## 2. Add a relay
+## 2. Add a device for a person (a data node)
+
+**When:** someone needs a laptop, desktop or server on the network, either a new person or someone who already has an account. References: §13.3, §8.
+
+A data node is the default kind of node: it sends and receives its own traffic, and relays nothing for others. Every node is owned by an account. The owner can rename the device, revoke it (for example when it's lost) and re-key it after a reinstall (runbook 9) without an admin. Only an admin can enroll devices or change their tags, addresses, roles or owner, because those decide what the device may reach.
+
+**You need:** an admin account, and the person's device with Linux, macOS or Windows.
+
+**Steps:**
+
+1. **New person only:** create their account. The person makes the key on their own machine, where it stays, and sends you only the public file. If they will never run `webjetctl` themselves, you can make the key for them and keep it.
+   ```
+   [person]   webjetctl account keygen --name bob --pub-out bob.pub
+   [admin]    webjetctl account create --name bob --key bob.pub
+   [admin]    webjetctl account list                  # bob, VALID true, ADMIN false
+   ```
+   Account names are 1–32 lowercase letters, digits and `-`, unique in the network. The account can only manage its own devices; admin accounts are made offline with the root key (`webjetctl root admin sign`, runbook 1).
+2. Choose the tags the device gets. Tags are how the policy decides what it may reach (§14), and the device's owner can't change them. Check what the current rules allow those tags, and if needed add a rule and apply the policy again. For example, to let laptops reach the web servers on HTTPS:
+   ```yaml
+   # policy.yaml (excerpt)
+   version: 4             # one higher than the policy in force
+   default: deny
+   rules:
+     - id: laptops-to-web
+       action: allow
+       src: ["tag:laptop"]
+       dst: ["tag:web"]
+       ports: ["tcp:443"]
+   tests:
+     - {src: "tag:laptop", dst: "tag:web", port: "tcp:443", expect: allow}
+     - {src: "tag:laptop", dst: "tag:db", port: "tcp:5432", expect: deny}
+   ```
+   ```
+   [admin]    webjetctl policy show > policy.yaml     # start from the policy in force
+   [admin]    webjetctl policy check policy.yaml      # runs the tests, submits nothing
+   [admin]    webjetctl policy apply policy.yaml
+   ```
+   `owner:bob` in a rule matches every device bob owns, if access should follow the person rather than the kind of device.
+3. Create the enrollment. The overlay address is picked from the pool unless you give `--ip`; `--roles` defaults to `data`.
+   ```
+   [admin]    webjetctl node enroll --owner bob --name bob-laptop --tags tag:laptop
+              → prints an enrollment string
+   ```
+   The string is valid for 24 hours (`--expires-hours` changes that) and can be used once. Treat it like a password until then: whoever redeems it first gets the device's place in the network. Send it to the person over a channel you trust.
+4. On the device, install Webjet and enroll it in one step. On Linux and macOS:
+   ```
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh \
+                  | sudo sh -s -- --enroll '<enrollment string>'
+   ```
+   On Windows, download `webjetup-v0.3.0-x86_64-pc-windows-msvc.exe` from the release page and run, in an Administrator prompt:
+   ```
+   [node]     webjetup-v0.3.0-x86_64-pc-windows-msvc.exe install --enroll "<enrollment string>"
+   ```
+   On a device that already has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same. A device doesn't need a public address or open ports: it reaches the network through relays, and connects directly to other nodes where NAT allows (§10).
+5. If the person will administer their own devices from it (rename, revoke, re-key), they run `webjetctl` there with their key; see "Running `webjetctl`" above.
+
+**Check:**
+- On the device, `sudo webjetctl status` shows its name, its overlay address and no alarms.
+- `sudo webjetctl ping <name>` reaches a node the policy allows, and the device resolves names under the DNS suffix (`<name>.internal` by default).
+- On any node, `webjetctl node list` lists the device with its owner.
+
+**Later:**
+- The owner, or an admin, renames it with `webjetctl node rename bob-laptop bob-mbp`.
+- Only an admin changes its tags or owner: `webjetctl node update bob-laptop --tags tag:laptop,tag:dev`, or `--owner carol` when the device changes hands.
+- A lost device is revoked (runbook 8), a reinstalled one re-keyed (runbook 9). When the person leaves, `webjetctl account revoke bob` removes the account and every device it owns.
+
+---
+
+## 3. Add a relay
 
 **When:** to add capacity, cover a new region, or replace a relay. References: §4, §8, §11.8.
 
@@ -273,11 +342,11 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 
 ---
 
-## 3. Add a controller and promote it to voter
+## 4. Add a controller and promote it to voter
 
 **When:** building the cluster up, or adding spare learners. References: §7.1, §7.5.
 
-**You need:** a Linux node that is already enrolled (runbook 2 without the relay-specific steps; giving controllers `RELAY` as well is recommended), and the offline computer.
+**You need:** a Linux node that is already enrolled (runbook 3 without the relay-specific steps; giving controllers `RELAY` as well is recommended), and the offline computer.
 
 **Steps:**
 
@@ -311,7 +380,7 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 
 ---
 
-## 4. Replace a lost voter
+## 5. Replace a lost voter
 
 **When:** a voter is down and won't be back soon, or the "voters below a majority plus one" alarm fires. References: §7.4, §7.5.
 
@@ -326,14 +395,14 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    ```
    [admin]    webjetctl controller remove ctl-03
    ```
-4. If the machine is gone for good, or might have been compromised, retire its signing key (runbook 9). Never start it again without wiping it (`webjetup nuke`).
-5. Add a new learner to restore the number of spares (runbook 3).
+4. If the machine is gone for good, or might have been compromised, retire its signing key (runbook 10). Never start it again without wiping it (`webjetup nuke`).
+5. Add a new learner to restore the number of spares (runbook 4).
 
 **Check:** five voters, one leader, no alarms.
 
 ---
 
-## 5. Rotate the PSK
+## 6. Rotate the PSK
 
 **When:** on a regular schedule, and after revoking a node that may have been compromised, since it knew the PSK. References: §7.6, §9.1, §10.7.3.
 
@@ -355,7 +424,7 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
 
 ---
 
-## 6. Renew or replace the camouflage certificate
+## 7. Renew or replace the camouflage certificate
 
 **When:** the "camouflage certificate expires in under 14 days" alarm, or a key change. References: §9.7.2, §6.17.
 
@@ -390,7 +459,7 @@ A node that was offline through the whole announcement period can't use AnyTLS u
 
 ---
 
-## 7. Revoke a lost device or an account
+## 8. Revoke a lost device or an account
 
 **When:** a device is lost, stolen or decommissioned, or a person leaves. References: §22, §13.4, §8.1.
 
@@ -401,7 +470,7 @@ A node that was offline through the whole announcement period can't use AnyTLS u
    [admin]    webjetctl node revoke laptop-17 --reason lost
    ```
    It takes effect on online nodes within about 10 seconds, and relays tear down its circuits.
-2. If the device will be replaced and should keep its name, addresses and tags, re-key it instead of revoking it (runbook 8, with `--revoke-old-now`).
+2. If the device will be replaced and should keep its name, addresses and tags, re-key it instead of revoking it (runbook 9, with `--revoke-old-now`).
 
 ### An account
 
@@ -431,7 +500,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 ```
 
 **Afterwards, if the device or account may have been compromised:**
-- rotate the PSK twice (runbook 5)
+- rotate the PSK twice (runbook 6)
 - check the audit trail for operations the account signed (§13.3)
 - review policy rules that name the device or account by key
 
@@ -439,7 +508,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 
 ---
 
-## 8. Re-key a reinstalled node
+## 9. Re-key a reinstalled node
 
 **When:** a machine was reinstalled, replaced, or restored from a backup, and no longer has its key. The node keeps its name, addresses, tags, routes and history. References: §8.1, §8.3.
 
@@ -466,7 +535,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 
 ---
 
-## 9. Retire a controller's signing key
+## 10. Retire a controller's signing key
 
 **When:** a controller is decommissioned, is dead and won't return, or may have been compromised. The other controllers keep running throughout. References: §22.1, §6.6.
 
@@ -484,14 +553,14 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
    ```
    [admin]    webjetctl controller remove ctl-03
    ```
-4. **For a compromise only:** revoke the node itself (runbook 7), rotate the PSK twice (runbook 5), and review the audit trail and the current tree for changes made after the last legitimate version.
-5. Add a replacement controller if the cluster needs it (runbook 3).
+4. **For a compromise only:** revoke the node itself (runbook 8), rotate the PSK twice (runbook 6), and review the audit trail and the current tree for changes made after the last legitimate version.
+5. Add a replacement controller if the cluster needs it (runbook 4).
 
 **Check:** no equivocation alarm remains in `webjetctl status` on several nodes, and the retired controller's tree heads are no longer accepted.
 
 ---
 
-## 10. Roll out a release with a schema change
+## 11. Roll out a release with a schema change
 
 **When:** a release introduces new schema versions or state-machine rules, which take effect only when the root activates a new StateVersion. References: §15.6, §15.7, §19.8.
 
@@ -518,7 +587,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 
 ---
 
-## 11. A majority of voters is lost
+## 12. A majority of voters is lost
 
 **When:** the "no Raft leader" alarm fires and can't be cleared by waiting. References: §7.4, §6.16, §2.
 
@@ -528,7 +597,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 |---|---|
 | Traffic, routing, DNS, policy enforcement | Keep working |
 | Enrollment, changes, revocation through controllers, the daily validity extension | Stopped |
-| Revocation with the emergency key | Works (runbook 7) |
+| Revocation with the emergency key | Works (runbook 8) |
 
 | Deadline | When | Effect |
 |---|---|---|
@@ -548,11 +617,11 @@ The validity horizon is the hard deadline. Check how much time is left:
    1. Stop Raft on every surviving controller.
    2. Find the survivor with the highest applied log index (`applied` in `webjetctl controller list`).
    3. Restart it as the only voter of a new cluster that continues from its log.
-   4. Re-add the other survivors as learners and promote until there are five voters (runbook 3).
-   5. Retire the lost controllers' signing keys (runbook 9), so they can never return with a different history. Never start a lost voter again without wiping it.
+   4. Re-add the other survivors as learners and promote until there are five voters (runbook 4).
+   5. Retire the lost controllers' signing keys (runbook 10), so they can never return with a different history. Never start a lost voter again without wiping it.
 4. **If no controller survives:** rebuild from the latest snapshot (§19.9). The architecture leaves this as a manual procedure (§2), and it loses everything committed after the snapshot. There is no snapshot export or restore tool yet. Keeping a copy of a controller's data directory (`/var/lib/webjet`, taken with the agent stopped) is the closest thing available.
    1. Restore the snapshot onto a new controller host.
-   2. Create new signing keys and have the root certify them; retire all the old controller keys (runbook 9).
+   2. Create new signing keys and have the root certify them; retire all the old controller keys (runbook 10).
    3. Start the new cluster's log **above the highest tree version any node holds**, or nodes will reject its tree heads as a rollback. Read the version (`tree_version`) from `webjetctl status` on several nodes.
    4. Redo the changes made after the snapshot. Nodes enrolled after it must be enrolled again or re-keyed.
    5. Rehearse this in a test network before you need it.
@@ -563,4 +632,4 @@ The validity horizon is the hard deadline. Check how much time is left:
 
 ## Testing this guide
 
-`docker/runbook-test.sh` runs runbooks 1, 2, 3, 5, 7 and 8 with these commands on systemd machines (containers) installed with `webjetup`, from a local copy of the release files built from the checkout.
+`docker/runbook-test.sh` runs runbooks 1, 2, 3, 4, 6, 8 and 9 with these commands on systemd machines (containers) installed with `webjetup`, from a local copy of the release files built from the checkout.

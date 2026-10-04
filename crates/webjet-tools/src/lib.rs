@@ -434,7 +434,7 @@ pub struct CamouflageFile {
     /// PEM certificate chain file, leaf first. Website mode only.
     #[serde(default)]
     pub certificate: Option<String>,
-    /// Optional PEM certificate of the next key, for a key change (runbook 6).
+    /// Optional PEM certificate of the next key, for a key change (runbook 7).
     /// Website mode only.
     #[serde(default)]
     pub next_certificate: Option<String>,

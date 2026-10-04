@@ -58,7 +58,7 @@ pub enum RootCmd {
         #[command(subcommand)]
         cmd: NodeCmd,
     },
-    /// Sign a StateVersion for a release (runbook 10).
+    /// Sign a StateVersion for a release (runbook 11).
     StateVersion {
         #[command(subcommand)]
         cmd: StateVersionCmd,
@@ -99,7 +99,7 @@ pub enum ControllerCmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Retire a controller signing key (runbook 9).
+    /// Retire a controller signing key (runbook 10).
     Retire {
         #[arg(long)]
         key_id: String,
@@ -116,7 +116,7 @@ pub enum ControllerCmd {
 
 #[derive(Subcommand, Clone)]
 pub enum AccountCmd {
-    /// Revoke an account (runbook 7, admin unavailable or compromised).
+    /// Revoke an account (runbook 8, admin unavailable or compromised).
     Revoke {
         /// The account's public file.
         #[arg(long)]
@@ -134,7 +134,7 @@ pub enum AccountCmd {
 
 #[derive(Subcommand, Clone)]
 pub enum NodeCmd {
-    /// An offline node tombstone (runbook 7, no controller majority).
+    /// An offline node tombstone (runbook 8, no controller majority).
     Revoke {
         /// Node id (hex).
         #[arg(long)]

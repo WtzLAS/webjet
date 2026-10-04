@@ -67,7 +67,7 @@ The enrollment string is single-use and only needed on the first start; later
 starts use the state in the volume. `WEBJET_ENROLL_FILE` reads it from a file
 instead, which works with Docker and Compose secrets.
 
-To re-key a node (runbook 8), stop the container, run
+To re-key a node (runbook 9), stop the container, run
 `docker run --rm -v webjet-state:/var/lib/webjet webjet webjetctl enroll <string>`,
 and start it again.
 

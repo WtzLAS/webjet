@@ -242,7 +242,7 @@ it, `release.yml` publishes with the workflow's automatic token.
    `docker/release-test.sh vX.Y.Z` runs `install.sh` and `webjetup` in fresh
    Debian 11, Ubuntu 20.04 and Debian 12 containers on amd64 and arm64, and
    `RELEASE=vX.Y.Z docker/runbook-test.sh` runs the operations guide's
-   runbooks 1, 2, 3, 5, 7 and 8 on systemd hosts installed from it.
+   runbooks 1, 2, 3, 4, 6, 8 and 9 on systemd hosts installed from it.
 
 `scripts/release.sh` without `--targets` still builds everything on a Mac
 (Linux in Docker with `docker/release.Dockerfile`, Windows with cargo-xwin),

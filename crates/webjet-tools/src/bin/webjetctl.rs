@@ -251,7 +251,7 @@ enum NodeCmd {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Issue a re-key token for a reinstalled node (runbook 8).
+    /// Issue a re-key token for a reinstalled node (runbook 9).
     Rekey {
         name: String,
         #[arg(long)]

@@ -124,7 +124,7 @@ Where the identity key is stored at rest (§8.3).
 | `keychain` | System keychain | macOS: a different keychain file. |
 
 TPM, Keychain and DPAPI keys are bound to the machine: a copied or restored
-`identity.key` is refused with a message to re-key the node (runbook 8).
+`identity.key` is refused with a message to re-key the node (runbook 9).
 The backend is chosen when the key is written (`webjetctl init`, enrollment or
 re-key); changing `storage` later doesn't move an existing key.
 
@@ -149,7 +149,7 @@ tls = 10
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Run the controller role. The node needs a SigningKeyCert from the root key (runbook 3) and must be added as a Raft member. |
+| `enabled` | `false` | Run the controller role. The node needs a SigningKeyCert from the root key (runbook 4) and must be added as a Raft member. |
 | `signer_socket` | none | Socket (Windows: named pipe) of `webjetd signer`, which holds the signing key in a separate process (§19.2). Without it the key is a file in `data_dir`. |
 | `head_lifetime_hours` | `48` | How long signed tree heads stay valid (§7.3; 24–72 h recommended). |
 
