@@ -137,12 +137,128 @@ async fn tabs_data_from_a_live_network() {
     assert!(sum.nodes_active >= 3 && sum.hops >= 1 && sum.sessions_established >= 1);
 }
 
+#[tokio::test]
+async fn merkle_tree_and_operation_log_from_a_live_network() {
+    use webjet_app::merkle::{Merkle, Names, Signer};
+    let Some((c, keys)) = net() else { return };
+    wait_for(&c, |s| s.nodes.len() >= 3).await;
+    let s = c
+        .snapshot(false, true)
+        .await
+        .expect("snapshot with the tree");
+    let w = s.merkle.clone().expect("fetched").expect("merkle answered");
+    assert_eq!(w.source, "head", "node-02 isn't a controller");
+    assert_eq!(w.genesis.first_admin.as_deref(), Some("alice"));
+    assert!(!w.certs.is_empty() && w.certs.iter().all(|c| c.valid));
+
+    // The leaves rebuild the signed root (or the head moved meanwhile).
+    let names = Names::new(&s, Some(&w));
+    let m = Merkle::new(w, &names);
+    assert!(
+        m.matches_head()
+            || m.wire
+                .head
+                .as_ref()
+                .is_some_and(|h| h.version > s.status.tree_version.unwrap_or(0)),
+        "leaves hash to the signed root"
+    );
+    assert_eq!(m.bad, 0);
+    assert!(
+        m.leaves.iter().all(|l| l.error.is_none()),
+        "every leaf decodes"
+    );
+    for n in s.nodes.iter().filter(|n| n.valid) {
+        let l = m
+            .find(webjet_core::merkle::kind::NODE, &n.id)
+            .expect("every node has a leaf");
+        assert_eq!(l.title, n.name);
+        let (_, ok) = m.proof(l);
+        assert!(ok);
+    }
+    let alice = s.accounts.iter().find(|a| a.name == "alice").unwrap();
+    let leaf = m
+        .find(webjet_core::merkle::kind::ACCOUNT, &alice.id)
+        .unwrap();
+    assert_eq!(
+        leaf.signer,
+        Signer::Key {
+            key: m.wire.genesis.root_key.clone(),
+            who: "the root key".into()
+        },
+        "the first admin's record is root-signed"
+    );
+
+    // An admin reads the log through node-02 (forwarded to a controller).
+    let admin = client::sign_in(&keys, "alice", PASS, &s).unwrap();
+    let page = c
+        .log(ops::log_request(&admin.account, 0, 50))
+        .await
+        .expect("admin reads the log");
+    assert!(!page.records.is_empty() && page.records.len() <= 50);
+    assert!(page.records.windows(2).all(|p| p[0].index < p[1].index));
+    assert_eq!(page.records.last().unwrap().index, page.commit_index);
+    let first = c
+        .log(ops::log_request(&admin.account, 2, 50))
+        .await
+        .expect("older page");
+    assert!(first.records.iter().all(|r| r.index < 2), "before = 2");
+    // An uncompacted log starts with the leader's no-op, then genesis,
+    // signed by the root key.
+    if page.first_index == 1 {
+        let g = c.log(ops::log_request(&admin.account, 3, 2)).await.unwrap();
+        let t: Vec<(String, String)> = g
+            .records
+            .iter()
+            .map(|r| (r.title(), r.signer(&names)))
+            .collect();
+        assert_eq!(
+            t,
+            [
+                ("Noop".to_string(), "the controllers".to_string()),
+                ("Genesis".to_string(), "the root key".to_string())
+            ]
+        );
+    }
+    // Some entry was signed by alice, and some wrote node leaves.
+    let all = c
+        .log(ops::log_request(&admin.account, 0, 200))
+        .await
+        .unwrap();
+    assert!(
+        all.records.iter().any(|r| r.signer(&names) == "admin alice"
+            && r.account_id.as_deref() == Some(alice.id.as_str())),
+        "{:?}",
+        all.records
+            .iter()
+            .map(|r| (r.title(), r.signer(&names)))
+            .collect::<Vec<_>>()
+    );
+    assert!(all.records.iter().any(|r| {
+        r.leaves
+            .iter()
+            .any(|l| l.kind == webjet_core::merkle::kind::NODE)
+    }));
+    assert!(
+        all.records
+            .iter()
+            .all(|r| r.description.is_some() || r.payload.is_none())
+    );
+
+    // A member's request is refused by the controller.
+    let member = client::sign_in(&keys, "infra", PASS, &s).unwrap();
+    let e = c
+        .log(ops::log_request(&member.account, 0, 10))
+        .await
+        .expect_err("members don't read the log");
+    assert!(format!("{e:#}").contains("only admins"), "{e:#}");
+}
+
 async fn wait_for(
     c: &Client,
     ok: impl Fn(&webjet_app::model::Snapshot) -> bool,
 ) -> webjet_app::model::Snapshot {
     for _ in 0..100 {
-        let s = c.snapshot(false).await.expect("snapshot");
+        let s = c.snapshot(false, false).await.expect("snapshot");
         if ok(&s) {
             return s;
         }

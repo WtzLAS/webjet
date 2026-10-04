@@ -434,6 +434,9 @@ pub struct Snapshot {
     pub metrics: Result<String, String>,
     /// `metrics` holds every node's latest report.
     pub metrics_all: bool,
+    /// The state tree (`merkle`), fetched only while the Merkle tab is
+    /// shown; `None` when not fetched this time.
+    pub merkle: Option<Result<crate::merkle::MerkleWire, String>>,
 }
 
 impl Default for Snapshot {
@@ -452,6 +455,7 @@ impl Default for Snapshot {
             topology: none(),
             metrics: none(),
             metrics_all: false,
+            merkle: None,
         }
     }
 }

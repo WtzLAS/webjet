@@ -149,11 +149,79 @@ impl Graph {
         self.edges.iter().filter(|e| e.a == v || e.b == v).collect()
     }
 
+    /// Put the vertices the user moved where they left them (positions by
+    /// node id, in the same 0..1 units as the layout).
+    pub fn pin(&mut self, pinned: &BTreeMap<String, (f32, f32)>) {
+        for v in &mut self.vertices {
+            if let Some(&(x, y)) = pinned.get(&v.id) {
+                v.x = x;
+                v.y = y;
+            }
+        }
+    }
+
     /// The edge between two vertices, if any.
     pub fn edge(&self, a: usize, b: usize) -> Option<&Edge> {
         self.edges
             .iter()
             .find(|e| (e.a, e.b) == (a.min(b), a.max(b)))
+    }
+}
+
+/// How the graph is shown in its drawing area: zoomed by `zoom` around the
+/// area's center, then panned by `pan`. Everything is in fractions of the
+/// area's width and height, so drawing doesn't depend on its pixel size;
+/// graph positions are the layout's 0..1 coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    pub pan: (f32, f32),
+    pub zoom: f32,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            pan: (0.0, 0.0),
+            zoom: 1.0,
+        }
+    }
+}
+
+impl Viewport {
+    pub const MIN_ZOOM: f32 = 0.2;
+    pub const MAX_ZOOM: f32 = 8.0;
+
+    /// A graph position to a position in the area (0..1 is visible).
+    pub fn to_view(&self, p: (f32, f32)) -> (f32, f32) {
+        (
+            0.5 + self.pan.0 + (p.0 - 0.5) * self.zoom,
+            0.5 + self.pan.1 + (p.1 - 0.5) * self.zoom,
+        )
+    }
+
+    /// A position in the area to a graph position.
+    pub fn to_graph(&self, v: (f32, f32)) -> (f32, f32) {
+        (
+            0.5 + (v.0 - 0.5 - self.pan.0) / self.zoom,
+            0.5 + (v.1 - 0.5 - self.pan.1) / self.zoom,
+        )
+    }
+
+    pub fn pan_by(&mut self, dx: f32, dy: f32) {
+        self.pan.0 += dx;
+        self.pan.1 += dy;
+    }
+
+    /// Zoom by `factor`, keeping the graph point at `at` (a position in the
+    /// area) where it is.
+    pub fn zoom_at(&mut self, factor: f32, at: (f32, f32)) {
+        if !factor.is_finite() || factor <= 0.0 {
+            return;
+        }
+        let g = self.to_graph(at);
+        self.zoom = (self.zoom * factor).clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+        let v = self.to_view(g);
+        self.pan_by(at.0 - v.0, at.1 - v.1);
     }
 }
 
@@ -329,6 +397,55 @@ mod tests {
         }
         assert_eq!(layout(&[], &[]), vec![]);
         assert_eq!(layout(&[true], &[]), vec![(0.5, 0.5)]);
+    }
+
+    #[test]
+    fn viewport_maps_both_ways_and_zooms_around_the_cursor() {
+        let close =
+            |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-5 && (a.1 - b.1).abs() < 1e-5;
+        let mut v = Viewport::default();
+        assert!(
+            close(v.to_view((0.2, 0.7)), (0.2, 0.7)),
+            "identity at first"
+        );
+        v.pan_by(0.1, -0.05);
+        for p in [(0.1, 0.9), (0.5, 0.5), (1.3, -0.2)] {
+            assert!(close(v.to_graph(v.to_view(p)), p));
+        }
+        // The point under the cursor stays put while zooming.
+        let at = (0.75, 0.25);
+        let g = v.to_graph(at);
+        v.zoom_at(2.0, at);
+        assert_eq!(v.zoom, 2.0);
+        assert!(close(v.to_view(g), at));
+        assert!(close(v.to_graph(v.to_view((0.2, 0.7))), (0.2, 0.7)));
+        // Zoom is bounded; nonsense factors are ignored.
+        v.zoom_at(1000.0, at);
+        assert_eq!(v.zoom, Viewport::MAX_ZOOM);
+        v.zoom_at(1e-6, at);
+        assert_eq!(v.zoom, Viewport::MIN_ZOOM);
+        let before = v;
+        v.zoom_at(f32::NAN, at);
+        v.zoom_at(-1.0, at);
+        assert_eq!(v, before);
+    }
+
+    #[test]
+    fn pinned_vertices_stay_where_they_were_put() {
+        let mut g = Graph::from_snapshot(&snap());
+        let free = (g.vertices[1].x, g.vertices[1].y);
+        let pinned = BTreeMap::from([
+            ("c".to_string(), (0.9, 0.1)),
+            ("zz".to_string(), (0.0, 0.0)),
+        ]);
+        g.pin(&pinned);
+        let c = g.index("c").unwrap();
+        assert_eq!((g.vertices[c].x, g.vertices[c].y), (0.9, 0.1));
+        assert_eq!(
+            (g.vertices[1].x, g.vertices[1].y),
+            free,
+            "others keep the layout"
+        );
     }
 
     #[test]

@@ -1,16 +1,18 @@
-//! The GPUI front end: a sign-in screen, then five tabs — Dashboard,
-//! Connections, Nodes, Metrics and Accounts. What the account may change
+//! The GPUI front end: a sign-in screen, then six tabs — Dashboard,
+//! Connections, Nodes, Merkle, Metrics and Accounts. What the account may change
 //! comes from `model::Session::may`; everything else is shown read-only.
 
 mod accounts;
 mod connections;
 mod dashboard;
 mod field;
+mod merkle;
 mod metrics;
 mod nodes;
 
 use crate::client::{self, Client, SignedIn};
-use crate::graph::Graph;
+use crate::graph::{Graph, Viewport};
+use crate::merkle::{LogPage, Merkle, Names};
 use crate::model::{self, Flow, Level, Snapshot, Traffic};
 use crate::openmetrics::{self, Family};
 use field::Field;
@@ -18,6 +20,8 @@ use gpui::{
     AnyElement, App, AsyncApp, Context, Entity, SharedString, WeakEntity, Window, div, prelude::*,
     px, rgb,
 };
+use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -56,14 +60,16 @@ enum Tab {
     Dashboard,
     Connections,
     Nodes,
+    Merkle,
     Metrics,
     Accounts,
 }
 
-const TABS: [(Tab, &str); 5] = [
+const TABS: [(Tab, &str); 6] = [
     (Tab::Dashboard, "Dashboard"),
     (Tab::Connections, "Connections"),
     (Tab::Nodes, "Nodes"),
+    (Tab::Merkle, "Merkle"),
     (Tab::Metrics, "Metrics"),
     (Tab::Accounts, "Accounts"),
 ];
@@ -101,6 +107,33 @@ pub struct WebjetApp {
     rename: Entity<Field>,
     tags: Entity<Field>,
     reason: Entity<Field>,
+    /// Pan and zoom of the graph.
+    viewport: Viewport,
+    /// Positions of the nodes the user dragged, by node id; they survive
+    /// refreshes and layout changes.
+    pinned: BTreeMap<String, (f32, f32)>,
+    /// A drag on the graph in progress.
+    drag: Option<nodes::Drag>,
+    /// The graph area's bounds in the window (x, y, width, height), from
+    /// the last frame.
+    graph_bounds: Rc<Cell<[f32; 4]>>,
+    // Merkle tab
+    merkle: Option<Result<Rc<Merkle>, String>>,
+    names: Names,
+    leaf_filter: Entity<Field>,
+    op_filter: Entity<Field>,
+    /// The selected leaf, by its tree path.
+    leaf: Option<webjet_core::crypto::Bytes32>,
+    bucket: Option<u8>,
+    /// The selected log entry, by index.
+    op: Option<u64>,
+    /// The operation log; newest first is how it's shown.
+    log: Option<Result<LogPage, String>>,
+    log_busy: bool,
+    /// The log entries shown, after the filter (shared with the virtual list).
+    ops_shown: Rc<Vec<crate::merkle::LogRecord>>,
+    /// Leaf indices shown, after the filter and bucket.
+    leaves_shown: Rc<Vec<usize>>,
     // Connections tab
     flow_filter: Entity<Field>,
     /// The flows shown, after the filter (shared with the virtual list).
@@ -151,6 +184,21 @@ impl WebjetApp {
             rename: cx.new(|cx| Field::new(cx, "new name", false)),
             tags: cx.new(|cx| Field::new(cx, "tag:a, tag:b", false)),
             reason: cx.new(|cx| Field::new(cx, "reason (optional)", false)),
+            viewport: Viewport::default(),
+            pinned: BTreeMap::new(),
+            drag: None,
+            graph_bounds: Rc::new(Cell::new([0.0, 0.0, 800.0, 420.0])),
+            merkle: None,
+            names: Names::default(),
+            leaf_filter: cx.new(|cx| Field::new(cx, "find: name, kind, signer, hash", false)),
+            op_filter: cx.new(|cx| Field::new(cx, "filter: operation, signer, index", false)),
+            leaf: None,
+            bucket: None,
+            op: None,
+            log: None,
+            log_busy: false,
+            ops_shown: Rc::new(Vec::new()),
+            leaves_shown: Rc::new(Vec::new()),
             flow_filter: cx.new(|cx| {
                 Field::new(
                     cx,
@@ -183,7 +231,13 @@ impl WebjetApp {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let client = self.client.clone();
         let all = self.metrics_all;
-        let job = self.rt.spawn(async move { client.snapshot(all).await });
+        let merkle = self.tab == Tab::Merkle;
+        if merkle && self.log.is_none() {
+            self.fetch_log(0, cx);
+        }
+        let job = self
+            .rt
+            .spawn(async move { client.snapshot(all, merkle).await });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let r = job.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = this.update(cx, |app, cx| {
@@ -197,7 +251,7 @@ impl WebjetApp {
         .detach();
     }
 
-    fn loaded(&mut self, s: Snapshot) {
+    fn loaded(&mut self, mut s: Snapshot) {
         // An account revoked or demoted meanwhile loses its rights.
         if let Some(si) = &mut self.signed_in {
             let key = webjet_core::crypto::key_b64(&si.account.kp.public());
@@ -212,6 +266,15 @@ impl WebjetApp {
         let sum = s.summary();
         self.traffic.push(now_ms(), sum.tx_bytes, sum.rx_bytes);
         self.graph = Graph::from_snapshot(&s);
+        self.graph.pin(&self.pinned);
+        // The tree is large: it lives here, not in the snapshot cloned
+        // for every frame.
+        if let Some(m) = s.merkle.take() {
+            self.merkle = Some(m.map(|w| {
+                self.names = Names::new(&s, Some(&w));
+                Rc::new(Merkle::new(w, &self.names))
+            }));
+        }
         self.families = Rc::new(match &s.metrics {
             Ok(t) => openmetrics::parse(t),
             Err(_) => Vec::new(),
@@ -249,6 +312,8 @@ impl WebjetApp {
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
         self.signed_in = None;
+        self.log = None;
+        self.op = None;
         self.selected = None;
         self.account = None;
         self.confirm = None;
@@ -613,8 +678,14 @@ impl WebjetApp {
                     .text_color(rgb(if on { 0xffffff } else { theme::TEXT }))
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        let fetch = t == Tab::Merkle && this.tab != Tab::Merkle;
                         this.tab = t;
                         this.confirm = None;
+                        if fetch {
+                            // The tree and the log are fetched only for this tab.
+                            this.log = None;
+                            this.refresh(cx);
+                        }
                         cx.notify();
                     })),
             );
@@ -664,6 +735,7 @@ impl Render for WebjetApp {
             Tab::Dashboard => self.render_dashboard(&s, cx),
             Tab::Connections => self.render_connections(&s, cx),
             Tab::Nodes => self.render_nodes(&s, cx),
+            Tab::Merkle => self.render_merkle(&s, cx),
             Tab::Metrics => self.render_metrics(&s, cx),
             Tab::Accounts => self.render_accounts(&s, cx),
         };
@@ -755,6 +827,7 @@ mod tests {
             topology: Ok(serde_json::from_value::<Topology>(get("topology")).unwrap()),
             metrics: Ok(v["metrics"].as_str().unwrap().to_string()),
             metrics_all: false,
+            merkle: Some(Ok(serde_json::from_value(get("merkle")).unwrap())),
         }
     }
 
@@ -801,6 +874,8 @@ mod tests {
                 cx,
             )
         });
+        // The window's own frame (which events hit) the size of the drawn one.
+        cx.simulate_resize(size(px(1280.), px(820.)));
         let mut snap = fixture();
         let si = admin(&mut snap);
         let node = snap.nodes.iter().find(|n| n.relay).unwrap().id.clone();
@@ -855,6 +930,43 @@ mod tests {
         });
         draw(cx);
 
+        // The Merkle tab: the tree, a leaf with its proof, the log and an
+        // entry of it.
+        view.update(cx, |app, _| {
+            app.tab = Tab::Merkle;
+            app.log = Some(Ok(merkle::sample_log()));
+        });
+        draw(cx);
+        let leaf = view.update(cx, |app, _| {
+            let Some(Ok(m)) = &app.merkle else {
+                panic!("the tree is loaded")
+            };
+            assert!(
+                m.matches_head(),
+                "the fixture's leaves hash to its signed root"
+            );
+            assert!(m.leaves.iter().all(|l| l.error.is_none()));
+            m.leaves[0].path
+        });
+        view.update(cx, |app, _| {
+            app.leaf = Some(leaf);
+            app.bucket = Some(leaf[0]);
+        });
+        draw(cx);
+        view.update(cx, |app, _| {
+            assert_eq!(app.leaves_shown.len(), 1, "the bucket filters the list");
+            assert_eq!(app.ops_shown.len(), 3);
+            assert_eq!(app.ops_shown[0].index, 3, "newest first");
+            app.op = Some(3);
+        });
+        draw(cx);
+        // Members can't read the log; old agents can't show the tree.
+        view.update(cx, |app, _| {
+            app.log = Some(Err("Only admins read the operation log".into()));
+            app.merkle = Some(Err("unknown command merkle".into()));
+        });
+        draw(cx);
+
         view.update(cx, |app, _| {
             assert!(app.graph.vertices.len() >= 5, "every node is a vertex");
             assert!(!app.graph.edges.is_empty());
@@ -863,6 +975,138 @@ mod tests {
             assert!(app.signed_in.is_some(), "still signed in");
         });
 
+        // The graph: drag a node to place it, click it to select it, drag
+        // the background to pan, scroll to zoom. Events hit the window's own
+        // frame, so these steps let the window redraw instead of `draw`.
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        view.update(cx, |app, _| {
+            app.tab = Tab::Nodes;
+            app.selected = None;
+            app.circuit = None;
+        });
+        frame(cx);
+        let (at, dx, dy) = view.update(cx, |app, _| {
+            let [x, y, w, h] = app.graph_bounds.get();
+            assert!(w > 100.0 && h > 100.0, "the graph area was laid out");
+            let v = &app.graph.vertices[0];
+            let p = app.viewport.to_view((v.x, v.y));
+            // Toward the middle, so the node stays inside the area.
+            let dx = if p.0 < 0.5 { 60.0 } else { -60.0 };
+            let dy = if p.1 < 0.5 { 40.0 } else { -40.0 };
+            // The vertex's circle sits just below its center line.
+            (point(px(x + p.0 * w), px(y + p.1 * h + 6.0)), dx, dy)
+        });
+        let to = point(at.x + px(dx), at.y + px(dy));
+        cx.simulate_mouse_down(at, gpui::MouseButton::Left, Default::default());
+        // Labels may overlap: whichever node is on top was grabbed.
+        let (id, start) = view.update(cx, |app, _| {
+            let Some(nodes::Drag {
+                kind: nodes::DragKind::Node(id),
+                ..
+            }) = &app.drag
+            else {
+                panic!("a node was grabbed: {:?}", app.drag)
+            };
+            let v = &app.graph.vertices[app.graph.index(id).unwrap()];
+            (id.clone(), app.viewport.to_view((v.x, v.y)))
+        });
+        frame(cx);
+        cx.simulate_mouse_move(to, gpui::MouseButton::Left, Default::default());
+        cx.simulate_mouse_up(to, gpui::MouseButton::Left, Default::default());
+        view.update(cx, |app, _| {
+            assert!(app.drag.is_none());
+            assert!(app.pinned.contains_key(&id), "the dragged node is pinned");
+            assert_eq!(app.selected, None, "a drag isn't a click");
+            let v = &app.graph.vertices[app.graph.index(&id).unwrap()];
+            assert_eq!((v.x, v.y), app.pinned[&id]);
+            // It moved with the pointer.
+            let [_, _, w, h] = app.graph_bounds.get();
+            let now = app.viewport.to_view((v.x, v.y));
+            assert!(
+                ((now.0 - start.0) * w - dx).abs() < 1.0,
+                "{now:?} {start:?}"
+            );
+            assert!(((now.1 - start.1) * h - dy).abs() < 1.0);
+        });
+        // A refresh keeps the node where it was put.
+        view.update(cx, |app, _| {
+            let p = app.pinned[&id];
+            app.loaded(snap.clone());
+            assert!(app.signed_in.is_some());
+            let v = &app.graph.vertices[app.graph.index(&id).unwrap()];
+            assert_eq!((v.x, v.y), p);
+        });
+        frame(cx);
+        cx.simulate_mouse_down(to, gpui::MouseButton::Left, Default::default());
+        let clicked = view.update(cx, |app, _| match &app.drag {
+            Some(nodes::Drag {
+                kind: nodes::DragKind::Node(id),
+                ..
+            }) => id.clone(),
+            d => panic!("a node was pressed: {d:?}"),
+        });
+        frame(cx);
+        cx.simulate_mouse_up(to, gpui::MouseButton::Left, Default::default());
+        view.update(cx, |app, _| {
+            assert!(app.drag.is_none());
+            assert_eq!(
+                app.selected.as_deref(),
+                Some(clicked.as_str()),
+                "a click selects"
+            );
+            assert!(
+                !app.pinned.contains_key(&clicked) || clicked == id,
+                "a click doesn't move"
+            );
+        });
+        frame(cx);
+        // Pan from an empty corner of the area.
+        let corner = view.update(cx, |app, _| {
+            let [x, y, _, _] = app.graph_bounds.get();
+            point(px(x + 4.0), px(y + 4.0))
+        });
+        cx.simulate_mouse_down(corner, gpui::MouseButton::Left, Default::default());
+        frame(cx);
+        cx.simulate_mouse_move(
+            point(corner.x + px(100.), corner.y + px(50.)),
+            gpui::MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_up(corner, gpui::MouseButton::Left, Default::default());
+        view.update(cx, |app, _| {
+            let [_, _, w, h] = app.graph_bounds.get();
+            assert!(
+                (app.viewport.pan.0 * w - 100.0).abs() < 1.0,
+                "{:?}",
+                app.viewport
+            );
+            assert!((app.viewport.pan.1 * h - 50.0).abs() < 1.0);
+            assert_eq!(
+                app.selected.as_deref(),
+                Some(id.as_str()),
+                "panning keeps the selection"
+            );
+        });
+        frame(cx);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: point(corner.x + px(200.), corner.y + px(100.)),
+            delta: gpui::ScrollDelta::Lines(point(0., 2.)),
+            ..Default::default()
+        });
+        view.update(cx, |app, _| {
+            assert!(
+                app.viewport.zoom > 1.2,
+                "the wheel zooms: {:?}",
+                app.viewport
+            );
+            app.reset_layout();
+            assert!(app.pinned.is_empty() && app.viewport == Viewport::default());
+        });
+        frame(cx);
+
         // An older agent without the new commands still renders.
         view.update(cx, |app, _| {
             let mut old = snap.clone();
@@ -870,6 +1114,7 @@ mod tests {
             old.conntrack = Err("unknown command".into());
             old.topology = Err("unknown command".into());
             old.metrics = Err("unknown command".into());
+            old.merkle = Some(Err("unknown command".into()));
             app.loaded(old);
         });
         for (tab, _) in TABS {

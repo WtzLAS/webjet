@@ -1409,10 +1409,1874 @@ mod root {
             }
         }
 
+        /// The table `GetLog` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `GetLog` in the file `schema/wire.fbs:37`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct GetLog {
+            /// The field `request` in the table `GetLog`
+            pub request: ::core::option::Option<::planus::alloc::vec::Vec<u8>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for GetLog {
+            fn default() -> Self {
+                Self {
+                    request: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl GetLog {
+            /// Creates a [GetLogBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> GetLogBuilder<()> {
+                GetLogBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_request: impl ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_request = field_request.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_request.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[u8]>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_request) = prepared_request {
+                            object_writer.write::<_, _, 4>(&prepared_request);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<GetLog>> for GetLog {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetLog> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<GetLog>> for GetLog {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<GetLog>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<GetLog> for GetLog {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetLog> {
+                GetLog::create(builder, &self.request)
+            }
+        }
+
+        /// Builder for serializing an instance of the [GetLog] type.
+        ///
+        /// Can be created using the [GetLog::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct GetLogBuilder<State>(State);
+
+        impl GetLogBuilder<()> {
+            /// Setter for the [`request` field](GetLog#structfield.request).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn request<T0>(self, value: T0) -> GetLogBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            {
+                GetLogBuilder((value,))
+            }
+
+            /// Sets the [`request` field](GetLog#structfield.request) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn request_as_null(self) -> GetLogBuilder<((),)> {
+                self.request(())
+            }
+        }
+
+        impl<T0> GetLogBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [GetLog].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetLog>
+            where
+                Self: ::planus::WriteAsOffset<GetLog>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAs<::planus::Offset<GetLog>> for GetLogBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<GetLog>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetLog> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAsOptional<::planus::Offset<GetLog>> for GetLogBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<GetLog>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<GetLog>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>> ::planus::WriteAsOffset<GetLog>
+            for GetLogBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetLog> {
+                let (v0,) = &self.0;
+                GetLog::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [GetLog].
+        #[derive(Copy, Clone)]
+        pub struct GetLogRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> GetLogRef<'a> {
+            /// Getter for the [`request` field](GetLog#structfield.request).
+            #[inline]
+            pub fn request(&self) -> ::planus::Result<::core::option::Option<&'a [u8]>> {
+                self.0.access(0, "GetLog", "request")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for GetLogRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("GetLogRef");
+                if let ::core::option::Option::Some(field_request) = self.request().transpose() {
+                    f.field("request", &field_request);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<GetLogRef<'a>> for GetLog {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: GetLogRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    request: value.request()?.map(|v| v.to_vec()),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for GetLogRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for GetLogRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location("[GetLogRef]", "get", buffer.offset_from_start)
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<GetLog>> for GetLog {
+            type Value = ::planus::Offset<GetLog>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<GetLog>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for GetLogRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[GetLogRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `LogLeaf` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `LogLeaf` in the file `schema/wire.fbs:38`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct LogLeaf {
+            /// The field `kind` in the table `LogLeaf`
+            pub kind: u8,
+            /// The field `key` in the table `LogLeaf`
+            pub key: ::core::option::Option<self::Key32>,
+            /// The field `hash` in the table `LogLeaf`
+            pub hash: ::core::option::Option<self::Key32>,
+            /// The field `deleted` in the table `LogLeaf`
+            pub deleted: bool,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for LogLeaf {
+            fn default() -> Self {
+                Self {
+                    kind: 0,
+                    key: ::core::default::Default::default(),
+                    hash: ::core::default::Default::default(),
+                    deleted: false,
+                }
+            }
+        }
+
+        impl LogLeaf {
+            /// Creates a [LogLeafBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> LogLeafBuilder<()> {
+                LogLeafBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_kind: impl ::planus::WriteAsDefault<u8, u8>,
+                field_key: impl ::planus::WriteAsOptional<self::Key32>,
+                field_hash: impl ::planus::WriteAsOptional<self::Key32>,
+                field_deleted: impl ::planus::WriteAsDefault<bool, bool>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_kind = field_kind.prepare(builder, &0);
+                let prepared_key = field_key.prepare(builder);
+                let prepared_hash = field_hash.prepare(builder);
+                let prepared_deleted = field_deleted.prepare(builder, &false);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_key.is_some() {
+                    table_writer.write_entry::<self::Key32>(1);
+                }
+                if prepared_hash.is_some() {
+                    table_writer.write_entry::<self::Key32>(2);
+                }
+                if prepared_kind.is_some() {
+                    table_writer.write_entry::<u8>(0);
+                }
+                if prepared_deleted.is_some() {
+                    table_writer.write_entry::<bool>(3);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_key) = prepared_key {
+                            object_writer.write::<_, _, 32>(&prepared_key);
+                        }
+                        if let ::core::option::Option::Some(prepared_hash) = prepared_hash {
+                            object_writer.write::<_, _, 32>(&prepared_hash);
+                        }
+                        if let ::core::option::Option::Some(prepared_kind) = prepared_kind {
+                            object_writer.write::<_, _, 1>(&prepared_kind);
+                        }
+                        if let ::core::option::Option::Some(prepared_deleted) = prepared_deleted {
+                            object_writer.write::<_, _, 1>(&prepared_deleted);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<LogLeaf>> for LogLeaf {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogLeaf> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<LogLeaf>> for LogLeaf {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogLeaf>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<LogLeaf> for LogLeaf {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogLeaf> {
+                LogLeaf::create(builder, self.kind, self.key, self.hash, self.deleted)
+            }
+        }
+
+        /// Builder for serializing an instance of the [LogLeaf] type.
+        ///
+        /// Can be created using the [LogLeaf::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct LogLeafBuilder<State>(State);
+
+        impl LogLeafBuilder<()> {
+            /// Setter for the [`kind` field](LogLeaf#structfield.kind).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn kind<T0>(self, value: T0) -> LogLeafBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<u8, u8>,
+            {
+                LogLeafBuilder((value,))
+            }
+
+            /// Sets the [`kind` field](LogLeaf#structfield.kind) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn kind_as_default(self) -> LogLeafBuilder<(::planus::DefaultValue,)> {
+                self.kind(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> LogLeafBuilder<(T0,)> {
+            /// Setter for the [`key` field](LogLeaf#structfield.key).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn key<T1>(self, value: T1) -> LogLeafBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0,) = self.0;
+                LogLeafBuilder((v0, value))
+            }
+
+            /// Sets the [`key` field](LogLeaf#structfield.key) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn key_as_null(self) -> LogLeafBuilder<(T0, ())> {
+                self.key(())
+            }
+        }
+
+        impl<T0, T1> LogLeafBuilder<(T0, T1)> {
+            /// Setter for the [`hash` field](LogLeaf#structfield.hash).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn hash<T2>(self, value: T2) -> LogLeafBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0, v1) = self.0;
+                LogLeafBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`hash` field](LogLeaf#structfield.hash) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn hash_as_null(self) -> LogLeafBuilder<(T0, T1, ())> {
+                self.hash(())
+            }
+        }
+
+        impl<T0, T1, T2> LogLeafBuilder<(T0, T1, T2)> {
+            /// Setter for the [`deleted` field](LogLeaf#structfield.deleted).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn deleted<T3>(self, value: T3) -> LogLeafBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsDefault<bool, bool>,
+            {
+                let (v0, v1, v2) = self.0;
+                LogLeafBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`deleted` field](LogLeaf#structfield.deleted) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn deleted_as_default(
+                self,
+            ) -> LogLeafBuilder<(T0, T1, T2, ::planus::DefaultValue)> {
+                self.deleted(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3> LogLeafBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [LogLeaf].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogLeaf>
+            where
+                Self: ::planus::WriteAsOffset<LogLeaf>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u8, u8>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+                T2: ::planus::WriteAsOptional<self::Key32>,
+                T3: ::planus::WriteAsDefault<bool, bool>,
+            > ::planus::WriteAs<::planus::Offset<LogLeaf>> for LogLeafBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<LogLeaf>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogLeaf> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u8, u8>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+                T2: ::planus::WriteAsOptional<self::Key32>,
+                T3: ::planus::WriteAsDefault<bool, bool>,
+            > ::planus::WriteAsOptional<::planus::Offset<LogLeaf>>
+            for LogLeafBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<LogLeaf>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogLeaf>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u8, u8>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+                T2: ::planus::WriteAsOptional<self::Key32>,
+                T3: ::planus::WriteAsDefault<bool, bool>,
+            > ::planus::WriteAsOffset<LogLeaf> for LogLeafBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogLeaf> {
+                let (v0, v1, v2, v3) = &self.0;
+                LogLeaf::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [LogLeaf].
+        #[derive(Copy, Clone)]
+        pub struct LogLeafRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> LogLeafRef<'a> {
+            /// Getter for the [`kind` field](LogLeaf#structfield.kind).
+            #[inline]
+            pub fn kind(&self) -> ::planus::Result<u8> {
+                ::core::result::Result::Ok(self.0.access(0, "LogLeaf", "kind")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`key` field](LogLeaf#structfield.key).
+            #[inline]
+            pub fn key(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(1, "LogLeaf", "key")
+            }
+
+            /// Getter for the [`hash` field](LogLeaf#structfield.hash).
+            #[inline]
+            pub fn hash(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(2, "LogLeaf", "hash")
+            }
+
+            /// Getter for the [`deleted` field](LogLeaf#structfield.deleted).
+            #[inline]
+            pub fn deleted(&self) -> ::planus::Result<bool> {
+                ::core::result::Result::Ok(self.0.access(3, "LogLeaf", "deleted")?.unwrap_or(false))
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for LogLeafRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("LogLeafRef");
+                f.field("kind", &self.kind());
+                if let ::core::option::Option::Some(field_key) = self.key().transpose() {
+                    f.field("key", &field_key);
+                }
+                if let ::core::option::Option::Some(field_hash) = self.hash().transpose() {
+                    f.field("hash", &field_hash);
+                }
+                f.field("deleted", &self.deleted());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<LogLeafRef<'a>> for LogLeaf {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: LogLeafRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    kind: ::core::convert::TryInto::try_into(value.kind()?)?,
+                    key: value.key()?.map(::core::convert::Into::into),
+                    hash: value.hash()?.map(::core::convert::Into::into),
+                    deleted: ::core::convert::TryInto::try_into(value.deleted()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for LogLeafRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for LogLeafRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location("[LogLeafRef]", "get", buffer.offset_from_start)
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<LogLeaf>> for LogLeaf {
+            type Value = ::planus::Offset<LogLeaf>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<LogLeaf>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for LogLeafRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[LogLeafRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `LogRecord` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `LogRecord` in the file `schema/wire.fbs:39`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct LogRecord {
+            /// The field `index` in the table `LogRecord`
+            pub index: u64,
+            /// The field `term` in the table `LogRecord`
+            pub term: u64,
+            /// The field `timestamp` in the table `LogRecord`
+            pub timestamp: u64,
+            /// The field `payload` in the table `LogRecord`
+            pub payload: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `op` in the table `LogRecord`
+            pub op: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `signer_key` in the table `LogRecord`
+            pub signer_key: ::core::option::Option<self::Key32>,
+            /// The field `account_id` in the table `LogRecord`
+            pub account_id: ::core::option::Option<self::Key32>,
+            /// The field `op_seq` in the table `LogRecord`
+            pub op_seq: u64,
+            /// The field `issued_at` in the table `LogRecord`
+            pub issued_at: u64,
+            /// The field `description` in the table `LogRecord`
+            pub description: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `leaves` in the table `LogRecord`
+            pub leaves: ::core::option::Option<::planus::alloc::vec::Vec<self::LogLeaf>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for LogRecord {
+            fn default() -> Self {
+                Self {
+                    index: 0,
+                    term: 0,
+                    timestamp: 0,
+                    payload: ::core::default::Default::default(),
+                    op: ::core::default::Default::default(),
+                    signer_key: ::core::default::Default::default(),
+                    account_id: ::core::default::Default::default(),
+                    op_seq: 0,
+                    issued_at: 0,
+                    description: ::core::default::Default::default(),
+                    leaves: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl LogRecord {
+            /// Creates a [LogRecordBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> LogRecordBuilder<()> {
+                LogRecordBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_index: impl ::planus::WriteAsDefault<u64, u64>,
+                field_term: impl ::planus::WriteAsDefault<u64, u64>,
+                field_timestamp: impl ::planus::WriteAsDefault<u64, u64>,
+                field_payload: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_op: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_signer_key: impl ::planus::WriteAsOptional<self::Key32>,
+                field_account_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_op_seq: impl ::planus::WriteAsDefault<u64, u64>,
+                field_issued_at: impl ::planus::WriteAsDefault<u64, u64>,
+                field_description: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<::core::primitive::str>,
+                >,
+                field_leaves: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::LogLeaf>]>,
+                >,
+            ) -> ::planus::Offset<Self> {
+                let prepared_index = field_index.prepare(builder, &0);
+                let prepared_term = field_term.prepare(builder, &0);
+                let prepared_timestamp = field_timestamp.prepare(builder, &0);
+                let prepared_payload = field_payload.prepare(builder);
+                let prepared_op = field_op.prepare(builder);
+                let prepared_signer_key = field_signer_key.prepare(builder);
+                let prepared_account_id = field_account_id.prepare(builder);
+                let prepared_op_seq = field_op_seq.prepare(builder, &0);
+                let prepared_issued_at = field_issued_at.prepare(builder, &0);
+                let prepared_description = field_description.prepare(builder);
+                let prepared_leaves = field_leaves.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<26> =
+                    ::core::default::Default::default();
+                if prepared_index.is_some() {
+                    table_writer.write_entry::<u64>(0);
+                }
+                if prepared_term.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+                if prepared_timestamp.is_some() {
+                    table_writer.write_entry::<u64>(2);
+                }
+                if prepared_signer_key.is_some() {
+                    table_writer.write_entry::<self::Key32>(5);
+                }
+                if prepared_account_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(6);
+                }
+                if prepared_op_seq.is_some() {
+                    table_writer.write_entry::<u64>(7);
+                }
+                if prepared_issued_at.is_some() {
+                    table_writer.write_entry::<u64>(8);
+                }
+                if prepared_payload.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(3);
+                }
+                if prepared_op.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(4);
+                }
+                if prepared_description.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(9);
+                }
+                if prepared_leaves.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::LogLeaf>]>>(10);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_index) = prepared_index {
+                            object_writer.write::<_, _, 8>(&prepared_index);
+                        }
+                        if let ::core::option::Option::Some(prepared_term) = prepared_term {
+                            object_writer.write::<_, _, 8>(&prepared_term);
+                        }
+                        if let ::core::option::Option::Some(prepared_timestamp) = prepared_timestamp
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_timestamp);
+                        }
+                        if let ::core::option::Option::Some(prepared_signer_key) =
+                            prepared_signer_key
+                        {
+                            object_writer.write::<_, _, 32>(&prepared_signer_key);
+                        }
+                        if let ::core::option::Option::Some(prepared_account_id) =
+                            prepared_account_id
+                        {
+                            object_writer.write::<_, _, 32>(&prepared_account_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_op_seq) = prepared_op_seq {
+                            object_writer.write::<_, _, 8>(&prepared_op_seq);
+                        }
+                        if let ::core::option::Option::Some(prepared_issued_at) = prepared_issued_at
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_issued_at);
+                        }
+                        if let ::core::option::Option::Some(prepared_payload) = prepared_payload {
+                            object_writer.write::<_, _, 4>(&prepared_payload);
+                        }
+                        if let ::core::option::Option::Some(prepared_op) = prepared_op {
+                            object_writer.write::<_, _, 4>(&prepared_op);
+                        }
+                        if let ::core::option::Option::Some(prepared_description) =
+                            prepared_description
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_description);
+                        }
+                        if let ::core::option::Option::Some(prepared_leaves) = prepared_leaves {
+                            object_writer.write::<_, _, 4>(&prepared_leaves);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<LogRecord>> for LogRecord {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRecord> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<LogRecord>> for LogRecord {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogRecord>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<LogRecord> for LogRecord {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRecord> {
+                LogRecord::create(
+                    builder,
+                    self.index,
+                    self.term,
+                    self.timestamp,
+                    &self.payload,
+                    &self.op,
+                    self.signer_key,
+                    self.account_id,
+                    self.op_seq,
+                    self.issued_at,
+                    &self.description,
+                    &self.leaves,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [LogRecord] type.
+        ///
+        /// Can be created using the [LogRecord::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct LogRecordBuilder<State>(State);
+
+        impl LogRecordBuilder<()> {
+            /// Setter for the [`index` field](LogRecord#structfield.index).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn index<T0>(self, value: T0) -> LogRecordBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<u64, u64>,
+            {
+                LogRecordBuilder((value,))
+            }
+
+            /// Sets the [`index` field](LogRecord#structfield.index) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn index_as_default(self) -> LogRecordBuilder<(::planus::DefaultValue,)> {
+                self.index(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> LogRecordBuilder<(T0,)> {
+            /// Setter for the [`term` field](LogRecord#structfield.term).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn term<T1>(self, value: T1) -> LogRecordBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                LogRecordBuilder((v0, value))
+            }
+
+            /// Sets the [`term` field](LogRecord#structfield.term) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn term_as_default(self) -> LogRecordBuilder<(T0, ::planus::DefaultValue)> {
+                self.term(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> LogRecordBuilder<(T0, T1)> {
+            /// Setter for the [`timestamp` field](LogRecord#structfield.timestamp).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn timestamp<T2>(self, value: T2) -> LogRecordBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1) = self.0;
+                LogRecordBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`timestamp` field](LogRecord#structfield.timestamp) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn timestamp_as_default(
+                self,
+            ) -> LogRecordBuilder<(T0, T1, ::planus::DefaultValue)> {
+                self.timestamp(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2> LogRecordBuilder<(T0, T1, T2)> {
+            /// Setter for the [`payload` field](LogRecord#structfield.payload).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn payload<T3>(self, value: T3) -> LogRecordBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1, v2) = self.0;
+                LogRecordBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`payload` field](LogRecord#structfield.payload) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn payload_as_null(self) -> LogRecordBuilder<(T0, T1, T2, ())> {
+                self.payload(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> LogRecordBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`op` field](LogRecord#structfield.op).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn op<T4>(self, value: T4) -> LogRecordBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`op` field](LogRecord#structfield.op) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn op_as_null(self) -> LogRecordBuilder<(T0, T1, T2, T3, ())> {
+                self.op(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> LogRecordBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`signer_key` field](LogRecord#structfield.signer_key).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn signer_key<T5>(self, value: T5) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`signer_key` field](LogRecord#structfield.signer_key) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn signer_key_as_null(self) -> LogRecordBuilder<(T0, T1, T2, T3, T4, ())> {
+                self.signer_key(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> LogRecordBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`account_id` field](LogRecord#structfield.account_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id<T6>(self, value: T6) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`account_id` field](LogRecord#structfield.account_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id_as_null(self) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, ())> {
+                self.account_id(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
+            /// Setter for the [`op_seq` field](LogRecord#structfield.op_seq).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn op_seq<T7>(self, value: T7) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
+            where
+                T7: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, v4, v5, v6, value))
+            }
+
+            /// Sets the [`op_seq` field](LogRecord#structfield.op_seq) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn op_seq_as_default(
+                self,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, ::planus::DefaultValue)>
+            {
+                self.op_seq(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)> {
+            /// Setter for the [`issued_at` field](LogRecord#structfield.issued_at).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at<T8>(
+                self,
+                value: T8,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+            where
+                T8: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, v4, v5, v6, v7, value))
+            }
+
+            /// Sets the [`issued_at` field](LogRecord#structfield.issued_at) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at_as_default(
+                self,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, ::planus::DefaultValue)>
+            {
+                self.issued_at(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)> {
+            /// Setter for the [`description` field](LogRecord#structfield.description).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn description<T9>(
+                self,
+                value: T9,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+            where
+                T9: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, value))
+            }
+
+            /// Sets the [`description` field](LogRecord#structfield.description) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn description_as_null(
+                self,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, ())> {
+                self.description(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>
+            LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
+            /// Setter for the [`leaves` field](LogRecord#structfield.leaves).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn leaves<T10>(
+                self,
+                value: T10,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            where
+                T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogLeaf>]>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = self.0;
+                LogRecordBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, value))
+            }
+
+            /// Sets the [`leaves` field](LogRecord#structfield.leaves) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn leaves_as_null(
+                self,
+            ) -> LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, ())> {
+                self.leaves(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>
+            LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+        {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [LogRecord].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRecord>
+            where
+                Self: ::planus::WriteAsOffset<LogRecord>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T5: ::planus::WriteAsOptional<self::Key32>,
+                T6: ::planus::WriteAsOptional<self::Key32>,
+                T7: ::planus::WriteAsDefault<u64, u64>,
+                T8: ::planus::WriteAsDefault<u64, u64>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogLeaf>]>>,
+            > ::planus::WriteAs<::planus::Offset<LogRecord>>
+            for LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+        {
+            type Prepared = ::planus::Offset<LogRecord>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRecord> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T5: ::planus::WriteAsOptional<self::Key32>,
+                T6: ::planus::WriteAsOptional<self::Key32>,
+                T7: ::planus::WriteAsDefault<u64, u64>,
+                T8: ::planus::WriteAsDefault<u64, u64>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogLeaf>]>>,
+            > ::planus::WriteAsOptional<::planus::Offset<LogRecord>>
+            for LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+        {
+            type Prepared = ::planus::Offset<LogRecord>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogRecord>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T4: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T5: ::planus::WriteAsOptional<self::Key32>,
+                T6: ::planus::WriteAsOptional<self::Key32>,
+                T7: ::planus::WriteAsDefault<u64, u64>,
+                T8: ::planus::WriteAsDefault<u64, u64>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogLeaf>]>>,
+            > ::planus::WriteAsOffset<LogRecord>
+            for LogRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRecord> {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = &self.0;
+                LogRecord::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
+            }
+        }
+
+        /// Reference to a deserialized [LogRecord].
+        #[derive(Copy, Clone)]
+        pub struct LogRecordRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> LogRecordRef<'a> {
+            /// Getter for the [`index` field](LogRecord#structfield.index).
+            #[inline]
+            pub fn index(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(0, "LogRecord", "index")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`term` field](LogRecord#structfield.term).
+            #[inline]
+            pub fn term(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(1, "LogRecord", "term")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`timestamp` field](LogRecord#structfield.timestamp).
+            #[inline]
+            pub fn timestamp(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(2, "LogRecord", "timestamp")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`payload` field](LogRecord#structfield.payload).
+            #[inline]
+            pub fn payload(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(3, "LogRecord", "payload")
+            }
+
+            /// Getter for the [`op` field](LogRecord#structfield.op).
+            #[inline]
+            pub fn op(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(4, "LogRecord", "op")
+            }
+
+            /// Getter for the [`signer_key` field](LogRecord#structfield.signer_key).
+            #[inline]
+            pub fn signer_key(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(5, "LogRecord", "signer_key")
+            }
+
+            /// Getter for the [`account_id` field](LogRecord#structfield.account_id).
+            #[inline]
+            pub fn account_id(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(6, "LogRecord", "account_id")
+            }
+
+            /// Getter for the [`op_seq` field](LogRecord#structfield.op_seq).
+            #[inline]
+            pub fn op_seq(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(7, "LogRecord", "op_seq")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`issued_at` field](LogRecord#structfield.issued_at).
+            #[inline]
+            pub fn issued_at(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(8, "LogRecord", "issued_at")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`description` field](LogRecord#structfield.description).
+            #[inline]
+            pub fn description(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(9, "LogRecord", "description")
+            }
+
+            /// Getter for the [`leaves` field](LogRecord#structfield.leaves).
+            #[inline]
+            pub fn leaves(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::LogLeafRef<'a>>>,
+                >,
+            > {
+                self.0.access(10, "LogRecord", "leaves")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for LogRecordRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("LogRecordRef");
+                f.field("index", &self.index());
+                f.field("term", &self.term());
+                f.field("timestamp", &self.timestamp());
+                if let ::core::option::Option::Some(field_payload) = self.payload().transpose() {
+                    f.field("payload", &field_payload);
+                }
+                if let ::core::option::Option::Some(field_op) = self.op().transpose() {
+                    f.field("op", &field_op);
+                }
+                if let ::core::option::Option::Some(field_signer_key) =
+                    self.signer_key().transpose()
+                {
+                    f.field("signer_key", &field_signer_key);
+                }
+                if let ::core::option::Option::Some(field_account_id) =
+                    self.account_id().transpose()
+                {
+                    f.field("account_id", &field_account_id);
+                }
+                f.field("op_seq", &self.op_seq());
+                f.field("issued_at", &self.issued_at());
+                if let ::core::option::Option::Some(field_description) =
+                    self.description().transpose()
+                {
+                    f.field("description", &field_description);
+                }
+                if let ::core::option::Option::Some(field_leaves) = self.leaves().transpose() {
+                    f.field("leaves", &field_leaves);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<LogRecordRef<'a>> for LogRecord {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: LogRecordRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    index: ::core::convert::TryInto::try_into(value.index()?)?,
+                    term: ::core::convert::TryInto::try_into(value.term()?)?,
+                    timestamp: ::core::convert::TryInto::try_into(value.timestamp()?)?,
+                    payload: value.payload()?.map(::core::convert::Into::into),
+                    op: value.op()?.map(::core::convert::Into::into),
+                    signer_key: value.signer_key()?.map(::core::convert::Into::into),
+                    account_id: value.account_id()?.map(::core::convert::Into::into),
+                    op_seq: ::core::convert::TryInto::try_into(value.op_seq()?)?,
+                    issued_at: ::core::convert::TryInto::try_into(value.issued_at()?)?,
+                    description: value.description()?.map(::core::convert::Into::into),
+                    leaves: if let ::core::option::Option::Some(leaves) = value.leaves()? {
+                        ::core::option::Option::Some(leaves.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for LogRecordRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for LogRecordRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[LogRecordRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<LogRecord>> for LogRecord {
+            type Value = ::planus::Offset<LogRecord>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<LogRecord>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for LogRecordRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[LogRecordRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `LogReply` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `LogReply` in the file `schema/wire.fbs:52`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct LogReply {
+            /// The field `error` in the table `LogReply`
+            pub error: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `first_index` in the table `LogReply`
+            pub first_index: u64,
+            /// The field `commit_index` in the table `LogReply`
+            pub commit_index: u64,
+            /// The field `records` in the table `LogReply`
+            pub records: ::core::option::Option<::planus::alloc::vec::Vec<self::LogRecord>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for LogReply {
+            fn default() -> Self {
+                Self {
+                    error: ::core::default::Default::default(),
+                    first_index: 0,
+                    commit_index: 0,
+                    records: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl LogReply {
+            /// Creates a [LogReplyBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> LogReplyBuilder<()> {
+                LogReplyBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_error: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_first_index: impl ::planus::WriteAsDefault<u64, u64>,
+                field_commit_index: impl ::planus::WriteAsDefault<u64, u64>,
+                field_records: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::LogRecord>]>,
+                >,
+            ) -> ::planus::Offset<Self> {
+                let prepared_error = field_error.prepare(builder);
+                let prepared_first_index = field_first_index.prepare(builder, &0);
+                let prepared_commit_index = field_commit_index.prepare(builder, &0);
+                let prepared_records = field_records.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_first_index.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+                if prepared_commit_index.is_some() {
+                    table_writer.write_entry::<u64>(2);
+                }
+                if prepared_error.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(0);
+                }
+                if prepared_records.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::LogRecord>]>>(3);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_first_index) =
+                            prepared_first_index
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_first_index);
+                        }
+                        if let ::core::option::Option::Some(prepared_commit_index) =
+                            prepared_commit_index
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_commit_index);
+                        }
+                        if let ::core::option::Option::Some(prepared_error) = prepared_error {
+                            object_writer.write::<_, _, 4>(&prepared_error);
+                        }
+                        if let ::core::option::Option::Some(prepared_records) = prepared_records {
+                            object_writer.write::<_, _, 4>(&prepared_records);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<LogReply>> for LogReply {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogReply> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<LogReply>> for LogReply {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogReply>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<LogReply> for LogReply {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogReply> {
+                LogReply::create(
+                    builder,
+                    &self.error,
+                    self.first_index,
+                    self.commit_index,
+                    &self.records,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [LogReply] type.
+        ///
+        /// Can be created using the [LogReply::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct LogReplyBuilder<State>(State);
+
+        impl LogReplyBuilder<()> {
+            /// Setter for the [`error` field](LogReply#structfield.error).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn error<T0>(self, value: T0) -> LogReplyBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                LogReplyBuilder((value,))
+            }
+
+            /// Sets the [`error` field](LogReply#structfield.error) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn error_as_null(self) -> LogReplyBuilder<((),)> {
+                self.error(())
+            }
+        }
+
+        impl<T0> LogReplyBuilder<(T0,)> {
+            /// Setter for the [`first_index` field](LogReply#structfield.first_index).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn first_index<T1>(self, value: T1) -> LogReplyBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                LogReplyBuilder((v0, value))
+            }
+
+            /// Sets the [`first_index` field](LogReply#structfield.first_index) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn first_index_as_default(self) -> LogReplyBuilder<(T0, ::planus::DefaultValue)> {
+                self.first_index(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> LogReplyBuilder<(T0, T1)> {
+            /// Setter for the [`commit_index` field](LogReply#structfield.commit_index).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn commit_index<T2>(self, value: T2) -> LogReplyBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1) = self.0;
+                LogReplyBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`commit_index` field](LogReply#structfield.commit_index) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn commit_index_as_default(
+                self,
+            ) -> LogReplyBuilder<(T0, T1, ::planus::DefaultValue)> {
+                self.commit_index(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2> LogReplyBuilder<(T0, T1, T2)> {
+            /// Setter for the [`records` field](LogReply#structfield.records).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn records<T3>(self, value: T3) -> LogReplyBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::LogRecord>]>,
+                >,
+            {
+                let (v0, v1, v2) = self.0;
+                LogReplyBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`records` field](LogReply#structfield.records) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn records_as_null(self) -> LogReplyBuilder<(T0, T1, T2, ())> {
+                self.records(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> LogReplyBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [LogReply].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogReply>
+            where
+                Self: ::planus::WriteAsOffset<LogReply>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogRecord>]>>,
+            > ::planus::WriteAs<::planus::Offset<LogReply>> for LogReplyBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<LogReply>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogReply> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogRecord>]>>,
+            > ::planus::WriteAsOptional<::planus::Offset<LogReply>>
+            for LogReplyBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<LogReply>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogReply>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::LogRecord>]>>,
+            > ::planus::WriteAsOffset<LogReply> for LogReplyBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogReply> {
+                let (v0, v1, v2, v3) = &self.0;
+                LogReply::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [LogReply].
+        #[derive(Copy, Clone)]
+        pub struct LogReplyRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> LogReplyRef<'a> {
+            /// Getter for the [`error` field](LogReply#structfield.error).
+            #[inline]
+            pub fn error(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(0, "LogReply", "error")
+            }
+
+            /// Getter for the [`first_index` field](LogReply#structfield.first_index).
+            #[inline]
+            pub fn first_index(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(1, "LogReply", "first_index")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`commit_index` field](LogReply#structfield.commit_index).
+            #[inline]
+            pub fn commit_index(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(2, "LogReply", "commit_index")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`records` field](LogReply#structfield.records).
+            #[inline]
+            pub fn records(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::LogRecordRef<'a>>>,
+                >,
+            > {
+                self.0.access(3, "LogReply", "records")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for LogReplyRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("LogReplyRef");
+                if let ::core::option::Option::Some(field_error) = self.error().transpose() {
+                    f.field("error", &field_error);
+                }
+                f.field("first_index", &self.first_index());
+                f.field("commit_index", &self.commit_index());
+                if let ::core::option::Option::Some(field_records) = self.records().transpose() {
+                    f.field("records", &field_records);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<LogReplyRef<'a>> for LogReply {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: LogReplyRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    error: value.error()?.map(::core::convert::Into::into),
+                    first_index: ::core::convert::TryInto::try_into(value.first_index()?)?,
+                    commit_index: ::core::convert::TryInto::try_into(value.commit_index()?)?,
+                    records: if let ::core::option::Option::Some(records) = value.records()? {
+                        ::core::option::Option::Some(records.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for LogReplyRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for LogReplyRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location("[LogReplyRef]", "get", buffer.offset_from_start)
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<LogReply>> for LogReply {
+            type Value = ::planus::Offset<LogReply>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<LogReply>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for LogReplyRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[LogReplyRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `GetOffline` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetOffline` in the file `schema/wire.fbs:33`
+        /// * Table `GetOffline` in the file `schema/wire.fbs:59`
         #[derive(
             Clone,
             Debug,
@@ -1682,7 +3546,7 @@ mod root {
         /// The table `OfflineItems` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OfflineItems` in the file `schema/wire.fbs:34`
+        /// * Table `OfflineItems` in the file `schema/wire.fbs:60`
         #[derive(
             Clone,
             Debug,
@@ -1959,7 +3823,7 @@ mod root {
         /// The table `GetBuckets` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetBuckets` in the file `schema/wire.fbs:38`
+        /// * Table `GetBuckets` in the file `schema/wire.fbs:64`
         #[derive(
             Clone,
             Debug,
@@ -2225,7 +4089,7 @@ mod root {
         /// The table `Buckets` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Buckets` in the file `schema/wire.fbs:39`
+        /// * Table `Buckets` in the file `schema/wire.fbs:65`
         #[derive(
             Clone,
             Debug,
@@ -2541,7 +4405,7 @@ mod root {
         /// The table `GetBucketIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetBucketIndex` in the file `schema/wire.fbs:40`
+        /// * Table `GetBucketIndex` in the file `schema/wire.fbs:66`
         #[derive(
             Clone,
             Debug,
@@ -2856,7 +4720,7 @@ mod root {
         /// The table `LeafIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafIndex` in the file `schema/wire.fbs:41`
+        /// * Table `LeafIndex` in the file `schema/wire.fbs:67`
         #[derive(
             Clone,
             Debug,
@@ -3170,7 +5034,7 @@ mod root {
         /// The table `BucketIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `BucketIndex` in the file `schema/wire.fbs:42`
+        /// * Table `BucketIndex` in the file `schema/wire.fbs:68`
         #[derive(
             Clone,
             Debug,
@@ -3499,7 +5363,7 @@ mod root {
         /// The table `GetLeaves` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetLeaves` in the file `schema/wire.fbs:43`
+        /// * Table `GetLeaves` in the file `schema/wire.fbs:69`
         #[derive(
             Clone,
             Debug,
@@ -3820,7 +5684,7 @@ mod root {
         /// The table `LeafData` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafData` in the file `schema/wire.fbs:44`
+        /// * Table `LeafData` in the file `schema/wire.fbs:70`
         #[derive(
             Clone,
             Debug,
@@ -4172,7 +6036,7 @@ mod root {
         /// The table `Leaves` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Leaves` in the file `schema/wire.fbs:45`
+        /// * Table `Leaves` in the file `schema/wire.fbs:71`
         #[derive(
             Clone,
             Debug,
@@ -4494,7 +6358,7 @@ mod root {
         /// The table `NotAvailable` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NotAvailable` in the file `schema/wire.fbs:46`
+        /// * Table `NotAvailable` in the file `schema/wire.fbs:72`
         #[derive(
             Clone,
             Debug,
@@ -4761,7 +6625,7 @@ mod root {
         /// The table `Records` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Records` in the file `schema/wire.fbs:50`
+        /// * Table `Records` in the file `schema/wire.fbs:76`
         #[derive(
             Clone,
             Debug,
@@ -5033,7 +6897,7 @@ mod root {
         /// The table `Lookup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Lookup` in the file `schema/wire.fbs:52`
+        /// * Table `Lookup` in the file `schema/wire.fbs:78`
         #[derive(
             Clone,
             Debug,
@@ -5351,7 +7215,7 @@ mod root {
         /// The table `CircuitOpen` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitOpen` in the file `schema/wire.fbs:56`
+        /// * Table `CircuitOpen` in the file `schema/wire.fbs:82`
         #[derive(
             Clone,
             Debug,
@@ -5663,7 +7527,7 @@ mod root {
         /// The table `CircuitAccept` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitAccept` in the file `schema/wire.fbs:57`
+        /// * Table `CircuitAccept` in the file `schema/wire.fbs:83`
         #[derive(
             Clone,
             Debug,
@@ -5975,7 +7839,7 @@ mod root {
         /// The table `CircuitRefuse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitRefuse` in the file `schema/wire.fbs:58`
+        /// * Table `CircuitRefuse` in the file `schema/wire.fbs:84`
         #[derive(
             Clone,
             Debug,
@@ -6290,7 +8154,7 @@ mod root {
         /// The table `CircuitClose` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitClose` in the file `schema/wire.fbs:60`
+        /// * Table `CircuitClose` in the file `schema/wire.fbs:86`
         #[derive(
             Clone,
             Debug,
@@ -6553,7 +8417,7 @@ mod root {
         /// The union `HopMsg` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `HopMsg` in the file `schema/wire.fbs:62`
+        /// * Union `HopMsg` in the file `schema/wire.fbs:88`
         #[derive(
             Clone,
             Debug,
@@ -7647,7 +9511,7 @@ mod root {
         /// The table `HopControl` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `HopControl` in the file `schema/wire.fbs:84`
+        /// * Table `HopControl` in the file `schema/wire.fbs:110`
         #[derive(
             Clone,
             Debug,
@@ -7923,7 +9787,7 @@ mod root {
         /// The table `Probe` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Probe` in the file `schema/wire.fbs:88`
+        /// * Table `Probe` in the file `schema/wire.fbs:114`
         #[derive(
             Clone,
             Debug,
@@ -8275,7 +10139,7 @@ mod root {
         /// The table `PunchOffer` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PunchOffer` in the file `schema/wire.fbs:90`
+        /// * Table `PunchOffer` in the file `schema/wire.fbs:116`
         #[derive(
             Clone,
             Debug,
@@ -8602,7 +10466,7 @@ mod root {
         /// The table `PunchGo` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PunchGo` in the file `schema/wire.fbs:95`
+        /// * Table `PunchGo` in the file `schema/wire.fbs:121`
         #[derive(
             Clone,
             Debug,
@@ -8864,7 +10728,7 @@ mod root {
         /// The table `PskEpoch` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PskEpoch` in the file `schema/wire.fbs:99`
+        /// * Table `PskEpoch` in the file `schema/wire.fbs:125`
         #[derive(
             Clone,
             Debug,
@@ -9171,7 +11035,7 @@ mod root {
         /// The table `GetPsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetPsk` in the file `schema/wire.fbs:100`
+        /// * Table `GetPsk` in the file `schema/wire.fbs:126`
         #[derive(
             Clone,
             Debug,
@@ -9429,7 +11293,7 @@ mod root {
         /// The table `PskInfo` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PskInfo` in the file `schema/wire.fbs:101`
+        /// * Table `PskInfo` in the file `schema/wire.fbs:127`
         #[derive(
             Clone,
             Debug,
@@ -9749,7 +11613,7 @@ mod root {
         /// The table `GetCamouflage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetCamouflage` in the file `schema/wire.fbs:102`
+        /// * Table `GetCamouflage` in the file `schema/wire.fbs:128`
         #[derive(
             Clone,
             Debug,
@@ -9960,7 +11824,7 @@ mod root {
         /// The table `CamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CamouflageSecret` in the file `schema/wire.fbs:103`
+        /// * Table `CamouflageSecret` in the file `schema/wire.fbs:129`
         #[derive(
             Clone,
             Debug,
@@ -10294,7 +12158,7 @@ mod root {
         /// The table `SubmitOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitOp` in the file `schema/wire.fbs:104`
+        /// * Table `SubmitOp` in the file `schema/wire.fbs:130`
         #[derive(
             Clone,
             Debug,
@@ -10556,7 +12420,7 @@ mod root {
         /// The table `SubmitResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitResult` in the file `schema/wire.fbs:105`
+        /// * Table `SubmitResult` in the file `schema/wire.fbs:131`
         #[derive(
             Clone,
             Debug,
@@ -10913,7 +12777,7 @@ mod root {
         /// The table `MetricUpload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricUpload` in the file `schema/wire.fbs:106`
+        /// * Table `MetricUpload` in the file `schema/wire.fbs:132`
         #[derive(
             Clone,
             Debug,
@@ -11180,7 +13044,7 @@ mod root {
         /// The table `RpcAck` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RpcAck` in the file `schema/wire.fbs:107`
+        /// * Table `RpcAck` in the file `schema/wire.fbs:133`
         #[derive(
             Clone,
             Debug,
@@ -11489,7 +13353,7 @@ mod root {
         /// The table `RaftRpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftRpc` in the file `schema/wire.fbs:108`
+        /// * Table `RaftRpc` in the file `schema/wire.fbs:134`
         #[derive(
             Clone,
             Debug,
@@ -11751,7 +13615,7 @@ mod root {
         /// The table `RedeemRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemRequest` in the file `schema/wire.fbs:109`
+        /// * Table `RedeemRequest` in the file `schema/wire.fbs:135`
         #[derive(
             Clone,
             Debug,
@@ -12018,7 +13882,7 @@ mod root {
         /// The table `OfflineSubmit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OfflineSubmit` in the file `schema/wire.fbs:110`
+        /// * Table `OfflineSubmit` in the file `schema/wire.fbs:136`
         #[derive(
             Clone,
             Debug,
@@ -12295,7 +14159,7 @@ mod root {
         /// The table `SubmitRoot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitRoot` in the file `schema/wire.fbs:111`
+        /// * Table `SubmitRoot` in the file `schema/wire.fbs:137`
         #[derive(
             Clone,
             Debug,
@@ -12561,7 +14425,7 @@ mod root {
         /// The table `GetControllerStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetControllerStatus` in the file `schema/wire.fbs:112`
+        /// * Table `GetControllerStatus` in the file `schema/wire.fbs:138`
         #[derive(
             Clone,
             Debug,
@@ -12791,7 +14655,7 @@ mod root {
         /// The table `GetCertRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetCertRequest` in the file `schema/wire.fbs:114`
+        /// * Table `GetCertRequest` in the file `schema/wire.fbs:140`
         #[derive(
             Clone,
             Debug,
@@ -13002,7 +14866,7 @@ mod root {
         /// The table `CertRequestReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CertRequestReply` in the file `schema/wire.fbs:115`
+        /// * Table `CertRequestReply` in the file `schema/wire.fbs:141`
         #[derive(
             Clone,
             Debug,
@@ -13334,7 +15198,7 @@ mod root {
         /// The table `ControllerStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerStatus` in the file `schema/wire.fbs:116`
+        /// * Table `ControllerStatus` in the file `schema/wire.fbs:142`
         #[derive(
             Clone,
             Debug,
@@ -14043,7 +15907,7 @@ mod root {
         /// The union `RpcBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RpcBody` in the file `schema/wire.fbs:128`
+        /// * Union `RpcBody` in the file `schema/wire.fbs:154`
         #[derive(
             Clone,
             Debug,
@@ -14103,6 +15967,12 @@ mod root {
 
             /// The variant of type `CertRequestReply` in the union `RpcBody`
             CertRequestReply(::planus::alloc::boxed::Box<self::CertRequestReply>),
+
+            /// The variant of type `GetLog` in the union `RpcBody`
+            GetLog(::planus::alloc::boxed::Box<self::GetLog>),
+
+            /// The variant of type `LogReply` in the union `RpcBody`
+            LogReply(::planus::alloc::boxed::Box<self::LogReply>),
         }
 
         impl RpcBody {
@@ -14239,6 +16109,22 @@ mod root {
             ) -> ::planus::UnionOffset<Self> {
                 ::planus::UnionOffset::new(16, value.prepare(builder).downcast())
             }
+
+            #[inline]
+            pub fn create_get_log(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::GetLog>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(17, value.prepare(builder).downcast())
+            }
+
+            #[inline]
+            pub fn create_log_reply(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::LogReply>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(18, value.prepare(builder).downcast())
+            }
         }
 
         impl ::planus::WriteAsUnion<RpcBody> for RpcBody {
@@ -14265,6 +16151,8 @@ mod root {
                     Self::CertRequestReply(value) => {
                         Self::create_cert_request_reply(builder, value)
                     }
+                    Self::GetLog(value) => Self::create_get_log(builder, value),
+                    Self::LogReply(value) => Self::create_log_reply(builder, value),
                 }
             }
         }
@@ -14442,6 +16330,24 @@ mod root {
             ) -> RpcBodyBuilder<::planus::Initialized<16, T>>
             where
                 T: ::planus::WriteAsOffset<self::CertRequestReply>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`GetLog` variant](RpcBody#variant.GetLog).
+            #[inline]
+            pub fn get_log<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<17, T>>
+            where
+                T: ::planus::WriteAsOffset<self::GetLog>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`LogReply` variant](RpcBody#variant.LogReply).
+            #[inline]
+            pub fn log_reply<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<18, T>>
+            where
+                T: ::planus::WriteAsOffset<self::LogReply>,
             {
                 RpcBodyBuilder(::planus::Initialized(value))
             }
@@ -14810,6 +16716,50 @@ mod root {
                 ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
             }
         }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<17, T>>
+        where
+            T: ::planus::WriteAsOffset<self::GetLog>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(17, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<17, T>>
+        where
+            T: ::planus::WriteAsOffset<self::GetLog>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<18, T>>
+        where
+            T: ::planus::WriteAsOffset<self::LogReply>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(18, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<18, T>>
+        where
+            T: ::planus::WriteAsOffset<self::LogReply>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
 
         /// Reference to a deserialized [RpcBody].
         #[derive(Copy, Clone, Debug)]
@@ -14830,6 +16780,8 @@ mod root {
             SubmitRoot(self::SubmitRootRef<'a>),
             GetCertRequest(self::GetCertRequestRef<'a>),
             CertRequestReply(self::CertRequestReplyRef<'a>),
+            GetLog(self::GetLogRef<'a>),
+            LogReply(self::LogReplyRef<'a>),
         }
 
         impl<'a> ::core::convert::TryFrom<RpcBodyRef<'a>> for RpcBody {
@@ -14924,6 +16876,16 @@ mod root {
                             ::core::convert::TryFrom::try_from(value)?,
                         ))
                     }
+
+                    RpcBodyRef::GetLog(value) => Self::GetLog(::planus::alloc::boxed::Box::new(
+                        ::core::convert::TryFrom::try_from(value)?,
+                    )),
+
+                    RpcBodyRef::LogReply(value) => {
+                        Self::LogReply(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
                 })
             }
         }
@@ -14983,6 +16945,12 @@ mod root {
                     16 => ::core::result::Result::Ok(Self::CertRequestReply(
                         ::planus::TableRead::from_buffer(buffer, field_offset)?,
                     )),
+                    17 => ::core::result::Result::Ok(Self::GetLog(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
+                    18 => ::core::result::Result::Ok(Self::LogReply(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
                     _ => {
                         ::core::result::Result::Err(::planus::errors::ErrorKind::UnknownUnionTag {
                             tag,
@@ -14999,7 +16967,7 @@ mod root {
         /// The table `Rpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Rpc` in the file `schema/wire.fbs:147`
+        /// * Table `Rpc` in the file `schema/wire.fbs:175`
         #[derive(
             Clone,
             Debug,
@@ -15269,7 +17237,7 @@ mod root {
         /// The table `RaftVote` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVote` in the file `schema/wire.fbs:151`
+        /// * Table `RaftVote` in the file `schema/wire.fbs:179`
         #[derive(
             Clone,
             Debug,
@@ -15681,7 +17649,7 @@ mod root {
         /// The table `RaftVoteResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:158`
+        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:186`
         #[derive(
             Clone,
             Debug,
@@ -16063,7 +18031,7 @@ mod root {
         /// The table `RaftAppend` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppend` in the file `schema/wire.fbs:160`
+        /// * Table `RaftAppend` in the file `schema/wire.fbs:188`
         #[derive(
             Clone,
             Debug,
@@ -16543,7 +18511,7 @@ mod root {
         /// The table `RaftAppendResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:168`
+        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:196`
         #[derive(
             Clone,
             Debug,
@@ -16984,7 +18952,7 @@ mod root {
         /// The table `RaftSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:175`
+        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:203`
         #[derive(
             Clone,
             Debug,
@@ -17398,7 +19366,7 @@ mod root {
         /// The table `RaftSnapshotResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:182`
+        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:210`
         #[derive(
             Clone,
             Debug,
@@ -17733,7 +19701,7 @@ mod root {
         /// The table `RaftForward` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForward` in the file `schema/wire.fbs:185`
+        /// * Table `RaftForward` in the file `schema/wire.fbs:213`
         #[derive(
             Clone,
             Debug,
@@ -18049,7 +20017,7 @@ mod root {
         /// The table `RaftForwardResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:186`
+        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:214`
         #[derive(
             Clone,
             Debug,
@@ -18486,7 +20454,7 @@ mod root {
         /// The table `RaftTimeoutNow` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:187`
+        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:215`
         #[derive(
             Clone,
             Debug,
@@ -18749,7 +20717,7 @@ mod root {
         /// The union `RaftBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RaftBody` in the file `schema/wire.fbs:189`
+        /// * Union `RaftBody` in the file `schema/wire.fbs:217`
         #[derive(
             Clone,
             Debug,
@@ -19346,7 +21314,7 @@ mod root {
         /// The table `RaftMessage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftMessage` in the file `schema/wire.fbs:201`
+        /// * Table `RaftMessage` in the file `schema/wire.fbs:229`
         #[derive(
             Clone,
             Debug,
@@ -19715,7 +21683,7 @@ mod root {
         /// The table `PendingEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:204`
+        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:232`
         #[derive(
             Clone,
             Debug,
@@ -20210,7 +22178,7 @@ mod root {
         /// The table `OpSeq` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpSeq` in the file `schema/wire.fbs:212`
+        /// * Table `OpSeq` in the file `schema/wire.fbs:240`
         #[derive(
             Clone,
             Debug,
@@ -20523,7 +22491,7 @@ mod root {
         /// The table `ControllerSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:214`
+        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:242`
         #[derive(
             Clone,
             Debug,
@@ -21678,7 +23646,7 @@ mod root {
         /// The table `EnrollRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollRequest` in the file `schema/wire.fbs:233`
+        /// * Table `EnrollRequest` in the file `schema/wire.fbs:261`
         #[derive(
             Clone,
             Debug,
@@ -22097,7 +24065,7 @@ mod root {
         /// The table `MerkleProof` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MerkleProof` in the file `schema/wire.fbs:240`
+        /// * Table `MerkleProof` in the file `schema/wire.fbs:268`
         #[derive(
             Clone,
             Debug,
@@ -22418,7 +24386,7 @@ mod root {
         /// The table `EnrollResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollResponse` in the file `schema/wire.fbs:242`
+        /// * Table `EnrollResponse` in the file `schema/wire.fbs:270`
         #[derive(
             Clone,
             Debug,
@@ -23373,7 +25341,7 @@ mod root {
         /// The table `EnrollmentTicket` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:259`
+        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:287`
         #[derive(
             Clone,
             Debug,
@@ -41446,10 +43414,424 @@ mod root {
             }
         }
 
+        /// The table `LogRequest` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `LogRequest` in the file `schema/webjet.fbs:283`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct LogRequest {
+            /// The field `account_id` in the table `LogRequest`
+            pub account_id: ::core::option::Option<self::Key32>,
+            /// The field `issued_at` in the table `LogRequest`
+            pub issued_at: u64,
+            /// The field `before` in the table `LogRequest`
+            pub before: u64,
+            /// The field `limit` in the table `LogRequest`
+            pub limit: u32,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for LogRequest {
+            fn default() -> Self {
+                Self {
+                    account_id: ::core::default::Default::default(),
+                    issued_at: 0,
+                    before: 0,
+                    limit: 0,
+                }
+            }
+        }
+
+        impl LogRequest {
+            /// Creates a [LogRequestBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> LogRequestBuilder<()> {
+                LogRequestBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_account_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_issued_at: impl ::planus::WriteAsDefault<u64, u64>,
+                field_before: impl ::planus::WriteAsDefault<u64, u64>,
+                field_limit: impl ::planus::WriteAsDefault<u32, u32>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_account_id = field_account_id.prepare(builder);
+                let prepared_issued_at = field_issued_at.prepare(builder, &0);
+                let prepared_before = field_before.prepare(builder, &0);
+                let prepared_limit = field_limit.prepare(builder, &0);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_account_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+                if prepared_issued_at.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+                if prepared_before.is_some() {
+                    table_writer.write_entry::<u64>(2);
+                }
+                if prepared_limit.is_some() {
+                    table_writer.write_entry::<u32>(3);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_account_id) =
+                            prepared_account_id
+                        {
+                            object_writer.write::<_, _, 32>(&prepared_account_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_issued_at) = prepared_issued_at
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_issued_at);
+                        }
+                        if let ::core::option::Option::Some(prepared_before) = prepared_before {
+                            object_writer.write::<_, _, 8>(&prepared_before);
+                        }
+                        if let ::core::option::Option::Some(prepared_limit) = prepared_limit {
+                            object_writer.write::<_, _, 4>(&prepared_limit);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<LogRequest>> for LogRequest {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRequest> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<LogRequest>> for LogRequest {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogRequest>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<LogRequest> for LogRequest {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRequest> {
+                LogRequest::create(
+                    builder,
+                    self.account_id,
+                    self.issued_at,
+                    self.before,
+                    self.limit,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [LogRequest] type.
+        ///
+        /// Can be created using the [LogRequest::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct LogRequestBuilder<State>(State);
+
+        impl LogRequestBuilder<()> {
+            /// Setter for the [`account_id` field](LogRequest#structfield.account_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id<T0>(self, value: T0) -> LogRequestBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                LogRequestBuilder((value,))
+            }
+
+            /// Sets the [`account_id` field](LogRequest#structfield.account_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id_as_null(self) -> LogRequestBuilder<((),)> {
+                self.account_id(())
+            }
+        }
+
+        impl<T0> LogRequestBuilder<(T0,)> {
+            /// Setter for the [`issued_at` field](LogRequest#structfield.issued_at).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at<T1>(self, value: T1) -> LogRequestBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                LogRequestBuilder((v0, value))
+            }
+
+            /// Sets the [`issued_at` field](LogRequest#structfield.issued_at) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at_as_default(self) -> LogRequestBuilder<(T0, ::planus::DefaultValue)> {
+                self.issued_at(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> LogRequestBuilder<(T0, T1)> {
+            /// Setter for the [`before` field](LogRequest#structfield.before).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn before<T2>(self, value: T2) -> LogRequestBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1) = self.0;
+                LogRequestBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`before` field](LogRequest#structfield.before) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn before_as_default(self) -> LogRequestBuilder<(T0, T1, ::planus::DefaultValue)> {
+                self.before(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2> LogRequestBuilder<(T0, T1, T2)> {
+            /// Setter for the [`limit` field](LogRequest#structfield.limit).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn limit<T3>(self, value: T3) -> LogRequestBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsDefault<u32, u32>,
+            {
+                let (v0, v1, v2) = self.0;
+                LogRequestBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`limit` field](LogRequest#structfield.limit) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn limit_as_default(
+                self,
+            ) -> LogRequestBuilder<(T0, T1, T2, ::planus::DefaultValue)> {
+                self.limit(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3> LogRequestBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [LogRequest].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRequest>
+            where
+                Self: ::planus::WriteAsOffset<LogRequest>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsDefault<u32, u32>,
+            > ::planus::WriteAs<::planus::Offset<LogRequest>>
+            for LogRequestBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<LogRequest>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRequest> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsDefault<u32, u32>,
+            > ::planus::WriteAsOptional<::planus::Offset<LogRequest>>
+            for LogRequestBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<LogRequest>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<LogRequest>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsDefault<u32, u32>,
+            > ::planus::WriteAsOffset<LogRequest> for LogRequestBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<LogRequest> {
+                let (v0, v1, v2, v3) = &self.0;
+                LogRequest::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [LogRequest].
+        #[derive(Copy, Clone)]
+        pub struct LogRequestRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> LogRequestRef<'a> {
+            /// Getter for the [`account_id` field](LogRequest#structfield.account_id).
+            #[inline]
+            pub fn account_id(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "LogRequest", "account_id")
+            }
+
+            /// Getter for the [`issued_at` field](LogRequest#structfield.issued_at).
+            #[inline]
+            pub fn issued_at(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(1, "LogRequest", "issued_at")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`before` field](LogRequest#structfield.before).
+            #[inline]
+            pub fn before(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(2, "LogRequest", "before")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`limit` field](LogRequest#structfield.limit).
+            #[inline]
+            pub fn limit(&self) -> ::planus::Result<u32> {
+                ::core::result::Result::Ok(self.0.access(3, "LogRequest", "limit")?.unwrap_or(0))
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for LogRequestRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("LogRequestRef");
+                if let ::core::option::Option::Some(field_account_id) =
+                    self.account_id().transpose()
+                {
+                    f.field("account_id", &field_account_id);
+                }
+                f.field("issued_at", &self.issued_at());
+                f.field("before", &self.before());
+                f.field("limit", &self.limit());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<LogRequestRef<'a>> for LogRequest {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: LogRequestRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    account_id: value.account_id()?.map(::core::convert::Into::into),
+                    issued_at: ::core::convert::TryInto::try_into(value.issued_at()?)?,
+                    before: ::core::convert::TryInto::try_into(value.before()?)?,
+                    limit: ::core::convert::TryInto::try_into(value.limit()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for LogRequestRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for LogRequestRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[LogRequestRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<LogRequest>> for LogRequest {
+            type Value = ::planus::Offset<LogRequest>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<LogRequest>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for LogRequestRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[LogRequestRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:281`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:292`
         #[derive(
             Clone,
             Debug,
@@ -41859,7 +44241,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:288`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:299`
         #[derive(
             Clone,
             Debug,
@@ -42701,7 +45083,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:302`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:313`
         #[derive(
             Clone,
             Debug,
@@ -43156,7 +45538,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:310`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:321`
         #[derive(
             Clone,
             Debug,
@@ -43615,7 +45997,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:318`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:329`
         #[derive(
             Clone,
             Debug,
@@ -44163,7 +46545,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:327`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:338`
         #[derive(
             Clone,
             Debug,
@@ -44599,7 +46981,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:334`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:345`
         #[derive(
             Clone,
             Debug,
@@ -45103,7 +47485,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:342`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:353`
         #[derive(
             Clone,
             Debug,
@@ -45613,7 +47995,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:353`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:364`
         #[derive(
             Clone,
             Debug,
@@ -45975,7 +48357,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:361`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:372`
         #[derive(
             Copy,
             Clone,
@@ -46148,7 +48530,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:363`
+        /// * Table `Counter` in the file `schema/webjet.fbs:374`
         #[derive(
             Clone,
             Debug,
@@ -46457,7 +48839,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:365`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:376`
         #[derive(
             Clone,
             Debug,
@@ -46756,7 +49138,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:367`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:378`
         #[derive(
             Clone,
             Debug,
@@ -47154,7 +49536,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:374`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:385`
         #[derive(
             Clone,
             Debug,
@@ -48020,7 +50402,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:389`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:400`
         #[derive(
             Clone,
             Debug,
@@ -49045,7 +51427,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:406`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:417`
         #[derive(
             Clone,
             Debug,
@@ -49401,7 +51783,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:408`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:419`
         #[derive(
             Clone,
             Debug,
@@ -49756,7 +52138,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:410`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:421`
         #[derive(
             Clone,
             Debug,
@@ -50726,7 +53108,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:428`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:439`
         #[derive(
             Clone,
             Debug,
@@ -51575,7 +53957,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:442`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:453`
         #[derive(
             Clone,
             Debug,
@@ -51891,7 +54273,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:444`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:455`
         #[derive(
             Clone,
             Debug,
@@ -52702,7 +55084,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:458`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:469`
         #[derive(
             Clone,
             Debug,
@@ -53019,7 +55401,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:460`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:471`
         #[derive(
             Clone,
             Debug,
@@ -53444,7 +55826,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:467`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:478`
         #[derive(
             Clone,
             Debug,
@@ -53710,7 +56092,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:468`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:479`
         #[derive(
             Clone,
             Debug,
@@ -53995,7 +56377,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:471`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:482`
         #[derive(
             Clone,
             Debug,
@@ -54267,7 +56649,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:472`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:483`
         #[derive(
             Clone,
             Debug,
@@ -54537,7 +56919,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:473`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:484`
         #[derive(
             Clone,
             Debug,
@@ -54805,7 +57187,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:474`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:485`
         #[derive(
             Clone,
             Debug,
@@ -55077,7 +57459,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:475`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:486`
         #[derive(
             Clone,
             Debug,
@@ -55353,7 +57735,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:476`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:487`
         #[derive(
             Clone,
             Debug,
@@ -55690,7 +58072,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:477`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:488`
         #[derive(
             Clone,
             Debug,
@@ -55981,7 +58363,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:478`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:489`
         #[derive(
             Clone,
             Debug,
@@ -56256,7 +58638,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:480`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:491`
         #[derive(
             Copy,
             Clone,
@@ -56434,7 +58816,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:481`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:492`
         #[derive(
             Clone,
             Debug,
@@ -56770,7 +59152,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:483`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:494`
         #[derive(
             Clone,
             Debug,
@@ -57032,7 +59414,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:485`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:496`
         #[derive(
             Clone,
             Debug,
@@ -58056,7 +60438,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:505`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:516`
         #[derive(
             Clone,
             Debug,
@@ -58461,7 +60843,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:514`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:525`
         #[derive(
             Clone,
             Debug,
@@ -58725,7 +61107,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:515`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:526`
         #[derive(
             Clone,
             Debug,
@@ -59008,7 +61390,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:516`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:527`
         #[derive(
             Clone,
             Debug,
@@ -59297,7 +61679,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:517`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:528`
         #[derive(
             Clone,
             Debug,
@@ -59693,7 +62075,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:518`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:529`
         #[derive(
             Clone,
             Debug,
@@ -59976,7 +62358,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:519`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:530`
         #[derive(
             Clone,
             Debug,
@@ -60265,7 +62647,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:520`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:531`
         #[derive(
             Clone,
             Debug,
@@ -60556,7 +62938,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:521`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:532`
         #[derive(
             Clone,
             Debug,
@@ -60818,7 +63200,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:522`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:533`
         #[derive(
             Clone,
             Debug,
@@ -61085,7 +63467,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:523`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:534`
         #[derive(
             Clone,
             Debug,
@@ -61429,7 +63811,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:525`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:536`
         #[derive(
             Clone,
             Debug,
@@ -62135,7 +64517,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:539`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:550`
         #[derive(
             Clone,
             Debug,
@@ -62449,7 +64831,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:544`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:555`
         #[derive(
             Clone,
             Debug,
@@ -62805,7 +65187,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:550`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:561`
         #[derive(
             Clone,
             Debug,

@@ -363,6 +363,28 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             let s = n.store.read();
             Ok(json!({"head": s.head().map(|h| b64(&h.raw))}))
         }
+        "merkle" => Ok(merkle(n)),
+        "log" => {
+            let raw = unb64(str_arg(&req, "request")?)?;
+            let reply = match n.controller.get() {
+                Some(c) => c.log(&raw),
+                None => {
+                    let body = RpcBody::GetLog(Box::new(wp::GetLog { request: Some(raw) }));
+                    match crate::rpc::call_any(n, body, Duration::from_secs(15))
+                        .await?
+                        .1
+                    {
+                        RpcBody::LogReply(r) => *r,
+                        RpcBody::RpcAck(a) => bail!(a.error.unwrap_or_default()),
+                        _ => bail!("unexpected reply"),
+                    }
+                }
+            };
+            if let Some(e) = reply.error {
+                bail!(e);
+            }
+            Ok(log_json(&reply))
+        }
         _ => bail!("unknown command {cmd}"),
     }
 }
@@ -462,6 +484,125 @@ pub async fn submit_signed(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
         t => bail!("don't know how to submit a {}", mt::name(t)),
     }
     Ok(Value::Object(out))
+}
+
+/// The state tree for webjet-app's Merkle tab: every leaf's bytes (the app
+/// decodes them and recomputes the root), the signed tree head, the genesis
+/// keys and the controllers' signing-key certificates. A controller shows
+/// its own state machine's tree, which may be ahead of the signed head.
+fn merkle(n: &Arc<Node>) -> Value {
+    fn leaves<'a>(it: impl Iterator<Item = &'a webjet_core::merkle::LeafEntry>) -> Vec<Value> {
+        it.map(|e| json!({"kind": e.kind, "key": hex::encode(e.key), "bytes": b64(&e.bytes)}))
+            .collect()
+    }
+    let controller_tree = n.controller.get().and_then(|c| {
+        let m = c.machine.lock();
+        m.genesis
+            .is_some()
+            .then(|| leaves(m.tree.iter().map(|(_, e)| e)))
+    });
+    let view = admin_view(n);
+    let s = n.store.read();
+    let (source, leaves) = match controller_tree {
+        Some(l) => ("controller", l),
+        None => ("head", leaves(s.tree().iter().map(|(_, e)| e))),
+    };
+    let head = s.head().map(|h| {
+        let kid = h.key_id();
+        let controller = s
+            .certs()
+            .find(|c| crypto::opt_k32(&c.cert.signing_key_id) == kid)
+            .map(|c| hex::encode(crypto::opt_k32(&c.cert.controller)));
+        json!({
+            "version": h.head.version,
+            "root": hex::encode(h.root()),
+            "signing_key_id": hex::encode(kid),
+            "controller": controller,
+            "state_version": h.head.state_version,
+            "issued_at": h.head.issued_at,
+            "expires_at": h.head.expires_at,
+        })
+    });
+    let certs: Vec<Value> = s
+        .certs()
+        .map(|c| {
+            let kid = crypto::opt_k32(&c.cert.signing_key_id);
+            json!({
+                "signing_key_id": hex::encode(kid),
+                "signing_key": crypto::key_b64(&crypto::opt_k32(&c.cert.signing_key)),
+                "controller": hex::encode(crypto::opt_k32(&c.cert.controller)),
+                "serial": c.cert.cert_serial,
+                "issuer": c.issuer.map(|i| hex::encode(i.id)),
+                "issuer_key": c.issuer.map(|i| crypto::key_b64(&i.key)),
+                "valid": view.valid_certs.contains(&kid),
+            })
+        })
+        .collect();
+    let tombs: Vec<Value> = s
+        .key_tombstones()
+        .map(|t| {
+            json!({
+                "signing_key_id": hex::encode(crypto::opt_k32(&t.tomb.signing_key_id)),
+                "last_valid_version": t.tomb.last_valid_version,
+                "reason": t.tomb.reason,
+            })
+        })
+        .collect();
+    let first_admin = s
+        .genesis
+        .first_admin
+        .as_deref()
+        .and_then(|b| crypto::open_envelope(b).ok())
+        .and_then(|v| v.decode::<wp::AccountRecord>().ok())
+        .and_then(|r| r.name);
+    json!({
+        "source": source,
+        "head": head,
+        "genesis": {
+            "root_key": crypto::key_b64(&s.root),
+            "emergency_key": s.emergency.as_ref().map(crypto::key_b64),
+            "created_at": s.genesis.created_at,
+            "first_admin": first_admin,
+        },
+        "certs": certs,
+        "key_tombstones": tombs,
+        "leaves": leaves,
+    })
+}
+
+/// A `LogReply` as JSON for webjet-app.
+fn log_json(r: &wp::LogReply) -> Value {
+    let k = |k: &Option<wp::Key32>| k.as_ref().map(|k| k.to_bytes());
+    let records: Vec<Value> = r
+        .records
+        .iter()
+        .flatten()
+        .map(|e| {
+            json!({
+                "index": e.index,
+                "term": e.term,
+                "timestamp": e.timestamp,
+                "payload": e.payload,
+                "op": e.op,
+                "signer_key": k(&e.signer_key).map(|x| crypto::key_b64(&x)),
+                "account_id": k(&e.account_id).map(hex::encode),
+                "op_seq": e.op_seq,
+                "issued_at": e.issued_at,
+                "description": e.description,
+                "leaves": e.leaves.iter().flatten().map(|l| json!({
+                    "kind": l.kind,
+                    "key": k(&l.key).map(hex::encode),
+                    "hash": k(&l.hash).map(hex::encode),
+                    "deleted": l.deleted,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "first_index": r.first_index,
+        "commit_index": r.commit_index,
+        "records": records,
+    })
 }
 
 /// What `webjetctl network node enroll` needs for an enrollment string.

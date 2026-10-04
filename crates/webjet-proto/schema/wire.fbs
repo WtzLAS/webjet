@@ -30,6 +30,32 @@ table HeadAnnounce {
     offline_hash: Key32;
 }
 
+// The log as an admin sees it (webjet-app's Merkle tab): one summary per
+// committed entry still in the log (entries before the last snapshot are
+// gone). Secrets in entries (the PSK chosen by the leader, the camouflage
+// private key) are never included.
+table GetLog { request: [ubyte]; }            // Signed(LogRequest) by an admin account key
+table LogLeaf { kind: ubyte; key: Key32; hash: Key32; deleted: bool; }
+table LogRecord {
+    index: uint64;
+    term: uint64;
+    timestamp: uint64;
+    payload: string;          // EntryPayload variant, e.g. "OpEntry"
+    op: string;               // the operation (AccountOp variant or signed type)
+    signer_key: Key32;        // the key that signed it (account, root, emergency, node); absent when nobody did
+    account_id: Key32;        // SignedOp.signer: the account
+    op_seq: uint64;
+    issued_at: uint64;
+    description: string;      // what applying it did
+    leaves: [LogLeaf];        // the tree leaves it changed
+}
+table LogReply {
+    error: string;
+    first_index: uint64;      // oldest entry still in the log
+    commit_index: uint64;
+    records: [LogRecord];     // oldest first
+}
+
 table GetOffline { have_hash: Key32; }
 table OfflineItems { items: [Blob]; }    // Signed envelopes (§10.3)
 
@@ -142,6 +168,8 @@ union RpcBody {
     SubmitRoot,
     GetCertRequest,
     CertRequestReply,
+    GetLog,
+    LogReply,
 }
 
 table Rpc { body: RpcBody; }

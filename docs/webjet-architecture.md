@@ -1661,6 +1661,8 @@ signed by: that account's current account_key
 
 **Audit trail:** each committed entry records which account signed what and when. The Raft log, and the snapshots that replace it, keep the signer of every change to the tree, so "who gave this node `RELAY`?" or "who revoked this laptop?" always has an answer. Controllers also export the audit trail to append-only storage, because log compaction discards old entries.
 
+**Reading the audit trail:** an admin reads the log entries still in a controller's Raft log with a `LogRequest { account_id, issued_at, before, limit }` signed by their account key (message type 27), sent as a `GetLog` RPC (the agent forwards it from its `log` control command; webjet-app's Merkle tab uses it). It is read-only and never enters the log. A controller answers only when the signer is a valid admin whose current key signed it and `issued_at` is within 5 minutes of its clock, with at most 200 `LogRecord`s: index, term, timestamp, entry type, operation, signing key, account, `op_seq`, `issued_at`, what applying it did, and the hashes of the leaves it wrote. Secrets carried in entries (the leader's random PSK, the camouflage private key) are never included.
+
 This closes the earlier gap where anyone on the overlay could reach the admin UI and act: reaching it is no longer enough, a signature from an allowed account is required.
 
 ### 13.4 Revoking accounts

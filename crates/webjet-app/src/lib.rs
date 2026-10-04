@@ -3,6 +3,7 @@
 
 pub mod client;
 pub mod graph;
+pub mod merkle;
 pub mod model;
 pub mod openmetrics;
 pub mod ui;

@@ -3,6 +3,7 @@
 //! path `webjetctl` uses, §13.1). The agent forwards operations to a
 //! controller, which checks the signature and the account's rights.
 
+use crate::merkle::LogPage;
 use crate::model::{Account, Node, Peer, Session, Sessions, Snapshot, Status, Tree};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -47,8 +48,8 @@ impl Client {
 
     /// Everything the views need, in one go. `metrics_all`: on a
     /// controller, fetch every node's latest metric report instead of this
-    /// node's own.
-    pub async fn snapshot(&self, metrics_all: bool) -> Result<Snapshot> {
+    /// node's own. `merkle`: also fetch the whole state tree.
+    pub async fn snapshot(&self, metrics_all: bool, merkle: bool) -> Result<Snapshot> {
         let status: Status = self.get("status").await?;
         let mut nodes: Vec<Node> = self.get("nodes").await?;
         nodes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -83,6 +84,11 @@ impl Client {
                     .map(String::from)
                     .ok_or_else(|| anyhow!("no metrics in the answer"))
             }));
+        let merkle = if merkle {
+            Some(opt(self.get("merkle").await))
+        } else {
+            None
+        };
         Ok(Snapshot {
             status,
             nodes,
@@ -94,6 +100,7 @@ impl Client {
             topology,
             metrics,
             metrics_all: all,
+            merkle,
         })
     }
 
@@ -105,6 +112,15 @@ impl Client {
         r.get("index")
             .and_then(|i| i.as_u64())
             .ok_or_else(|| anyhow!("no log index in the answer"))
+    }
+
+    /// A page of the controllers' operation log, for an admin's signed
+    /// request (`ops::log_request`).
+    pub async fn log(&self, signed: Vec<u8>) -> Result<LogPage> {
+        let v = self
+            .call(json!({"cmd": "log", "request": webjet_tools::b64(&signed)}))
+            .await?;
+        serde_json::from_value(v).context("unexpected answer to log")
     }
 
     /// Data for building enrollment strings.
@@ -182,6 +198,21 @@ pub mod ops {
             tags: Some(tags),
             ..Default::default()
         })))
+    }
+
+    /// A request to read the operation log (admins): up to `limit` entries
+    /// before index `before` (0 = the newest). Read-only, so it uses no
+    /// operation sequence number.
+    pub fn log_request(a: &webjet_tools::Account, before: u64, limit: u32) -> Vec<u8> {
+        a.kp.sign_obj(
+            wp::msg_type::LOG_REQUEST,
+            &wp::LogRequest {
+                account_id: Some(crypto::k32(&a.id)),
+                issued_at: webjet_core::types::now_ms(),
+                before,
+                limit,
+            },
+        )
     }
 
     /// Advance the PSK epoch (admin, §7.6).
@@ -273,6 +304,11 @@ mod tests {
             assert_eq!(so.signer.map(|k| k.to_bytes()), Some(a.id));
             assert!(so.op_seq > seq0, "op_seq increases");
         }
+        let v = crypto::open_envelope(&ops::log_request(&a, 9, 50)).unwrap();
+        assert_eq!(v.ty, wp::msg_type::LOG_REQUEST);
+        let r: wp::LogRequest = v.decode().unwrap();
+        assert_eq!((r.before, r.limit), (9, 50));
+        assert_eq!(r.account_id.map(|k| k.to_bytes()), Some(a.id));
         assert!(ops::rename(&a, &n, "Bad Name").is_err());
         assert!(ops::set_tags(&a, &n, "notatag").is_err());
         let _ = std::fs::remove_dir_all(d);

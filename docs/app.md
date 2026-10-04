@@ -42,6 +42,8 @@ adds the account (`webjetctl network account create`).
 | | Admin account | Normal account |
 | --- | --- | --- |
 | Dashboard, Connections, Nodes, Metrics | yes | yes |
+| Merkle tab: state tree, leaves, proofs | yes | yes |
+| Merkle tab: operation log | yes | no |
 | Accounts tab | every account | its own account |
 | Rename or revoke a node | any node | only nodes it owns |
 | Set a node's tags | yes | no |
@@ -56,9 +58,10 @@ Revoking a node and rotating the PSK need a second click.
 ## Tabs
 
 Everything is seen from the local agent and refreshes every 5 s. The
-Connections, Nodes and Metrics tabs need webjetd's `sessions`, `conntrack`,
-`topology` and `metrics` control commands. With an older agent the app
-says the data isn't available.
+Connections, Nodes, Merkle and Metrics tabs need webjetd's `sessions`,
+`conntrack`, `topology`, `merkle`, `log` and `metrics` control commands
+(`merkle` and `log` are new in 0.5.0). With an older agent the app says the data
+isn't available.
 
 - **Dashboard**: overall health (current tree head, node record, validity
   horizon, alarms, connectivity) with the reasons, then the headline numbers:
@@ -83,11 +86,47 @@ says the data isn't available.
   trip and loss and labeled with the round trip. Selecting a node highlights
   its edges and shows its record, relay load, and every report of each of
   its links (who reported it, transport, round trip, loss, use, address,
-  bytes), along with the changes the account may make. The circuit area
+  bytes), along with the changes the account may make.
+
+  The graph moves: drag the background (or scroll with two fingers) to move
+  the picture, and use the mouse wheel, ⌘/Ctrl + scroll or the − / + buttons
+  to zoom around the pointer. *Fit* goes back to the whole picture. Drag a
+  node to place it; a short press without moving selects it. Placed nodes
+  stay where you put them across refreshes until *Re-layout*, which also
+  resets the zoom. The circuit area
   below lists this agent's circuits, with ★ on the one a session sends on.
   Selecting a circuit draws its path in the graph and shows its hops, state,
   round trip, probes, and its route's traffic and drops. With no circuit
   selected, the area lists the routes relayed through this node.
+- **Merkle**: the network's state tree (§6.4) as the agent holds it. The
+  top row shows the signed tree head (version, root, the controller whose
+  signing key signed it, issue and expiry times) next to the root the app
+  recomputes from the leaves, with a chip saying whether they match. On a
+  controller the tree is the controller's own state machine, which may be
+  a little ahead of the last signed head. Beside it are the genesis keys
+  (root, emergency, first admin) and the controllers' signing-key
+  certificates, each with who signed it (the root key or an admin) and
+  whether it counts. Below, a map of the 256 subtrees at depth 8 (the
+  buckets gossip compares; click one to list only its leaves) and the leaf
+  list, filterable by name, kind, signer or hash prefix. Selecting a leaf
+  shows its decoded record, who vouches for it (account records carry their
+  own signature, by the root key or an admin; every other leaf is built by
+  the controllers and covered by the head's signature), the log entry that
+  last wrote it, and its inclusion proof: path, leaf hash and every
+  non-empty sibling from the leaf up to the root, checked by the app.
+
+  For admins, the right column is the controllers' operation log, newest
+  first: every committed entry still in the Raft log (older ones were
+  compacted into a snapshot), with the operation, who signed it (account,
+  root key, emergency key or node), when, and its index. *Load older* pages
+  back. Selecting an entry shows what applying it did, the signing key, the
+  account's operation sequence number and issue time, the log index and
+  term, and the leaves it wrote, each marked still current, changed since
+  or deleted, and linked to the leaf. The app reads the log with a request
+  signed by the admin's account key; controllers refuse requests from other
+  accounts, and requests more than 5 minutes off their clock. Secrets in
+  log entries (the PSK the leader chose, the camouflage private key) are
+  never sent.
 - **Metrics**: the OpenMetrics families the agent exports (§12.5), the same
   text Prometheus scrapes. You can filter on name, help or label value.
   Selecting a family shows its help text and its samples with their labels,
@@ -112,9 +151,15 @@ each may do, renames the normal account's own node through the controller,
 checks that the controller refuses a tag change by the normal account, and
 undoes its changes as the admin. A second live test checks the data behind
 the tabs: sessions and circuits, the graph with this agent's hops as edges,
-the conntrack answer and the agent's metrics. Both are skipped when no local
-network runs.
+the conntrack answer and the agent's metrics. A third rebuilds the state
+tree from the agent's leaves and checks it against the signed root, every
+node's leaf and proof, the root signature on the first admin's record, and
+the operation log read through node-02 (genesis signed by the root key,
+alice's operations, paging), and that a normal account's log request is
+refused. They are skipped when no local network runs.
 
-The headless render test draws every tab from `tests/fixtures/node-02.json`,
+The headless render test draws every tab from `tests/fixtures/node-02.json`
+and drives the graph with simulated mouse events (drag a node, click it, pan,
+wheel zoom),
 the agents' answers captured from `scripts/local-net.sh 4`. Capture it again
 after changing what the agent reports.

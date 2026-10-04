@@ -2,9 +2,37 @@
 //! link), the circuits of this agent, and the selected node's details.
 
 use super::*;
-use crate::graph::Edge;
+use crate::graph::{Edge, Viewport};
 use crate::model::{Action, Circuit, Node, Sessions};
-use gpui::{Bounds, PathBuilder, Pixels, canvas, point};
+use gpui::{
+    Bounds, CursorStyle, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathBuilder, Pixels, Point, ScrollDelta, ScrollWheelEvent, canvas, point,
+};
+
+/// What a drag on the graph moves.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum DragKind {
+    /// The whole picture.
+    Pan,
+    /// One node, by id.
+    Node(String),
+}
+
+/// A drag on the graph in progress. Positions are fractions of the graph
+/// area (see `Viewport`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Drag {
+    pub kind: DragKind,
+    start: (f32, f32),
+    last: (f32, f32),
+    /// From the pointer to the dragged node's center, in graph units.
+    grab: (f32, f32),
+    /// Moved beyond the click threshold: not a click any more.
+    pub moved: bool,
+}
+
+/// Pixels a press may wander and still count as a click.
+const CLICK_SLOP: f32 = 3.0;
 
 /// One edge as the canvas draws it.
 struct Line {
@@ -34,14 +62,31 @@ fn kind_text(kind: &str) -> &'static str {
     }
 }
 
-fn edges_canvas(lines: Vec<Line>) -> impl IntoElement {
+/// The edges, drawn through the viewport. The canvas also records the
+/// area's bounds (to turn pointer positions into graph positions) and,
+/// while a drag is on, follows the pointer anywhere in the window.
+fn edges_canvas(
+    lines: Vec<Line>,
+    vp: Viewport,
+    bounds: Rc<Cell<[f32; 4]>>,
+    dragging: Option<Entity<WebjetApp>>,
+) -> impl IntoElement {
     canvas(
-        move |_, _, _| lines,
+        move |b: Bounds<Pixels>, _, _| {
+            bounds.set([
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            ]);
+            lines
+        },
         move |b: Bounds<Pixels>, lines, window, _| {
             let at = |p: (f32, f32)| {
+                let v = vp.to_view(p);
                 point(
-                    b.origin.x + b.size.width * p.0,
-                    b.origin.y + b.size.height * p.1,
+                    b.origin.x + b.size.width * v.0,
+                    b.origin.y + b.size.height * v.1,
                 )
             };
             for l in lines {
@@ -55,6 +100,26 @@ fn edges_canvas(lines: Vec<Line>) -> impl IntoElement {
                     window.paint_path(p, rgb(l.color));
                 }
             }
+            if let Some(app) = dragging {
+                let up = app.clone();
+                window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Bubble {
+                        app.update(cx, |this, cx| {
+                            if e.pressed_button == Some(MouseButton::Left) {
+                                this.drag_to(e.position, cx);
+                            } else {
+                                // The button went up outside the window.
+                                this.end_drag(cx);
+                            }
+                        });
+                    }
+                });
+                window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Bubble && e.button == MouseButton::Left {
+                        up.update(cx, |this, cx| this.end_drag(cx));
+                    }
+                });
+            }
         },
     )
     .absolute()
@@ -64,6 +129,106 @@ fn edges_canvas(lines: Vec<Line>) -> impl IntoElement {
 }
 
 impl WebjetApp {
+    /// A window position as a fraction of the graph area.
+    fn graph_pos(&self, p: Point<Pixels>) -> (f32, f32) {
+        let [x, y, w, h] = self.graph_bounds.get();
+        (
+            (f32::from(p.x) - x) / w.max(1.0),
+            (f32::from(p.y) - y) / h.max(1.0),
+        )
+    }
+
+    pub(super) fn start_drag(&mut self, kind: DragKind, at: Point<Pixels>) {
+        let v = self.graph_pos(at);
+        let grab = match &kind {
+            DragKind::Node(id) => self
+                .graph
+                .index(id)
+                .map(|i| {
+                    let g = self.viewport.to_graph(v);
+                    let n = &self.graph.vertices[i];
+                    (n.x - g.0, n.y - g.1)
+                })
+                .unwrap_or((0.0, 0.0)),
+            DragKind::Pan => (0.0, 0.0),
+        };
+        self.drag = Some(Drag {
+            kind,
+            start: v,
+            last: v,
+            grab,
+            moved: false,
+        });
+    }
+
+    pub(super) fn drag_to(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let v = self.graph_pos(at);
+        let [_, _, w, h] = self.graph_bounds.get();
+        let Some(d) = &mut self.drag else { return };
+        if !d.moved {
+            let (dx, dy) = ((v.0 - d.start.0) * w, (v.1 - d.start.1) * h);
+            if dx.hypot(dy) < CLICK_SLOP {
+                return;
+            }
+            d.moved = true;
+        }
+        match &d.kind {
+            DragKind::Pan => self.viewport.pan_by(v.0 - d.last.0, v.1 - d.last.1),
+            DragKind::Node(id) => {
+                let g = self.viewport.to_graph(v);
+                let p = (g.0 + d.grab.0, g.1 + d.grab.1);
+                self.pinned.insert(id.clone(), p);
+                if let Some(i) = self.graph.index(id) {
+                    self.graph.vertices[i].x = p.0;
+                    self.graph.vertices[i].y = p.1;
+                }
+            }
+        }
+        d.last = v;
+        cx.notify();
+    }
+
+    /// The button went up: a node pressed without moving was clicked.
+    pub(super) fn end_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(d) = self.drag.take() else { return };
+        if !d.moved
+            && let DragKind::Node(id) = d.kind
+        {
+            self.selected = if self.selected.as_deref() == Some(id.as_str()) {
+                None
+            } else {
+                Some(id)
+            };
+            self.confirm = None;
+        }
+        cx.notify();
+    }
+
+    /// Two-finger scrolling pans; a mouse wheel, or scrolling with ⌘ or
+    /// Ctrl held, zooms around the pointer.
+    pub(super) fn scroll_graph(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let at = self.graph_pos(e.position);
+        let [_, _, w, h] = self.graph_bounds.get();
+        let zoom = e.modifiers.platform || e.modifiers.control;
+        match e.delta {
+            ScrollDelta::Pixels(p) if !zoom => self
+                .viewport
+                .pan_by(f32::from(p.x) / w.max(1.0), f32::from(p.y) / h.max(1.0)),
+            ScrollDelta::Pixels(p) => self.viewport.zoom_at((f32::from(p.y) * 0.01).exp(), at),
+            ScrollDelta::Lines(l) => self.viewport.zoom_at((l.y * 0.15).exp(), at),
+        }
+        cx.notify();
+    }
+
+    /// Forget moved nodes and go back to the computed layout and view.
+    pub(super) fn reset_layout(&mut self) {
+        self.pinned.clear();
+        self.viewport = Viewport::default();
+        if let Some(s) = &self.snapshot {
+            self.graph = crate::graph::Graph::from_snapshot(s);
+        }
+    }
+
     pub(super) fn render_nodes(&mut self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         let sessions = s.sessions.as_ref().ok();
         let left = div()
@@ -137,21 +302,49 @@ impl WebjetApp {
                 dashed: !e.mine() && e.reports.iter().all(|r| r.kind == "attachment"),
             });
             if show_labels || highlight || touches {
-                labels.push((
-                    (va.x + vb.x) / 2.0,
-                    (va.y + vb.y) / 2.0,
-                    rtt_text(e.rtt_ms()),
-                ));
+                let (x, y) = self
+                    .viewport
+                    .to_view(((va.x + vb.x) / 2.0, (va.y + vb.y) / 2.0));
+                labels.push((x, y, rtt_text(e.rtt_ms())));
             }
         }
+        let panning = self.drag.as_ref().is_some_and(|d| d.moved);
+        let listen = self.drag.is_some().then(|| cx.entity());
         let mut area = div()
+            .id("graph-area")
             .relative()
             .flex_1()
             .min_h(px(260.))
             .rounded_md()
             .bg(rgb(theme::INPUT))
             .overflow_hidden()
-            .child(edges_canvas(lines));
+            .cursor(if panning {
+                CursorStyle::ClosedHand
+            } else {
+                CursorStyle::OpenHand
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    this.start_drag(DragKind::Pan, e.position);
+                    cx.notify();
+                }),
+            )
+            // Also ends a drag released before the window redrew with its
+            // window-wide listeners.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_drag(cx)),
+            )
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+                this.scroll_graph(e, cx);
+            }))
+            .child(edges_canvas(
+                lines,
+                self.viewport,
+                self.graph_bounds.clone(),
+                listen,
+            ));
         for (i, (x, y, t)) in labels.into_iter().enumerate() {
             area = area.child(
                 div()
@@ -180,6 +373,11 @@ impl WebjetApp {
             let selected = sel == Some(i);
             let in_path = path.iter().any(|p| p == &v.id);
             let id = v.id.clone();
+            let (vx, vy) = self.viewport.to_view((v.x, v.y));
+            let dragged = self
+                .drag
+                .as_ref()
+                .is_some_and(|d| d.moved && d.kind == DragKind::Node(v.id.clone()));
             let ring = if selected {
                 0xffffff
             } else if in_path {
@@ -193,15 +391,19 @@ impl WebjetApp {
                 div()
                     .id(("vertex", i))
                     .absolute()
-                    .left(gpui::relative(v.x))
-                    .top(gpui::relative(v.y))
+                    .left(gpui::relative(vx))
+                    .top(gpui::relative(vy))
                     .ml(px(-60.))
                     .mt(px(-size / 2.0))
                     .w(px(120.))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .cursor_pointer()
+                    .cursor(if dragged {
+                        CursorStyle::ClosedHand
+                    } else {
+                        CursorStyle::PointingHand
+                    })
                     .child(
                         div()
                             .w(px(size))
@@ -240,15 +442,15 @@ impl WebjetApp {
                                 v.name.clone()
                             }),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected = if this.selected.as_deref() == Some(id.as_str()) {
-                            None
-                        } else {
-                            Some(id.clone())
-                        };
-                        this.confirm = None;
-                        cx.notify();
-                    })),
+                    // Press and release: select; press and move: place it.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                            this.start_drag(DragKind::Node(id.clone()), e.position);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
             );
         }
         if g.vertices.is_empty() {
@@ -281,6 +483,57 @@ impl WebjetApp {
             .child(legend_item(theme::WARN, "slow or lossy"))
             .child(legend_item(theme::BAD, "bad"))
             .child(muted("thick: this agent's hops · dashed: attachments").text_xs());
+        let hint = muted(
+            "Drag the background to move the picture, drag a node to place it · scroll to move, \
+             mouse wheel or ⌘/Ctrl + scroll to zoom",
+        )
+        .text_xs();
+        let moved = self.pinned.len();
+        let tools = div()
+            .flex()
+            .gap_1()
+            .items_center()
+            .child(muted(format!("{:.0}%", self.viewport.zoom * 100.0)).text_xs())
+            .child(
+                button("zoom-out", "−", true, theme::RAISED).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.viewport.zoom_at(1.0 / 1.25, (0.5, 0.5));
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("zoom-in", "+", true, theme::RAISED).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.viewport.zoom_at(1.25, (0.5, 0.5));
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("fit", "Fit", true, theme::RAISED).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.viewport = Viewport::default();
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button(
+                    "relayout",
+                    &if moved > 0 {
+                        format!("Re-layout ({moved} moved)")
+                    } else {
+                        "Re-layout".to_string()
+                    },
+                    moved > 0,
+                    theme::RAISED,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.reset_layout();
+                    cx.notify();
+                })),
+            );
         let topo_note = match &s.topology {
             Ok(_) => format!("{} nodes · {} links", g.vertices.len(), g.edges.len()),
             Err(e) => format!("links unavailable: {e}"),
@@ -293,11 +546,19 @@ impl WebjetApp {
                     .flex()
                     .justify_between()
                     .items_center()
-                    .child(heading("Network"))
-                    .child(muted(topo_note).text_xs()),
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .items_center()
+                            .child(heading("Network"))
+                            .child(muted(topo_note).text_xs()),
+                    )
+                    .child(tools),
             )
             .child(area)
             .child(legend)
+            .child(hint)
             .into_any_element()
     }
 

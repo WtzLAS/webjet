@@ -2,6 +2,7 @@
 //! applying operations, signing tree heads, serving enrollment, PSK and
 //! camouflage material, and collecting metric reports.
 
+pub mod audit;
 pub mod raft;
 pub mod signer;
 
@@ -11,7 +12,7 @@ use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use raft::{Raft, Role};
 use signer::Signer;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -88,6 +89,10 @@ pub struct Controller {
     last_signed: Mutex<(u64, u64)>,
     pub halted: Mutex<Option<String>>,
     pub reports: Mutex<HashMap<Bytes32, StoredReport>>,
+    /// What each entry still in the log did when applied, by index (the
+    /// audit trail, `audit::summarize`). Entries since the snapshot are
+    /// re-applied at start, so this covers the whole log.
+    descriptions: Mutex<BTreeMap<u64, String>>,
     bootstrap: bool,
 }
 
@@ -165,6 +170,7 @@ impl Controller {
             last_signed: Mutex::new((0, 0)),
             halted: Mutex::new(None),
             reports: Mutex::new(HashMap::new()),
+            descriptions: Mutex::new(BTreeMap::new()),
             bootstrap,
         });
         // Controllers accept every PSK epoch (§10.7.3).
@@ -255,6 +261,9 @@ impl Controller {
             match res {
                 Ok(outcome) => {
                     self.applied.store(next, Ordering::SeqCst);
+                    self.descriptions
+                        .lock()
+                        .insert(next, outcome.description.clone());
                     if !outcome.description.is_empty() && outcome.description != "no-op" {
                         tracing::info!(index = next, signer = ?outcome.signer.map(|s| crypto::short(&s)), "applied: {}", outcome.description);
                     }
@@ -314,9 +323,51 @@ impl Controller {
             let m = self.machine.lock();
             (m.snapshot_bytes(), m.last_index)
         };
-        let mut r = self.raft.lock();
-        if r.storage().save_snapshot(&bytes).is_ok() {
-            r.compact(idx);
+        let first = {
+            let mut r = self.raft.lock();
+            if r.storage().save_snapshot(&bytes).is_ok() {
+                r.compact(idx);
+            }
+            r.snap_index + 1
+        };
+        self.descriptions.lock().retain(|i, _| *i >= first);
+    }
+
+    /// The audit trail for an admin's signed `LogRequest`.
+    pub fn log(&self, raw: &[u8]) -> wp::LogReply {
+        let checked = {
+            let m = self.machine.lock();
+            audit::check_request(m.view(), raw, now_ms())
+        };
+        let req = match checked {
+            Ok(r) => r,
+            Err(e) => {
+                return wp::LogReply {
+                    error: Some(format!("{e:#}")),
+                    ..Default::default()
+                };
+            }
+        };
+        let (first, commit, entries) = {
+            let r = self.raft.lock();
+            let first = r.snap_index + 1;
+            let entries: Vec<(u64, Vec<u8>)> = audit::window(&req, first, r.commit)
+                .filter_map(|i| r.entry(i).map(|e| (i, e.bytes.clone())))
+                .collect();
+            (first, r.commit, entries)
+        };
+        let records = {
+            let d = self.descriptions.lock();
+            entries
+                .iter()
+                .filter_map(|(i, b)| audit::summarize(b, d.get(i).cloned()))
+                .collect()
+        };
+        wp::LogReply {
+            error: None,
+            first_index: first,
+            commit_index: commit,
+            records: Some(records),
         }
     }
 
@@ -740,6 +791,9 @@ impl Controller {
             RpcBody::GetControllerStatus(_) => {
                 Some(RpcBody::ControllerStatus(Box::new(self.status_wire(&n))))
             }
+            RpcBody::GetLog(g) => Some(RpcBody::LogReply(Box::new(
+                self.log(&g.request.unwrap_or_default()),
+            ))),
             _ => None,
         }
     }
