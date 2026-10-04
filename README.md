@@ -141,7 +141,7 @@ macOS (x86_64 and aarch64) and Windows (x86_64).
 root:
 
 ```sh
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.0/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.4.1/install.sh | sudo sh
 sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl network node enroll`
 ```
 
@@ -150,13 +150,13 @@ otherwise (Forgejo has no "latest" download link, so the URL names a tag).
 It downloads `webjetup` for the machine, checks it against its `.sha256` and
 runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
-`… | sudo sh -s -- v0.4.0` picks a version.
+`… | sudo sh -s -- v0.4.1` picks a version.
 
 On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
 release page and, in an Administrator prompt:
 
 ```powershell
-.\webjetup-v0.4.0-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
+.\webjetup-v0.4.1-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
 ```
 
 Then, on any platform:
@@ -168,7 +168,7 @@ Then, on any platform:
 | `webjetup status` | Installed version, service state, enrollment, this node's name and addresses. |
 | `webjetup list` | Published releases. |
 | `webjetup remove` (alias `uninstall`) | Stop the agent and remove the programs and service. The node's identity and state stay, so `webjetup install` brings it back as the same node. |
-| `webjetup nuke` | Also delete the identity key (including Keychain items), network state, configuration, logs, leftover DNS settings, the `webjet` user and webjetup itself. The node must be enrolled again; an admin should revoke its old record. Account keys in home directories are not touched. |
+| `webjetup nuke` | Also delete the identity key (including its Keychain items, also in a keychain set by `[key] keychain`), network state, configuration, logs, leftover DNS settings, the `webjet` user and webjetup itself. The node must be enrolled again; an admin should revoke its old record. Account keys in home directories are not touched. |
 
 `--dry-run` shows what any command would change. `remove` and `nuke` ask for
 confirmation; `--yes` skips it. `WEBJETUP_REPO` points webjetup at another

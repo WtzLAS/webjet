@@ -543,28 +543,133 @@ pub fn windows_restrict(sys: &Sys, dir: &Path) -> Result<()> {
 
 // ---------------------------------------------------------------- leftovers for nuke
 
-/// Delete identity keys webjetd put in the System keychain (macOS).
-pub fn delete_keychain_items(sys: &Sys) {
+/// Delete the identity keys webjetd put in the System keychain and, when
+/// webjetd.toml names one (`[key] keychain`), that keychain (macOS).
+///
+/// Items are deleted through the Security framework by reference, without
+/// reading them, so it works whatever their access list says (0.4.0 created
+/// them readable only by webjetctl), and without UI, so it can't hang on a
+/// consent dialog. Afterwards it checks that none are left.
+pub fn delete_keychain_items(sys: &Sys, config: &Path) -> Result<()> {
     if !cfg!(target_os = "macos") {
-        return;
+        return Ok(());
     }
-    let args = [
-        "delete-generic-password",
-        "-s",
-        layout::KEYCHAIN_SERVICE,
-        "/Library/Keychains/System.keychain",
-    ];
-    if sys.dry {
-        sys.say(&format!("run security {}", args.join(" ")));
-        return;
+    let mut keychains = vec![PathBuf::from(layout::SYSTEM_KEYCHAIN)];
+    if let Some(k) = configured_keychain(config)
+        && !keychains.contains(&k)
+    {
+        keychains.push(k);
     }
-    let mut n = 0;
-    // Each call deletes one matching item.
-    while n < 32 && sys.try_run("security", &args) {
-        n += 1;
+    for kc in &keychains {
+        if sys.dry {
+            sys.say(&format!(
+                "delete the {} items from {}",
+                layout::KEYCHAIN_SERVICE,
+                kc.display()
+            ));
+            continue;
+        }
+        if !kc.exists() {
+            continue;
+        }
+        let n = keychain::delete_all(kc)
+            .with_context(|| format!("delete identity keys from {}", kc.display()))?;
+        if n > 0 {
+            println!("    removed {n} identity key(s) from {}", kc.display());
+        }
+        let left = keychain::count(kc)?;
+        if left > 0 {
+            bail!(
+                "{left} identity key(s) are still in {} (service {}); delete them with \
+                 `sudo security delete-generic-password -s {} {}`",
+                kc.display(),
+                layout::KEYCHAIN_SERVICE,
+                layout::KEYCHAIN_SERVICE,
+                kc.display()
+            );
+        }
     }
-    if n > 0 {
-        println!("    removed {n} identity key(s) from the System keychain");
+    Ok(())
+}
+
+/// `[key] keychain` from webjetd.toml, if set.
+fn configured_keychain(config: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(config).ok()?;
+    let v: toml::Table = text.parse().ok()?;
+    let p = v.get("key")?.get("keychain")?.as_str()?;
+    let p = PathBuf::from(p);
+    Some(if p.is_relative() {
+        config.parent().unwrap_or(Path::new("/")).join(p)
+    } else {
+        p
+    })
+}
+
+#[cfg(target_os = "macos")]
+mod keychain {
+    use super::layout::KEYCHAIN_SERVICE;
+    use anyhow::{Result, anyhow, bail};
+    use security_framework::item::{ItemClass, ItemSearchOptions, Limit, Reference, SearchResult};
+    use security_framework::os::macos::keychain::SecKeychain;
+    use security_framework_sys::base::errSecItemNotFound;
+    use security_framework_sys::keychain_item::SecKeychainItemDelete;
+    use std::path::Path;
+
+    fn find(
+        kc: &Path,
+    ) -> Result<Vec<security_framework::os::macos::keychain_item::SecKeychainItem>> {
+        let keychain =
+            SecKeychain::open(kc).map_err(|e| anyhow!("open keychain {}: {e}", kc.display()))?;
+        let found = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .keychains(&[keychain])
+            .service(KEYCHAIN_SERVICE)
+            .load_refs(true)
+            .limit(Limit::All)
+            .search();
+        let found = match found {
+            Ok(v) => v,
+            Err(e) if e.code() == errSecItemNotFound => return Ok(Vec::new()),
+            Err(e) => bail!("search {}: {e}", kc.display()),
+        };
+        Ok(found
+            .into_iter()
+            .filter_map(|r| match r {
+                SearchResult::Ref(Reference::KeychainItem(i)) => Some(i),
+                _ => None,
+            })
+            .collect())
+    }
+
+    pub fn delete_all(kc: &Path) -> Result<usize> {
+        use core_foundation::base::TCFType;
+        let _ui = SecKeychain::disable_user_interaction();
+        let items = find(kc)?;
+        for item in &items {
+            // SAFETY: `item` is a live keychain item reference.
+            let status = unsafe { SecKeychainItemDelete(item.as_concrete_TypeRef()) };
+            if status != 0 {
+                bail!("{}", security_framework::base::Error::from_code(status));
+            }
+        }
+        Ok(items.len())
+    }
+
+    pub fn count(kc: &Path) -> Result<usize> {
+        let _ui = SecKeychain::disable_user_interaction();
+        Ok(find(kc)?.len())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod keychain {
+    use anyhow::Result;
+    use std::path::Path;
+    pub fn delete_all(_: &Path) -> Result<usize> {
+        Ok(0)
+    }
+    pub fn count(_: &Path) -> Result<usize> {
+        Ok(0)
     }
 }
 
@@ -640,6 +745,74 @@ mod tests {
             "<string>{}</string><string>run</string>",
             l.program("webjetd").display()
         )));
+    }
+
+    #[test]
+    fn keychain_path_from_the_config() {
+        let d = tempfile::tempdir().unwrap();
+        let c = d.path().join("webjetd.toml");
+        assert_eq!(configured_keychain(&c), None, "no config");
+        std::fs::write(
+            &c,
+            "[key]\nstorage = \"keychain\"\nkeychain = \"k.keychain-db\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            configured_keychain(&c),
+            Some(d.path().join("k.keychain-db"))
+        );
+        std::fs::write(&c, "[key]\nkeychain = \"/x/k.keychain-db\"\n").unwrap();
+        assert_eq!(
+            configured_keychain(&c),
+            Some(PathBuf::from("/x/k.keychain-db"))
+        );
+        std::fs::write(&c, "[key]\nstorage = \"file\"\n").unwrap();
+        assert_eq!(configured_keychain(&c), None);
+    }
+
+    /// Items created by another program with the default access list (as
+    /// 0.4.0's webjetctl did) can't be read by webjetup, but are deleted.
+    /// Runs against a temporary keychain (no root needed).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn nuke_deletes_keychain_items_it_cannot_read() {
+        use security_framework::os::macos::keychain::CreateOptions;
+        let d = tempfile::tempdir().unwrap();
+        let kcp = d.path().join("test.keychain-db");
+        let mut kc = CreateOptions::new().password("pw").create(&kcp).unwrap();
+        kc.unlock(Some("pw")).unwrap();
+        let add = |service: &str, account: &str| {
+            let ok = Command::new("security")
+                .args([
+                    "add-generic-password",
+                    "-s",
+                    service,
+                    "-a",
+                    account,
+                    "-w",
+                    "secret",
+                ])
+                .arg(&kcp)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "security add-generic-password");
+        };
+        add(layout::KEYCHAIN_SERVICE, "identity-1");
+        add(layout::KEYCHAIN_SERVICE, "identity-2");
+        add("something.else", "identity-1");
+        assert_eq!(keychain::count(&kcp).unwrap(), 2);
+        assert_eq!(keychain::delete_all(&kcp).unwrap(), 2);
+        assert_eq!(keychain::count(&kcp).unwrap(), 0);
+        assert_eq!(keychain::delete_all(&kcp).unwrap(), 0, "nothing left");
+        let other = Command::new("security")
+            .args(["find-generic-password", "-s", "something.else"])
+            .arg(&kcp)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(other.success(), "other items are kept");
+        drop(kc);
     }
 
     #[test]

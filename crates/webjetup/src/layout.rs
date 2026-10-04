@@ -24,6 +24,8 @@ pub const LAUNCHD_LABEL: &str = "net.webjet.webjetd";
 
 /// The Keychain service name under which webjetd stores identity keys.
 pub const KEYCHAIN_SERVICE: &str = "net.webjet.identity";
+/// Where webjetd keeps them unless `[key] keychain` says otherwise.
+pub const SYSTEM_KEYCHAIN: &str = "/Library/Keychains/System.keychain";
 
 /// The system user webjetd runs as on Linux.
 pub const LINUX_USER: &str = "webjet";

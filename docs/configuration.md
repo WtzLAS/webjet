@@ -300,6 +300,15 @@ Where the identity key is stored at rest (§8.3).
 | `storage` | `auto` | `auto`, `tpm`, `keychain`, `dpapi` or `file`. `auto` uses the TPM on Linux when one is usable, the System keychain on macOS and DPAPI on Windows, and falls back to `file` with a warning. An explicitly chosen backend must work. |
 | `keychain` | System keychain | macOS: a different keychain file. |
 
+On macOS the key is a generic password item (service `net.webjet.identity`)
+in the System keychain, which only root can open. Any program running as root
+may read the item, so the agent can use a key written by `webjetctl` or by an
+older agent. Keys written by 0.4.0 trusted only the program that wrote them, so
+the agent can't read them ("doesn't let webjetd read it"). To fix this,
+re-key the node: an admin runs `webjetctl network node rekey`, and you run
+`webjetup enroll` with the new string. `webjetup nuke` deletes these items
+too.
+
 TPM, Keychain and DPAPI keys are bound to the machine: a copied or restored
 `identity.key` is refused with a message to re-key the node (runbook 9).
 The backend is chosen when the key is written (`webjetctl local init`, enrollment or

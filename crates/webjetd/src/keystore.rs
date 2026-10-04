@@ -451,43 +451,266 @@ pub mod keychain {
     pub const SERVICE: &str = "net.webjet.identity";
     pub const SYSTEM: &str = "/Library/Keychains/System.keychain";
 
+    /// The seed is a generic password item (service [`SERVICE`], account =
+    /// the payload in `identity.key`) whose access list lets any program
+    /// read it, like `security add-generic-password -A`. The default access
+    /// list trusts only the program that created the item (and, for an
+    /// ad-hoc signed binary, only that exact build): an item written by
+    /// `webjetctl local enroll` was then unreadable for the webjetd daemon
+    /// ("User interaction is not allowed"), and every upgrade would have
+    /// locked the agent out of its own key. What protects the item is the
+    /// keychain: the System keychain opens only for root, the same bar as a
+    /// root-owned `file` key, but the seed isn't stored in plain on disk.
     #[cfg(target_os = "macos")]
-    fn open(path: Option<&Path>) -> Result<security_framework::os::macos::keychain::SecKeychain> {
-        let p = path
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(SYSTEM));
-        security_framework::os::macos::keychain::SecKeychain::open(&p)
-            .map_err(|e| anyhow!("open keychain {}: {e}", p.display()))
-    }
+    mod imp {
+        use super::*;
+        use core_foundation::array::{CFArray, CFArrayRef};
+        use core_foundation::base::{CFType, CFTypeRef, TCFType};
+        use core_foundation::string::{CFString, CFStringRef};
+        use security_framework::base::Error as SecError;
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit, Reference};
+        use security_framework::os::macos::access::SecAccess;
+        use security_framework::os::macos::keychain::SecKeychain;
+        use security_framework_sys::base::{
+            SecAccessRef, SecKeychainAttribute, SecKeychainAttributeList, SecKeychainItemRef,
+            SecKeychainRef, errSecAuthFailed, errSecItemNotFound,
+        };
+        use std::os::raw::c_void;
 
-    /// Store the seed as a generic password; the payload is the account name.
-    #[cfg(target_os = "macos")]
-    pub fn store(path: Option<&Path>, account: &str, seed: &Bytes32) -> Result<Vec<u8>> {
-        let kc = open(path)?;
-        if let Ok((_, item)) = kc.find_generic_password(SERVICE, account) {
-            item.delete();
+        type OsStatus = i32;
+        type SecAclRef = *const c_void;
+        /// `errSecInteractionNotAllowed`: the item's access list would need
+        /// the user's consent, which a daemon (or a disabled UI) can't give.
+        const ERR_INTERACTION_NOT_ALLOWED: OsStatus = -25308;
+        /// `errSecNoAccessForItem`.
+        const ERR_NO_ACCESS_FOR_ITEM: OsStatus = -25243;
+
+        // Legacy (file-based keychain) access control API. Deprecated, but
+        // it is the only one for the System keychain and still supported.
+        #[link(name = "Security", kind = "framework")]
+        unsafe extern "C" {
+            static kSecACLAuthorizationDecrypt: CFStringRef;
+            fn SecAccessCreate(
+                descriptor: CFStringRef,
+                trusted_list: CFArrayRef,
+                access: *mut SecAccessRef,
+            ) -> OsStatus;
+            fn SecAccessCopyMatchingACLList(access: SecAccessRef, tag: CFTypeRef) -> CFArrayRef;
+            fn SecACLCopyContents(
+                acl: SecAclRef,
+                application_list: *mut CFArrayRef,
+                description: *mut CFStringRef,
+                prompt_selector: *mut u16,
+            ) -> OsStatus;
+            fn SecACLSetContents(
+                acl: SecAclRef,
+                application_list: CFArrayRef,
+                description: CFStringRef,
+                prompt_selector: u16,
+            ) -> OsStatus;
+            fn SecKeychainItemCreateFromContent(
+                item_class: u32,
+                attr_list: *const SecKeychainAttributeList,
+                length: u32,
+                data: *const c_void,
+                keychain: SecKeychainRef,
+                initial_access: SecAccessRef,
+                item: *mut SecKeychainItemRef,
+            ) -> OsStatus;
+            fn SecKeychainItemDelete(item: SecKeychainItemRef) -> OsStatus;
         }
-        kc.set_generic_password(SERVICE, account, &seed[..])
-            .map_err(|e| anyhow!("store identity key in the keychain: {e}"))?;
-        Ok(account.as_bytes().to_vec())
+
+        fn fourcc(s: &[u8; 4]) -> u32 {
+            u32::from_be_bytes(*s)
+        }
+
+        fn check(status: OsStatus) -> std::result::Result<(), SecError> {
+            if status == 0 {
+                Ok(())
+            } else {
+                Err(SecError::from_code(status))
+            }
+        }
+
+        pub fn open(path: Option<&Path>) -> Result<SecKeychain> {
+            let p = path
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(SYSTEM));
+            SecKeychain::open(&p).map_err(|e| anyhow!("open keychain {}: {e}", p.display()))
+        }
+
+        /// An access object whose decrypt entries trust every application.
+        fn open_access() -> std::result::Result<SecAccess, SecError> {
+            let desc = CFString::new(SERVICE);
+            let none: CFArray<CFType> = CFArray::from_CFTypes(&[]);
+            let mut raw: SecAccessRef = std::ptr::null_mut();
+            // SAFETY: valid CF objects in, `raw` is an out pointer; on success
+            // we own the returned reference (create rule).
+            check(unsafe {
+                SecAccessCreate(
+                    desc.as_concrete_TypeRef(),
+                    none.as_concrete_TypeRef(),
+                    &mut raw,
+                )
+            })?;
+            if raw.is_null() {
+                return Err(SecError::from_code(errSecAuthFailed));
+            }
+            // SAFETY: `raw` is a +1 SecAccessRef from SecAccessCreate.
+            let access = unsafe { SecAccess::wrap_under_create_rule(raw) };
+            // SAFETY: the access object is valid; the tag is a constant
+            // CFString from the framework. The result is +1 (or null).
+            let list = unsafe {
+                SecAccessCopyMatchingACLList(
+                    access.as_concrete_TypeRef(),
+                    kSecACLAuthorizationDecrypt as CFTypeRef,
+                )
+            };
+            if list.is_null() {
+                return Err(SecError::from_code(errSecAuthFailed));
+            }
+            // SAFETY: +1 CFArray of SecACLRef.
+            let acls: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(list) };
+            for acl in acls.iter() {
+                let acl = acl.as_CFTypeRef();
+                let mut apps: CFArrayRef = std::ptr::null();
+                let mut desc: CFStringRef = std::ptr::null();
+                let mut prompt = 0u16;
+                // SAFETY: `acl` stays alive in `acls`; out pointers are valid.
+                check(unsafe { SecACLCopyContents(acl, &mut apps, &mut desc, &mut prompt) })?;
+                // SAFETY: both outputs are +1 references (or null); wrapping
+                // them releases them at the end of this iteration.
+                let _apps = (!apps.is_null())
+                    .then(|| unsafe { CFArray::<CFType>::wrap_under_create_rule(apps) });
+                let desc =
+                    (!desc.is_null()).then(|| unsafe { CFString::wrap_under_create_rule(desc) });
+                let desc_ref = desc
+                    .as_ref()
+                    .map_or(std::ptr::null(), |d| d.as_concrete_TypeRef());
+                // SAFETY: a null application list means "any application".
+                check(unsafe { SecACLSetContents(acl, std::ptr::null(), desc_ref, prompt) })?;
+            }
+            Ok(access)
+        }
+
+        /// Delete the items for `account` (all of webjet's when `None`)
+        /// without reading them, so it works whatever their access list
+        /// says. Returns how many were deleted.
+        pub fn remove(kc: &SecKeychain, account: Option<&str>) -> Result<usize> {
+            let mut q = ItemSearchOptions::new();
+            q.class(ItemClass::generic_password())
+                .keychains(std::slice::from_ref(kc))
+                .service(SERVICE)
+                .load_refs(true)
+                .limit(Limit::All);
+            if let Some(a) = account {
+                q.account(a);
+            }
+            let found = match q.search() {
+                Ok(v) => v,
+                Err(e) if e.code() == errSecItemNotFound => return Ok(0),
+                Err(e) => bail!("search the keychain: {e}"),
+            };
+            let mut n = 0;
+            for r in found {
+                if let security_framework::item::SearchResult::Ref(Reference::KeychainItem(item)) =
+                    r
+                {
+                    // SAFETY: `item` is a live keychain item reference.
+                    check(unsafe { SecKeychainItemDelete(item.as_concrete_TypeRef()) })
+                        .map_err(|e| anyhow!("delete a keychain item: {e}"))?;
+                    n += 1;
+                }
+            }
+            Ok(n)
+        }
+
+        pub fn store(path: Option<&Path>, account: &str, seed: &Bytes32) -> Result<Vec<u8>> {
+            // Never block on a consent dialog (an agent has no one to ask).
+            let _ui = SecKeychain::disable_user_interaction();
+            let kc = open(path)?;
+            remove(&kc, Some(account))?;
+            let access =
+                open_access().map_err(|e| anyhow!("set up the keychain item's access: {e}"))?;
+            let len = |s: &str| u32::try_from(s.len()).unwrap_or(u32::MAX);
+            let mut attrs = [
+                SecKeychainAttribute {
+                    tag: fourcc(b"svce"),
+                    length: len(SERVICE),
+                    data: SERVICE.as_ptr() as *mut c_void,
+                },
+                SecKeychainAttribute {
+                    tag: fourcc(b"acct"),
+                    length: len(account),
+                    data: account.as_ptr() as *mut c_void,
+                },
+                SecKeychainAttribute {
+                    tag: fourcc(b"labl"),
+                    length: len(SERVICE),
+                    data: SERVICE.as_ptr() as *mut c_void,
+                },
+            ];
+            let list = SecKeychainAttributeList {
+                count: attrs.len() as u32,
+                attr: attrs.as_mut_ptr(),
+            };
+            let mut item: SecKeychainItemRef = std::ptr::null_mut();
+            // SAFETY: the attribute data outlive the call (SERVICE is static,
+            // `account` is borrowed); the item reference is +1 and released.
+            let status = unsafe {
+                SecKeychainItemCreateFromContent(
+                    fourcc(b"genp"),
+                    &list,
+                    seed.len() as u32,
+                    seed.as_ptr().cast(),
+                    kc.as_concrete_TypeRef(),
+                    access.as_concrete_TypeRef(),
+                    &mut item,
+                )
+            };
+            if !item.is_null() {
+                // SAFETY: +1 reference from the create call.
+                drop(unsafe { CFType::wrap_under_create_rule(item as CFTypeRef) });
+            }
+            check(status).map_err(|e| anyhow!("store identity key in the keychain: {e}"))?;
+            Ok(account.as_bytes().to_vec())
+        }
+
+        pub fn load(path: Option<&Path>, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+            let account = std::str::from_utf8(payload)?;
+            let _ui = SecKeychain::disable_user_interaction();
+            let kc = open(path)?;
+            match kc.find_generic_password(SERVICE, account) {
+                Ok((pw, _)) => Ok(Zeroizing::new(pw.as_ref().to_vec())),
+                Err(e)
+                    if [
+                        ERR_INTERACTION_NOT_ALLOWED,
+                        errSecAuthFailed,
+                        ERR_NO_ACCESS_FOR_ITEM,
+                    ]
+                    .contains(&e.code()) =>
+                {
+                    bail!(
+                        "the identity key's keychain item doesn't let webjetd read it ({e}); \
+                         webjet 0.4.0 created it readable only by the program that wrote it \
+                         (webjetctl), so it can't be recovered"
+                    )
+                }
+                Err(e) => bail!("identity key not in this machine's keychain: {e}"),
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
-    pub fn load(path: Option<&Path>, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-        let account = std::str::from_utf8(payload)?;
-        let kc = open(path)?;
-        let (pw, _) = kc
-            .find_generic_password(SERVICE, account)
-            .map_err(|e| anyhow!("identity key not in this machine's keychain: {e}"))?;
-        Ok(Zeroizing::new(pw.as_ref().to_vec()))
-    }
+    pub use imp::{load, store};
 
     #[cfg(target_os = "macos")]
     pub fn delete(path: Option<&Path>, payload: &[u8]) {
-        if let (Ok(account), Ok(kc)) = (std::str::from_utf8(payload), open(path))
-            && let Ok((_, item)) = kc.find_generic_password(SERVICE, account)
+        let _ui = security_framework::os::macos::keychain::SecKeychain::disable_user_interaction();
+        if let (Ok(account), Ok(kc)) = (std::str::from_utf8(payload), imp::open(path))
+            && let Err(e) = imp::remove(&kc, Some(account))
         {
-            item.delete();
+            tracing::warn!("{e:#}");
         }
     }
 
@@ -692,12 +915,48 @@ mod tests {
         assert!(!raw.windows(32).any(|w| w == &kp.seed()[..]));
         let (k2, b) = load(&p, &cfg).unwrap().unwrap();
         assert_eq!((k2.public(), b), (kp.public(), Backend::Keychain));
+        // Any program may read the item (the agent reads what webjetctl
+        // wrote, and an upgraded agent what the old one wrote).
+        let security = |args: &[&str]| {
+            std::process::Command::new("security")
+                .args(args)
+                .arg(&kcp)
+                .output()
+                .unwrap()
+        };
+        let out = security(&["find-generic-password", "-s", keychain::SERVICE, "-w"]);
+        assert!(out.status.success(), "another program reads the item");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            hex::encode(kp.seed())
+        );
         // Re-saving replaces the item.
         let kp2 = KeyPair::generate();
         save(&p, &cfg, "node-under-test", &kp2.seed()).unwrap();
         assert_eq!(load(&p, &cfg).unwrap().unwrap().0.public(), kp2.public());
         discard(&p, &cfg);
         assert!(load(&p, &cfg).is_err(), "deleted from the keychain");
+        // An item another program created with the default access list (as
+        // 0.4.0's webjetctl did) can't be read, with a clear error, and
+        // enrolling again (saving) replaces it.
+        let added = security(&[
+            "add-generic-password",
+            "-s",
+            keychain::SERVICE,
+            "-a",
+            "node-under-test",
+            "-w",
+            "not-a-key",
+        ]);
+        assert!(added.status.success());
+        let e = load(&p, &cfg).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("doesn't let webjetd read it"),
+            "{e:#}"
+        );
+        save(&p, &cfg, "node-under-test", &kp.seed()).unwrap();
+        assert_eq!(load(&p, &cfg).unwrap().unwrap().0.public(), kp.public());
+        discard(&p, &cfg);
         drop(kc);
         let _ = std::fs::remove_dir_all(d);
     }

@@ -506,7 +506,7 @@ fn nuke(sys: &Sys, l: &Layout) -> Result<()> {
     remove(sys, l)?;
     println!("==> Deleting the node's identity and state");
     // Keys sealed in the System keychain live outside the state directory.
-    system::delete_keychain_items(sys);
+    system::delete_keychain_items(sys, &l.config)?;
     if cfg!(target_os = "linux") {
         sys.remove_dir_all(&l.data_dir)?;
         sys.remove_dir_all(&l.config_dir)?;

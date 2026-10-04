@@ -52,6 +52,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+security-framework-sys = "2"
+core-foundation = "0.10"
 
 [lints]
 workspace = true

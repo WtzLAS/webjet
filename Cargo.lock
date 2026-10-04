@@ -7261,7 +7261,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-app"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7278,7 +7278,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7302,7 +7302,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-net"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7327,7 +7327,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-proto"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "planus",
  "serde",
@@ -7336,7 +7336,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-tools"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7364,7 +7364,7 @@ dependencies = [
 
 [[package]]
 name = "webjetd"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7372,6 +7372,7 @@ dependencies = [
  "boring",
  "bytes",
  "clap",
+ "core-foundation 0.10.0",
  "futures",
  "hex",
  "hickory-proto",
@@ -7382,6 +7383,7 @@ dependencies = [
  "rand 0.8.8",
  "rustls",
  "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "snap",
@@ -7401,19 +7403,23 @@ dependencies = [
 
 [[package]]
 name = "webjetup"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
+ "core-foundation 0.10.0",
  "flate2",
  "hex",
  "libc",
  "rustls",
+ "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "toml 0.8.23",
  "ureq",
  "zip",
 ]
