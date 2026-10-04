@@ -23,7 +23,7 @@ $B/webjetctl root --dir $D/root init >/dev/null
 $B/webjetctl account keygen --name alice --pub-out $D/alice.pub >/dev/null
 $B/webjetctl root --dir $D/root admin sign --name alice --key $D/alice.pub --out $D/alice.account >/dev/null
 $B/webjetctl root --dir $D/root genesis --overlay-pool 10.7.0.0/16 --admin $D/alice.account --out $D/genesis.wj >/dev/null
-printf "data_dir = \"$D/node\"\ncontrol_socket = \"$D/node/control.sock\"\n[tun]\nenabled = false\n[controller]\nenabled = true\n" > $D/webjetd.toml
+printf "data_dir = \"$D/node\"\ncontrol_socket = \"$D/node/control.sock\"\n[tun]\nenabled = false\n" > $D/webjetd.toml
 echo "== init seals the key in the TPM"
 $B/webjetctl init --config $D/webjetd.toml --genesis $D/genesis.wj 2>&1 | tee $D/init.log
 head -c 5 $D/node/identity.key | od -c | head -1

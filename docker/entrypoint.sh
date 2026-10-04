@@ -109,7 +109,8 @@ generate_config() {
         fi
         echo
         echo "[controller]"
-        if is_true "${WEBJET_CONTROLLER:-false}"; then echo "enabled = true"; else echo "enabled = false"; fi
+        # The controller role follows the node's `control` role; false opts out.
+        if [ -n "${WEBJET_CONTROLLER:-}" ] && ! is_true "$WEBJET_CONTROLLER"; then echo "enabled = false"; fi
         [ -z "${WEBJET_SIGNER_SOCKET:-}" ] || printf 'signer_socket = "%s"\n' "$(safe WEBJET_SIGNER_SOCKET "$WEBJET_SIGNER_SOCKET")"
         [ -z "${WEBJET_HEAD_LIFETIME_HOURS:-}" ] || printf 'head_lifetime_hours = %d\n' "$WEBJET_HEAD_LIFETIME_HOURS"
         if [ -n "${WEBJET_RELAY_CAPACITY_MBPS:-}" ] || [ -n "${WEBJET_RATE_CEILING_MBPS:-}" ]; then

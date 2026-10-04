@@ -144,9 +144,11 @@ pub struct MetricsCfg {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControllerCfg {
-    /// Run the controller role (requires a SigningKeyCert for this node).
+    /// The controller role runs when the network grants this node CONTROL
+    /// (the `control` role, §4). `false` keeps it from running here anyway;
+    /// `true` is accepted for older files and changes nothing.
     #[serde(default)]
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     /// `webjetd signer` socket; when absent an in-process key file is used.
     pub signer_socket: Option<PathBuf>,
     /// Tree head lifetime in hours (§7.3, §24: 24–72 h).

@@ -70,7 +70,7 @@ echo "== first controller (WEBJET_GENESIS)"
 docker run -d --name "$P-ctl" --hostname ctl-01 --network "$NET" --ip "$CTL_IP" \
     --cap-add NET_ADMIN --device /dev/net/tun \
     -v "$P-ctl-state:/var/lib/webjet" -v "$P-admin:/admin" $ADMIN_ENV \
-    -e WEBJET_GENESIS=/admin/genesis.wj -e WEBJET_CONTROLLER=true \
+    -e WEBJET_GENESIS=/admin/genesis.wj \
     -e WEBJET_PUBLIC="tls:$CTL_IP:443,kcp:$CTL_IP:443" \
     "$IMG" >/dev/null
 W() { docker exec "$P-ctl" webjetctl --account alice "$@"; }
@@ -81,7 +81,7 @@ until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do
     [ $i -lt 60 ] || fail "controller did not start"
 done
 W account create --name infra --key /admin/infra.pub >/dev/null
-T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --controller "tls:$CTL_IP:443" 2>/dev/null)
+T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller "tls:$CTL_IP:443" 2>/dev/null)
 docker exec "$P-ctl" webjetctl enroll "$T" >/dev/null
 W controller cert-request --out /admin/ctl.req >/dev/null
 docker exec -e WEBJET_ROOT_PASSPHRASE=root-pass "$P-ctl" webjetctl root --dir /admin/root controller sign /admin/ctl.req --out /admin/ctl.cert >/dev/null

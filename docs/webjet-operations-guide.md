@@ -98,7 +98,7 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    [offline]  webjetctl root admin sign --name alice --key alice.pub --out alice.account
    [offline]  webjetctl root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj
    ```
-4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, turn on the controller role and give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it.
+4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it. A node initialized with the genesis file runs the controller role from the start; every later controller gets it from the `control` role (runbook 4).
    ```
    [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.3.0/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml
@@ -107,9 +107,6 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    [listen]
    tls = "0.0.0.0:443"
    kcp = "0.0.0.0:443"
-
-   [controller]
-   enabled = true
 
    [[public]]
    addr = "203.0.113.10:443"
@@ -134,18 +131,21 @@ Times in `webjetctl status` and `webjetctl controller list` (`valid_until`, `hea
    [admin]    webjetctl account keygen --name infra --pub-out infra.pub
    [admin]    webjetctl account create --name infra --key infra.pub
    [admin]    webjetctl node enroll --owner infra --name ctl-01 --ip 10.7.0.1 \
-                  --roles data,relay --tags tag:infra --controller tls:203.0.113.10:443
+                  --roles data,relay,control --tags tag:infra --controller tls:203.0.113.10:443
               → prints an enrollment string
    [node]     sudo webjetctl enroll '<enrollment string>'
    ```
    The first controller enrolls its own node through its running agent, so leave the agent running here; `webjetctl enroll` talks to it. Every other node is enrolled with `webjetup enroll` (runbooks 3 and 9), which stops the agent, enrolls and starts it again. The enrollment string is valid for 24 hours (`--expires-hours`).
-6. Make the node a controller: request a certificate for its signing key, sign it offline, and submit it. `webjetctl root controller sign` prints the key ID; note it for runbook 10.
+6. Certify the controller's signing key with the admin key. `certify` fetches the node's certificate request, signs it and submits the certificate; it prints the key ID, note it for runbook 10.
+   ```
+   [admin]    webjetctl controller certify ctl-01
+   ```
+   From now on, nodes accept this controller's tree heads. `webjetctl node list` shows `control` among its roles (`control(uncertified)` before this step). The root can sign the certificate instead, offline, which keeps it valid even if the admin is later revoked (an admin's certificates become void when the admin is revoked or changes key):
    ```
    [controller]  webjetctl controller cert-request --out ctl-01.req
    [offline]     webjetctl root controller sign ctl-01.req --out ctl-01.cert
    [admin]       webjetctl submit ctl-01.cert
    ```
-   From now on, nodes accept this controller's tree heads.
 7. Apply the first network settings. Each `apply` validates the YAML file and submits it; `check` only validates. `show` prints the setting in force in the same YAML form, and on a new network the built-in defaults (with `version: 0`), so `webjetctl dns show > dns.yaml` is a good starting point: edit it, raise `version`, and apply.
    ```
    [admin]    webjetctl psk rotate                      # creates the first PSK epoch
@@ -346,18 +346,21 @@ A data node is the default kind of node: it sends and receives its own traffic, 
 
 **When:** building the cluster up, or adding spare learners. References: §7.1, §7.5.
 
-**You need:** a Linux node that is already enrolled (runbook 3 without the relay-specific steps; giving controllers `RELAY` as well is recommended), and the offline computer.
+**You need:** a Linux node that is already enrolled (runbook 3 without the relay-specific steps; giving controllers `RELAY` as well is recommended). A new node can be enrolled with the `control` role right away (`--roles data,relay,control`); then skip step 1. In a network upgraded from 0.3.0 or earlier, every controller must run a release with the `control` role before you grant it (older controllers would diverge on the operation), and every node before you use `certify` (older nodes accept only root-signed certificates).
 
 **Steps:**
 
-1. Turn on the controller role and restart the agent. This creates the controller's signing key (or uses `webjetd signer`, see runbook 1, step 4). Then create a certificate request.
+1. Give the node the `control` role. `--roles` is the whole role set, so repeat the roles it keeps. The agent starts the controller role by itself within a minute, without a restart, and creates its signing key (or uses `webjetd signer`, see runbook 1, step 4; configure `signer_socket` before granting the role).
    ```
-   [node]     sudoedit /etc/webjet/webjetd.toml       # [controller] enabled = true
-   [node]     sudo systemctl restart webjetd
+   [admin]    webjetctl node update ctl-06 --roles data,relay,control
+   ```
+2. Certify its signing key. Note the key ID it prints.
+   ```
+   [admin]    webjetctl controller certify ctl-06
+   ```
+   Or have the root sign it (see runbook 1, step 6):
+   ```
    [node]     sudo webjetctl controller cert-request --out ctl-06.req
-   ```
-2. Sign the certificate with the root key and submit it. Note the key ID that `webjetctl root controller sign` prints.
-   ```
    [offline]  webjetctl root controller sign ctl-06.req --out ctl-06.cert
    [admin]    webjetctl submit ctl-06.cert
    ```
@@ -488,6 +491,8 @@ An **admin** account can only be revoked with the root or emergency key. It take
 [admin]    webjetctl submit carol.tomb
 ```
 
+Revoking an admin, or replacing an admin's key, also voids the controller certificates that admin signed (`webjetctl controller certify`): those controllers' tree heads stop being accepted. Before revoking, have another admin re-certify them (`webjetctl controller certify <name>`), or right after; `webjetctl node list` shows `control(uncertified)` for a controller without a valid certificate.
+
 `webjetctl root account revoke --key <account>.pub` does the same for a normal account, for when no admin is available to do it.
 
 ### If no controller majority is available
@@ -541,7 +546,7 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
 
 **Steps:**
 
-1. Find the key ID and the highest tree-head version that key signed. The key ID was printed by `webjetctl root controller sign` when the controller was set up. While the controller still runs, `webjetctl controller list` on it shows the same value as `signing_key_id`. The current tree version is `tree_version` in `webjetctl status`.
+1. Find the key ID and the highest tree-head version that key signed. The key ID was printed by `webjetctl controller certify` (or `webjetctl root controller sign`) when the controller was set up. While the controller still runs, `webjetctl controller list` on it shows the same value as `signing_key_id`. The current tree version is `tree_version` in `webjetctl status`.
    For a suspected compromise, find the last version known to be legitimate by comparing with the other controllers' logs.
 2. Sign the retirement with the root or emergency key (`--with emergency`), and submit it. If no controller majority is available, inject it at any node instead (`webjetctl inject`).
    ```
@@ -549,9 +554,10 @@ Sign the tombstone with the emergency revocation key and inject it at any node. 
                   --reason decommissioned --out ctl-03.keytomb
    [admin]    webjetctl submit ctl-03.keytomb
    ```
-3. Remove the controller from the cluster.
+3. Remove the controller from the cluster, then take away its `control` role (refused while it is a member).
    ```
    [admin]    webjetctl controller remove ctl-03
+   [admin]    webjetctl node update ctl-03 --roles data,relay
    ```
 4. **For a compromise only:** revoke the node itself (runbook 8), rotate the PSK twice (runbook 6), and review the audit trail and the current tree for changes made after the last legitimate version.
 5. Add a replacement controller if the cluster needs it (runbook 4).
@@ -621,7 +627,7 @@ The validity horizon is the hard deadline. Check how much time is left:
    5. Retire the lost controllers' signing keys (runbook 10), so they can never return with a different history. Never start a lost voter again without wiping it.
 4. **If no controller survives:** rebuild from the latest snapshot (§19.9). The architecture leaves this as a manual procedure (§2), and it loses everything committed after the snapshot. There is no snapshot export or restore tool yet. Keeping a copy of a controller's data directory (`/var/lib/webjet`, taken with the agent stopped) is the closest thing available.
    1. Restore the snapshot onto a new controller host.
-   2. Create new signing keys and have the root certify them; retire all the old controller keys (runbook 10).
+   2. Create new signing keys and certify them (an admin or the root); retire all the old controller keys (runbook 10).
    3. Start the new cluster's log **above the highest tree version any node holds**, or nodes will reject its tree heads as a rollback. Read the version (`tree_version`) from `webjetctl status` on several nodes.
    4. Redo the changes made after the snapshot. Nodes enrolled after it must be enrolled again or re-keyed.
    5. Rehearse this in a test network before you need it.

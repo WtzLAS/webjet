@@ -36,7 +36,7 @@ rm -rf "$W"; mkdir -p "$W"
 export WEBJET_ROOT_PASSPHRASE=root-pass WEBJET_ACCOUNT_PASSPHRASE=acct-pass WEBJET_KEYS="$W/keys"
 export RUST_LOG=${RUST_LOG:-info}
 
-conf() { # name port controller
+conf() { # name port
   cat > "$W/$1/webjetd.toml" <<EOT
 data_dir = "$W/$1"
 control_socket = "$W/$1/control.sock"
@@ -53,7 +53,6 @@ configure_system = false
 [metrics]
 listen = "127.0.0.1:$(($2 + 1000))"
 [controller]
-enabled = $3
 head_lifetime_hours = 24
 EOT
 }
@@ -71,17 +70,15 @@ echo "== root keys, admin account, genesis"
 "$BIN/webjetctl" root --dir "$W/root" genesis --overlay-pool 10.7.0.0/16 --admin "$W/alice.account" --out "$W/genesis.wj" > /dev/null
 
 echo "== first controller"
-mkdir -p "$W/ctl-01"; conf ctl-01 17001 true
+mkdir -p "$W/ctl-01"; conf ctl-01 17001
 "$BIN/webjetctl" init --config "$W/ctl-01/webjetd.toml" --genesis "$W/genesis.wj" > /dev/null
 start ctl-01; wait_sock "$W/ctl-01/control.sock"
 i=0; until ctl controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do sleep 0.2; i=$((i+1)); [ $i -lt 100 ] || { echo "controller did not start"; exit 1; }; done
 "$BIN/webjetctl" account keygen --name infra --pub-out "$W/infra.pub" > /dev/null
 ctl account create --name infra --key "$W/infra.pub"
-T=$(ctl node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --tags tag:infra --controller tls:127.0.0.1:17001 2>/dev/null)
+T=$(ctl node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --tags tag:infra --controller tls:127.0.0.1:17001 2>/dev/null)
 "$BIN/webjetctl" enroll --config "$W/ctl-01/webjetd.toml" "$T" > /dev/null
-ctl controller cert-request --out "$W/ctl-01.req" > /dev/null
-"$BIN/webjetctl" root --dir "$W/root" controller sign "$W/ctl-01.req" --out "$W/ctl-01.cert" > /dev/null
-ctl submit "$W/ctl-01.cert" > /dev/null 2>&1
+ctl controller certify ctl-01 > /dev/null
 cat > "$W/policy.yaml" <<EOT
 version: 1
 default: deny
@@ -111,7 +108,7 @@ i=2
 while [ $i -le $((N+1)) ]; do
   name=node-0$i; port=$((17000+i))
   echo "== $name"
-  mkdir -p "$W/$name"; conf $name $port false
+  mkdir -p "$W/$name"; conf $name $port
   T=$(ctl node enroll --owner infra --name $name --ip 10.7.0.$i --roles data --controller tls:127.0.0.1:17001 2>/dev/null)
   "$BIN/webjetctl" enroll --config "$W/$name/webjetd.toml" "$T"
   start $name

@@ -354,17 +354,18 @@ impl Controller {
                 return;
             }
         }
-        // Only sign with a certified key (§6.5).
+        // Only sign with a validly certified key (§6.5).
         let certified = n
             .store
             .read()
-            .certs()
-            .any(|c| opt_k32(&c.cert.signing_key_id) == self.signing_key_id);
+            .view()
+            .valid_certs
+            .contains(&self.signing_key_id);
         if !certified {
             n.alarm(
                 "no_signing_cert",
                 "warning",
-                "this controller's signing key has no SigningKeyCert yet (runbook 1 step 6)".into(),
+                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl controller certify`, runbook 4)".into(),
             );
             return;
         }
@@ -631,6 +632,18 @@ impl Controller {
                 self.on_raft(&n, from, rb);
                 None
             }
+            RpcBody::GetCertRequest(_) => Some(RpcBody::CertRequestReply(Box::new(
+                match self.cert_request() {
+                    Ok(r) => wp::CertRequestReply {
+                        request: Some(r),
+                        error: None,
+                    },
+                    Err(e) => wp::CertRequestReply {
+                        request: None,
+                        error: Some(e.to_string()),
+                    },
+                },
+            ))),
             RpcBody::SubmitOp(s) => {
                 let raw = s.signed.clone().unwrap_or_default();
                 let payload = webjet_core::statemachine::ops::op_entry(raw.clone());
@@ -957,6 +970,7 @@ impl Controller {
             signing_key: Some(crypto::k32(&pk)),
             controller: Some(crypto::k32(&n.me)),
             cert_serial: now_ms(),
+            issuer: None,
         };
         self.signer.sign(mt::CERT_REQUEST, body.encode_bytes())
     }

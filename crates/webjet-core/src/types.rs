@@ -155,25 +155,53 @@ pub fn sort_dedup<T: Ord>(mut v: Vec<T>) -> Vec<T> {
     v
 }
 
-pub fn role_name(r: wp::Role) -> &'static str {
-    match r {
-        wp::Role::Data => "data",
-        wp::Role::Relay => "relay",
+/// A node's roles (§4) as admins assign them: `data` and `relay` travel in
+/// the NodeRecord's `roles` vector, `control` in its own field (older
+/// software reads the vector and ignores the field).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Roles {
+    pub data: bool,
+    pub relay: bool,
+    pub control: bool,
+}
+
+impl Roles {
+    /// The `roles` vector of the wire format (sorted, without duplicates).
+    pub fn wire(&self) -> Vec<wp::Role> {
+        let mut v = Vec::new();
+        if self.data {
+            v.push(wp::Role::Data);
+        }
+        if self.relay {
+            v.push(wp::Role::Relay);
+        }
+        v
+    }
+
+    pub fn names(&self) -> Vec<&'static str> {
+        [
+            (self.data, "data"),
+            (self.relay, "relay"),
+            (self.control, "control"),
+        ]
+        .into_iter()
+        .filter_map(|(on, n)| on.then_some(n))
+        .collect()
     }
 }
 
-pub fn parse_roles(s: &str) -> Result<Vec<wp::Role>> {
-    let mut v = Vec::new();
+/// Parses `data,relay,control` (any subset, any order).
+pub fn parse_roles(s: &str) -> Result<Roles> {
+    let mut r = Roles::default();
     for p in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-        v.push(match p {
-            "data" => wp::Role::Data,
-            "relay" => wp::Role::Relay,
-            other => {
-                bail!("unknown role {other} (CONTROL comes only from a root-signed certificate)")
-            }
-        });
+        match p {
+            "data" => r.data = true,
+            "relay" => r.relay = true,
+            "control" => r.control = true,
+            other => bail!("unknown role {other} (roles are data, relay and control)"),
+        }
     }
-    Ok(sort_dedup(v))
+    Ok(r)
 }
 
 /// Builds a canonical CIDR for an overlay host address.
@@ -211,5 +239,22 @@ mod tests {
         assert!(canonical(&c).is_ok());
         let bad = wp::Cidr::new("10.7.0.12".parse().unwrap(), 24);
         assert!(canonical(&bad).is_err());
+    }
+
+    #[test]
+    fn roles_parse() {
+        let r = parse_roles("control, data").unwrap();
+        assert_eq!(
+            r,
+            Roles {
+                data: true,
+                relay: false,
+                control: true
+            }
+        );
+        assert_eq!(r.wire(), vec![wp::Role::Data]);
+        assert_eq!(r.names(), vec!["data", "control"]);
+        assert_eq!(parse_roles("").unwrap(), Roles::default());
+        assert!(parse_roles("data,admin").is_err());
     }
 }

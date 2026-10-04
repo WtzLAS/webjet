@@ -281,6 +281,67 @@ pub async fn run(cfg: Config) -> Result<()> {
 }
 
 /// Run until `shutdown` resolves (a signal, or the Windows service manager).
+/// Whether the network grants this node CONTROL (§4): its record holds the
+/// `control` role, or a valid certificate makes it a controller (records
+/// from before `control` was a role).
+fn control_granted(n: &Node) -> bool {
+    let s = n.store.read();
+    let v = s.view();
+    v.nodes
+        .get(&n.me)
+        .is_some_and(|m| m.valid && m.control_role)
+        || v.is_controller(&n.me)
+}
+
+/// Start the controller role if this node should run it and doesn't yet:
+/// the first controller of a new network, or a node granted CONTROL, unless
+/// `[controller] enabled = false` opts out.
+fn maybe_start_controller(n: &Arc<Node>, bootstrap: bool) -> Result<()> {
+    if n.controller.get().is_some() || n.cfg.controller.enabled == Some(false) {
+        return Ok(());
+    }
+    if !bootstrap && !control_granted(n) {
+        return Ok(());
+    }
+    let c = crate::controller::Controller::start(n, bootstrap)?;
+    if n.controller.set(c.clone()).is_ok() {
+        tokio::spawn(c.run());
+        crate::transport::refresh_anytls(n);
+    }
+    Ok(())
+}
+
+/// Start the controller role as soon as the tree grants this node CONTROL,
+/// and say so when it's taken away (the role then idles: its heads aren't
+/// accepted and it isn't a cluster member; a restart stops it).
+async fn watch_control_role(n: Arc<Node>) {
+    let mut ev = n.events.subscribe();
+    let mut warned = false;
+    loop {
+        match ev.recv().await {
+            Ok(Event::HeadChanged) => {}
+            Ok(_) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(_) => return,
+        }
+        let granted = control_granted(&n);
+        if n.controller.get().is_none() {
+            if granted && let Err(e) = maybe_start_controller(&n, false) {
+                tracing::error!("starting the controller role: {e:#}");
+            }
+        } else if !granted && !n.node_file.lock().bootstrap {
+            if !warned {
+                tracing::warn!(
+                    "this node no longer holds the control role; restart webjetd to stop the controller"
+                );
+            }
+            warned = true;
+        } else {
+            warned = false;
+        }
+    }
+}
+
 pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Result<()> {
     let paths = Paths::new(&cfg.data_dir);
     crate::keystore::harden_process();
@@ -312,17 +373,19 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     {
         let s = n.store.read();
         let enrolled = s.view().nodes.contains_key(&me);
-        if !enrolled && !bootstrap && !n.cfg.controller.enabled {
+        if !enrolled && !bootstrap {
             bail!(
                 "this node is not enrolled; run `webjetup enroll <enrollment string>` (or `webjetctl enroll`)"
             );
         }
     }
-    if n.cfg.controller.enabled || bootstrap {
-        let c = crate::controller::Controller::start(&n, bootstrap)?;
-        let _ = n.controller.set(c.clone());
-        tokio::spawn(c.run());
+    if n.cfg.controller.enabled == Some(true) {
+        tracing::warn!(
+            "[controller] enabled = true is no longer needed: the controller role starts when the node holds the control role (`webjetctl node update --roles ...,control`)"
+        );
     }
+    maybe_start_controller(&n, bootstrap)?;
+    tokio::spawn(watch_control_role(n.clone()));
     // Seed relays accept all epochs too (§10.7.3).
     if is_seed(&n) {
         n.epochs.write().accept_all = true;

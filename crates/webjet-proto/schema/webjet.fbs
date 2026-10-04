@@ -61,6 +61,7 @@ table NodeRecord {
     tags: [string];
     routes: [RouteGrant];
     version: uint64;
+    control: bool = null;     // the CONTROL role (§4): absent = a root-signed cert alone decides, as before roles held it
 }
 
 table Tombstone {
@@ -215,6 +216,7 @@ table SigningKeyCert {
     signing_key: Key32;
     controller: Key32;
     cert_serial: uint64;
+    issuer: [ubyte];          // Signed(AccountRecord) of the admin who signed the cert; absent when the root signed it
 }
 
 table SigningKeyTombstone {
@@ -409,6 +411,7 @@ table CreateEnrollment {
     expires_at: uint64;
     identity_key: Key32;       // optional: the fingerprint flow (§8, alternative)
     node_id: Key32;            // optional: only for a Raft member without a record (bootstrap)
+    control: bool;             // grants the CONTROL role (§4)
 }
 
 table RenameNode { node_id: Key32; name: string; }
@@ -424,6 +427,7 @@ table UpdateNode {
     tags: [string];
     set_routes: bool;
     routes: [RouteGrant];
+    control: bool = null;      // optional: grant (true) or remove (false) the CONTROL role
 }
 
 table TombstoneNode { node_id: Key32; reason: string; }

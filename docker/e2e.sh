@@ -12,16 +12,16 @@ cleanup
 [ "${1:-}" = "clean" ] && exit 0
 docker network create --subnet 172.30.0.0/24 $P-wan >/dev/null
 docker network create --subnet 192.168.50.0/24 $P-lan >/dev/null
-run() { # container name ctl gw
+run() { # container name gw
   docker run -d --name $1 --hostname $2 --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun \
     --sysctl net.ipv4.ip_forward=1 -e RUST_LOG=info -e WEBJET_ROOT_PASSPHRASE=r -e WEBJET_ACCOUNT_PASSPHRASE=a -e WEBJET_KEYS=/root/keys \
-    $IMG /opt/webjet/docker/node.sh $2 $3 $4 >/dev/null
+    $IMG /opt/webjet/docker/node.sh $2 $3 >/dev/null
 }
-run $P-ctl ctl-01 true ""
-run $P-a node-a false ""
-run $P-b node-b false ""
+run $P-ctl ctl-01 ""
+run $P-a node-a ""
+run $P-b node-b ""
 docker create --name $P-gw --hostname gw --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 \
-  -e RUST_LOG=info $IMG /opt/webjet/docker/node.sh gw false 192.168.50.0/24 >/dev/null
+  -e RUST_LOG=info $IMG /opt/webjet/docker/node.sh gw 192.168.50.0/24 >/dev/null
 docker network connect --ip 192.168.50.2 $P-lan $P-gw
 docker start $P-gw >/dev/null
 docker run -d --name $P-lan --network $P-lan --ip 192.168.50.10 --cap-add NET_ADMIN $IMG sh -c 'exec sleep infinity' >/dev/null
@@ -39,11 +39,9 @@ W() { x $P-ctl webjetctl --account alice "$@"; }
 i=0; until W controller list 2>/dev/null | grep -q 'valid_until: [1-9]'; do sleep 0.5; i=$((i+1)); [ $i -lt 60 ] || { echo "controller did not start"; x $P-ctl cat /var/log/webjetd.log; exit 1; }; done
 x $P-ctl sh -c 'cd /root && webjetctl account keygen --name infra --pub-out infra.pub >/dev/null'
 W account create --name infra --key /root/infra.pub
-T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --controller tls:$CTL_IP:443 2>/dev/null)
+T=$(W node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller tls:$CTL_IP:443 2>/dev/null)
 x $P-ctl webjetctl enroll "$T" >/dev/null
-W controller cert-request --out /root/ctl.req >/dev/null
-x $P-ctl webjetctl root --dir /root/root controller sign /root/ctl.req --out /root/ctl.cert >/dev/null
-W submit /root/ctl.cert >/dev/null 2>&1
+W controller certify ctl-01 >/dev/null
 x $P-ctl sh -c 'cat > /root/policy.yaml <<EOT
 version: 1
 default: deny

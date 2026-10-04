@@ -49,10 +49,26 @@ fn admin_view(n: &Node) -> webjet_core::store::View {
     if let Some(c) = n.controller.get() {
         let m = c.machine.lock();
         if m.genesis.is_some() {
-            return m.view().clone();
+            return n.store.read().view_of(&m.tree);
         }
     }
     n.store.read().view().clone()
+}
+
+/// An account's leaf: its signed AccountRecord.
+fn account_leaf(n: &Node, id: &Bytes32) -> Option<Vec<u8>> {
+    use webjet_core::merkle::kind;
+    if let Some(c) = n.controller.get() {
+        let m = c.machine.lock();
+        if m.genesis.is_some() {
+            return m.tree.get(kind::ACCOUNT, id).map(|e| e.bytes.clone());
+        }
+    }
+    n.store
+        .read()
+        .tree()
+        .get(kind::ACCOUNT, id)
+        .map(|e| e.bytes.clone())
 }
 
 fn str_arg<'a>(req: &'a Value, k: &str) -> Result<&'a str> {
@@ -76,6 +92,7 @@ fn node_json(v: &webjet_core::store::View, id: &Bytes32) -> Value {
         "relay": info.relay,
         "data": info.data,
         "control": info.control,
+        "control_role": info.control_role,
         "routes": info.routes.iter().map(|g| if g.mapped() { format!("{}={}", g.lan, g.published) } else { g.published.to_string() }).collect::<Vec<_>>(),
         "valid": info.valid,
         "version": info.rec.version,
@@ -135,7 +152,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             let mut v: Vec<Value> = view
                 .accounts
                 .values()
-                .map(|a| json!({"id": hex::encode(a.id), "name": a.name, "admin": a.admin, "valid": a.valid, "key": crypto::key_b64(&a.key), "version": a.rec.version}))
+                .map(|a| json!({"id": hex::encode(a.id), "name": a.name, "admin": a.admin, "valid": a.valid, "key": crypto::key_b64(&a.key), "version": a.rec.version, "record": account_leaf(n, &a.id).map(|r| b64(&r))}))
                 .collect();
             v.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
             Ok(json!(v))
@@ -228,11 +245,37 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             )
         }
         "cert_request" => {
-            let c = n
-                .controller
-                .get()
-                .ok_or_else(|| anyhow!("this node doesn't run the controller role"))?;
-            Ok(json!({"request": b64(&c.cert_request()?)}))
+            // This node's own request, or another controller's (by node id),
+            // asked of that node over the overlay.
+            let target = match req.get("node").and_then(|v| v.as_str()) {
+                Some(h) => crypto::parse_hex32(h).ok_or_else(|| anyhow!("bad node id"))?,
+                None => n.me,
+            };
+            if target == n.me {
+                let c = n.controller.get().ok_or_else(|| {
+                    anyhow!("this node doesn't run the controller role; it needs the control role first (`webjetctl node update <name> --roles ...,control`)")
+                })?;
+                return Ok(json!({"request": b64(&c.cert_request()?)}));
+            }
+            let r = crate::rpc::call(
+                n,
+                &target,
+                RpcBody::GetCertRequest(Box::new(wp::GetCertRequest {})),
+                Duration::from_secs(15),
+            )
+            .await?;
+            match r {
+                RpcBody::CertRequestReply(c) => match (c.request, c.error) {
+                    (Some(req), _) => Ok(json!({"request": b64(&req)})),
+                    (None, e) => bail!("{}", e.unwrap_or_else(|| "no certificate request".into())),
+                },
+                RpcBody::RpcAck(a) => bail!(
+                    "{} doesn't run the controller role yet ({})",
+                    n.name_of(&target),
+                    a.error.unwrap_or_default()
+                ),
+                _ => bail!("unexpected reply"),
+            }
         }
         "controller" => match n.controller.get() {
             Some(c) => Ok(c.status()),
@@ -446,7 +489,7 @@ pub fn status(n: &Arc<Node>) -> Value {
         "name": me.map(|m| m.name.clone()),
         "key": crypto::key_b64(&n.kp.public()),
         "ips": me.map(|m| m.ips.iter().map(|i| i.to_string()).collect::<Vec<_>>()),
-        "roles": {"relay": me.map(|m| m.relay), "data": me.map(|m| m.data), "control": me.map(|m| m.control)},
+        "roles": {"relay": me.map(|m| m.relay), "data": me.map(|m| m.data), "control": me.map(|m| m.control), "control_role": me.map(|m| m.control_role)},
         "valid": me.map(|m| m.valid).unwrap_or(false),
         "tree_version": s.head().map(|h| h.head.version),
         "tree_root": s.head().map(|h| hex::encode(h.root())),

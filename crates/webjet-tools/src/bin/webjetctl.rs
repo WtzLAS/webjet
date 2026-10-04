@@ -209,6 +209,7 @@ enum NodeCmd {
         /// Overlay address(es); picked from the pool when omitted.
         #[arg(long)]
         ip: Vec<String>,
+        /// Roles: any of `data`, `relay`, `control` (comma-separated).
         #[arg(long, default_value = "data")]
         roles: String,
         #[arg(long, value_delimiter = ',')]
@@ -229,6 +230,7 @@ enum NodeCmd {
     },
     Update {
         name: String,
+        /// The full role set: any of `data`, `relay`, `control`.
         #[arg(long)]
         roles: Option<String>,
         #[arg(long, value_delimiter = ',')]
@@ -301,10 +303,21 @@ enum CamouflageCmd {
 
 #[derive(Subcommand)]
 enum ControllerCmd {
-    /// Create a certificate request for this controller's signing key.
+    /// Certify a controller's signing key with an admin key and submit the
+    /// certificate. The node needs the `control` role; its request is fetched
+    /// from it over the overlay, or read from `--request`.
+    Certify {
+        name: String,
+        #[arg(long)]
+        request: Option<PathBuf>,
+    },
+    /// Write the certificate request for a controller's signing key (this
+    /// node's, or `--node`'s), to sign offline with `webjetctl root controller sign`.
     CertRequest {
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        node: Option<String>,
     },
     List,
     AddLearner {
@@ -351,6 +364,17 @@ fn load_account(cli: &Cli) -> Result<Account> {
 }
 
 // ---------------------------------------------------------------- talking to webjetd
+
+/// A controller's certificate request, from the local agent (`None`: this
+/// node's own) or fetched from another node over the overlay.
+async fn cert_request(cli: &Cli, node: Option<Bytes32>) -> Result<Vec<u8>> {
+    let mut req = json!({"cmd": "cert_request"});
+    if let Some(id) = node {
+        req["node"] = json!(hex::encode(id));
+    }
+    let r = call(cli, req).await?;
+    webjetd::state::unb64(r["request"].as_str().unwrap_or(""))
+}
 
 async fn call(cli: &Cli, req: Value) -> Result<Value> {
     client::call(&cli.socket, req).await
@@ -777,6 +801,7 @@ async fn main() -> Result<()> {
                 expires_hours,
                 controller,
             } => {
+                let roles = parse_roles(roles)?;
                 let a = load_account(&cli)?;
                 let owner_id = account_id(&cli, owner).await?;
                 let ips = if ip.is_empty() {
@@ -790,7 +815,8 @@ async fn main() -> Result<()> {
                     owner: Some(crypto::k32(&owner_id)),
                     name: Some(name.clone()),
                     overlay_ips: Some(overlay_ips(&ips)?),
-                    roles: Some(parse_roles(roles)?),
+                    roles: Some(roles.wire()),
+                    control: roles.control,
                     tags: Some(tags(tg)?),
                     routes: Some(grants(route)?),
                     token_hash: Some(crypto::k32(&th)),
@@ -825,6 +851,12 @@ async fn main() -> Result<()> {
                             if n[r].as_bool() == Some(true) {
                                 roles.push(r);
                             }
+                        }
+                        if n["control"].as_bool() != Some(true)
+                            && n["control_role"].as_bool() == Some(true)
+                        {
+                            // Granted, but the signing key isn't certified yet.
+                            roles.push("control(uncertified)");
                         }
                         let j = |k: &str| {
                             n[k].as_array()
@@ -865,6 +897,7 @@ async fn main() -> Result<()> {
                 no_routes,
                 owner,
             } => {
+                let roles = roles.as_deref().map(parse_roles).transpose()?;
                 let a = load_account(&cli)?;
                 let id = node_id(&cli, name).await?;
                 let owner = match owner {
@@ -877,7 +910,8 @@ async fn main() -> Result<()> {
                     set_overlay_ips: ip.is_some(),
                     overlay_ips: ip.as_ref().map(|v| overlay_ips(v)).transpose()?,
                     set_roles: roles.is_some(),
-                    roles: roles.as_ref().map(|r| parse_roles(r)).transpose()?,
+                    roles: roles.map(|r| r.wire()),
+                    control: roles.map(|r| r.control),
                     set_tags: tg.is_some(),
                     tags: tg.as_ref().map(|t| tags(t)).transpose()?,
                     set_routes: route.is_some() || *no_routes,
@@ -1088,9 +1122,37 @@ async fn main() -> Result<()> {
             CamouflageCmd::Selfsign { .. } => bail!("built without AnyTLS"),
         },
         Cmd::Controller { cmd } => match cmd {
-            ControllerCmd::CertRequest { out } => {
-                let r = call(&cli, json!({"cmd": "cert_request"})).await?;
-                let raw = webjetd::state::unb64(r["request"].as_str().unwrap_or(""))?;
+            ControllerCmd::Certify { name, request } => {
+                let id = node_id(&cli, name).await?;
+                let req = match request {
+                    Some(p) => read(p)?,
+                    None => cert_request(&cli, Some(id)).await?,
+                };
+                let a = load_account(&cli)?;
+                let accts = call(&cli, json!({"cmd": "accounts"})).await?;
+                let record = accts
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|x| x["id"].as_str() == Some(&hex::encode(a.id)))
+                    .and_then(|x| x["record"].as_str().map(String::from))
+                    .ok_or_else(|| anyhow!("account {} isn't known to the network", a.name))?;
+                let record = webjetd::state::unb64(&record)?;
+                let (cert, kid) = webjet_tools::certify(&req, Some(id), &a.kp, Some(record))?;
+                let r = call(&cli, json!({"cmd": "submit_signed", "signed": b64(&cert)})).await?;
+                println!(
+                    "certified {name}'s signing key {} (added: {})",
+                    hex::encode(kid),
+                    r["added"]
+                );
+            }
+            ControllerCmd::CertRequest { out, node } => {
+                let target = match node {
+                    Some(nm) => Some(node_id(&cli, nm).await?),
+                    None => None,
+                };
+                let raw = cert_request(&cli, target).await?;
                 write_public(out, &raw)?;
                 println!(
                     "certificate request → {} (sign it offline: webjetctl root controller sign)",

@@ -19,7 +19,10 @@ pub struct Node {
     pub owner_id: String,
     pub relay: bool,
     pub data: bool,
+    /// CONTROL in effect (role held and the signing key certified).
     pub control: bool,
+    /// The `control` role is granted, certified or not.
+    pub control_role: bool,
     pub routes: Vec<String>,
     pub valid: bool,
     pub version: u64,
@@ -36,6 +39,8 @@ impl Node {
         }
         if self.control {
             r.push("control");
+        } else if self.control_role {
+            r.push("control (key not certified)");
         }
         r.join(", ")
     }
@@ -349,6 +354,11 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(n.roles(), "data, relay");
+        let c = Node {
+            control_role: true,
+            ..n.clone()
+        };
+        assert_eq!(c.roles(), "data, relay, control (key not certified)");
         assert!(
             n.matches("FRA") && n.matches("10.7.0.2") && n.matches("infra") && n.matches("relay")
         );

@@ -110,6 +110,9 @@ table RedeemRequest { request: [ubyte]; }     // EnrollRequest, forwarded to the
 table OfflineSubmit { items: [Blob]; }        // root-signed certs and tombstones
 table SubmitRoot { signed: [ubyte]; }         // root-signed AccountRecord/AccountTombstone/StateVersion
 table GetControllerStatus {}
+// The certificate request for a controller's signing key, asked of that controller (§6.5).
+table GetCertRequest {}
+table CertRequestReply { request: [ubyte]; error: string; }
 table ControllerStatus {
     node_id: Key32;
     is_leader: bool;
@@ -137,6 +140,8 @@ union RpcBody {
     RedeemRequest,
     OfflineSubmit,
     SubmitRoot,
+    GetCertRequest,
+    CertRequestReply,
 }
 
 table Rpc { body: RpcBody; }

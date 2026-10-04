@@ -43,11 +43,11 @@ services:
       - "443:443/tcp"
       - "443:443/udp"
     environment:
-      WEBJET_CONTROLLER: "true"
       WEBJET_SIGNER_SOCKET: /run/webjet-signer/signer.sock
       WEBJET_PUBLIC: tls:203.0.113.10:443,kcp:203.0.113.10:443
       # First controller of a new network: the genesis from `webjetctl root genesis`.
-      # Additional controllers enroll instead: WEBJET_ENROLL_FILE.
+      # Additional controllers enroll instead (WEBJET_ENROLL_FILE), with the
+      # control role in the enrollment (`--roles data,relay,control`).
       WEBJET_GENESIS: /run/secrets/genesis
     secrets: [genesis]
     volumes:

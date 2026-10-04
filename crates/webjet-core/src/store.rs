@@ -19,6 +19,15 @@ use webjet_proto::{self as wp, Decodable, msg_type as mt};
 pub struct CertEntry {
     pub cert: wp::SigningKeyCert,
     pub raw: Vec<u8>,
+    /// The admin who signed it; `None` for the root.
+    pub issuer: Option<CertIssuer>,
+}
+
+/// The admin account that signed a SigningKeyCert, and the key it used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CertIssuer {
+    pub id: Bytes32,
+    pub key: Bytes32,
 }
 
 #[derive(Clone, Debug)]
@@ -54,7 +63,11 @@ pub struct NodeInfo {
     pub routes: Vec<Grant>,
     pub data: bool,
     pub relay: bool,
+    /// CONTROL in effect: the role is held (or the record predates it as a
+    /// role) and a valid SigningKeyCert names the node.
     pub control: bool,
+    /// The record grants the `control` role (§4), certified or not.
+    pub control_role: bool,
     /// Record present, no tombstone, owner valid.
     pub valid: bool,
 }
@@ -87,8 +100,12 @@ pub struct View {
     pub limits: Option<wp::Limits>,
     pub transport: Option<wp::TransportConfig>,
     pub valid_until: u64,
-    /// Controllers: node_id → valid signing key ids.
+    /// Controllers: node_id → valid signing key ids, for nodes that hold the
+    /// `control` role and are valid (§4).
     pub controllers: HashMap<Bytes32, Vec<Bytes32>>,
+    /// Signing key ids whose certificate is valid: signed by the root, or by
+    /// an admin that is neither revoked nor using a replaced key.
+    pub valid_certs: HashSet<Bytes32>,
 }
 
 impl View {
@@ -245,6 +262,7 @@ pub struct Store {
     pub root: Bytes32,
     pub emergency: Option<Bytes32>,
     pub overlay_pool: Vec<IpNet>,
+    /// By the hash of the cert's bytes.
     certs: BTreeMap<Bytes32, CertEntry>,
     key_tombs: BTreeMap<Bytes32, KeyTombEntry>,
     head: Option<HeadEntry>,
@@ -340,30 +358,89 @@ impl Store {
         self.key_tombs.values()
     }
 
-    /// Accept a SigningKeyCert signed by the root (§10.2).
+    /// Accept a SigningKeyCert signed by the root, or by an admin whose
+    /// root-signed AccountRecord the cert carries in `issuer` (§6.5, §10.2).
+    /// Admins' certs for one key are all kept (one may be voided by its
+    /// issuer's revocation while another stays good) until a root-signed one
+    /// replaces them; which count is decided in the view (`View::valid_certs`).
     pub fn add_cert(&mut self, raw: &[u8]) -> Result<bool> {
-        let v = open_expect(raw, mt::SIGNING_KEY_CERT, &[self.root])?;
+        let v = open_envelope(raw)?;
+        if v.ty != mt::SIGNING_KEY_CERT {
+            bail!("expected a SigningKeyCert, got {}", mt::name(v.ty));
+        }
         let c: wp::SigningKeyCert = v.decode()?;
+        let issuer = self.cert_issuer(&v, &c)?;
         let key = crypto::opt_k32(&c.signing_key);
         let id = crypto::opt_k32(&c.signing_key_id);
         if crypto::signing_key_id(&key) != id {
             bail!("signing key id does not match the key");
         }
+        if crypto::opt_k32(&c.controller) == [0; 32] {
+            bail!("certificate names no controller");
+        }
         if self.key_tombs.contains_key(&id) {
             return Ok(false);
         }
-        if self.certs.contains_key(&id) {
+        let cid = crypto::hash(raw);
+        if self.certs.contains_key(&cid) {
             return Ok(false);
         }
+        let same_key = || {
+            self.certs
+                .values()
+                .filter(move |o| crypto::opt_k32(&o.cert.signing_key_id) == id)
+        };
+        if same_key().any(|o| o.cert.controller != c.controller) {
+            bail!("this signing key is already certified for another node");
+        }
+        // One root-signed cert per key is enough, and it replaces admins'
+        // (in whatever order they arrive, so every node ends up with the
+        // same set and anti-entropy settles). One per admin key, too.
+        if same_key().any(|o| o.issuer.is_none() || o.issuer == issuer) {
+            return Ok(false);
+        }
+        if issuer.is_none() {
+            self.certs
+                .retain(|_, o| crypto::opt_k32(&o.cert.signing_key_id) != id);
+        }
         self.certs.insert(
-            id,
+            cid,
             CertEntry {
                 cert: c,
                 raw: raw.to_vec(),
+                issuer,
             },
         );
         self.rebuild();
         Ok(true)
+    }
+
+    /// Who signed a certificate: `None` for the root, or the admin account.
+    fn cert_issuer(
+        &self,
+        v: &crypto::Verified,
+        c: &wp::SigningKeyCert,
+    ) -> Result<Option<CertIssuer>> {
+        let Some(rec_raw) = &c.issuer else {
+            if v.signer != self.root {
+                bail!("certificate signed by neither the root nor an admin");
+            }
+            return Ok(None);
+        };
+        if v.signer == self.root {
+            bail!("a root-signed certificate carries no issuer");
+        }
+        let rv = open_expect(rec_raw, mt::ACCOUNT_RECORD, &[self.root])?;
+        let r: wp::AccountRecord = rv.decode()?;
+        if !r.admin || !r.issuer_root {
+            bail!("certificate issuer is not an admin account");
+        }
+        let key = crypto::opt_k32(&r.account_key);
+        if key != v.signer {
+            bail!("certificate not signed by its issuer's key");
+        }
+        let id = crypto::opt_k32(&r.account_id);
+        Ok(Some(CertIssuer { id, key }))
     }
 
     /// Accept a SigningKeyTombstone signed by the root or emergency key
@@ -383,7 +460,8 @@ impl Store {
                 raw: raw.to_vec(),
             },
         );
-        self.certs.remove(&id);
+        self.certs
+            .retain(|_, c| crypto::opt_k32(&c.cert.signing_key_id) != id);
         // Discard state known only through heads above last_valid_version.
         if let Some(h) = &self.head
             && h.key_id() == id
@@ -408,8 +486,13 @@ impl Store {
         }
         // A retired key's cert is removed, so only heads from still-certified
         // keys can be verified; retired keys' older heads are kept as stored.
+        // A cert from a revoked admin no longer verifies anything.
+        if !self.view.valid_certs.contains(key_id) {
+            return None;
+        }
         self.certs
-            .get(key_id)
+            .values()
+            .find(|c| crypto::opt_k32(&c.cert.signing_key_id) == *key_id)
             .map(|c| crypto::opt_k32(&c.cert.signing_key))
     }
 
@@ -635,9 +718,20 @@ impl Store {
 
     pub fn offline_hash(&self) -> Bytes32 {
         let mut ids: Vec<Bytes32> = Vec::new();
+        // Root-signed certs by key id, as before admins could sign them, so
+        // nodes of either kind agree while only the root signs certs.
+        let mut root_kids: Vec<Bytes32> = Vec::new();
+        for (cid, c) in &self.certs {
+            match c.issuer {
+                None => root_kids.push(crypto::opt_k32(&c.cert.signing_key_id)),
+                Some(_) => ids.push(crypto::hash(&[b"C".as_slice(), cid].concat())),
+            }
+        }
+        root_kids.sort();
+        root_kids.dedup();
         ids.extend(
-            self.certs
-                .keys()
+            root_kids
+                .iter()
                 .map(|k| crypto::hash(&[b"c".as_slice(), k].concat())),
         );
         ids.extend(
@@ -701,6 +795,19 @@ impl Store {
     }
 
     // ------------------------------------------------------------ derived view
+
+    /// The view of another tree (a controller's state machine, which is
+    /// ahead of signed heads) with this store's certificates and offline
+    /// tombstones, so CONTROL shows as the network will see it.
+    pub fn view_of(&self, tree: &Tree) -> View {
+        build_view(
+            tree,
+            &self.root,
+            &self.certs,
+            &self.offline_node_tombs,
+            &self.offline_acct_tombs,
+        )
+    }
 
     fn rebuild(&mut self) {
         self.view = build_view(
@@ -816,14 +923,30 @@ pub fn build_view(
             );
         }
     }
-    // Controllers from certs.
-    let mut ctrl: HashMap<Bytes32, Vec<Bytes32>> = HashMap::new();
-    for (id, c) in certs {
-        ctrl.entry(crypto::opt_k32(&c.cert.controller))
-            .or_default()
-            .push(*id);
+    // Valid certs (§6.5): root-signed, or signed by an admin that isn't
+    // revoked and still has the key it signed with. Certs aren't ordered by
+    // the log, so a cert signed with a revoked or replaced admin key can't be
+    // told apart from one signed in time: revoking or re-keying an admin
+    // voids every cert it signed (the root or another admin re-signs them).
+    // Head verification needs only this, never the tree's node records.
+    // node → (signing key id, signed by the root)
+    let mut ctrl: HashMap<Bytes32, Vec<(Bytes32, bool)>> = HashMap::new();
+    for c in certs.values() {
+        if let Some(i) = c.issuer {
+            let revoked = v.tombstoned_accounts.contains(&i.id);
+            let rekeyed = v.accounts.get(&i.id).is_some_and(|a| a.key != i.key);
+            if revoked || rekeyed {
+                continue;
+            }
+        }
+        let kid = crypto::opt_k32(&c.cert.signing_key_id);
+        v.valid_certs.insert(kid);
+        let e = ctrl.entry(crypto::opt_k32(&c.cert.controller)).or_default();
+        match e.iter_mut().find(|(k, _)| *k == kid) {
+            Some(x) => x.1 |= c.issuer.is_none(),
+            None => e.push((kid, c.issuer.is_none())),
+        }
     }
-    v.controllers = ctrl;
     // Nodes and singletons.
     for (_, e) in tree.iter() {
         let Ok(val) = leaf::decode(e.kind, &e.key, &e.bytes) else {
@@ -863,7 +986,8 @@ pub fn build_view(
                         .collect(),
                     data: roles.contains(&wp::Role::Data),
                     relay: roles.contains(&wp::Role::Relay),
-                    control: v.controllers.contains_key(&id),
+                    control: false,
+                    control_role: r.control == Some(true),
                     valid: !offline_tomb && owner_ok && key != [0u8; 32],
                     rec: r,
                 };
@@ -900,9 +1024,26 @@ pub fn build_view(
             }
         }
     }
-    // A controller only counts while its node is valid.
-    v.controllers
-        .retain(|id, _| v.nodes.get(id).map(|n| n.valid).unwrap_or(false));
+    // CONTROL (§4): a valid node with a valid cert and the `control` role.
+    // A record that doesn't mention the role (from before it was one) counts
+    // with a root-signed cert, as it always did; an admin's cert needs the
+    // role. A role removed by an admin (`false`) turns every cert off.
+    for (id, keys) in ctrl {
+        let Some(n) = v.nodes.get(&id).filter(|n| n.valid) else {
+            continue;
+        };
+        let keys: Vec<Bytes32> = keys
+            .into_iter()
+            .filter(|(_, by_root)| match n.rec.control {
+                Some(c) => c,
+                None => *by_root,
+            })
+            .map(|(k, _)| k)
+            .collect();
+        if !keys.is_empty() {
+            v.controllers.insert(id, keys);
+        }
+    }
     for n in v.nodes.values_mut() {
         n.control = v.controllers.contains_key(&n.id);
     }

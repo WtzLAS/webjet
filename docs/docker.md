@@ -84,7 +84,6 @@ docker run -d --name webjet-ctl --restart unless-stopped \
   -v "$PWD/genesis.wj:/genesis.wj:ro" \
   -p 443:443/tcp -p 443:443/udp \
   -e WEBJET_GENESIS=/genesis.wj \
-  -e WEBJET_CONTROLLER=true \
   -e WEBJET_PUBLIC=tls:203.0.113.10:443,kcp:203.0.113.10:443 \
   webjet
 ```
@@ -104,14 +103,20 @@ Then:
 
 ```sh
 docker exec -it webjet-ctl webjetctl --account alice account create --name infra --key /admin-keys/infra.pub
-docker exec -it webjet-ctl webjetctl --account alice node enroll --owner infra --name ctl-01 --roles data,relay --controller tls:203.0.113.10:443
+docker exec -it webjet-ctl webjetctl --account alice node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.10:443
 docker exec -it webjet-ctl webjetctl enroll <string>
-docker exec -it webjet-ctl webjetctl controller cert-request --out /var/lib/webjet/ctl-01.req
+docker exec -it webjet-ctl webjetctl --account alice controller certify ctl-01
 ```
 
-`webjetctl` asks for the account passphrase. Copy the request out with
-`docker cp`, sign it with `webjetctl root controller sign` on the offline machine, copy the
-certificate back in and run `webjetctl submit` on it.
+`webjetctl` asks for the account passphrase. To have the root sign the
+certificate instead, write the request with `webjetctl controller cert-request
+--out /var/lib/webjet/ctl-01.req`, copy it out with `docker cp`, sign it with
+`webjetctl root controller sign` on the offline machine, copy the certificate
+back in and run `webjetctl submit` on it.
+
+Further controllers are ordinary enrolled containers whose node has the
+`control` role (`--roles data,relay,control`, or `webjetctl node update` later);
+they start the controller role by themselves. Runbook 4 continues from there.
 
 Once the network runs, recreate the container without the key directory, so
 account keys don't stay on the controller.
@@ -132,7 +137,7 @@ environment variables:
 | `WEBJET_TUN` | `true` | `tun.enabled`. |
 | `WEBJET_TUN_NAME`, `WEBJET_MTU` | | `tun.name`, `tun.mtu`. |
 | `WEBJET_GATEWAY_ROUTES` | | `[[gateway.route]]`: comma-separated `prefix[=interface]`. Without an interface, the one the prefix is directly connected to. |
-| `WEBJET_CONTROLLER` | `false` | `controller.enabled`. |
+| `WEBJET_CONTROLLER` | | `false` writes `controller.enabled = false`: never run the controller role, even with the `control` role. The role itself comes from the node's record. |
 | `WEBJET_SIGNER_SOCKET` | | `controller.signer_socket`. |
 | `WEBJET_HEAD_LIFETIME_HOURS` | | `controller.head_lifetime_hours`. |
 | `WEBJET_METRICS_LISTEN` | | `metrics.listen`. |

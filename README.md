@@ -106,14 +106,14 @@ The operations guide's runbooks map to these commands:
 webjetctl root --dir ./root init
 webjetctl root --dir ./root admin sign --name alice --key alice.pub --out alice.account
 webjetctl root --dir ./root genesis --overlay-pool 10.7.0.0/16 --admin alice.account --out genesis.wj
-webjetctl root --dir ./root controller sign ctl.req --out ctl.cert
+webjetctl root --dir ./root controller sign ctl.req --out ctl.cert   # optional: admins can certify controllers
 
 # First controller
 webjetctl init --genesis genesis.wj && webjetd run
 webjetctl account keygen --name alice --pub-out alice.pub
-webjetctl node enroll --owner infra --name ctl-01 --roles data,relay --controller tls:203.0.113.5:443
+webjetctl node enroll --owner infra --name ctl-01 --roles data,relay,control --controller tls:203.0.113.5:443
 webjetctl enroll 'wj1:…'
-webjetctl controller cert-request --out ctl.req;  webjetctl submit ctl.cert
+webjetctl controller certify ctl-01     # admin-signed; or cert-request + root sign + submit
 
 # Everyday administration
 webjetctl policy apply policy.yaml      # dns / seeds / limits / transport likewise

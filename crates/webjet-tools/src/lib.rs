@@ -206,6 +206,37 @@ pub fn account_record(
 }
 
 /// Describe a signed file for the user.
+/// Turn a controller's certificate request into a SigningKeyCert signed by
+/// `signer` (§6.5): the root key (`issuer: None`), or an admin key with its
+/// root-signed AccountRecord. Checks that the request is signed by the key it
+/// certifies and, when `expect` is given, names that node. Returns the signed
+/// cert and the signing key id.
+pub fn certify(
+    request: &[u8],
+    expect: Option<Bytes32>,
+    signer: &KeyPair,
+    issuer: Option<Vec<u8>>,
+) -> Result<(Vec<u8>, Bytes32)> {
+    use webjet_proto::msg_type as mt;
+    let v = crypto::open_envelope(request)?;
+    if v.ty != mt::CERT_REQUEST {
+        bail!("not a certificate request");
+    }
+    let mut c: wp::SigningKeyCert = v.decode()?;
+    let key = crypto::opt_k32(&c.signing_key);
+    let kid = crypto::opt_k32(&c.signing_key_id);
+    if key != v.signer || crypto::signing_key_id(&key) != kid {
+        bail!("the request isn't signed by the key it certifies");
+    }
+    if let Some(id) = expect
+        && crypto::opt_k32(&c.controller) != id
+    {
+        bail!("the request names a different node");
+    }
+    c.issuer = issuer;
+    Ok((signer.sign_obj(mt::SIGNING_KEY_CERT, &c), kid))
+}
+
 pub fn describe(raw: &[u8]) -> String {
     match crypto::open_envelope(raw) {
         Ok(v) => format!(

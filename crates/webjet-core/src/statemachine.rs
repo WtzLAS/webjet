@@ -567,6 +567,14 @@ impl Machine {
                 if u.set_roles {
                     rec.roles = Some(sort_dedup(u.roles.clone().unwrap_or_default()));
                 }
+                if let Some(ctl) = u.control {
+                    if !ctl && self.members.contains(&id) {
+                        return rej(
+                            "the node is a controller cluster member; remove it from the cluster first",
+                        );
+                    }
+                    rec.control = Some(ctl);
+                }
                 if u.set_tags {
                     rec.tags = Some(check_tags(&u.tags.clone().unwrap_or_default())?);
                 }
@@ -767,8 +775,11 @@ impl Machine {
                         if m.contains(&id) {
                             return rej("already a member");
                         }
-                        if !self.view.nodes.get(&id).map(|n| n.valid).unwrap_or(false) {
+                        let Some(node) = self.view.nodes.get(&id).filter(|n| n.valid) else {
                             return rej("learner must be a valid enrolled node");
+                        };
+                        if node.rec.control != Some(true) {
+                            return rej("learner must hold the control role (node update --roles)");
                         }
                         m.learners.insert(id);
                     }
@@ -1021,6 +1032,9 @@ impl Machine {
             if !self.members.contains(&f) {
                 return rej("a fixed node_id is only allowed for a Raft member without a record");
             }
+            if !c.control {
+                return rej("a controller cluster member's record needs the control role");
+            }
         }
         let node_id = fixed_id.unwrap_or_else(|| opt_k32(&random.node_id));
         if self.tree.get(kind::NODE, &node_id).is_some() {
@@ -1089,6 +1103,11 @@ impl Machine {
             && self.tree.get(kind::NODE, &node_id).is_none();
         if p.node_id != node_id && !member_bootstrap {
             return rej("node id does not match the pending enrollment");
+        }
+        if member_bootstrap && !p.create.as_ref().is_some_and(|c| c.control) {
+            return rej(
+                "a controller cluster member's record needs the control role (node enroll --roles ...,control)",
+            );
         }
         if p.is_rekey {
             let mut rec = self.live_node(&p.node_id)?;
@@ -1568,6 +1587,8 @@ fn record_from(c: &wp::CreateEnrollment, node_id: Bytes32, key: Bytes32) -> wp::
         tags: c.tags.clone(),
         routes: c.routes.clone(),
         version: 1,
+        // Left out unless granted, so records stay as older software wrote them.
+        control: c.control.then_some(true),
     }
 }
 
@@ -1978,6 +1999,7 @@ mod tests {
             signing_key: Some(crypto::k32(&ctl.public())),
             controller: Some(crypto::k32(&[9; 32])),
             cert_serial: 1,
+            issuer: None,
         };
         let cert_raw = h.net.root.sign_obj(mt::SIGNING_KEY_CERT, &cert);
         let mut st = Store::new(h.net.genesis.clone()).unwrap();
@@ -2038,6 +2060,223 @@ mod tests {
             st.offer_head(&rogue.sign_obj(mt::SIGNED_TREE_HEAD, &head))
                 .is_err()
         );
+    }
+
+    fn enroll_roles(h: &mut H, name: &str, ip: &str, key: &KeyPair, control: bool) -> Bytes32 {
+        let o = h
+            .admin_op(AccountOp::CreateEnrollment(Box::new(
+                wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&h.net.admin_id)),
+                    name: Some(name.into()),
+                    overlay_ips: Some(vec![super::ops::ip(ip).unwrap()]),
+                    roles: Some(vec![wp::Role::Data, wp::Role::Relay]),
+                    identity_key: Some(crypto::k32(&key.public())),
+                    control,
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+        o.node_id.unwrap()
+    }
+
+    fn cert_for(node: &Bytes32, key: &KeyPair, issuer: Option<Vec<u8>>) -> wp::SigningKeyCert {
+        wp::SigningKeyCert {
+            signing_key_id: Some(crypto::k32(&crypto::signing_key_id(&key.public()))),
+            signing_key: Some(crypto::k32(&key.public())),
+            controller: Some(crypto::k32(node)),
+            cert_serial: 1,
+            issuer,
+        }
+    }
+
+    fn head_for(h: &mut H, key: &KeyPair) -> Vec<u8> {
+        let head = wp::SignedTreeHead {
+            signing_key_id: Some(crypto::k32(&crypto::signing_key_id(&key.public()))),
+            version: h.m.last_index,
+            root: Some(crypto::k32(&h.m.root())),
+            state_version: 1,
+            issued_at: now_ms(),
+            expires_at: now_ms() + 3_600_000,
+        };
+        key.sign_obj(mt::SIGNED_TREE_HEAD, &head)
+    }
+
+    fn install_tree(h: &mut H, st: &mut Store, head: &[u8]) {
+        let leaves: Vec<_> =
+            h.m.tree
+                .iter()
+                .map(|(_, e)| (e.kind, e.key, Some(e.bytes.clone())))
+                .collect();
+        st.install(head, leaves).unwrap();
+    }
+
+    #[test]
+    fn control_role_and_admin_certificates() {
+        let mut h = H::new();
+        let admin_rec = wp::Genesis::decode_bytes(&h.net.genesis)
+            .unwrap()
+            .first_admin
+            .unwrap();
+        let (ka, kb, kc) = (
+            KeyPair::generate(),
+            KeyPair::generate(),
+            KeyPair::generate(),
+        );
+        let ctl = enroll_roles(&mut h, "ctl", "10.7.0.10", &ka, true);
+        let plain = enroll_roles(&mut h, "plain", "10.7.0.11", &kb, false);
+        let legacy = enroll_roles(&mut h, "legacy", "10.7.0.12", &kc, false);
+        // The record carries the role only when granted.
+        assert_eq!(h.m.view().nodes[&ctl].rec.control, Some(true));
+        assert_eq!(h.m.view().nodes[&plain].rec.control, None);
+        assert!(h.m.view().nodes[&ctl].control_role);
+        let (sa, sb, sc) = (
+            KeyPair::generate(),
+            KeyPair::generate(),
+            KeyPair::generate(),
+        );
+        let admin = h.net.admin.clone();
+        let admin_cert = |node, key| {
+            admin.sign_obj(
+                mt::SIGNING_KEY_CERT,
+                &cert_for(node, key, Some(admin_rec.clone())),
+            )
+        };
+        let (cert_a, cert_b) = (admin_cert(&ctl, &sa), admin_cert(&plain, &sb));
+        let mut st = Store::new(h.net.genesis.clone()).unwrap();
+        // An admin may certify a controller's key; heads from it verify.
+        assert!(st.add_cert(&cert_a).unwrap());
+        assert!(!st.add_cert(&cert_a).unwrap(), "duplicate");
+        let again = h.net.admin.sign_obj(
+            mt::SIGNING_KEY_CERT,
+            &wp::SigningKeyCert {
+                cert_serial: 2,
+                ..cert_for(&ctl, &sa, Some(admin_rec.clone()))
+            },
+        );
+        assert!(!st.add_cert(&again).unwrap(), "one cert per admin and key");
+        let head = head_for(&mut h, &sa);
+        install_tree(&mut h, &mut st, &head);
+        assert!(st.view().is_controller(&ctl));
+        assert!(st.view().nodes[&ctl].control);
+        // An admin's cert for a node without the control role doesn't make
+        // it a controller.
+        st.add_cert(&cert_b).unwrap();
+        assert!(!st.view().is_controller(&plain));
+        // A root-signed cert still works for a record from before the role
+        // existed (field absent), as before.
+        st.add_cert(
+            &h.net
+                .root
+                .sign_obj(mt::SIGNING_KEY_CERT, &cert_for(&legacy, &sc, None)),
+        )
+        .unwrap();
+        assert!(st.view().is_controller(&legacy));
+        // Malformed issuers are refused.
+        let no_issuer = h.net.admin.sign_obj(
+            mt::SIGNING_KEY_CERT,
+            &cert_for(&ctl, &KeyPair::generate(), None),
+        );
+        assert!(st.add_cert(&no_issuer).is_err());
+        let wrong_key = KeyPair::generate().sign_obj(
+            mt::SIGNING_KEY_CERT,
+            &cert_for(&ctl, &KeyPair::generate(), Some(admin_rec.clone())),
+        );
+        assert!(st.add_cert(&wrong_key).is_err());
+        let root_with_issuer = h.net.root.sign_obj(
+            mt::SIGNING_KEY_CERT,
+            &cert_for(&ctl, &KeyPair::generate(), Some(admin_rec.clone())),
+        );
+        assert!(st.add_cert(&root_with_issuer).is_err());
+        // A key certified for one node can't be certified for another.
+        assert!(st.add_cert(&admin_cert(&plain, &sa)).is_err());
+        // Taking the role away ends CONTROL, cert or not.
+        h.admin_op(AccountOp::UpdateNode(Box::new(wp::UpdateNode {
+            node_id: Some(crypto::k32(&legacy)),
+            control: Some(false),
+            ..Default::default()
+        })))
+        .unwrap();
+        let head = head_for(&mut h, &sa);
+        install_tree(&mut h, &mut st, &head);
+        assert!(!st.view().is_controller(&legacy));
+        assert!(st.view().is_controller(&ctl));
+        // Revoking the admin voids the certs it signed: their heads no
+        // longer verify.
+        let tomb = wp::AccountTombstone {
+            account_id: Some(crypto::k32(&h.net.admin_id)),
+            version: 99,
+            revoke_issued: false,
+            reason: None,
+        };
+        st.add_offline_tombstone(&h.net.root.sign_obj(mt::ACCOUNT_TOMBSTONE, &tomb))
+            .unwrap();
+        assert!(!st.view().is_controller(&ctl));
+        assert!(st.verify_head(&head_for(&mut h, &sa)).is_err());
+        // The root re-signs it; the root's cert replaces the admin's.
+        st.add_cert(
+            &h.net
+                .root
+                .sign_obj(mt::SIGNING_KEY_CERT, &cert_for(&ctl, &sa, None)),
+        )
+        .unwrap();
+        assert!(st.verify_head(&head_for(&mut h, &sa)).is_ok());
+        assert_eq!(
+            st.certs()
+                .filter(|c| opt_k32(&c.cert.controller) == ctl)
+                .count(),
+            1
+        );
+        // Arrival order doesn't matter: a store that sees the root's cert
+        // first ends up with the same set.
+        let mut st2 = Store::new(h.net.genesis.clone()).unwrap();
+        st2.add_cert(
+            &h.net
+                .root
+                .sign_obj(mt::SIGNING_KEY_CERT, &cert_for(&ctl, &sa, None)),
+        )
+        .unwrap();
+        assert!(!st2.add_cert(&cert_a).unwrap());
+    }
+
+    #[test]
+    fn cluster_members_need_the_control_role() {
+        let mut h = H::new();
+        let (ka, kb) = (KeyPair::generate(), KeyPair::generate());
+        let ctl = enroll_roles(&mut h, "ctl", "10.7.0.10", &ka, true);
+        let plain = enroll_roles(&mut h, "plain", "10.7.0.11", &kb, false);
+        let change = |h: &mut H, change, id: &Bytes32| {
+            h.admin_op(AccountOp::ChangeMembership(Box::new(
+                wp::ChangeMembership {
+                    change,
+                    node_id: Some(crypto::k32(id)),
+                },
+            )))
+        };
+        assert!(change(&mut h, wp::MembershipChange::AddLearner, &plain).is_err());
+        change(&mut h, wp::MembershipChange::AddLearner, &ctl).unwrap();
+        // A member keeps its role until it leaves the cluster.
+        let drop_role = |h: &mut H| {
+            h.admin_op(AccountOp::UpdateNode(Box::new(wp::UpdateNode {
+                node_id: Some(crypto::k32(&ctl)),
+                control: Some(false),
+                ..Default::default()
+            })))
+        };
+        assert!(drop_role(&mut h).is_err());
+        change(&mut h, wp::MembershipChange::Remove, &ctl).unwrap();
+        drop_role(&mut h).unwrap();
+        assert!(!h.m.view().nodes[&ctl].control_role);
+        // Granting it again through the role set.
+        h.admin_op(AccountOp::UpdateNode(Box::new(wp::UpdateNode {
+            node_id: Some(crypto::k32(&plain)),
+            set_roles: true,
+            roles: Some(vec![wp::Role::Data]),
+            control: Some(true),
+            ..Default::default()
+        })))
+        .unwrap();
+        let n = &h.m.view().nodes[&plain];
+        assert!(n.control_role && n.data && !n.relay);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Raft test on the local network: turn node-02 and node-03 into controllers
-# (certificate, learner, voter), then stop the leader and check that writes
-# still commit and the data plane keeps working.
+# (control role, admin-signed certificate, learner, voter), then stop the
+# leader and check that writes still commit and the data plane keeps working.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 B=${BIN:-$ROOT/target/debug}
@@ -13,18 +13,16 @@ cd "$W"
 export WEBJET_KEYS=$W/keys WEBJET_ACCOUNT_PASSPHRASE=acct-pass WEBJET_ROOT_PASSPHRASE=root-pass
 C() { s=$1; shift; perl -e 'alarm shift; exec @ARGV' 30 "$B/webjetctl" --socket "$W/$s/control.sock" --account alice "$@"; }
 sleep 3
-for n in node-02 node-03; do
-  kill "$(cat $n/webjetd.pid)"; sleep 0.5
-  sed -i.bak '/^\[controller\]/,$ s/^enabled = false/enabled = true/' $n/webjetd.toml
-  "$B/webjetd" -c $n/webjetd.toml run > $n/log 2>&1 & echo $! > $n/webjetd.pid
-done
+# The role starts the controller on the running agents; no restart.
+for n in node-02 node-03; do C ctl-01 node update $n --roles data,control > /dev/null; done
 sleep 4
-for n in node-02 node-03; do
-  C $n controller cert-request --out $n.req > /dev/null
-  "$B/webjetctl" root --dir root controller sign $n.req --out $n.cert > /dev/null
-  C ctl-01 submit $n.cert > /dev/null 2>&1
-  C ctl-01 controller add-learner $n
-done
+# node-02: the admin certifies it (its request is fetched over the overlay);
+# node-03: the root signs its request offline.
+C ctl-01 controller certify node-02
+C node-03 controller cert-request --out node-03.req > /dev/null
+"$B/webjetctl" root --dir root controller sign node-03.req --out node-03.cert > /dev/null
+C ctl-01 submit node-03.cert > /dev/null 2>&1
+for n in node-02 node-03; do C ctl-01 controller add-learner $n; done
 sleep 5
 C ctl-01 controller promote node-02
 C ctl-01 controller promote node-03

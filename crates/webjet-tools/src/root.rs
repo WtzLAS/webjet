@@ -339,25 +339,19 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             let k = load_keys(dir)?;
             let raw = read(&request)?;
             let v = crypto::open_envelope(&raw)?;
-            if v.ty != mt::CERT_REQUEST {
-                bail!("{} is not a certificate request", request.display());
-            }
             let c = wp::SigningKeyCert::decode_bytes(&v.body)?;
-            let key = crypto::opt_k32(&c.signing_key);
-            if key != v.signer || crypto::signing_key_id(&key) != crypto::opt_k32(&c.signing_key_id)
-            {
-                bail!("the request isn't signed by the key it certifies");
-            }
+            let (cert, kid) = crate::certify(&raw, None, &k.root, None)
+                .with_context(|| request.display().to_string())?;
             println!(
                 "controller node: {}",
                 hex::encode(crypto::opt_k32(&c.controller))
             );
-            println!("signing key:     {}", crypto::key_b64(&key));
             println!(
-                "key id:          {}",
-                hex::encode(crypto::opt_k32(&c.signing_key_id))
+                "signing key:     {}",
+                crypto::key_b64(&crypto::opt_k32(&c.signing_key))
             );
-            write_public(&out, &k.root.sign_obj(mt::SIGNING_KEY_CERT, &c))?;
+            println!("key id:          {}", hex::encode(kid));
+            write_public(&out, &cert)?;
             println!("certificate → {}", out.display());
         }
         RootCmd::Controller {

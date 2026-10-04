@@ -3,13 +3,14 @@
 # machines installed with webjetup, with the guide's commands:
 #
 #   runbook 1   bootstrap: root keys, admin, genesis, first controller from
-#               an empty install, its own enrollment and certificate, the
-#               first settings
+#               an empty install, its own enrollment (control role) and
+#               admin-signed certificate, the first settings
 #   runbook 2   a person's device: new account, policy with tests,
 #               enrollment, install with --enroll; owner renames it, can't
 #               retag it
 #   runbook 3   a relay
-#   runbook 4   the relay becomes a controller: learner, then voter
+#   runbook 4   the relay becomes a controller: control role, root-signed
+#               certificate (the offline alternative), learner, then voter
 #   runbook 6   PSK rotation
 #   runbook 9   re-key a reinstalled node (the owner issues the token)
 #   runbook 8   revoke a device, offline node tombstone
@@ -141,20 +142,19 @@ webjetctl root --dir /offline/root admin sign --name alice --key /admin/alice.pu
 webjetctl root --dir /offline/root genesis --overlay-pool 10.7.0.0/16 --admin /offline/alice.account --out /offline/genesis.wj >/dev/null' ||
     fail "offline steps"
 # 4 [node] configure, init, start
-on ctl-01 "printf '%s\n' '$(public "$C1")' > /etc/webjet/webjetd.toml; printf '[controller]\nenabled = true\n' >> /etc/webjet/webjetd.toml"
+on ctl-01 "printf '%s\n' '$(public "$C1")' > /etc/webjet/webjetd.toml"
 on ctl-01 'webjetctl init --genesis /offline/genesis.wj >/dev/null && systemctl start webjetd' || fail "init"
 wait_for ctl-01 'webjetctl controller list | grep -q "valid_until: [1-9]"' "first controller did not start"
 on ctl-01 'stat -c %U /var/lib/webjet/node.json' | grep -qx webjet || fail "state not owned by the agent's user"
 # 5 [admin] infra account, enroll the controller's node
 on ctl-01 'webjetctl --keys /admin/keys account keygen --name infra --pub-out /admin/infra.pub >/dev/null'
 admin "account create --name infra --key /admin/infra.pub" >/dev/null || fail "account create"
-T=$(admin "node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay --tags tag:infra --controller tls:$C1:$PORT" 2>/dev/null) || fail "node enroll"
+T=$(admin "node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --tags tag:infra --controller tls:$C1:$PORT" 2>/dev/null) || fail "node enroll"
 on ctl-01 "webjetctl enroll '$T'" >/dev/null || fail "webjetctl enroll on the bootstrap controller"
 on ctl-01 'systemctl is-active webjetd' | grep -qx active || fail "agent stopped during the bootstrap enrollment"
-# 6 certificate
-on ctl-01 'webjetctl controller cert-request --out /offline/ctl-01.req >/dev/null
-webjetctl root --dir /offline/root controller sign /offline/ctl-01.req --out /offline/ctl-01.cert >/dev/null' || fail "certificate"
-admin "submit /offline/ctl-01.cert" >/dev/null 2>&1 || fail "submit certificate"
+# 6 certificate, signed by the admin
+admin "controller certify ctl-01" | grep -q "certified ctl-01" || fail "certify ctl-01"
+wait_for ctl-01 'webjetctl node list | grep ctl-01 | grep -q "data,relay,control "' "ctl-01 doesn't show CONTROL"
 # 7 settings
 on ctl-01 "cat > /admin/policy.yaml <<EOT
 version: 1
@@ -219,7 +219,8 @@ wait_for ctl-02 'webjetctl ping ctl-01 -c 1 | grep -q "reply from"' "relay can't
 wait_for ctl-01 'webjetctl peers | grep -q ctl-02' "ctl-01 doesn't list the relay"
 
 echo "== runbook 4: make ctl-02 a controller"
-on ctl-02 "printf '[controller]\nenabled = true\n\n' >> /etc/webjet/webjetd.toml && systemctl restart webjetd"
+admin "node update ctl-02 --roles data,relay,control" >/dev/null || fail "grant the control role"
+admin "node list" | grep ctl-02 | grep -q "control(uncertified)" || fail "role not shown as uncertified"
 wait_for ctl-02 'webjetctl controller cert-request --out /tmp/ctl-02.req' "cert-request on ctl-02"
 docker cp "$P-ctl-02:/tmp/ctl-02.req" "$out/ctl-02.req" && docker cp "$out/ctl-02.req" "$P-ctl-01:/offline/ctl-02.req"
 on ctl-01 'webjetctl root --dir /offline/root controller sign /offline/ctl-02.req --out /offline/ctl-02.cert' | grep -q "key id" || fail "sign ctl-02"

@@ -55,7 +55,7 @@ Control plane:
 ## 2. Non-Goals
 
 - Protecting against a fully compromised **root key**.
-- Containing a compromised **controller**. Controllers are **trusted by assumption**: the root grants `CONTROL` only to trusted computers. Any single controller's signing key can sign network-wide state, so if a controller were compromised anyway, the network would be affected until its key is retired (§21.18, §22.1).
+- Containing a compromised **controller**. Controllers are **trusted by assumption**: admins and the root grant `CONTROL` only to trusted computers. Any single controller's signing key can sign network-wide state, so if a controller were compromised anyway, the network would be affected until its key is retired (§21.18, §22.1).
 - Automated disaster recovery of the controller cluster. If every controller is lost, the cluster is rebuilt manually.
 - iOS and Android clients. The first implementation targets Linux, macOS and Windows (§19.1); mobile is left for later. Notes about phones elsewhere in this document describe the intended behavior once they are added.
 - Byzantine fault tolerance between controllers. Raft assumes controllers are honest; it tolerates crashes, not malice.
@@ -82,11 +82,13 @@ Control plane:
 
 | Capability | Meaning | Granted by |
 |---|---|---|
-| `CONTROL` | Member of the controller cluster: replicates the log, signs tree heads, handles enrollment and admin operations, collects metric reports | The **root key**, through a SigningKeyCert naming the node (§6.5) |
-| `DATA` | Sends and receives overlay traffic through its tun interface | An admin, through a signed operation (§13.3), in the NodeRecord's `roles` |
-| `RELAY` | Forwards traffic for other nodes and takes part in link-state routing. Requires a global public IP address | An admin, through a signed operation (§13.3), in the NodeRecord's `roles` |
+| `CONTROL` | Member of the controller cluster: replicates the log, signs tree heads, handles enrollment and admin operations, collects metric reports | An admin, through a signed operation (§13.3), in the NodeRecord's roles, **plus** a SigningKeyCert for the node's signing key, signed by an admin or the root key (§6.5) |
+| `DATA` | Sends and receives overlay traffic through its tun interface | An admin, through a signed operation (§13.3), in the NodeRecord's roles |
+| `RELAY` | Forwards traffic for other nodes and takes part in link-state routing. Requires a global public IP address | An admin, through a signed operation (§13.3), in the NodeRecord's roles |
 
-A node has `CONTROL` if and only if a valid, non-tombstoned SigningKeyCert names its `node_id` as `controller`. The controller cluster can grant `DATA` and `RELAY`, but never `CONTROL`; only the root can.
+All three are assigned the same way, as the node's role set (`webjetctl node enroll|update --roles data,relay,control`). `CONTROL` needs one more thing, because a controller signs tree heads with its own online signing key, and nodes must be able to check that key without the tree: a **SigningKeyCert** (§6.5) binding the key to the node. A node has `CONTROL` if and only if its record holds the `control` role, it is valid (§6.1), and a valid, non-tombstoned SigningKeyCert names its `node_id` as `controller`. Records written before `control` was a role don't mention it; for them a root-signed cert alone decides, as it did then.
+
+A node whose record holds the `control` role starts the controller role by itself, creating its signing key; it needs no local setting. Removing the role takes `CONTROL` away even while the cert stays valid, but a node can't lose the role while it is a Raft member (§7.5).
 
 Enforcement, which works even while every controller is down:
 
@@ -121,7 +123,7 @@ Rules for combined nodes:
 
 ```
 Root Key (offline, Ed25519)
- ├── signs → SigningKeyCerts         (admit a controller to the cluster)
+ ├── signs → SigningKeyCerts         (certify a controller's signing key; admins may too)
  ├── signs → SigningKeyTombstones    (retire a controller's signing key)
  ├── signs → Node Tombstones
  ├── signs → Admin AccountRecords    (create admins)
@@ -130,6 +132,7 @@ Root Key (offline, Ed25519)
  └── signs → Emergency Revocation Key cert
 
 Admin Account Key (Ed25519, held by each admin person)
+ ├── signs → SigningKeyCerts         (for nodes with the control role, §6.5)
  ├── signs → Normal AccountRecords   (never other admins)
  ├── signs → Account Tombstones      (normal accounts only)
  └── signs → admin operations        (enrollment, node changes, tags, policy, …)
@@ -181,6 +184,7 @@ NodeRecord {
     identity_key: Ed25519 pubkey // the node's current key
     overlay_ips:  [CIDR]        // admin-assigned, e.g. 10.7.0.12/32
     roles:        {DATA, RELAY} // capability set (§4)
+    control:      bool?         // the CONTROL role (§4); absent in records from before it was a role
     name:         String        // unique, admin-assigned, e.g. "build-01" (§14.2)
     owner:        account_id    // the account this node belongs to (§13)
     tags:         [String]      // admin-assigned, e.g. ["tag:server", "tag:prod"] (§14.1)
@@ -191,7 +195,7 @@ NodeRecord {
 
 - A NodeRecord **carries no signature of its own**. Every controller applies the same committed log, so the record must be byte-identical on every controller. A per-controller signature would make the trees differ.
 - A record is authenticated by its **inclusion proof** against a valid SignedTreeHead (§6.4). Records are gossiped together with their proofs.
-- `CONTROL` is never in `roles`; it comes from a SigningKeyCert (§4).
+- `CONTROL` is a separate field rather than a member of `roles`, so software that reads only `roles` keeps working; tools show all three as one role set. Having the role isn't enough on its own: a SigningKeyCert is needed too (§4).
 - These fields change only through committed operations (§7.2), signed by an admin or, for renaming and tombstoning, by the node's owner (§13.3).
 - If the `owner` account is tombstoned, the node is treated as revoked (§13.4).
 - A record has **no expiry of its own**. Every record in the tree is valid until the tree's validity horizon (§6.16), unless tombstoned.
@@ -254,20 +258,25 @@ SignedTreeHead {
 - **Any** controller signs heads for the state it has applied (§7.3). Because the state is deterministic, heads from different honest controllers for the same `version` always have the same `root`.
 - Two heads with the same `version` and the same `root` but different `expires_at` are **not** equivocation. They are re-signings of the same state.
 
-### 6.5 SigningKeyCert (signed by root key only)
+### 6.5 SigningKeyCert (signed by the root key or an admin account key)
 
 ```
 SigningKeyCert {
     signing_key_id: [u8; 32]      // BLAKE3-derived from signing_key (§15.4)
     signing_key:    Ed25519 pubkey
     controller:     node_id       // the CONTROL node that holds this key
-    cert_serial:    u64           // assigned by the root, unique and increasing
+    cert_serial:    u64           // from the request; informational
+    issuer:         Signed(AccountRecord)?  // the signing admin's root-signed record; absent when the root signs
 }
 ```
 
 - No expiry field: the key is permanent until tombstoned.
 - Nodes receive all certs during enrollment and through priority gossip.
-- A cert admits a node as a controller. Joining the Raft cluster itself is a separate membership change (§7.5).
+- **Who signs:** the root, offline (`webjetctl root controller sign`), or any admin (`webjetctl controller certify`). An admin's cert carries the admin's own root-signed AccountRecord, so a node verifies it with the root key alone, without the tree, which it needs before it can trust any tree head.
+- **An admin's cert is valid while** the admin's account isn't tombstoned and its current key is the one that signed. Certs aren't ordered by the log, so a cert signed with a stolen key after a revocation or key change couldn't be told apart from one signed before: **revoking an admin, or replacing an admin's key, voids every cert it signed.** The root or another admin re-signs the controllers concerned.
+- A root-signed cert replaces any admins' certs for the same key; one key is certified for one node only.
+- **Upgrading:** software from before `control` was a role rejects admin-signed certs (and heads from keys certified only that way), and its state machine doesn't know the `control` field. Upgrade every controller before the first operation that sets `control`, and every node before the first admin-signed cert; until then keep using root-signed certs.
+- A cert lets a node with the `control` role act as a controller (§4). Joining the Raft cluster itself is a separate membership change (§7.5).
 
 ### 6.6 SigningKeyTombstone (signed by root or emergency revocation key)
 
@@ -514,9 +523,9 @@ Every controller applies committed operations to the same deterministic state ma
 
 | Operation | Effect | Owner |
 |---|---|---|
-| `CreateEnrollment { owner, name, overlay_ips, roles, tags, token_hash, expires_at }` | Adds a pending enrollment for a node owned by the account `owner`. The node's key isn't known yet | |
+| `CreateEnrollment { owner, name, overlay_ips, roles, control, tags, token_hash, expires_at }` | Adds a pending enrollment for a node owned by the account `owner`. The node's key isn't known yet | |
 | `RenameNode { node_id, name }` | Changes a node's name and increments its `version` | ✓ |
-| `UpdateNode { node_id, owner?, overlay_ips?, roles?, tags?, routes? }` | Changes a NodeRecord's other fields and increments its `version` | |
+| `UpdateNode { node_id, owner?, overlay_ips?, roles?, control?, tags?, routes? }` | Changes a NodeRecord's other fields and increments its `version`. Removing `control` is refused while the node is a Raft member | |
 | `TombstoneNode { node_id, reason }` | Adds a Tombstone leaf | ✓ |
 | `RekeyNode { node_id, token_hash, expires_at, revoke_old_now }` | Adds a pending re-key for an existing node (§8.1) | ✓ |
 | `PutAccount { record }` | Stores a signed AccountRecord (§6.10) | |
@@ -584,13 +593,13 @@ A controller that has died but is not suspected of compromise can stay a Raft me
 ### 7.5 Adding and removing controllers
 
 **Adding:**
-1. The admin enrolls the node like any other (§8).
-2. On the offline computer, the root signs a **SigningKeyCert** for the node's new signing key.
-3. The cert spreads by gossip, and the admin submits `ChangeMembership { add learner }`. The new controller receives a snapshot, catches up, and starts signing heads.
+1. The admin enrolls the node with the `control` role, or gives an enrolled node the role with `UpdateNode` (§8). The node starts the controller role and creates its signing key.
+2. An admin signs a **SigningKeyCert** for the node's signing key (§6.5), or the root does on the offline computer.
+3. The cert spreads by gossip, and the admin submits `ChangeMembership { add learner }`, which is accepted only for a valid node with the `control` role. The new controller receives a snapshot, catches up, and starts signing heads.
 4. To make it a voter, the admin submits `ChangeMembership { promote }`, usually together with demoting or removing another voter so the count stays odd.
 
 **Removing:**
-1. The admin submits `ChangeMembership { remove }`.
+1. The admin submits `ChangeMembership { remove }`, then removes the node's `control` role (refused while it is still a member).
 2. If the controller is being decommissioned, or might be compromised, its key is **retired** with a SigningKeyTombstone (§22.1), so the key can't be used again even if its disk is later recovered.
 
 ### 7.6 Network PSK epochs
@@ -902,7 +911,7 @@ Nodes accept state from any controller **or** from any peer. The source doesn't 
 ### 10.2 Merge rules
 
 **Controller certificates:**
-- SigningKeyCert: accept only if signed by the root key and no SigningKeyTombstone exists for that `signing_key_id`.
+- SigningKeyCert: accept only if signed by the root key, or by the key in its `issuer` AccountRecord, which must be a root-signed admin record (§6.5); and no SigningKeyTombstone exists for that `signing_key_id`. An admin's cert counts only while that admin isn't tombstoned and still has that key.
 - SigningKeyTombstone: accept if signed by the root or emergency revocation key. It is permanent and takes effect immediately (§22.1).
 
 **Tree state:**
@@ -1573,12 +1582,12 @@ Every person who uses the network has an **account** (§6.10): a name, an Ed2551
 |---|---|
 | Root key | Admin AccountRecords; any AccountRecord; AccountTombstones for any account |
 | Emergency revocation key | AccountTombstones for any account |
-| Admin account key | **Normal** AccountRecords; AccountTombstones for **normal** accounts; admin operations (§13.3) |
+| Admin account key | **Normal** AccountRecords; AccountTombstones for **normal** accounts; SigningKeyCerts (§6.5); admin operations (§13.3) |
 | Normal account key | `RenameNode`, `TombstoneNode` and `RekeyNode` for nodes it owns (§13.3). It also identifies the person in the policy (§14.2) |
 
 Consequences:
 - **An admin cannot create, promote, modify or revoke another admin.** Only the root can.
-- An admin cannot grant `CONTROL`; that still needs a root-signed SigningKeyCert (§4).
+- **An admin can grant `CONTROL`:** the `control` role plus a SigningKeyCert signed with the admin's own key (§4, §6.5). Admins are therefore trusted as much as controllers are.
 - **All admins have the same powers.** There are no scoped or partial admins.
 
 ### 13.3 Signed operations
@@ -1618,7 +1627,7 @@ This closes the earlier gap where anyone on the overlay could reach the admin UI
 | Tombstoned account | Effect |
 |---|---|
 | Normal account | Every node it owns is treated as **revoked**: hop and end-to-end sessions are destroyed, relays tear down their circuits, and the nodes drop off the network. `owner:` selectors for it match nothing |
-| Admin account | It can no longer sign operations; operations it signed earlier stay in effect. Nodes it owns are revoked like a normal account's. Normal accounts it signed **stay valid**, unless the tombstone has `revoke_issued = true`, in which case they are revoked too |
+| Admin account | It can no longer sign operations; operations it signed earlier stay in effect. Nodes it owns are revoked like a normal account's. Normal accounts it signed **stay valid**, unless the tombstone has `revoke_issued = true`, in which case they are revoked too. SigningKeyCerts it signed are **void** either way (§6.5) |
 
 - `revoke_issued` lets the root choose: an admin who simply leaves keeps their colleagues' accounts working, while a compromised admin's accounts all go at once.
 - Node verifiers (§9.2) check the owner on every handshake, so revoking one account takes all its nodes off the network without a tombstone per node.
@@ -1628,13 +1637,13 @@ This closes the earlier gap where anyone on the overlay could reach the admin UI
 
 1. On the offline computer, the root signs the first **admin AccountRecord**.
 2. It is submitted, without a `SignedOp` wrapper, as the first `PutAccount` of a new cluster (or included in the cluster's initial state).
-3. That admin creates the first controllers' NodeRecords (owned by an infrastructure account, for example `infra`), then the root signs their SigningKeyCerts (§7.5).
+3. That admin creates the first controllers' NodeRecords with the `control` role (owned by an infrastructure account, for example `infra`) and signs their SigningKeyCerts, or has the root sign them (§7.5).
 4. From then on, admins create normal accounts and enroll nodes; only new admins need the root.
 
 ### 13.6 Account key loss or rotation
 
 - **Normal account:** an admin signs a new AccountRecord with the same `account_id` and a higher `version`, carrying the new key. Nodes, ownership and `owner:<name>` rules are unaffected. `owner:<base64 key>` rules naming the old key stop matching; the policy validator warns about this (§14.5).
-- **Admin account:** the same, but signed by the root.
+- **Admin account:** the same, but signed by the root. SigningKeyCerts signed with the old key become void (§6.5); re-sign them with the new key.
 - If a key may be stolen rather than lost, the old key is useless for control-plane actions as soon as the new record is committed, because only the current key is accepted.
 
 ---
@@ -2510,7 +2519,7 @@ A release is blocked by any failing security test, any golden-vector change with
 
 - **Defense:**
   - `RELAY` and `DATA` are in the NodeRecord, which is authenticated through a controller-signed tree head.
-  - `CONTROL` exists only through a root-signed SigningKeyCert.
+  - `CONTROL` needs the role in the record and a SigningKeyCert signed by an admin or the root.
   - Adverts and circuits involving nodes without `RELAY` are rejected.
 
 ### 21.8 Lying relay (false link metrics or traffic reports)
@@ -2575,11 +2584,11 @@ A release is blocked by any failing security test, any golden-vector change with
 
 ### 21.18 Compromised controller (outside the threat model)
 
-Controllers are trusted: the root key grants `CONTROL` only to trusted computers (§2), and the design does not try to contain a compromised controller. This section records what the impact would be, and the remedy, in case that assumption is ever broken.
+Controllers are trusted: admins and the root key grant `CONTROL` only to trusted computers (§2), and the design does not try to contain a compromised controller. This section records what the impact would be, and the remedy, in case that assumption is ever broken.
 
 - **Threat:** an attacker obtains one controller's signing key, or takes over a controller.
 - **What it can do:** any valid controller key can sign a tree head over any root. The attacker can therefore present nodes with a forged node list: add rogue nodes, change IPs or roles, or leave out tombstones. As a Raft member (and especially as leader) it can also commit forged operations that honest controllers will apply.
-- **What it cannot do:** grant `CONTROL` (that needs the root key), forge self-signed records of other nodes, forge account records (they carry their own root or admin signature, §6.10), or read end-to-end traffic.
+- **What it cannot do:** certify other controllers' signing keys (that needs an admin or the root key), forge self-signed records of other nodes, forge account records (they carry their own root or admin signature, §6.10), or read end-to-end traffic.
 - **Detection:** a forged head competes with honest controllers' heads for the same versions, so gossip exposes it as equivocation (§21.3) once both reach the same node.
 - **Response:** retire the key with a SigningKeyTombstone (§22.1) and remove the controller from the cluster (§7.5).
 - This is the accepted trade-off of this design: automatic failover with simple controllers, relying on controllers being trusted. Admitting only trusted computers, isolating the signing key (§4.1) and hardening controller hosts are what keep the assumption true.
@@ -2612,6 +2621,7 @@ A controller's key is retired when the controller is decommissioned, has died an
    - rejects every head from that key with `version > last_valid_version`, and discards state known only through those heads
    - if the key was compromised and may have signed inflated versions, resets its high-water mark to the highest version signed by any **still-valid** controller key. This is the only permitted rollback.
    - removes `CONTROL` from the controller named in the retired cert, unless it holds another valid cert
+   - (an admin's revocation or key change voids the certs it signed in the same way, §6.5; heads from those keys are no longer accepted)
 4. The admin removes the controller from the Raft cluster (§7.5). If the cluster needs its full size back, a replacement controller is added the normal way.
 
 No state has to be rebuilt: the remaining controllers already hold the full committed log, and every node already holds the full tree.
@@ -2796,7 +2806,7 @@ No state has to be rebuilt: the remaining controllers already hold the full comm
 | NAT traversal | DATA nodes behind NAT try UDP hole punching, using relays as address reflectors and the e2e session for coordination | §11.7 |
 | Metric reporting and storage | Push to the nearest controller; all controllers remote-write to one shared Prometheus-compatible store with out-of-order ingestion | §12.5 |
 | Multi-capability nodes | Any combination allowed; roles are independent checks, with the specific uses and isolation rules in §4.1 | §4.1 |
-| Compromised controllers | Outside the threat model: the root grants `CONTROL` only to trusted computers. No multisignature or threshold signing | §2, §21.18 |
+| Compromised controllers | Outside the threat model: admins and the root grant `CONTROL` only to trusted computers. No multisignature or threshold signing | §2, §21.18 |
 | Accounts | Every person has an account; every node has an owner account. Admin accounts are signed by the root only; admins sign normal accounts, never other admins | §13.1, §13.2 |
 | Authentication and audit | Every operation is signed by the account that made it, with per-account sequence numbers; the log records who did what | §13.3 |
 | Web admin UI | Prompts for the account key on every submit and signs in the browser; the key is never sent to the controller | §13.3 |
