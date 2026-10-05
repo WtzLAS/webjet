@@ -14,6 +14,10 @@ pub struct Vertex {
     pub control: bool,
     pub me: bool,
     pub load: Option<Load>,
+    /// The webjetd version it runs, when known (`0.7.1`).
+    pub software: Option<String>,
+    /// Ignored by this agent for its old gossip protocol (§10.6.5).
+    pub outdated: bool,
     /// Position in 0..1 of the drawing area's width and height.
     pub x: f32,
     pub y: f32,
@@ -23,6 +27,22 @@ impl Vertex {
     /// Relays and controllers form the network's core.
     pub fn infra(&self) -> bool {
         self.relay || self.control
+    }
+
+    /// The text under the vertex: name, "(this)" for this agent, and the
+    /// version it runs; outdated nodes say so.
+    pub fn label(&self) -> String {
+        let mut t = self.name.clone();
+        if self.me {
+            t.push_str(" (this)");
+        }
+        match (&self.software, self.outdated) {
+            (Some(v), true) => t.push_str(&format!(" · {v} outdated")),
+            (None, true) => t.push_str(" · outdated"),
+            (Some(v), false) => t.push_str(&format!(" · {v}")),
+            (None, false) => {}
+        }
+        t
     }
 }
 
@@ -83,6 +103,8 @@ impl Graph {
                     control: n.control,
                     me: n.me || n.id == t.me,
                     load: n.load.clone(),
+                    software: n.software.clone(),
+                    outdated: n.outdated,
                     x: 0.5,
                     y: 0.5,
                 })
@@ -99,6 +121,8 @@ impl Graph {
                     control: n.control,
                     me: n.id == s.status.node_id,
                     load: None,
+                    software: None,
+                    outdated: false,
                     x: 0.5,
                     y: 0.5,
                 })
@@ -352,6 +376,22 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn labels_carry_the_version() {
+        let mut v = Graph::from_snapshot(&snap()).vertices[0].clone();
+        v.name = "relay-1".into();
+        v.me = false;
+        v.software = None;
+        assert_eq!(v.label(), "relay-1");
+        v.software = Some("0.7.1".into());
+        v.me = true;
+        assert_eq!(v.label(), "relay-1 (this) · 0.7.1");
+        v.me = false;
+        v.software = Some("0.6.1".into());
+        v.outdated = true;
+        assert_eq!(v.label(), "relay-1 · 0.6.1 outdated");
     }
 
     #[test]

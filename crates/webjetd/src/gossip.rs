@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use webjet_core::crypto::{self, Bytes32, opt_k32};
+use webjet_core::protocol as proto;
 use webjet_core::store::HeadOutcome;
 use webjet_core::types::{MINUTE, SECOND, SKEW_SHORT_RECORD, now_ms};
 use webjet_proto::{self as wp, HopMsg, Transport, msg_type as mt};
@@ -594,18 +595,23 @@ fn after_install(n: &Arc<Node>) {
 pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Result<bool> {
     let v = crypto::open_envelope(raw)?;
     let now = now_ms();
-    let (origin, seq, expires, ty) = match v.ty {
+    // The gossip protocol the record states (§10.6.5); an EndpointRecord
+    // from before the field also tells it through `software`.
+    let mut software = None;
+    let (origin, seq, expires, ty, protocol) = match v.ty {
         mt::ENDPOINT_RECORD => {
             let r: wp::EndpointRecord = v.decode()?;
-            (opt_k32(&r.node_id), r.seq, r.expires_at, v.ty)
+            let p = proto::endpoint_protocol(r.protocol, r.software.as_deref());
+            software = r.software;
+            (opt_k32(&r.node_id), r.seq, r.expires_at, v.ty, p)
         }
         mt::LINK_STATE_ADVERT => {
             let r: wp::LinkStateAdvert = v.decode()?;
-            (opt_k32(&r.origin), r.seq, r.expires_at, v.ty)
+            (opt_k32(&r.origin), r.seq, r.expires_at, v.ty, r.protocol)
         }
         mt::ATTACHMENT_RECORD => {
             let r: wp::AttachmentRecord = v.decode()?;
-            (opt_k32(&r.node_id), r.seq, r.expires_at, v.ty)
+            (opt_k32(&r.node_id), r.seq, r.expires_at, v.ty, r.protocol)
         }
         _ => bail!("not a record"),
     };
@@ -628,6 +634,28 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
     }
     let new = {
         let mut recs = n.records.lock();
+        if let Some(marked) = refuse_old_protocol(
+            &mut recs,
+            Incoming {
+                origin,
+                ty,
+                seq,
+                expires,
+                protocol,
+                software,
+                raw,
+            },
+        ) {
+            drop(recs);
+            if marked {
+                tracing::info!(
+                    "{}: ignoring its records, gossip protocol {protocol} is below {} (§10.6.5)",
+                    n.name_of(&origin),
+                    proto::MIN_GOSSIP_PROTOCOL
+                );
+            }
+            bail!("record from outdated software (gossip protocol {protocol})");
+        }
         match ty {
             mt::ENDPOINT_RECORD => {
                 if recs
@@ -676,6 +704,81 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
     n.emit(Event::RecordsChanged(origin));
     flood(n, from.map(|h| h.id), origin, ty, raw);
     Ok(true)
+}
+
+/// The gossip protocol floor (§10.6.5): None when a record from `origin`
+/// of this type and protocol may be used, else Some(whether the node was
+/// newly marked outdated). An EndpointRecord below the floor
+/// marks the node outdated and drops everything it published before; one at
+/// or above it clears the mark. LinkStateAdverts and AttachmentRecords
+/// without the field (protocol 0, before 0.7.1) take the protocol of the
+/// node's EndpointRecord, and are used when there is none yet (an
+/// EndpointRecord marking the node outdated removes them later).
+/// What the floor check needs to know about an incoming record.
+struct Incoming<'a> {
+    origin: Bytes32,
+    ty: u16,
+    seq: u64,
+    expires: u64,
+    protocol: u16,
+    software: Option<String>,
+    raw: &'a [u8],
+}
+
+fn refuse_old_protocol(recs: &mut crate::node::Records, r: Incoming<'_>) -> Option<bool> {
+    let Incoming {
+        origin,
+        ty,
+        seq,
+        expires,
+        protocol,
+        software,
+        raw,
+    } = r;
+    if ty == mt::ENDPOINT_RECORD {
+        if recs.outdated.get(&origin).is_some_and(|o| o.seq >= seq) {
+            return Some(false);
+        }
+        if proto::accepted(protocol) {
+            // Upgraded: the new EndpointRecord replaces the mark.
+            recs.outdated.remove(&origin);
+            return None;
+        }
+        if recs
+            .endpoints
+            .get(&origin)
+            .is_some_and(|(r, _)| r.seq >= seq)
+        {
+            // Older than the record we have.
+            return Some(false);
+        }
+        let marked = recs
+            .outdated
+            .insert(
+                origin,
+                crate::node::Outdated {
+                    software: software.unwrap_or_default(),
+                    protocol,
+                    seq,
+                    expires_at: expires,
+                    raw: raw.to_vec(),
+                },
+            )
+            .is_none();
+        recs.endpoints.remove(&origin);
+        recs.lsas.remove(&origin);
+        recs.attachments.remove(&origin);
+        return Some(marked);
+    }
+    let ok = if protocol > 0 {
+        proto::accepted(protocol)
+    } else {
+        !recs.outdated.contains_key(&origin)
+            && recs.endpoints.get(&origin).is_none_or(|(r, _)| {
+                proto::accepted(proto::endpoint_protocol(r.protocol, r.software.as_deref()))
+            })
+    };
+    (!ok).then_some(false)
 }
 
 /// Forward a new record (§10.6.1): within the core everything; to edge
@@ -754,6 +857,11 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
             }
             if let Some((_, raw)) = recs.attachments.get(id) {
                 items.push(raw.clone());
+            }
+            // Outdated software (§10.6.5): its EndpointRecord, so the edge
+            // node can tell why it has nothing else.
+            if let Some(o) = recs.outdated.get(id) {
+                items.push(o.raw.clone());
             }
         }
     }
@@ -933,6 +1041,7 @@ pub fn publish_endpoint(n: &Arc<Node>, force: bool) {
         issued_at: now,
         expires_at: now + ENDPOINT_LIFETIME,
         priorities: Some(crate::transport::my_priorities(n)),
+        protocol: proto::GOSSIP_PROTOCOL,
     };
     let raw = n.kp.sign_obj(mt::ENDPOINT_RECORD, &rec);
     *n.sync.last_endpoint.lock() = Some((addrs, now));
@@ -1019,6 +1128,7 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
         load: Some(Box::new(load)),
         issued_at: now,
         expires_at: now + LSA_LIFETIME,
+        protocol: proto::GOSSIP_PROTOCOL,
     };
     let raw = n.kp.sign_obj(mt::LINK_STATE_ADVERT, &lsa);
     *n.sync.last_lsa.lock() = Some((summary, now));
@@ -1065,6 +1175,7 @@ pub fn publish_attachment(n: &Arc<Node>) {
         ),
         issued_at: now,
         expires_at: now + ATTACH_LIFETIME,
+        protocol: proto::GOSSIP_PROTOCOL,
     };
     let raw = n.kp.sign_obj(mt::ATTACHMENT_RECORD, &rec);
     *n.sync.last_attach.lock() = Some((ids, now));
@@ -1090,6 +1201,7 @@ pub fn expire_records(n: &Arc<Node>) {
     });
     recs.lsas.retain(|id, (r, _)| ok(id, r.expires_at));
     recs.attachments.retain(|id, (r, _)| ok(id, r.expires_at));
+    recs.outdated.retain(|id, o| ok(id, o.expires_at));
 }
 
 /// Build the routing graph from LSAs and attachments (§11.4).
@@ -1323,16 +1435,27 @@ pub fn topology(n: &Node) -> serde_json::Value {
     }
     // NAT type and addresses from each node's EndpointRecord (§6.2); this
     // node's own are current rather than as last published.
-    let mut endpoints: HashMap<Bytes32, (wp::NatType, Vec<wp::EndpointAddr>)> = n
-        .records
-        .lock()
-        .endpoints
-        .iter()
-        .map(|(id, (r, _))| (*id, (r.nat, r.addrs.clone().unwrap_or_default())))
-        .collect();
+    // The software version too, and nodes whose records are ignored for
+    // their old gossip protocol (§10.6.5).
+    let (mut endpoints, outdated) = {
+        let recs = n.records.lock();
+        let endpoints: HashMap<Bytes32, (wp::NatType, Vec<wp::EndpointAddr>, Option<String>)> =
+            recs.endpoints
+                .iter()
+                .map(|(id, (r, _))| {
+                    let a = r.addrs.clone().unwrap_or_default();
+                    (*id, (r.nat, a, r.software.clone()))
+                })
+                .collect();
+        (endpoints, recs.outdated.clone())
+    };
     endpoints.insert(
         n.me,
-        (crate::transport::nat_type(n), crate::transport::my_addrs(n)),
+        (
+            crate::transport::nat_type(n),
+            crate::transport::my_addrs(n),
+            Some(format!("webjetd/{}", env!("CARGO_PKG_VERSION"))),
+        ),
     );
     let mapping = *n.port_mapping.lock();
     let s = n.store.read();
@@ -1343,17 +1466,171 @@ pub fn topology(n: &Node) -> serde_json::Value {
         .filter(|x| x.valid)
         .map(|x| {
             let ep = endpoints.get(&x.id);
+            let old = outdated.get(&x.id);
+            let software = ep
+                .and_then(|(_, _, s)| s.as_deref())
+                .or(old.map(|o| o.software.as_str()))
+                .map(proto::version_text);
             json!({
                 "id": hex::encode(x.id), "name": x.name,
                 "ips": x.ips.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
                 "relay": x.relay, "data": x.data, "control": x.control,
                 "me": x.id == n.me,
                 "load": loads.get(&hex::encode(x.id)),
-                "nat": ep.map(|(t, _)| crate::transport::nat_name(*t)),
-                "endpoints": ep.map(|(_, a)| crate::transport::addrs_json(a)),
+                "nat": ep.map(|(t, _, _)| crate::transport::nat_name(*t)),
+                "endpoints": ep.map(|(_, a, _)| crate::transport::addrs_json(a)).unwrap_or_default(),
+                "software": software,
+                "outdated": old.is_some(),
                 "port_mapping": (x.id == n.me).then_some(mapping).flatten().map(|m| json!({"external": m.external.to_string(), "protocol": m.protocol})),
             })
         })
         .collect();
     json!({"me": hex::encode(n.me), "nodes": nodes, "edges": edges})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::Records;
+
+    const A: Bytes32 = [1; 32];
+
+    fn endpoint(seq: u64, software: &str, protocol: u16) -> wp::EndpointRecord {
+        wp::EndpointRecord {
+            node_id: Some(crypto::k32(&A)),
+            software: Some(software.into()),
+            seq,
+            expires_at: u64::MAX / 2,
+            protocol,
+            ..Default::default()
+        }
+    }
+
+    /// Run the floor check like accept_record does, storing what passes.
+    fn offer(recs: &mut Records, ty: u16, seq: u64, protocol: u16, sw: Option<&str>) -> bool {
+        let p = if ty == mt::ENDPOINT_RECORD {
+            proto::endpoint_protocol(protocol, sw)
+        } else {
+            protocol
+        };
+        let refused = refuse_old_protocol(
+            recs,
+            Incoming {
+                origin: A,
+                ty,
+                seq,
+                expires: u64::MAX / 2,
+                protocol: p,
+                software: sw.map(String::from),
+                raw: &[],
+            },
+        )
+        .is_some();
+        if !refused {
+            match ty {
+                mt::ENDPOINT_RECORD => {
+                    let r = endpoint(seq, sw.unwrap_or(""), protocol);
+                    recs.endpoints.insert(A, (r, Vec::new()));
+                }
+                mt::LINK_STATE_ADVERT => {
+                    let l = wp::LinkStateAdvert {
+                        seq,
+                        protocol,
+                        ..Default::default()
+                    };
+                    recs.lsas.insert(A, (l, Vec::new()));
+                }
+                _ => {
+                    let a = wp::AttachmentRecord {
+                        seq,
+                        protocol,
+                        ..Default::default()
+                    };
+                    recs.attachments.insert(A, (a, Vec::new()));
+                }
+            }
+        }
+        !refused
+    }
+
+    #[test]
+    fn old_software_is_ignored_and_comes_back_when_upgraded() {
+        let mut recs = Records::default();
+        // An LSA without the field arrives before any EndpointRecord: used.
+        assert!(offer(&mut recs, mt::LINK_STATE_ADVERT, 1, 0, None));
+        // Its 0.6.1 EndpointRecord marks it outdated and drops the LSA.
+        assert!(!offer(
+            &mut recs,
+            mt::ENDPOINT_RECORD,
+            2,
+            0,
+            Some("webjetd/0.6.1")
+        ));
+        assert!(recs.lsas.is_empty() && recs.endpoints.is_empty());
+        assert_eq!(
+            recs.outdated.get(&A).map(|o| o.software.as_str()),
+            Some("webjetd/0.6.1")
+        );
+        // Further records without the field are ignored.
+        assert!(!offer(&mut recs, mt::LINK_STATE_ADVERT, 3, 0, None));
+        assert!(!offer(&mut recs, mt::ATTACHMENT_RECORD, 3, 0, None));
+        // A replayed older record doesn't change anything.
+        assert!(!offer(
+            &mut recs,
+            mt::ENDPOINT_RECORD,
+            1,
+            0,
+            Some("webjetd/0.5.0")
+        ));
+        // Upgraded to the current software: accepted again.
+        assert!(offer(
+            &mut recs,
+            mt::ENDPOINT_RECORD,
+            4,
+            proto::GOSSIP_PROTOCOL,
+            Some("webjetd/9.9.9")
+        ));
+        assert!(recs.outdated.is_empty());
+        assert!(offer(
+            &mut recs,
+            mt::LINK_STATE_ADVERT,
+            5,
+            proto::GOSSIP_PROTOCOL,
+            None
+        ));
+    }
+
+    #[test]
+    fn compatible_older_software_is_kept() {
+        let mut recs = Records::default();
+        // 0.7.0 has no field but is at the floor.
+        assert!(offer(
+            &mut recs,
+            mt::ENDPOINT_RECORD,
+            1,
+            0,
+            Some("webjetd/0.7.0")
+        ));
+        assert!(offer(&mut recs, mt::LINK_STATE_ADVERT, 2, 0, None));
+        assert!(offer(&mut recs, mt::ATTACHMENT_RECORD, 2, 0, None));
+        assert!(recs.outdated.is_empty());
+        // A stale downgrade below what we hold is ignored without marking.
+        assert!(!offer(
+            &mut recs,
+            mt::ENDPOINT_RECORD,
+            1,
+            0,
+            Some("webjetd/0.6.1")
+        ));
+        assert!(recs.outdated.is_empty() && recs.endpoints.contains_key(&A));
+        // A real downgrade (newer seq) marks it outdated.
+        assert!(!offer(
+            &mut recs,
+            mt::ENDPOINT_RECORD,
+            3,
+            0,
+            Some("webjetd/0.6.1")
+        ));
+        assert!(recs.outdated.contains_key(&A) && recs.attachments.is_empty());
+    }
 }

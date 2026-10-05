@@ -453,6 +453,7 @@ impl WebjetApp {
                     .flex()
                     .flex_col()
                     .items_center()
+                    .when(v.outdated, |d| d.opacity(0.45))
                     .cursor(if dragged {
                         CursorStyle::ClosedHand
                     } else {
@@ -490,11 +491,7 @@ impl WebjetApp {
                             } else {
                                 theme::MUTED
                             }))
-                            .child(if v.me {
-                                format!("{} (this)", v.name)
-                            } else {
-                                v.name.clone()
-                            }),
+                            .child(v.label()),
                     )
                     // Press and release: select; press and move: place it.
                     .on_mouse_down(
@@ -548,6 +545,7 @@ impl WebjetApp {
             .child(legend_item(theme::WARN, "slow or lossy"))
             .child(legend_item(theme::BAD, "bad"))
             .child(legend_note("bold: links of circuits in use (★)"))
+            .child(legend_note("dim: outdated software, ignored"))
             .child(legend_note("faded: other links").debug_selector(|| "legend-last".into()));
         let hint = muted(
             "Drag the background to move the picture, drag a node to place it · scroll to move, \
@@ -939,6 +937,15 @@ impl WebjetApp {
         if let Ok(t) = &s.topology
             && let Some(tn) = t.nodes.iter().find(|x| x.id == n.id)
         {
+            if let Some(v) = &tn.software {
+                d = d.child(label_value("Software", format!("webjetd {v}")));
+            }
+            if tn.outdated {
+                d = d.child(div().text_color(rgb(theme::WARN)).text_xs().child(
+                    "Outdated: its gossip protocol is below this agent's minimum, so its \
+                         records are ignored (no routes through it, no links shown). Upgrade it.",
+                ));
+            }
             if let Some(nat) = tn.nat_text() {
                 d = d.child(label_value("NAT", nat));
             }

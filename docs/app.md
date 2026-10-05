@@ -100,8 +100,13 @@ isn't available.
   links stay visible. Edges are colored by round trip and loss and labeled
   with the round trip. While the tab is open the agent also subscribes to
   every node's attachment records, so an edge node shows the links and delays
-  of all nodes, not only of the peers it talks to. Selecting a node highlights
-  its edges and shows its record, relay load, its NAT type (none,
+  of all nodes, not only of the peers it talks to. Each vertex is labeled with
+  the webjetd version the node runs (from its endpoint record). A node whose
+  software is below this agent's gossip protocol floor (architecture
+  §10.6.5, for example 0.6.x) is drawn dimmed and marked `outdated`. The
+  agent ignores its records, so it has no links in the graph. Selecting a
+  node highlights its edges and shows its record, software version, relay
+  load, its NAT type (none,
   consistent, symmetric or unknown, from its endpoint record; for this
   agent also the router port mapping) and advertised addresses (public,
   reflexive, host), and every report of each of

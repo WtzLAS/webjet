@@ -12,6 +12,7 @@ pub mod merkle;
 pub mod packet;
 pub mod padding;
 pub mod policy;
+pub mod protocol;
 pub mod proxy;
 pub mod queue;
 pub mod routing;

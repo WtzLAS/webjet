@@ -136,6 +136,22 @@ pub struct Records {
     pub endpoints: HashMap<Bytes32, (wp::EndpointRecord, Vec<u8>)>,
     pub lsas: HashMap<Bytes32, (wp::LinkStateAdvert, Vec<u8>)>,
     pub attachments: HashMap<Bytes32, (wp::AttachmentRecord, Vec<u8>)>,
+    /// Nodes whose latest EndpointRecord came from software below the
+    /// gossip protocol floor (§10.6.5): their records are ignored, this is
+    /// only kept to show which version they run.
+    pub outdated: HashMap<Bytes32, Outdated>,
+}
+
+/// A node ignored for its old gossip protocol (§10.6.5).
+#[derive(Clone, Debug)]
+pub struct Outdated {
+    pub software: String,
+    pub protocol: u16,
+    pub seq: u64,
+    pub expires_at: u64,
+    /// The EndpointRecord, signed: lookups answer with it so edge nodes
+    /// learn the version too; it is never flooded.
+    pub raw: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]

@@ -1124,6 +1124,17 @@ A home relay can't forge state, but it could withhold updates (a freeze, §21.2)
 - Tree-head expiry still applies (§21.2).
 - If both home relays look stale, the node asks a third relay chosen at random.
 
+#### 10.6.5 Gossip protocol floor
+
+Every self-signed record (EndpointRecord, LinkStateAdvert, AttachmentRecord) carries `protocol`, the gossip protocol of the software that signed it (`webjet_core::protocol::GOSSIP_PROTOCOL`). Records from before the field have no `protocol` field (it reads as 0). For an EndpointRecord the protocol then comes from `software`: `webjetd/0.7.x` is protocol 1, anything older is 0. The protocol number goes up only when a release changes gossip or the records in a way older software can't handle. Patch releases normally keep it, so their rolling upgrades lose nothing.
+
+A node ignores records from software below its floor (`MIN_GOSSIP_PROTOCOL`, currently 1, so 0.6.x and older are ignored):
+- An EndpointRecord below the floor marks the node **outdated**. The node's endpoint, link-state and attachment records are removed, and later records without the field are refused as well. Outdated records aren't stored or forwarded, and aren't used for routing (§11.4), hole punching or display. The node keeps working as a tree-gossip peer, and its tree-head and Merkle traffic is unaffected. Only its soft state is ignored.
+- An EndpointRecord at or above the floor with a higher `seq` clears the mark, for example after the node is upgraded.
+- A LinkStateAdvert or AttachmentRecord without the field is used while its node's EndpointRecord is unknown or at or above the floor.
+
+The `topology` control command reports each node's `software` version and whether it is `outdated`. webjet-app shows both in the Nodes tab.
+
 ### 10.7 Peer discovery and bootstrap
 
 A node that has been offline for a long time may find that every address it remembers has changed. Identity is always checked by the hop handshake (§9.2), so every source below is only a **hint** for where to connect: a wrong hint can make a connection fail but can never make the node trust the wrong peer.
@@ -2084,6 +2095,7 @@ signed by: the root key
 - **Hop sessions** negotiate the protocol version with TLS ALPN (`webjet/1`, `webjet/2`, …).
 - **AnyTLS** must present a browser's ALPN values (`h2`, `http/1.1`, §9.7.2), so it negotiates with a version hello as the first message after authentication instead.
 - **End-to-end sessions** use ALPN on their internal TLS handshake (`webjet-e2e/1`, …).
+- **Gossip records** carry their own protocol number. Records below a node's floor are ignored (§10.6.5).
 - **Feature flags:** each node lists optional features in its EndpointRecord (§6.2), for example a new transport, so peers know what it supports before dialing. New record and frame types are sent only to peers that advertise them: `zstd` and `lz4` (compression, §9.8), `proxy`.
 - Software supports the current and previous wire protocol versions. Peers refuse protocols below the StateVersion's `min_wire_protocol`.
 

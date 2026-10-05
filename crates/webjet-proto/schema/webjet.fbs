@@ -347,6 +347,9 @@ table EndpointRecord {
     issued_at: uint64;
     expires_at: uint64;
     priorities: [TransportPriority];
+    // Gossip protocol of the software that signed the record (§10.6.5);
+    // absent (0) before it existed. Peers ignore records below their floor.
+    protocol: uint16;
 }
 
 table LinkEntry {
@@ -372,6 +375,7 @@ table LinkStateAdvert {
     load: RelayLoad;
     issued_at: uint64;
     expires_at: uint64;
+    protocol: uint16;                 // gossip protocol (§10.6.5)
 }
 
 table AttachmentEntry {
@@ -387,6 +391,7 @@ table AttachmentRecord {
     relays: [AttachmentEntry];
     issued_at: uint64;
     expires_at: uint64;
+    protocol: uint16;                 // gossip protocol (§10.6.5)
 }
 
 table CircuitSetup {

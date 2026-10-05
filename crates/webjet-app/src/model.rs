@@ -450,11 +450,23 @@ pub struct Load {
     pub capacity_mbps: u32,
 }
 
+/// `null` read as the default: agents 0.7.0 send `"endpoints": null` for
+/// a node they hold no EndpointRecord of, and one such node must not make
+/// the whole topology unreadable.
+fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TopoNode {
     pub id: String,
     pub name: String,
+    #[serde(deserialize_with = "nullable")]
     pub ips: Vec<String>,
     pub relay: bool,
     pub data: bool,
@@ -466,9 +478,16 @@ pub struct TopoNode {
     /// agent has no record of the node (older agents don't send it).
     pub nat: Option<String>,
     /// The addresses it advertises.
+    #[serde(deserialize_with = "nullable")]
     pub endpoints: Vec<TopoAddr>,
     /// This agent's router port mapping (only on `me`).
     pub port_mapping: Option<PortMapping>,
+    /// The webjetd version it runs (`0.7.1`), from its EndpointRecord;
+    /// absent when this agent has no record (agents before 0.7.1 don't send it).
+    pub software: Option<String>,
+    /// Its software is below this agent's gossip protocol floor (§10.6.5):
+    /// its records are ignored, so it neither routes nor shows links.
+    pub outdated: bool,
 }
 
 /// An advertised address (§6.2).
@@ -557,7 +576,9 @@ pub struct TopoEdge {
 #[serde(default)]
 pub struct Topology {
     pub me: String,
+    #[serde(deserialize_with = "nullable")]
     pub nodes: Vec<TopoNode>,
+    #[serde(deserialize_with = "nullable")]
     pub edges: Vec<TopoEdge>,
 }
 
@@ -1245,6 +1266,26 @@ mod tests {
         );
         assert_eq!(t.nodes[1].nat_text(), None);
         assert_eq!(t.nodes[1].endpoints_text(), "—");
+    }
+
+    /// Agents 0.7.0 send `null` for a node without an EndpointRecord (an
+    /// offline or 0.6 node); that once failed the whole topology with
+    /// "links unavailable: … invalid type: null, expected a sequence".
+    #[test]
+    fn topology_tolerates_nulls_and_shows_versions() {
+        let t: Topology = serde_json::from_value(json!({
+            "me": "aa", "nodes": [
+                {"id": "aa", "name": "new", "nat": "none", "endpoints": [], "software": "0.7.1"},
+                {"id": "bb", "name": "old", "ips": null, "nat": null, "endpoints": null,
+                    "load": null, "port_mapping": null, "software": "0.6.1", "outdated": true}],
+            "edges": null
+        }))
+        .unwrap();
+        assert_eq!(t.nodes.len(), 2);
+        assert!(t.edges.is_empty());
+        assert!(t.nodes[1].endpoints.is_empty() && t.nodes[1].ips.is_empty());
+        assert_eq!(t.nodes[0].software.as_deref(), Some("0.7.1"));
+        assert!(!t.nodes[0].outdated && t.nodes[1].outdated);
     }
 
     #[test]

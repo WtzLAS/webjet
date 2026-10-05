@@ -46392,6 +46392,8 @@ mod root {
             /// The field `priorities` in the table `EndpointRecord`
             pub priorities:
                 ::core::option::Option<::planus::alloc::vec::Vec<self::TransportPriority>>,
+            /// The field `protocol` in the table `EndpointRecord`
+            pub protocol: u16,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -46409,6 +46411,7 @@ mod root {
                     issued_at: 0,
                     expires_at: 0,
                     priorities: ::core::default::Default::default(),
+                    protocol: 0,
                 }
             }
         }
@@ -46440,6 +46443,7 @@ mod root {
                 field_priorities: impl ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
                 >,
+                field_protocol: impl ::planus::WriteAsDefault<u16, u16>,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_addrs = field_addrs.prepare(builder);
@@ -46452,8 +46456,9 @@ mod root {
                 let prepared_issued_at = field_issued_at.prepare(builder, &0);
                 let prepared_expires_at = field_expires_at.prepare(builder, &0);
                 let prepared_priorities = field_priorities.prepare(builder);
+                let prepared_protocol = field_protocol.prepare(builder, &0);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<26> =
+                let mut table_writer: ::planus::table_writer::TableWriter<28> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -46482,6 +46487,9 @@ mod root {
                 }
                 if prepared_priorities.is_some() {
                     table_writer.write_entry::<::planus::Offset<[::planus::Offset<self::TransportPriority>]>>(10);
+                }
+                if prepared_protocol.is_some() {
+                    table_writer.write_entry::<u16>(11);
                 }
                 if prepared_nat.is_some() {
                     table_writer.write_entry::<self::NatType>(2);
@@ -46523,6 +46531,9 @@ mod root {
                             prepared_priorities
                         {
                             object_writer.write::<_, _, 4>(&prepared_priorities);
+                        }
+                        if let ::core::option::Option::Some(prepared_protocol) = prepared_protocol {
+                            object_writer.write::<_, _, 2>(&prepared_protocol);
                         }
                         if let ::core::option::Option::Some(prepared_nat) = prepared_nat {
                             object_writer.write::<_, _, 1>(&prepared_nat);
@@ -46575,6 +46586,7 @@ mod root {
                     self.issued_at,
                     self.expires_at,
                     &self.priorities,
+                    self.protocol,
                 )
             }
         }
@@ -46844,6 +46856,46 @@ mod root {
         impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>
             EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
         {
+            /// Setter for the [`protocol` field](EndpointRecord#structfield.protocol).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol<T11>(
+                self,
+                value: T11,
+            ) -> EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
+            where
+                T11: ::planus::WriteAsDefault<u16, u16>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = self.0;
+                EndpointRecordBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, value))
+            }
+
+            /// Sets the [`protocol` field](EndpointRecord#structfield.protocol) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol_as_default(
+                self,
+            ) -> EndpointRecordBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                ::planus::DefaultValue,
+            )> {
+                self.protocol(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>
+            EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [EndpointRecord].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<EndpointRecord>
@@ -46868,8 +46920,9 @@ mod root {
                 T10: ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
                 >,
+                T11: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAs<::planus::Offset<EndpointRecord>>
-            for EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            for EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
         {
             type Prepared = ::planus::Offset<EndpointRecord>;
 
@@ -46893,8 +46946,9 @@ mod root {
                 T10: ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
                 >,
+                T11: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAsOptional<::planus::Offset<EndpointRecord>>
-            for EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            for EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
         {
             type Prepared = ::planus::Offset<EndpointRecord>;
 
@@ -46921,13 +46975,14 @@ mod root {
                 T10: ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::TransportPriority>]>,
                 >,
+                T11: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAsOffset<EndpointRecord>
-            for EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            for EndpointRecordBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<EndpointRecord> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = &self.0;
-                EndpointRecord::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = &self.0;
+                EndpointRecord::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
             }
         }
 
@@ -47036,6 +47091,16 @@ mod root {
             > {
                 self.0.access(10, "EndpointRecord", "priorities")
             }
+
+            /// Getter for the [`protocol` field](EndpointRecord#structfield.protocol).
+            #[inline]
+            pub fn protocol(&self) -> ::planus::Result<u16> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(11, "EndpointRecord", "protocol")?
+                        .unwrap_or(0),
+                )
+            }
         }
 
         impl<'a> ::core::fmt::Debug for EndpointRecordRef<'a> {
@@ -47070,6 +47135,7 @@ mod root {
                 {
                     f.field("priorities", &field_priorities);
                 }
+                f.field("protocol", &self.protocol());
                 f.finish()
             }
         }
@@ -47117,6 +47183,7 @@ mod root {
                     } else {
                         ::core::option::Option::None
                     },
+                    protocol: ::core::convert::TryInto::try_into(value.protocol()?)?,
                 })
             }
         }
@@ -47197,7 +47264,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:352`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:355`
         #[derive(
             Clone,
             Debug,
@@ -47652,7 +47719,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:360`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:363`
         #[derive(
             Clone,
             Debug,
@@ -48111,7 +48178,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:368`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:371`
         #[derive(
             Clone,
             Debug,
@@ -48136,6 +48203,8 @@ mod root {
             pub issued_at: u64,
             /// The field `expires_at` in the table `LinkStateAdvert`
             pub expires_at: u64,
+            /// The field `protocol` in the table `LinkStateAdvert`
+            pub protocol: u16,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -48148,6 +48217,7 @@ mod root {
                     load: ::core::default::Default::default(),
                     issued_at: 0,
                     expires_at: 0,
+                    protocol: 0,
                 }
             }
         }
@@ -48170,6 +48240,7 @@ mod root {
                 field_load: impl ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
                 field_issued_at: impl ::planus::WriteAsDefault<u64, u64>,
                 field_expires_at: impl ::planus::WriteAsDefault<u64, u64>,
+                field_protocol: impl ::planus::WriteAsDefault<u16, u16>,
             ) -> ::planus::Offset<Self> {
                 let prepared_origin = field_origin.prepare(builder);
                 let prepared_seq = field_seq.prepare(builder, &0);
@@ -48177,8 +48248,9 @@ mod root {
                 let prepared_load = field_load.prepare(builder);
                 let prepared_issued_at = field_issued_at.prepare(builder, &0);
                 let prepared_expires_at = field_expires_at.prepare(builder, &0);
+                let prepared_protocol = field_protocol.prepare(builder, &0);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<16> =
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
                     ::core::default::Default::default();
                 if prepared_origin.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -48198,6 +48270,9 @@ mod root {
                 }
                 if prepared_load.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::RelayLoad>>(3);
+                }
+                if prepared_protocol.is_some() {
+                    table_writer.write_entry::<u16>(6);
                 }
 
                 unsafe {
@@ -48222,6 +48297,9 @@ mod root {
                         }
                         if let ::core::option::Option::Some(prepared_load) = prepared_load {
                             object_writer.write::<_, _, 4>(&prepared_load);
+                        }
+                        if let ::core::option::Option::Some(prepared_protocol) = prepared_protocol {
+                            object_writer.write::<_, _, 2>(&prepared_protocol);
                         }
                     });
                 }
@@ -48267,6 +48345,7 @@ mod root {
                     &self.load,
                     self.issued_at,
                     self.expires_at,
+                    self.protocol,
                 )
             }
         }
@@ -48407,6 +48486,32 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5> LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`protocol` field](LinkStateAdvert#structfield.protocol).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol<T6>(
+                self,
+                value: T6,
+            ) -> LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsDefault<u16, u16>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                LinkStateAdvertBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`protocol` field](LinkStateAdvert#structfield.protocol) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol_as_default(
+                self,
+            ) -> LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5, ::planus::DefaultValue)>
+            {
+                self.protocol(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [LinkStateAdvert].
             #[inline]
             pub fn finish(
@@ -48427,8 +48532,9 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
                 T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAs<::planus::Offset<LinkStateAdvert>>
-            for LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5)>
+            for LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<LinkStateAdvert>;
 
@@ -48448,8 +48554,9 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
                 T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAsOptional<::planus::Offset<LinkStateAdvert>>
-            for LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5)>
+            for LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<LinkStateAdvert>;
 
@@ -48469,16 +48576,17 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
                 T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAsOffset<LinkStateAdvert>
-            for LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5)>
+            for LinkStateAdvertBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             #[inline]
             fn prepare(
                 &self,
                 builder: &mut ::planus::Builder,
             ) -> ::planus::Offset<LinkStateAdvert> {
-                let (v0, v1, v2, v3, v4, v5) = &self.0;
-                LinkStateAdvert::create(builder, v0, v1, v2, v3, v4, v5)
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                LinkStateAdvert::create(builder, v0, v1, v2, v3, v4, v5, v6)
             }
         }
 
@@ -48536,6 +48644,16 @@ mod root {
                         .unwrap_or(0),
                 )
             }
+
+            /// Getter for the [`protocol` field](LinkStateAdvert#structfield.protocol).
+            #[inline]
+            pub fn protocol(&self) -> ::planus::Result<u16> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(6, "LinkStateAdvert", "protocol")?
+                        .unwrap_or(0),
+                )
+            }
         }
 
         impl<'a> ::core::fmt::Debug for LinkStateAdvertRef<'a> {
@@ -48553,6 +48671,7 @@ mod root {
                 }
                 f.field("issued_at", &self.issued_at());
                 f.field("expires_at", &self.expires_at());
+                f.field("protocol", &self.protocol());
                 f.finish()
             }
         }
@@ -48579,6 +48698,7 @@ mod root {
                     },
                     issued_at: ::core::convert::TryInto::try_into(value.issued_at()?)?,
                     expires_at: ::core::convert::TryInto::try_into(value.expires_at()?)?,
+                    protocol: ::core::convert::TryInto::try_into(value.protocol()?)?,
                 })
             }
         }
@@ -48659,7 +48779,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:377`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:381`
         #[derive(
             Clone,
             Debug,
@@ -49095,7 +49215,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:384`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:388`
         #[derive(
             Clone,
             Debug,
@@ -49118,6 +49238,8 @@ mod root {
             pub issued_at: u64,
             /// The field `expires_at` in the table `AttachmentRecord`
             pub expires_at: u64,
+            /// The field `protocol` in the table `AttachmentRecord`
+            pub protocol: u16,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -49129,6 +49251,7 @@ mod root {
                     relays: ::core::default::Default::default(),
                     issued_at: 0,
                     expires_at: 0,
+                    protocol: 0,
                 }
             }
         }
@@ -49150,14 +49273,16 @@ mod root {
                 >,
                 field_issued_at: impl ::planus::WriteAsDefault<u64, u64>,
                 field_expires_at: impl ::planus::WriteAsDefault<u64, u64>,
+                field_protocol: impl ::planus::WriteAsDefault<u16, u16>,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_seq = field_seq.prepare(builder, &0);
                 let prepared_relays = field_relays.prepare(builder);
                 let prepared_issued_at = field_issued_at.prepare(builder, &0);
                 let prepared_expires_at = field_expires_at.prepare(builder, &0);
+                let prepared_protocol = field_protocol.prepare(builder, &0);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<14> =
+                let mut table_writer: ::planus::table_writer::TableWriter<16> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -49176,6 +49301,9 @@ mod root {
                         .write_entry::<::planus::Offset<[::planus::Offset<self::AttachmentEntry>]>>(
                             2,
                         );
+                }
+                if prepared_protocol.is_some() {
+                    table_writer.write_entry::<u16>(5);
                 }
 
                 unsafe {
@@ -49197,6 +49325,9 @@ mod root {
                         }
                         if let ::core::option::Option::Some(prepared_relays) = prepared_relays {
                             object_writer.write::<_, _, 4>(&prepared_relays);
+                        }
+                        if let ::core::option::Option::Some(prepared_protocol) = prepared_protocol {
+                            object_writer.write::<_, _, 2>(&prepared_protocol);
                         }
                     });
                 }
@@ -49241,6 +49372,7 @@ mod root {
                     &self.relays,
                     self.issued_at,
                     self.expires_at,
+                    self.protocol,
                 )
             }
         }
@@ -49358,6 +49490,31 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4> AttachmentRecordBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`protocol` field](AttachmentRecord#structfield.protocol).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol<T5>(
+                self,
+                value: T5,
+            ) -> AttachmentRecordBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsDefault<u16, u16>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                AttachmentRecordBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`protocol` field](AttachmentRecord#structfield.protocol) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol_as_default(
+                self,
+            ) -> AttachmentRecordBuilder<(T0, T1, T2, T3, T4, ::planus::DefaultValue)> {
+                self.protocol(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> AttachmentRecordBuilder<(T0, T1, T2, T3, T4, T5)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [AttachmentRecord].
             #[inline]
             pub fn finish(
@@ -49379,8 +49536,9 @@ mod root {
                 >,
                 T3: ::planus::WriteAsDefault<u64, u64>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAs<::planus::Offset<AttachmentRecord>>
-            for AttachmentRecordBuilder<(T0, T1, T2, T3, T4)>
+            for AttachmentRecordBuilder<(T0, T1, T2, T3, T4, T5)>
         {
             type Prepared = ::planus::Offset<AttachmentRecord>;
 
@@ -49401,8 +49559,9 @@ mod root {
                 >,
                 T3: ::planus::WriteAsDefault<u64, u64>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAsOptional<::planus::Offset<AttachmentRecord>>
-            for AttachmentRecordBuilder<(T0, T1, T2, T3, T4)>
+            for AttachmentRecordBuilder<(T0, T1, T2, T3, T4, T5)>
         {
             type Prepared = ::planus::Offset<AttachmentRecord>;
 
@@ -49423,16 +49582,17 @@ mod root {
                 >,
                 T3: ::planus::WriteAsDefault<u64, u64>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u16, u16>,
             > ::planus::WriteAsOffset<AttachmentRecord>
-            for AttachmentRecordBuilder<(T0, T1, T2, T3, T4)>
+            for AttachmentRecordBuilder<(T0, T1, T2, T3, T4, T5)>
         {
             #[inline]
             fn prepare(
                 &self,
                 builder: &mut ::planus::Builder,
             ) -> ::planus::Offset<AttachmentRecord> {
-                let (v0, v1, v2, v3, v4) = &self.0;
-                AttachmentRecord::create(builder, v0, v1, v2, v3, v4)
+                let (v0, v1, v2, v3, v4, v5) = &self.0;
+                AttachmentRecord::create(builder, v0, v1, v2, v3, v4, v5)
             }
         }
 
@@ -49486,6 +49646,16 @@ mod root {
                         .unwrap_or(0),
                 )
             }
+
+            /// Getter for the [`protocol` field](AttachmentRecord#structfield.protocol).
+            #[inline]
+            pub fn protocol(&self) -> ::planus::Result<u16> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(5, "AttachmentRecord", "protocol")?
+                        .unwrap_or(0),
+                )
+            }
         }
 
         impl<'a> ::core::fmt::Debug for AttachmentRecordRef<'a> {
@@ -49500,6 +49670,7 @@ mod root {
                 }
                 f.field("issued_at", &self.issued_at());
                 f.field("expires_at", &self.expires_at());
+                f.field("protocol", &self.protocol());
                 f.finish()
             }
         }
@@ -49519,6 +49690,7 @@ mod root {
                     },
                     issued_at: ::core::convert::TryInto::try_into(value.issued_at()?)?,
                     expires_at: ::core::convert::TryInto::try_into(value.expires_at()?)?,
+                    protocol: ::core::convert::TryInto::try_into(value.protocol()?)?,
                 })
             }
         }
@@ -49599,7 +49771,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:392`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:397`
         #[derive(
             Clone,
             Debug,
@@ -50109,7 +50281,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:403`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:408`
         #[derive(
             Clone,
             Debug,
@@ -50471,7 +50643,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:411`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:416`
         #[derive(
             Copy,
             Clone,
@@ -50644,7 +50816,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:413`
+        /// * Table `Counter` in the file `schema/webjet.fbs:418`
         #[derive(
             Clone,
             Debug,
@@ -50953,7 +51125,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:415`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:420`
         #[derive(
             Clone,
             Debug,
@@ -51252,7 +51424,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:417`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:422`
         #[derive(
             Clone,
             Debug,
@@ -51650,7 +51822,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:424`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:429`
         #[derive(
             Clone,
             Debug,
@@ -52516,7 +52688,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:439`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:444`
         #[derive(
             Clone,
             Debug,
@@ -53541,7 +53713,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:456`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:461`
         #[derive(
             Clone,
             Debug,
@@ -53897,7 +54069,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:458`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:463`
         #[derive(
             Clone,
             Debug,
@@ -54252,7 +54424,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:460`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:465`
         #[derive(
             Clone,
             Debug,
@@ -55584,7 +55756,7 @@ mod root {
         /// The table `TunMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TunMetrics` in the file `schema/webjet.fbs:483`
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:488`
         #[derive(
             Clone,
             Debug,
@@ -55997,7 +56169,7 @@ mod root {
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:495`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:500`
         #[derive(
             Clone,
             Debug,
@@ -56717,7 +56889,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:509`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:514`
         #[derive(
             Clone,
             Debug,
@@ -57451,7 +57623,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:524`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:529`
         #[derive(
             Clone,
             Debug,
@@ -58300,7 +58472,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:538`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:543`
         #[derive(
             Clone,
             Debug,
@@ -58616,7 +58788,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:540`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:545`
         #[derive(
             Clone,
             Debug,
@@ -59427,7 +59599,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:554`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:559`
         #[derive(
             Clone,
             Debug,
@@ -59744,7 +59916,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:556`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:561`
         #[derive(
             Clone,
             Debug,
@@ -60169,7 +60341,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:563`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:568`
         #[derive(
             Clone,
             Debug,
@@ -60435,7 +60607,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:564`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:569`
         #[derive(
             Clone,
             Debug,
@@ -60720,7 +60892,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:567`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:572`
         #[derive(
             Clone,
             Debug,
@@ -60992,7 +61164,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:568`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:573`
         #[derive(
             Clone,
             Debug,
@@ -61262,7 +61434,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:569`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:574`
         #[derive(
             Clone,
             Debug,
@@ -61530,7 +61702,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:570`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:575`
         #[derive(
             Clone,
             Debug,
@@ -61802,7 +61974,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:571`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:576`
         #[derive(
             Clone,
             Debug,
@@ -62078,7 +62250,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:572`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:577`
         #[derive(
             Clone,
             Debug,
@@ -62415,7 +62587,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:573`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:578`
         #[derive(
             Clone,
             Debug,
@@ -62706,7 +62878,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:574`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:579`
         #[derive(
             Clone,
             Debug,
@@ -62981,7 +63153,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:576`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:581`
         #[derive(
             Copy,
             Clone,
@@ -63159,7 +63331,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:577`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:582`
         #[derive(
             Clone,
             Debug,
@@ -63495,7 +63667,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:579`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:584`
         #[derive(
             Clone,
             Debug,
@@ -63757,7 +63929,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:581`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:586`
         #[derive(
             Clone,
             Debug,
@@ -64781,7 +64953,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:601`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:606`
         #[derive(
             Clone,
             Debug,
@@ -65186,7 +65358,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:610`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:615`
         #[derive(
             Clone,
             Debug,
@@ -65450,7 +65622,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:611`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:616`
         #[derive(
             Clone,
             Debug,
@@ -65733,7 +65905,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:612`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:617`
         #[derive(
             Clone,
             Debug,
@@ -66022,7 +66194,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:613`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:618`
         #[derive(
             Clone,
             Debug,
@@ -66418,7 +66590,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:614`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:619`
         #[derive(
             Clone,
             Debug,
@@ -66701,7 +66873,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:615`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:620`
         #[derive(
             Clone,
             Debug,
@@ -66990,7 +67162,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:616`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:621`
         #[derive(
             Clone,
             Debug,
@@ -67281,7 +67453,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:617`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:622`
         #[derive(
             Clone,
             Debug,
@@ -67543,7 +67715,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:618`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:623`
         #[derive(
             Clone,
             Debug,
@@ -67810,7 +67982,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:619`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:624`
         #[derive(
             Clone,
             Debug,
@@ -68154,7 +68326,7 @@ mod root {
         /// The table `AutoMembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:621`
+        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:626`
         #[derive(
             Clone,
             Debug,
@@ -68495,7 +68667,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:623`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:628`
         #[derive(
             Clone,
             Debug,
@@ -69263,7 +69435,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:638`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:643`
         #[derive(
             Clone,
             Debug,
@@ -69577,7 +69749,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:643`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:648`
         #[derive(
             Clone,
             Debug,
@@ -69933,7 +70105,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:649`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:654`
         #[derive(
             Clone,
             Debug,
