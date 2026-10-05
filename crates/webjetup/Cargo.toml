@@ -18,10 +18,10 @@ hex.workspace = true
 rustls = { workspace = true }
 # HTTPS with the workspace's aws-lc-rs provider (no ring) and Mozilla's roots.
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
-sha2 = "0.10"
+sha2 = "0.11"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 tempfile = "3"
 toml.workspace = true
 

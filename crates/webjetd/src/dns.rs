@@ -2,7 +2,7 @@
 //! forwarded zones with answer rewriting for mapped subnet routes.
 
 use crate::node::Node;
-use hickory_proto::op::{Message, MessageType, ResponseCode};
+use hickory_proto::op::{Message, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA, CNAME, PTR, SRV, TXT};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use std::net::{IpAddr, SocketAddr};
@@ -44,18 +44,20 @@ pub async fn handle(n: &Arc<Node>, p: &[u8]) -> Option<Vec<u8>> {
     ))
 }
 
+/// An empty response to `q`: same id, op code and questions, recursion
+/// desired copied, recursion available.
+fn response_to(q: &Message) -> Message {
+    let mut r = Message::response(q.metadata.id, q.metadata.op_code);
+    r.metadata.recursion_desired = q.metadata.recursion_desired;
+    r.metadata.recursion_available = true;
+    r.queries = q.queries.clone();
+    r
+}
+
 pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
-    let mut r = Message::new();
-    r.set_id(q.id());
-    r.set_message_type(MessageType::Response);
-    r.set_op_code(q.op_code());
-    r.set_recursion_desired(q.recursion_desired());
-    r.set_recursion_available(true);
-    for query in q.queries() {
-        r.add_query(query.clone());
-    }
-    let Some(query) = q.queries().first() else {
-        r.set_response_code(ResponseCode::FormErr);
+    let mut r = response_to(q);
+    let Some(query) = q.queries.first() else {
+        r.metadata.response_code = ResponseCode::FormErr;
         return r;
     };
     let name = query.name().to_ascii();
@@ -77,7 +79,7 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
         if in_zone(&name, &zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, f)) {
             return forward(n, q, f).await.unwrap_or_else(|| {
                 let mut e = r.clone();
-                e.set_response_code(ResponseCode::ServFail);
+                e.metadata.response_code = ResponseCode::ServFail;
                 e
             });
         }
@@ -110,9 +112,9 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
                 .unwrap_or(false)
         });
     if !answered && known_zone && !name_exists(n, &name, &suffix, &records) {
-        r.set_response_code(ResponseCode::NXDomain);
+        r.metadata.response_code = ResponseCode::NXDomain;
     } else if !answered && !known_zone && qtype != RecordType::PTR {
-        r.set_response_code(ResponseCode::Refused);
+        r.metadata.response_code = ResponseCode::Refused;
     }
     r
 }
@@ -325,7 +327,7 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
     let mut out = q.clone();
     // Reverse lookups for a published address go out as the LAN address.
     let mut ptr_orig: Option<Name> = None;
-    if let Some(query) = q.queries().first()
+    if let Some(query) = q.queries.first()
         && query.query_type() == RecordType::PTR
         && let Some(ip) = ptr_to_ip(&query.name().to_ascii())
         && let Some(g) = gs.iter().find(|g| g.published.contains(&ip))
@@ -335,8 +337,7 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
         nq.set_name(Name::from_ascii(format!("{}.", ip_to_ptr(lan))).ok()?);
         ptr_orig = Some(query.name().clone());
         out = q.clone();
-        out.take_queries();
-        out.add_query(nq);
+        out.queries = vec![nq];
     }
     let bytes = out.to_vec().ok()?;
     let servers: Vec<IpAddr> = f
@@ -372,48 +373,43 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
         else {
             continue;
         };
-        let Ok(mut resp) = Message::from_vec(&buf[..len]) else {
+        let Ok(resp) = Message::from_vec(&buf[..len]) else {
             continue;
         };
-        if gs.iter().any(|g| g.mapped()) {
-            let answers: Vec<Record> = resp
-                .take_answers()
-                .into_iter()
-                .map(|rec| rewrite_record(rec, &gs))
-                .collect();
-            resp.add_answers(answers);
-            let adds: Vec<Record> = resp
-                .take_additionals()
-                .into_iter()
-                .map(|rec| rewrite_record(rec, &gs))
-                .collect();
-            resp.add_additionals(adds);
-            resp.set_authentic_data(false);
-        }
-        if let Some(orig) = &ptr_orig {
-            resp.take_queries();
-            for qq in q.queries() {
-                resp.add_query(qq.clone());
-            }
-            let answers: Vec<Record> = resp
-                .take_answers()
-                .into_iter()
-                .map(|mut rec| {
-                    rec.set_name(orig.clone());
-                    rec
-                })
-                .collect();
-            resp.add_answers(answers);
-        }
-        resp.set_id(q.id());
-        return Some(resp);
+        return Some(fix_forwarded(resp, q, &gs, ptr_orig.as_ref()));
     }
     None
 }
 
+/// A forwarded zone's answer to `q`, as the client gets it: LAN addresses
+/// rewritten to published ones (§11.10.5), a reverse lookup sent as the LAN
+/// address answered under the published name the client asked for, and the
+/// client's query id.
+fn fix_forwarded(mut resp: Message, q: &Message, gs: &[Grant], ptr_orig: Option<&Name>) -> Message {
+    if gs.iter().any(|g| g.mapped()) {
+        resp.answers = std::mem::take(&mut resp.answers)
+            .into_iter()
+            .map(|rec| rewrite_record(rec, gs))
+            .collect();
+        resp.additionals = std::mem::take(&mut resp.additionals)
+            .into_iter()
+            .map(|rec| rewrite_record(rec, gs))
+            .collect();
+        resp.metadata.authentic_data = false;
+    }
+    if let Some(orig) = ptr_orig {
+        resp.queries = q.queries.clone();
+        for rec in &mut resp.answers {
+            rec.name = orig.clone();
+        }
+    }
+    resp.metadata.id = q.metadata.id;
+    resp
+}
+
 fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
-    let new = match rec.data() {
-        Some(RData::A(a)) => {
+    let new = match &rec.data {
+        RData::A(a) => {
             let ip = IpAddr::V4(a.0);
             gs.iter()
                 .find(|g| g.lan.contains(&ip))
@@ -423,7 +419,7 @@ fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
                     _ => None,
                 })
         }
-        Some(RData::AAAA(a)) => {
+        RData::AAAA(a) => {
             let ip = IpAddr::V6(a.0);
             gs.iter()
                 .find(|g| g.lan.contains(&ip))
@@ -436,7 +432,7 @@ fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
         _ => None,
     };
     if let Some(d) = new {
-        rec.set_data(Some(d));
+        rec.data = d;
     }
     rec
 }
@@ -498,5 +494,80 @@ mod tests {
         let parsed = packet::parse(&p).unwrap();
         assert_eq!(parsed.flow.sport, 53);
         assert_eq!(parsed.flow.dport, 5353);
+    }
+
+    /// A DNS message on the wire: header, one question, and A answers for it
+    /// (name compressed as a pointer to the question).
+    fn wire(id: u16, flags: u16, name: &str, qtype: u16, answers: &[[u8; 4]]) -> Vec<u8> {
+        let mut m = Vec::new();
+        m.extend_from_slice(&id.to_be_bytes());
+        m.extend_from_slice(&flags.to_be_bytes());
+        m.extend_from_slice(&1u16.to_be_bytes());
+        m.extend_from_slice(&(answers.len() as u16).to_be_bytes());
+        m.extend_from_slice(&[0, 0, 0, 0]);
+        for label in name.trim_end_matches('.').split('.') {
+            m.push(label.len() as u8);
+            m.extend_from_slice(label.as_bytes());
+        }
+        m.push(0);
+        m.extend_from_slice(&qtype.to_be_bytes());
+        m.extend_from_slice(&1u16.to_be_bytes());
+        for a in answers {
+            m.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+            m.extend_from_slice(a);
+        }
+        m
+    }
+
+    #[test]
+    fn response_keeps_query_header() {
+        // RD set, standard query.
+        let q = Message::from_vec(&wire(0xbeef, 0x0100, "web.internal", 1, &[])).unwrap();
+        let mut r = response_to(&q);
+        r.metadata.response_code = ResponseCode::NXDomain;
+        let b = r.to_vec().unwrap();
+        assert_eq!(&b[0..2], &[0xbe, 0xef]);
+        // QR, RD, RA; rcode 3.
+        assert_eq!(u16::from_be_bytes([b[2], b[3]]), 0x8183);
+        let back = Message::from_vec(&b).unwrap();
+        assert_eq!(back.queries.len(), 1);
+        assert_eq!(back.queries[0].name().to_ascii(), "web.internal.");
+        assert_eq!(back.queries[0].query_type(), RecordType::A);
+    }
+
+    #[test]
+    fn forwarded_answers_are_rewritten() {
+        let gs = [Grant::parse("192.168.1.0/24=10.2.2.0/24").unwrap()];
+        let q = Message::from_vec(&wire(7, 0x0100, "nas.lan", 1, &[])).unwrap();
+        // The server answers with its own id and the LAN address.
+        let resp =
+            Message::from_vec(&wire(99, 0x8180, "nas.lan", 1, &[[192, 168, 1, 20]])).unwrap();
+        let out = fix_forwarded(resp, &q, &gs, None);
+        assert_eq!(out.metadata.id, 7);
+        assert!(!out.metadata.authentic_data);
+        let ips: Vec<IpAddr> = out
+            .answers
+            .iter()
+            .filter_map(|r| match &r.data {
+                RData::A(a) => Some(IpAddr::V4(a.0)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ips, vec!["10.2.2.20".parse::<IpAddr>().unwrap()]);
+        // A reverse lookup answered under the name the client asked for.
+        let orig = Name::from_ascii("20.2.2.10.in-addr.arpa.").unwrap();
+        let q = Message::from_vec(&wire(8, 0x0100, "20.2.2.10.in-addr.arpa", 12, &[])).unwrap();
+        let resp = Message::from_vec(&wire(
+            8,
+            0x8180,
+            "20.1.168.192.in-addr.arpa",
+            1,
+            &[[1, 2, 3, 4]],
+        ))
+        .unwrap();
+        let out = fix_forwarded(resp, &q, &gs, Some(&orig));
+        assert_eq!(out.queries[0].name(), &orig);
+        assert!(out.answers.iter().all(|r| r.name == orig));
+        assert!(out.to_vec().is_ok());
     }
 }

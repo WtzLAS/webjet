@@ -2,7 +2,7 @@
 //! style, 8192 packets) and the relay frame header (§11.5, §17.7).
 
 use crate::crypto::Bytes32;
-use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use zeroize::Zeroize;
 
@@ -43,7 +43,7 @@ pub struct SessionKey {
 
 impl SessionKey {
     pub fn new(mut k: [u8; 32]) -> Self {
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&k));
+        let cipher = ChaCha20Poly1305::new(&Key::from(k));
         k.zeroize();
         SessionKey { cipher }
     }
@@ -51,7 +51,7 @@ impl SessionKey {
     fn nonce(counter: u64) -> Nonce {
         let mut n = [0u8; 12];
         n[4..].copy_from_slice(&counter.to_be_bytes());
-        *Nonce::from_slice(&n)
+        Nonce::from(n)
     }
 
     /// Seal `payload` into a complete frame. `None` only if the payload is
@@ -66,7 +66,7 @@ impl SessionKey {
         aad.copy_from_slice(&out);
         let tag = self
             .cipher
-            .encrypt_in_place_detached(&Self::nonce(counter), &aad, &mut body)
+            .encrypt_inout_detached(&Self::nonce(counter), &aad, body.as_mut_slice().into())
             .ok()?;
         out.extend_from_slice(&body);
         out.extend_from_slice(&tag);
@@ -84,7 +84,12 @@ impl SessionKey {
         let (ct, tag) = rest.split_at(rest.len() - TAG);
         let mut body = ct.to_vec();
         self.cipher
-            .decrypt_in_place_detached(&Self::nonce(counter), hdr, &mut body, tag.into())
+            .decrypt_inout_detached(
+                &Self::nonce(counter),
+                hdr,
+                body.as_mut_slice().into(),
+                tag.try_into().ok()?,
+            )
             .ok()?;
         Some(body)
     }

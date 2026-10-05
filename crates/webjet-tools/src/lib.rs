@@ -70,7 +70,10 @@ pub fn unseal(pass: &str, data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         .map_err(|e| anyhow!("argon2: {e}"))?;
     let c = chacha20poly1305::ChaCha20Poly1305::new((&*key).into());
     let pt = c
-        .decrypt(nonce.into(), ct)
+        .decrypt(
+            nonce.try_into().map_err(|_| anyhow!("bad nonce length"))?,
+            ct,
+        )
         .map_err(|_| anyhow!("wrong passphrase or damaged file"))?;
     Ok(Zeroizing::new(pt))
 }
@@ -362,10 +365,10 @@ pub fn refuse_certificate(
     }
     #[cfg(feature = "anytls")]
     {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        use rand::RngExt;
+        let mut rng = rand::rng();
         let label: String = (0..10)
-            .map(|_| rng.gen_range(b'a'..=b'z') as char)
+            .map(|_| rng.random_range(b'a'..=b'z') as char)
             .collect();
         let domain = format!("www.{label}.com");
         let (cert, key_pem) = webjet_net::anytls::self_signed(&domain)?;

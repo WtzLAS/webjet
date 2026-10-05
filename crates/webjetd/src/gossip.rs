@@ -1134,8 +1134,8 @@ pub async fn run(n: Arc<Node>) {
                 .cloned()
                 .collect();
             let fanout = if hops.len() > 64 { 4 } else { hops.len() };
-            use rand::seq::SliceRandom;
-            for h in hops.choose_multiple(&mut rand::thread_rng(), fanout) {
+            use rand::seq::IndexedRandom;
+            for h in hops.sample(&mut rand::rng(), fanout) {
                 h.send_control(HopMsg::Digest(Box::new(wp::Digest { digest: Some(d) })));
             }
         }

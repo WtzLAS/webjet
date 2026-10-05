@@ -9,7 +9,9 @@
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use parking_lot::Mutex;
-use rand::RngCore;
+use rand::Rng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use webjet_core::crypto::{Bytes32, ct_eq, ctx, derive, keyed};
@@ -124,7 +126,7 @@ pub fn tcp_preamble(epoch: u16, psk: &Bytes32) -> [u8; TCP_PREAMBLE] {
     let mut out = [0u8; TCP_PREAMBLE];
     out[..2].copy_from_slice(&epoch.to_be_bytes());
     out[2..10].copy_from_slice(&now_ms().to_be_bytes());
-    rand::rngs::OsRng.fill_bytes(&mut out[10..26]);
+    UnwrapErr(SysRng).fill_bytes(&mut out[10..26]);
     let mac = keyed(&tcp_gate_key(psk), &out[..26]);
     out[26..].copy_from_slice(&mac);
     out
@@ -203,17 +205,17 @@ impl UdpObfs {
         let ciphers = self.ciphers.read();
         let c = ciphers.get(&epoch)?;
         let mut nonce = [0u8; 24];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        UnwrapErr(SysRng).fill_bytes(&mut nonce);
         let mut pt = Vec::with_capacity(2 + inner.len() + pad);
         pt.extend_from_slice(&(inner.len() as u16).to_be_bytes());
         pt.extend_from_slice(inner);
         let mut padding = vec![0u8; pad];
-        rand::rngs::OsRng.fill_bytes(&mut padding);
+        UnwrapErr(SysRng).fill_bytes(&mut padding);
         pt.extend_from_slice(&padding);
         let m = self.mask(&nonce);
         let me = [epoch.to_be_bytes()[0] ^ m[0], epoch.to_be_bytes()[1] ^ m[1]];
         let ct = c
-            .encrypt(XNonce::from_slice(&nonce), Payload { msg: &pt, aad: &me })
+            .encrypt(&XNonce::from(nonce), Payload { msg: &pt, aad: &me })
             .ok()?;
         let mut out = Vec::with_capacity(26 + ct.len());
         out.extend_from_slice(&nonce);
@@ -235,7 +237,7 @@ impl UdpObfs {
         let c = ciphers.get(&epoch)?;
         let pt = c
             .decrypt(
-                XNonce::from_slice(nonce),
+                &XNonce::try_from(nonce).ok()?,
                 Payload {
                     msg: &d[26..],
                     aad: &d[24..26],

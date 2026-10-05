@@ -404,7 +404,7 @@ impl Dataplane {
             .iter()
             .find(|g| n.e2e.get(g).map(|s| s.established()).unwrap_or(false))
             .copied()
-            .unwrap_or_else(|| gws[rand::random::<usize>() % gws.len()]);
+            .unwrap_or_else(|| gws[rand::random_range(0..gws.len())]);
         choice.insert(prefix, pick);
         Some((pick, false))
     }

@@ -3,7 +3,7 @@
 //! A `c` entry means "stop splitting here if the payload is exhausted".
 
 use anyhow::{Result, anyhow, bail};
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Seg {
@@ -95,7 +95,7 @@ impl Scheme {
     /// applies.
     pub fn plan(&self, pkt: u32, len: usize) -> Option<Vec<(usize, usize)>> {
         let segs = self.segments(pkt)?;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut left = len;
         let mut out = Vec::new();
         for s in segs {
@@ -106,7 +106,7 @@ impl Scheme {
                     }
                 }
                 Seg::Range(a, b) => {
-                    let size = rng.gen_range(*a as usize..=*b as usize);
+                    let size = rng.random_range(*a as usize..=*b as usize);
                     let data = left.min(size);
                     out.push((data, size - data));
                     left -= data;

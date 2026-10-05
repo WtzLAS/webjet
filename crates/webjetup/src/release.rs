@@ -271,7 +271,14 @@ impl Client {
 pub fn sha256_file(path: &Path) -> Result<String> {
     let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut h = Sha256::new();
-    std::io::copy(&mut f, &mut h)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut f, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
     Ok(hex::encode(h.finalize()))
 }
 

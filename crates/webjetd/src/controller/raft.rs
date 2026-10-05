@@ -19,7 +19,7 @@
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
@@ -372,7 +372,7 @@ impl Raft {
         let log = contiguous(storage.load_log(), snap_index);
         let rng = match seed {
             Some(s) => StdRng::seed_from_u64(s),
-            None => StdRng::from_entropy(),
+            None => rand::make_rng(),
         };
         let mut r = Raft {
             id,
@@ -575,7 +575,7 @@ impl Raft {
     fn reset_deadline(&mut self) {
         let lo = self.timing.election_min.as_millis() as u64;
         let hi = self.timing.election_max.as_millis() as u64;
-        self.election_deadline = self.now + Duration::from_millis(self.rng.gen_range(lo..=hi));
+        self.election_deadline = self.now + Duration::from_millis(self.rng.random_range(lo..=hi));
     }
 
     fn in_lease(&self) -> bool {

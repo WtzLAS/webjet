@@ -17,7 +17,7 @@
 
 use super::*;
 use rand::rngs::StdRng;
-use rand::{Rng, RngCore, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use webjet_proto::EntryPayload;
@@ -255,12 +255,16 @@ impl Sim {
 
     fn send(&mut self, from: Bytes32, out: Out) {
         for (to, body) in out {
-            if self.rng.gen_bool(self.drop_p) {
+            if self.rng.random_bool(self.drop_p) {
                 continue;
             }
-            let copies = if self.rng.gen_bool(self.dup_p) { 2 } else { 1 };
+            let copies = if self.rng.random_bool(self.dup_p) {
+                2
+            } else {
+                1
+            };
             for _ in 0..copies {
-                let d = self.rng.gen_range(1..=self.max_delay);
+                let d = self.rng.random_range(1..=self.max_delay);
                 self.net.push((self.t + d, from, to, body.clone()));
             }
         }
@@ -280,7 +284,7 @@ impl Sim {
         self.net = keep;
         // Random order among messages due at the same time: more reordering.
         for k in (1..due.len()).rev() {
-            let j = self.rng.gen_range(0..=k);
+            let j = self.rng.random_range(0..=k);
             due.swap(k, j);
         }
         for (_, from, to, body) in due {
@@ -543,7 +547,7 @@ impl Sim {
         if options.is_empty() {
             return;
         }
-        let m = options[self.rng.gen_range(0..options.len())].clone();
+        let m = options[self.rng.random_range(0..options.len())].clone();
         let now = self.now();
         let r = self.nodes[i].raft.as_mut().unwrap();
         let e = conf_entry(r.term, r.last_index() + 1, &m);
@@ -578,28 +582,28 @@ impl Sim {
 
     fn faults(&mut self, f: &Faults) {
         let n = self.nodes.len();
-        if self.rng.gen_bool(f.crash) {
-            let i = self.rng.gen_range(0..n);
+        if self.rng.random_bool(f.crash) {
+            let i = self.rng.random_range(0..n);
             if self.nodes[i].raft.is_some() {
                 self.crash(i);
             }
         }
-        if self.rng.gen_bool(f.restart) {
+        if self.rng.random_bool(f.restart) {
             let down: Vec<usize> = (0..n).filter(|i| self.nodes[*i].raft.is_none()).collect();
             if !down.is_empty() {
-                let i = down[self.rng.gen_range(0..down.len())];
+                let i = down[self.rng.random_range(0..down.len())];
                 self.start(i);
             }
         }
-        if self.rng.gen_bool(f.partition) {
+        if self.rng.random_bool(f.partition) {
             if self.group.is_some() {
                 self.group = None;
             } else {
-                self.group = Some((0..n).map(|_| self.rng.gen_range(0..2u8)).collect());
+                self.group = Some((0..n).map(|_| self.rng.random_range(0..2u8)).collect());
                 self.stats.partitions += 1;
             }
         }
-        if f.conf > 0.0 && self.rng.gen_bool(f.conf) {
+        if f.conf > 0.0 && self.rng.random_bool(f.conf) {
             self.propose_conf(f.max_voters);
         }
     }
@@ -1217,6 +1221,10 @@ fn prevote_keeps_a_partitioned_follower_from_disrupting() {
     s.run(3000, None, 20);
     assert_eq!(s.leader(), Some(l), "rejoining must not depose the leader");
     assert_eq!(s.nodes[l].raft.as_ref().unwrap().term, term);
+    // Proposals stopped: the newest commit index reaches the follower with
+    // the next heartbeat, so let it settle before comparing.
+    s.run(1000, None, 0);
+    assert_eq!(s.leader(), Some(l));
     assert_eq!(s.nodes[victim].sm.values.len(), s.nodes[l].sm.values.len());
 }
 

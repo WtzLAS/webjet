@@ -4,7 +4,7 @@
 //! choice per neighbor (§9.6).
 
 use crate::crypto::Bytes32;
-use rand::Rng;
+use rand::RngExt;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
 use webjet_proto::Transport;
 
@@ -328,7 +328,7 @@ pub fn spread_pick(cands: &[Path]) -> Option<&Path> {
         .filter(|p| p.cost <= best * (1.0 + SPREAD))
         .collect();
     let total: u32 = near.iter().map(|p| p.spare.max(1) as u32).sum();
-    let mut x = rand::thread_rng().gen_range(0..total.max(1));
+    let mut x = rand::rng().random_range(0..total.max(1));
     for p in &near {
         let w = p.spare.max(1) as u32;
         if x < w {

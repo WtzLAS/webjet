@@ -3,7 +3,9 @@
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-use rand::RngCore;
+use rand::Rng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use webjet_proto::{Decodable, Encodable, Key32, Sig64, Signed, msg_type};
 use zeroize::Zeroizing;
 
@@ -51,7 +53,7 @@ impl std::fmt::Debug for KeyPair {
 impl KeyPair {
     pub fn generate() -> Self {
         let mut seed = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng.fill_bytes(&mut seed[..]);
+        UnwrapErr(SysRng).fill_bytes(&mut seed[..]);
         KeyPair {
             sk: SigningKey::from_bytes(&seed),
         }
@@ -259,13 +261,13 @@ pub fn enroll_proof(token_hash: &Bytes32, pubkey: &Bytes32, nonce: &Bytes32) -> 
 
 pub fn random32() -> Bytes32 {
     let mut b = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut b);
+    UnwrapErr(SysRng).fill_bytes(&mut b);
     b
 }
 
 pub fn random16() -> [u8; 16] {
     let mut b = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut b);
+    UnwrapErr(SysRng).fill_bytes(&mut b);
     b
 }
 
