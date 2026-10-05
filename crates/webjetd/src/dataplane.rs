@@ -93,7 +93,7 @@ impl Dataplane {
             }
         }
         if let Some(n) = self.node() {
-            n.metrics.tun_tx.fetch_add(1, Ordering::Relaxed);
+            n.metrics.tun_out(p.len());
         }
         self.write_tun_raw(p);
     }
@@ -201,7 +201,7 @@ impl Dataplane {
     pub fn outbound(&self, mut p: Vec<u8>) {
         let Some(n) = self.node() else { return };
         let Some(parsed) = packet::parse(&p) else {
-            n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
+            n.metrics.tun_in(p.len());
             return;
         };
         let (src, dst) = (parsed.flow.src, parsed.flow.dst);
@@ -217,7 +217,7 @@ impl Dataplane {
         }
         // The local resolver (§11.10.1).
         if self.resolver.read().contains(&dst) {
-            n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
+            n.metrics.tun_in(p.len());
             let n2 = n.clone();
             tokio::spawn(async move {
                 if let Some(reply) = crate::dns::handle(&n2, &p).await
@@ -252,7 +252,7 @@ impl Dataplane {
             if self.proxy.from_local(&n, &p, &after) {
                 return;
             }
-            n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
+            n.metrics.tun_in(p.len());
             let v = self
                 .conntrack
                 .lock()
@@ -263,7 +263,7 @@ impl Dataplane {
             crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p));
             return;
         }
-        n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
+        n.metrics.tun_in(p.len());
         // Where does it go? A node, or a gateway serving a published prefix (§9.5, §11.9.3).
         let (peer, dest_is_node) = match self.route(&n, &dst) {
             Some(x) => x,

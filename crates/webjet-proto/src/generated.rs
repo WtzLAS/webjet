@@ -53222,6 +53222,8 @@ mod root {
             /// The field `compression` in the table `MetricReport`
             pub compression:
                 ::core::option::Option<::planus::alloc::vec::Vec<self::CompressionMetrics>>,
+            /// The field `tun` in the table `MetricReport`
+            pub tun: ::core::option::Option<::planus::alloc::boxed::Box<self::TunMetrics>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -53243,6 +53245,7 @@ mod root {
                     load: ::core::default::Default::default(),
                     proxy: ::core::default::Default::default(),
                     compression: ::core::default::Default::default(),
+                    tun: ::core::default::Default::default(),
                 }
             }
         }
@@ -53288,6 +53291,7 @@ mod root {
                 field_compression: impl ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::CompressionMetrics>]>,
                 >,
+                field_tun: impl ::planus::WriteAsOptional<::planus::Offset<self::TunMetrics>>,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_boot_id = field_boot_id.prepare(builder);
@@ -53304,8 +53308,9 @@ mod root {
                 let prepared_load = field_load.prepare(builder);
                 let prepared_proxy = field_proxy.prepare(builder);
                 let prepared_compression = field_compression.prepare(builder);
+                let prepared_tun = field_tun.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<34> =
+                let mut table_writer: ::planus::table_writer::TableWriter<36> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -53360,6 +53365,9 @@ mod root {
                 }
                 if prepared_compression.is_some() {
                     table_writer.write_entry::<::planus::Offset<[::planus::Offset<self::CompressionMetrics>]>>(14);
+                }
+                if prepared_tun.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::TunMetrics>>(15);
                 }
 
                 unsafe {
@@ -53420,6 +53428,9 @@ mod root {
                         {
                             object_writer.write::<_, _, 4>(&prepared_compression);
                         }
+                        if let ::core::option::Option::Some(prepared_tun) = prepared_tun {
+                            object_writer.write::<_, _, 4>(&prepared_tun);
+                        }
                     });
                 }
                 builder.current_offset()
@@ -53467,6 +53478,7 @@ mod root {
                     &self.load,
                     &self.proxy,
                     &self.compression,
+                    &self.tun,
                 )
             }
         }
@@ -53896,6 +53908,86 @@ mod root {
                 T14,
             )>
         {
+            /// Setter for the [`tun` field](MetricReport#structfield.tun).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn tun<T15>(
+                self,
+                value: T15,
+            ) -> MetricReportBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                T15,
+            )>
+            where
+                T15: ::planus::WriteAsOptional<::planus::Offset<self::TunMetrics>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14) = self.0;
+                MetricReportBuilder((
+                    v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, value,
+                ))
+            }
+
+            /// Sets the [`tun` field](MetricReport#structfield.tun) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn tun_as_null(
+                self,
+            ) -> MetricReportBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                (),
+            )> {
+                self.tun(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>
+            MetricReportBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                T15,
+            )>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [MetricReport].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<MetricReport>
@@ -53924,6 +54016,7 @@ mod root {
                 T14: ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::CompressionMetrics>]>,
                 >,
+                T15: ::planus::WriteAsOptional<::planus::Offset<self::TunMetrics>>,
             > ::planus::WriteAs<::planus::Offset<MetricReport>>
             for MetricReportBuilder<(
                 T0,
@@ -53941,6 +54034,7 @@ mod root {
                 T12,
                 T13,
                 T14,
+                T15,
             )>
         {
             type Prepared = ::planus::Offset<MetricReport>;
@@ -53969,6 +54063,7 @@ mod root {
                 T14: ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::CompressionMetrics>]>,
                 >,
+                T15: ::planus::WriteAsOptional<::planus::Offset<self::TunMetrics>>,
             > ::planus::WriteAsOptional<::planus::Offset<MetricReport>>
             for MetricReportBuilder<(
                 T0,
@@ -53986,6 +54081,7 @@ mod root {
                 T12,
                 T13,
                 T14,
+                T15,
             )>
         {
             type Prepared = ::planus::Offset<MetricReport>;
@@ -54017,6 +54113,7 @@ mod root {
                 T14: ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::CompressionMetrics>]>,
                 >,
+                T15: ::planus::WriteAsOptional<::planus::Offset<self::TunMetrics>>,
             > ::planus::WriteAsOffset<MetricReport>
             for MetricReportBuilder<(
                 T0,
@@ -54034,13 +54131,15 @@ mod root {
                 T12,
                 T13,
                 T14,
+                T15,
             )>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<MetricReport> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14) = &self.0;
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) =
+                    &self.0;
                 MetricReport::create(
-                    builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14,
+                    builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15,
                 )
             }
         }
@@ -54195,6 +54294,12 @@ mod root {
             > {
                 self.0.access(14, "MetricReport", "compression")
             }
+
+            /// Getter for the [`tun` field](MetricReport#structfield.tun).
+            #[inline]
+            pub fn tun(&self) -> ::planus::Result<::core::option::Option<self::TunMetricsRef<'a>>> {
+                self.0.access(15, "MetricReport", "tun")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for MetricReportRef<'a> {
@@ -54245,6 +54350,9 @@ mod root {
                     self.compression().transpose()
                 {
                     f.field("compression", &field_compression);
+                }
+                if let ::core::option::Option::Some(field_tun) = self.tun().transpose() {
+                    f.field("tun", &field_tun);
                 }
                 f.finish()
             }
@@ -54312,6 +54420,13 @@ mod root {
                         value.compression()?
                     {
                         ::core::option::Option::Some(compression.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    tun: if let ::core::option::Option::Some(tun) = value.tun()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(tun)?,
+                        ))
                     } else {
                         ::core::option::Option::None
                     },
@@ -54392,10 +54507,423 @@ mod root {
             }
         }
 
+        /// The table `TunMetrics` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:470`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct TunMetrics {
+            /// The field `rx_packets` in the table `TunMetrics`
+            pub rx_packets: u64,
+            /// The field `rx_bytes` in the table `TunMetrics`
+            pub rx_bytes: u64,
+            /// The field `tx_packets` in the table `TunMetrics`
+            pub tx_packets: u64,
+            /// The field `tx_bytes` in the table `TunMetrics`
+            pub tx_bytes: u64,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for TunMetrics {
+            fn default() -> Self {
+                Self {
+                    rx_packets: 0,
+                    rx_bytes: 0,
+                    tx_packets: 0,
+                    tx_bytes: 0,
+                }
+            }
+        }
+
+        impl TunMetrics {
+            /// Creates a [TunMetricsBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> TunMetricsBuilder<()> {
+                TunMetricsBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_rx_packets: impl ::planus::WriteAsDefault<u64, u64>,
+                field_rx_bytes: impl ::planus::WriteAsDefault<u64, u64>,
+                field_tx_packets: impl ::planus::WriteAsDefault<u64, u64>,
+                field_tx_bytes: impl ::planus::WriteAsDefault<u64, u64>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_rx_packets = field_rx_packets.prepare(builder, &0);
+                let prepared_rx_bytes = field_rx_bytes.prepare(builder, &0);
+                let prepared_tx_packets = field_tx_packets.prepare(builder, &0);
+                let prepared_tx_bytes = field_tx_bytes.prepare(builder, &0);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_rx_packets.is_some() {
+                    table_writer.write_entry::<u64>(0);
+                }
+                if prepared_rx_bytes.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+                if prepared_tx_packets.is_some() {
+                    table_writer.write_entry::<u64>(2);
+                }
+                if prepared_tx_bytes.is_some() {
+                    table_writer.write_entry::<u64>(3);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_rx_packets) =
+                            prepared_rx_packets
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_rx_packets);
+                        }
+                        if let ::core::option::Option::Some(prepared_rx_bytes) = prepared_rx_bytes {
+                            object_writer.write::<_, _, 8>(&prepared_rx_bytes);
+                        }
+                        if let ::core::option::Option::Some(prepared_tx_packets) =
+                            prepared_tx_packets
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_tx_packets);
+                        }
+                        if let ::core::option::Option::Some(prepared_tx_bytes) = prepared_tx_bytes {
+                            object_writer.write::<_, _, 8>(&prepared_tx_bytes);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<TunMetrics>> for TunMetrics {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<TunMetrics>> for TunMetrics {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<TunMetrics>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<TunMetrics> for TunMetrics {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics> {
+                TunMetrics::create(
+                    builder,
+                    self.rx_packets,
+                    self.rx_bytes,
+                    self.tx_packets,
+                    self.tx_bytes,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [TunMetrics] type.
+        ///
+        /// Can be created using the [TunMetrics::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct TunMetricsBuilder<State>(State);
+
+        impl TunMetricsBuilder<()> {
+            /// Setter for the [`rx_packets` field](TunMetrics#structfield.rx_packets).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn rx_packets<T0>(self, value: T0) -> TunMetricsBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<u64, u64>,
+            {
+                TunMetricsBuilder((value,))
+            }
+
+            /// Sets the [`rx_packets` field](TunMetrics#structfield.rx_packets) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn rx_packets_as_default(self) -> TunMetricsBuilder<(::planus::DefaultValue,)> {
+                self.rx_packets(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> TunMetricsBuilder<(T0,)> {
+            /// Setter for the [`rx_bytes` field](TunMetrics#structfield.rx_bytes).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn rx_bytes<T1>(self, value: T1) -> TunMetricsBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                TunMetricsBuilder((v0, value))
+            }
+
+            /// Sets the [`rx_bytes` field](TunMetrics#structfield.rx_bytes) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn rx_bytes_as_default(self) -> TunMetricsBuilder<(T0, ::planus::DefaultValue)> {
+                self.rx_bytes(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> TunMetricsBuilder<(T0, T1)> {
+            /// Setter for the [`tx_packets` field](TunMetrics#structfield.tx_packets).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn tx_packets<T2>(self, value: T2) -> TunMetricsBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1) = self.0;
+                TunMetricsBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`tx_packets` field](TunMetrics#structfield.tx_packets) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn tx_packets_as_default(
+                self,
+            ) -> TunMetricsBuilder<(T0, T1, ::planus::DefaultValue)> {
+                self.tx_packets(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2> TunMetricsBuilder<(T0, T1, T2)> {
+            /// Setter for the [`tx_bytes` field](TunMetrics#structfield.tx_bytes).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn tx_bytes<T3>(self, value: T3) -> TunMetricsBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2) = self.0;
+                TunMetricsBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`tx_bytes` field](TunMetrics#structfield.tx_bytes) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn tx_bytes_as_default(
+                self,
+            ) -> TunMetricsBuilder<(T0, T1, T2, ::planus::DefaultValue)> {
+                self.tx_bytes(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3> TunMetricsBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [TunMetrics].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics>
+            where
+                Self: ::planus::WriteAsOffset<TunMetrics>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAs<::planus::Offset<TunMetrics>>
+            for TunMetricsBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<TunMetrics>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOptional<::planus::Offset<TunMetrics>>
+            for TunMetricsBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<TunMetrics>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<TunMetrics>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+                T2: ::planus::WriteAsDefault<u64, u64>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOffset<TunMetrics> for TunMetricsBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics> {
+                let (v0, v1, v2, v3) = &self.0;
+                TunMetrics::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [TunMetrics].
+        #[derive(Copy, Clone)]
+        pub struct TunMetricsRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> TunMetricsRef<'a> {
+            /// Getter for the [`rx_packets` field](TunMetrics#structfield.rx_packets).
+            #[inline]
+            pub fn rx_packets(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(0, "TunMetrics", "rx_packets")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`rx_bytes` field](TunMetrics#structfield.rx_bytes).
+            #[inline]
+            pub fn rx_bytes(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(1, "TunMetrics", "rx_bytes")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`tx_packets` field](TunMetrics#structfield.tx_packets).
+            #[inline]
+            pub fn tx_packets(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(2, "TunMetrics", "tx_packets")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`tx_bytes` field](TunMetrics#structfield.tx_bytes).
+            #[inline]
+            pub fn tx_bytes(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(3, "TunMetrics", "tx_bytes")?.unwrap_or(0))
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for TunMetricsRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("TunMetricsRef");
+                f.field("rx_packets", &self.rx_packets());
+                f.field("rx_bytes", &self.rx_bytes());
+                f.field("tx_packets", &self.tx_packets());
+                f.field("tx_bytes", &self.tx_bytes());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<TunMetricsRef<'a>> for TunMetrics {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: TunMetricsRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    rx_packets: ::core::convert::TryInto::try_into(value.rx_packets()?)?,
+                    rx_bytes: ::core::convert::TryInto::try_into(value.rx_bytes()?)?,
+                    tx_packets: ::core::convert::TryInto::try_into(value.tx_packets()?)?,
+                    tx_bytes: ::core::convert::TryInto::try_into(value.tx_bytes()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for TunMetricsRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for TunMetricsRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[TunMetricsRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<TunMetrics>> for TunMetrics {
+            type Value = ::planus::Offset<TunMetrics>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<TunMetrics>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for TunMetricsRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[TunMetricsRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:470`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:482`
         #[derive(
             Clone,
             Debug,
@@ -55115,7 +55643,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:484`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:496`
         #[derive(
             Clone,
             Debug,
@@ -55849,7 +56377,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:499`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:511`
         #[derive(
             Clone,
             Debug,
@@ -56698,7 +57226,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:513`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:525`
         #[derive(
             Clone,
             Debug,
@@ -57014,7 +57542,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:515`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:527`
         #[derive(
             Clone,
             Debug,
@@ -57825,7 +58353,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:529`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:541`
         #[derive(
             Clone,
             Debug,
@@ -58142,7 +58670,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:531`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:543`
         #[derive(
             Clone,
             Debug,
@@ -58567,7 +59095,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:538`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:550`
         #[derive(
             Clone,
             Debug,
@@ -58833,7 +59361,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:539`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:551`
         #[derive(
             Clone,
             Debug,
@@ -59118,7 +59646,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:542`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:554`
         #[derive(
             Clone,
             Debug,
@@ -59390,7 +59918,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:543`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:555`
         #[derive(
             Clone,
             Debug,
@@ -59660,7 +60188,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:544`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:556`
         #[derive(
             Clone,
             Debug,
@@ -59928,7 +60456,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:545`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:557`
         #[derive(
             Clone,
             Debug,
@@ -60200,7 +60728,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:546`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:558`
         #[derive(
             Clone,
             Debug,
@@ -60476,7 +61004,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:547`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:559`
         #[derive(
             Clone,
             Debug,
@@ -60813,7 +61341,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:548`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:560`
         #[derive(
             Clone,
             Debug,
@@ -61104,7 +61632,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:549`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:561`
         #[derive(
             Clone,
             Debug,
@@ -61379,7 +61907,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:551`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:563`
         #[derive(
             Copy,
             Clone,
@@ -61557,7 +62085,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:552`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:564`
         #[derive(
             Clone,
             Debug,
@@ -61893,7 +62421,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:554`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:566`
         #[derive(
             Clone,
             Debug,
@@ -62155,7 +62683,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:556`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:568`
         #[derive(
             Clone,
             Debug,
@@ -63179,7 +63707,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:576`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:588`
         #[derive(
             Clone,
             Debug,
@@ -63584,7 +64112,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:585`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:597`
         #[derive(
             Clone,
             Debug,
@@ -63848,7 +64376,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:586`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:598`
         #[derive(
             Clone,
             Debug,
@@ -64131,7 +64659,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:587`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:599`
         #[derive(
             Clone,
             Debug,
@@ -64420,7 +64948,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:588`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:600`
         #[derive(
             Clone,
             Debug,
@@ -64816,7 +65344,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:589`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:601`
         #[derive(
             Clone,
             Debug,
@@ -65099,7 +65627,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:590`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:602`
         #[derive(
             Clone,
             Debug,
@@ -65388,7 +65916,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:591`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:603`
         #[derive(
             Clone,
             Debug,
@@ -65679,7 +66207,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:592`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:604`
         #[derive(
             Clone,
             Debug,
@@ -65941,7 +66469,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:593`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:605`
         #[derive(
             Clone,
             Debug,
@@ -66208,7 +66736,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:594`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:606`
         #[derive(
             Clone,
             Debug,
@@ -66552,7 +67080,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:596`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:608`
         #[derive(
             Clone,
             Debug,
@@ -67258,7 +67786,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:610`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:622`
         #[derive(
             Clone,
             Debug,
@@ -67572,7 +68100,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:615`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:627`
         #[derive(
             Clone,
             Debug,
@@ -67928,7 +68456,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:621`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:633`
         #[derive(
             Clone,
             Debug,

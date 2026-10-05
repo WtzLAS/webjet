@@ -290,11 +290,20 @@ impl Bbr {
         }
     }
 
-    fn on_delivery(&mut self, bytes: usize, interval: Duration, now: Instant) {
+    /// A delivery-rate sample. `app_limited`: the sender had less to send
+    /// than the window allowed, so the sample shows the application's rate,
+    /// not the path's. Such a sample may raise the estimate but never lowers
+    /// it, and the old samples are kept meanwhile (as in BBR); otherwise an
+    /// idle second followed by one small packet collapsed the estimate to the
+    /// floor and throttled the next burst.
+    fn on_delivery(&mut self, bytes: usize, interval: Duration, now: Instant, app_limited: bool) {
         if bytes == 0 || interval.is_zero() {
             return;
         }
         let rate = bytes as f64 / interval.as_secs_f64();
+        if app_limited && rate <= self.btl_bw {
+            return;
+        }
         self.bw_samples.push_back((now, rate));
         let window = (self.min_rtt * 10).max(Duration::from_secs(1));
         while let Some((t, _)) = self.bw_samples.front() {
@@ -392,7 +401,7 @@ async fn run_session(
     let mut last_wait_snd = 0usize;
     let mut last_delivery = Instant::now();
     let mut stats_sent_at = Instant::now();
-    let (mut got_shards, mut last_group_seen) = (0u32, 0u32);
+    let mut next_new_sn: Option<u32> = None;
     let mut user_buf = vec![0u8; 16 * 1024];
     let mut user_open = true;
     let mut tick = tokio::time::interval(Duration::from_millis(5));
@@ -412,39 +421,53 @@ async fn run_session(
     loop {
         // Pull more user data only while KCP's send queue is short (§17.2).
         let can_take = user_open && kcp.wait_snd() < bbr.window() as usize * 2;
+        // New data or acknowledgements to send: flush KCP now instead of at
+        // its next 10 ms interval, which added up to 10 ms per direction and
+        // per hop (and delayed acknowledgements inflated KCP's RTT).
+        let mut flush_now = false;
         tokio::select! {
             r = user.read(&mut user_buf), if can_take => {
                 match r {
                     Ok(0) | Err(_) => { user_open = false; }
-                    Ok(n) => { let _ = kcp.send(&user_buf[..n]); }
+                    Ok(n) => {
+                        let _ = kcp.send(&user_buf[..n]);
+                        flush_now = true;
+                    }
                 }
             }
             d = rx.recv() => {
                 let Some(d) = d else { break };
                 last_rx = Instant::now();
-                stats.wire_rx.fetch_add(d.len() as u64, Ordering::Relaxed);
                 opened = true;
-                let (kind, body) = (d[0], &d[1..]);
-                let shard = match kind {
-                    K_SHARD => body,
-                    K_OPEN if body.len() >= 24 => &body[24..],
-                    K_STATS if body.len() >= 8 => {
-                        let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
-                        let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
-                        if exp > 0.0 {
-                            enc.adapt(((exp - recv) / exp).clamp(0.0, 1.0));
-                            stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
-                        }
-                        continue;
+                // Take what else has arrived, so one flush answers it all.
+                let mut batch = vec![d];
+                while batch.len() < 64 {
+                    match rx.try_recv() {
+                        Ok(d) => batch.push(d),
+                        Err(_) => break,
                     }
-                    _ => continue,
-                };
-                if let Some(g) = webjet_core::bytes::be_u32(shard, 0) {
-                    got_shards += 1;
-                    last_group_seen = last_group_seen.max(g);
                 }
-                for pkt in dec.push(shard) {
-                    let _ = kcp.input(&pkt);
+                for d in batch {
+                    stats.wire_rx.fetch_add(d.len() as u64, Ordering::Relaxed);
+                    let (kind, body) = (d[0], &d[1..]);
+                    let shard = match kind {
+                        K_SHARD => body,
+                        K_OPEN if body.len() >= 24 => &body[24..],
+                        K_STATS if body.len() >= 8 => {
+                            let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
+                            let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
+                            if exp > 0.0 {
+                                enc.adapt(((exp - recv) / exp).clamp(0.0, 1.0));
+                                stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
+                            }
+                            continue;
+                        }
+                        _ => continue,
+                    };
+                    for pkt in dec.push(shard) {
+                        let _ = kcp.input(&pkt);
+                        flush_now = true;
+                    }
                 }
                 stats.fec_recovered.store(dec.recovered, Ordering::Relaxed);
                 // Deliver received bytes to the user.
@@ -460,11 +483,22 @@ async fn run_session(
         if let Err(e) = kcp.update(ms(now)) {
             tracing::debug!("kcp update: {e}");
         }
+        if flush_now && let Err(e) = kcp.flush() {
+            tracing::debug!("kcp flush: {e}");
+        }
         // Delivery-rate sample from bytes leaving KCP's send buffer.
         let ws = kcp.wait_snd();
         if ws < last_wait_snd {
             let delivered = (last_wait_snd - ws) * KCP_MTU;
-            bbr.on_delivery(delivered, now.duration_since(last_delivery), now);
+            // Neither the window nor the pacer held data back: the sender
+            // had no more to send, so the sample is application-limited.
+            let app_limited = paced.is_empty() && last_wait_snd < bbr.window() as usize;
+            bbr.on_delivery(
+                delivered,
+                now.duration_since(last_delivery),
+                now,
+                app_limited,
+            );
             last_delivery = now;
         } else if ws == 0 {
             last_delivery = now;
@@ -479,6 +513,10 @@ async fn run_session(
         // FEC-wrap new KCP packets; parity counts toward the paced rate.
         let pkts: Vec<Vec<u8>> = out.0.lock().drain(..).collect();
         for p in pkts {
+            let re = count_retransmits(&p, &mut next_new_sn);
+            if re > 0 {
+                stats.retrans.fetch_add(re, Ordering::Relaxed);
+            }
             for s in enc.push(&p) {
                 paced.push_back(s);
             }
@@ -496,14 +534,16 @@ async fn run_session(
             .fec_parity_tx
             .store(enc.parity_bytes, Ordering::Relaxed);
         // Loss feedback for the peer's FEC (§17.6).
-        if now.duration_since(stats_sent_at) > Duration::from_secs(1) && got_shards > 0 {
-            let expected = got_shards.max(1);
-            let mut inner = vec![K_STATS];
-            inner.extend_from_slice(&conv.to_be_bytes());
-            inner.extend_from_slice(&got_shards.to_be_bytes());
-            inner.extend_from_slice(&expected.to_be_bytes());
-            seal_and_send(inner).await;
-            got_shards = 0;
+        if now.duration_since(stats_sent_at) > Duration::from_secs(1) {
+            // Line loss before FEC recovery, counted from shard group gaps.
+            let (received, expected) = dec.take_loss();
+            if expected > 0 {
+                let mut inner = vec![K_STATS];
+                inner.extend_from_slice(&conv.to_be_bytes());
+                inner.extend_from_slice(&(received.min(u64::from(u32::MAX)) as u32).to_be_bytes());
+                inner.extend_from_slice(&(expected.min(u64::from(u32::MAX)) as u32).to_be_bytes());
+                seal_and_send(inner).await;
+            }
             stats_sent_at = now;
             if let Some(rtt) = kcp_rtt(&kcp) {
                 bbr.on_rtt(rtt, now);
@@ -540,6 +580,31 @@ async fn run_session(
             break;
         }
     }
+}
+
+/// KCP segment header: conv[4] cmd[1] frg[1] wnd[2] ts[4] sn[4] una[4] len[4],
+/// little-endian.
+const KCP_SEG_HDR: usize = 24;
+const KCP_CMD_PUSH: u8 = 81;
+
+/// Count the data segments in one KCP output packet that were sent before:
+/// KCP sends new segments in sequence order, so a PUSH whose number is below
+/// the next new one is a retransmission (timeout or fast resend; §12.3
+/// `kcp_retrans`). The `kcp` crate counts only timeouts, and privately.
+fn count_retransmits(pkt: &[u8], next_new_sn: &mut Option<u32>) -> u64 {
+    let le = |at: usize| webjet_core::bytes::array::<4>(pkt, at).map(u32::from_le_bytes);
+    let mut n = 0;
+    let mut at = 0;
+    while let (Some(&cmd), Some(sn), Some(len)) = (pkt.get(at + 4), le(at + 12), le(at + 20)) {
+        if cmd == KCP_CMD_PUSH {
+            match *next_new_sn {
+                Some(next) if sn.wrapping_sub(next) >= u32::MAX / 2 => n += 1,
+                _ => *next_new_sn = Some(sn.wrapping_add(1)),
+            }
+        }
+        at += KCP_SEG_HDR + len as usize;
+    }
+    n
 }
 
 fn kcp_rtt<O>(k: &kcp::Kcp<O>) -> Option<Duration> {
@@ -601,6 +666,146 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(&back, b"thank");
+    }
+
+    /// A small message and its reply cross KCP without waiting for KCP's
+    /// 10 ms flush interval on either side.
+    #[tokio::test]
+    async fn small_messages_are_not_delayed() {
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        let mut c = ep_a.dial(ep_b.local_addr().unwrap());
+        c.stream.write_all(b"x").await.unwrap();
+        let mut s = tokio::time::timeout(Duration::from_secs(5), async {
+            ep_b.accept_rx.lock().await.recv().await.unwrap()
+        })
+        .await
+        .unwrap();
+        tokio::spawn(async move {
+            let mut b = [0u8; 1];
+            while s.stream.read_exact(&mut b).await.is_ok() {
+                if s.stream.write_all(&b).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut b = [0u8; 1];
+        c.stream.read_exact(&mut b).await.unwrap();
+        let mut rtts = Vec::new();
+        for _ in 0..30 {
+            let t = Instant::now();
+            c.stream.write_all(b"y").await.unwrap();
+            c.stream.read_exact(&mut b).await.unwrap();
+            rtts.push(t.elapsed());
+            tokio::time::sleep(Duration::from_millis(7)).await;
+        }
+        rtts.sort();
+        let median = rtts[rtts.len() / 2];
+        assert!(median < Duration::from_millis(4), "median RTT {median:?}");
+    }
+
+    /// Over a lossy path, the sender's FEC ratio rises and the counters move.
+    #[tokio::test]
+    async fn lossy_link_turns_on_fec() {
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        // A proxy dropping every 10th datagram in each direction.
+        let proxy = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let (b_addr, p) = (ep_b.local_addr().unwrap(), proxy.clone());
+        tokio::spawn(async move {
+            let (mut buf, mut a_addr, mut n) = (vec![0u8; 65536], None, 0u64);
+            while let Ok((len, from)) = p.recv_from(&mut buf).await {
+                n += 1;
+                let to = if from == b_addr {
+                    a_addr
+                } else {
+                    a_addr = Some(from);
+                    Some(b_addr)
+                };
+                if n % 10 != 0
+                    && let Some(to) = to
+                {
+                    let _ = p.send_to(&buf[..len], to).await;
+                }
+            }
+        });
+        let mut c = ep_a.dial(proxy.local_addr().unwrap());
+        let stats = c.stats.clone();
+        let w = tokio::spawn(async move {
+            for _ in 0..40 {
+                c.stream.write_all(&[7u8; 50_000]).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            c
+        });
+        let mut s = tokio::time::timeout(Duration::from_secs(5), async {
+            ep_b.accept_rx.lock().await.recv().await.unwrap()
+        })
+        .await
+        .unwrap();
+        let mut got = vec![0u8; 40 * 50_000];
+        tokio::time::timeout(Duration::from_secs(30), s.stream.read_exact(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
+        let _c = w.await.unwrap();
+        let ratio = stats.fec_ratio_pct.load(Ordering::Relaxed);
+        assert!(ratio > 0, "FEC ratio rose");
+        assert!(
+            stats.fec_parity_tx.load(Ordering::Relaxed) > 0,
+            "parity sent"
+        );
+        assert!(
+            stats.retrans.load(Ordering::Relaxed) > 0,
+            "retransmits counted"
+        );
+        assert!(
+            s.stats.fec_recovered.load(Ordering::Relaxed) > 0,
+            "receiver recovered"
+        );
+    }
+
+    #[test]
+    fn counts_kcp_retransmits() {
+        let (a_out, b_out) = (OutQueue::default(), OutQueue::default());
+        let mut a = kcp::Kcp::new_stream(7, a_out.clone());
+        let mut b = kcp::Kcp::new_stream(7, b_out.clone());
+        for k in [&mut a, &mut b] {
+            k.set_mtu(KCP_MTU).unwrap();
+            k.set_nodelay(true, 10, 2, true);
+        }
+        a.send(&vec![9u8; 20 * 1200]).unwrap();
+        let (mut next, mut re, mut dropped) = (None, 0, false);
+        for t in (0..3000).step_by(10) {
+            a.update(t).unwrap();
+            for p in a_out.0.lock().drain(..).collect::<Vec<_>>() {
+                re += count_retransmits(&p, &mut next);
+                if !dropped && get_sn(&p) == 3 {
+                    dropped = true; // lose one data packet once
+                    continue;
+                }
+                b.input(&p).unwrap();
+            }
+            b.update(t).unwrap();
+            for p in b_out.0.lock().drain(..).collect::<Vec<_>>() {
+                a.input(&p).unwrap();
+            }
+            while b.recv(&mut [0u8; 65536]).is_ok() {}
+        }
+        assert_eq!(a.wait_snd(), 0, "all delivered");
+        assert_eq!(re, 1, "the one lost segment was resent once");
+    }
+
+    fn get_sn(p: &[u8]) -> u32 {
+        u32::from_le_bytes([p[12], p[13], p[14], p[15]])
     }
 
     #[tokio::test]

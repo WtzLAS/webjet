@@ -522,7 +522,7 @@ pub struct Status {
     pub version: String,
     /// This agent's controller status, when it runs the controller role.
     pub controller: Option<Value>,
-    /// Compression in force and its counters (agents from 0.5.2 on).
+    /// Compression in force and its counters (agents from 0.6.0 on).
     pub compression: Option<Compression>,
 }
 
@@ -1079,7 +1079,7 @@ mod tests {
         let st: Status = serde_json::from_value(json!({"node_id": "ab", "tree_version": 7, "alarms": [{"name": "soft_mode", "severity": "warning", "since": 1}]})).unwrap();
         assert_eq!(st.tree_version, Some(7));
         assert_eq!(st.alarms.len(), 1);
-        assert!(st.compression.is_none(), "agents before 0.5.2");
+        assert!(st.compression.is_none(), "agents before 0.6.0");
         let st: Status = serde_json::from_value(json!({"compression": {
             "control": {"algorithm": "zstd", "tx_raw_bytes": 3000, "tx_wire_bytes": 1000, "rx_raw_bytes": 1000, "rx_wire_bytes": 1000, "rx_errors": 0},
             "data": {"algorithm": "off"}

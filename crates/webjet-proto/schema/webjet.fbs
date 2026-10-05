@@ -460,6 +460,18 @@ table MetricReport {
     load: RelayLoad;          // this node's load figures (§11.8.1)
     proxy: [ProxyMetrics];    // reverse proxy traffic, kept apart (§11.11)
     compression: [CompressionMetrics];   // per plane (§9.8)
+    tun: TunMetrics;          // overlay traffic through the tun interface
+}
+
+// Overlay packets through this node's tun interface, reverse proxy traffic
+// excluded (§11.11). rx: read from the interface, what local hosts (this
+// one, or a gateway's LAN) sent into the overlay; tx: written to it, what
+// the overlay delivered to them.
+table TunMetrics {
+    rx_packets: uint64;
+    rx_bytes: uint64;
+    tx_packets: uint64;
+    tx_bytes: uint64;
 }
 
 // Compression on this node (§9.8) for one plane, "control" or "data".

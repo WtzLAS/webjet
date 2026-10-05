@@ -151,12 +151,27 @@ struct Group {
     done: bool,
 }
 
+/// Groups behind the newest one before a group's loss is counted, so
+/// reordered shards still arrive in time.
+const SETTLE_LAG: u32 = 4;
+/// A larger jump in group numbers is an outage, not line loss; it is skipped
+/// rather than counted group by group.
+const MAX_SETTLE_GAP: u32 = 256;
+
 pub struct Decoder {
     groups: BTreeMap<u32, Group>,
     newest: u32,
     pub recovered: u64,
     pub received: u64,
     codecs: HashMap<(usize, usize), ReedSolomon>,
+    /// Next group whose loss is to be counted.
+    next_settle: Option<u32>,
+    /// Data shards sent and received in counted groups, since the last
+    /// [`Decoder::take_loss`].
+    loss_expected: u64,
+    loss_received: u64,
+    /// Average data shards per group, for groups lost entirely (0 = none seen).
+    avg_k: f64,
 }
 
 impl Default for Decoder {
@@ -173,7 +188,58 @@ impl Decoder {
             recovered: 0,
             received: 0,
             codecs: HashMap::new(),
+            next_settle: None,
+            loss_expected: 0,
+            loss_received: 0,
+            avg_k: 0.0,
         }
+    }
+
+    /// Line loss of data shards since the last call, as `(received,
+    /// expected)`, measured before recovery: the loss FEC has to cover (§17.6).
+    /// A group's size is known from its parity header; a group without parity
+    /// counts up to its highest data shard seen, so trailing losses go unseen
+    /// until parity flows.
+    pub fn take_loss(&mut self) -> (u64, u64) {
+        let r = (self.loss_received, self.loss_expected);
+        self.loss_received = 0;
+        self.loss_expected = 0;
+        r
+    }
+
+    /// Count the loss of every group at least [`SETTLE_LAG`] behind the newest.
+    fn settle(&mut self) {
+        let Some(mut next) = self.next_settle else {
+            return;
+        };
+        let behind = self.newest.wrapping_sub(next);
+        if behind >= u32::MAX / 2 {
+            return;
+        }
+        if behind > MAX_SETTLE_GAP + SETTLE_LAG {
+            next = self.newest;
+        }
+        while self.newest.wrapping_sub(next) >= SETTLE_LAG
+            && self.newest.wrapping_sub(next) < u32::MAX / 2
+        {
+            let (expected, got) = match self.groups.get(&next) {
+                Some(g) => {
+                    let seen = g.data.keys().next_back().map_or(0, |i| u64::from(*i) + 1);
+                    let expected = if g.k > 0 { u64::from(g.k) } else { seen };
+                    self.avg_k = if self.avg_k == 0.0 {
+                        expected as f64
+                    } else {
+                        self.avg_k * 0.9 + expected as f64 * 0.1
+                    };
+                    (expected, (g.data.len() as u64).min(expected))
+                }
+                None => ((self.avg_k.round() as u64).max(1), 0),
+            };
+            self.loss_expected += expected;
+            self.loss_received += got;
+            next = next.wrapping_add(1);
+        }
+        self.next_settle = Some(next);
     }
 
     /// Process one shard; returns the data packets to hand to KCP.
@@ -195,6 +261,10 @@ impl Decoder {
         if group.wrapping_sub(self.newest) < u32::MAX / 2 {
             self.newest = group;
         }
+        if self.next_settle.is_none() {
+            self.next_settle = Some(group);
+        }
+        self.settle();
         while self.groups.len() > 64 {
             self.groups.pop_first();
         }
@@ -312,5 +382,75 @@ mod tests {
         e.adapt(0.05);
         e.adapt(0.05);
         assert!(e.ratio > 0.0 && e.ratio <= MAX_PARITY_RATIO);
+    }
+
+    /// Shards of `groups` groups of 8 packets, with `ratio` parity.
+    fn stream(ratio: f64, groups: usize) -> Vec<Vec<u8>> {
+        let mut e = Encoder::new();
+        e.ratio = ratio;
+        let mut shards = Vec::new();
+        for i in 0..groups * GROUP_DATA {
+            shards.extend(e.push(&[i as u8; 40]));
+        }
+        shards
+    }
+
+    fn is_data(s: &[u8]) -> bool {
+        s[5] == 0
+    }
+
+    #[test]
+    fn measures_loss_without_parity() {
+        // No parity yet (a clean link's start): loss must still be seen, or
+        // the sender's ratio never leaves 0.
+        let mut d = Decoder::new();
+        for (i, s) in stream(0.0, 20).iter().enumerate() {
+            if i % 10 != 3 {
+                d.push(s);
+            }
+        }
+        let (got, expected) = d.take_loss();
+        assert!(expected >= 120, "expected {expected}");
+        let loss = 1.0 - got as f64 / expected as f64;
+        assert!((0.07..0.13).contains(&loss), "loss {loss}");
+        assert_eq!(d.take_loss(), (0, 0), "counted once");
+    }
+
+    #[test]
+    fn measures_loss_before_recovery_and_whole_lost_groups() {
+        let mut d = Decoder::new();
+        let shards = stream(0.25, 20);
+        let mut data_seen = 0;
+        for s in &shards {
+            let group = u32::from_be_bytes([s[0], s[1], s[2], s[3]]);
+            if group == 5 {
+                continue; // a whole group lost
+            }
+            if is_data(s) {
+                data_seen += 1;
+                if data_seen % 8 == 1 {
+                    continue; // one data shard per group lost, recovered by parity
+                }
+            }
+            d.push(s);
+        }
+        assert!(d.recovered > 0);
+        let (got, expected) = d.take_loss();
+        // 16 settled groups × 8 data shards; group 5 lost, one shard lost in
+        // every other group, whether or not parity rebuilt it.
+        assert_eq!(expected, 16 * 8);
+        assert_eq!(got, 15 * 7);
+    }
+
+    #[test]
+    fn outage_is_not_counted_as_loss() {
+        let mut d = Decoder::new();
+        let shards = stream(0.0, 2000);
+        for s in shards.iter().take(80).chain(shards.iter().skip(15_000)) {
+            d.push(s);
+        }
+        let (got, expected) = d.take_loss();
+        assert!(expected > 0);
+        assert_eq!(got, expected);
     }
 }

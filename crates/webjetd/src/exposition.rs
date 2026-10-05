@@ -313,6 +313,20 @@ impl Exposition {
                         e.loss_pct as f64 / 100.0,
                         ts,
                     );
+                    self.gauge(
+                        "webjet_route_selected",
+                        "Whether the session sends on this route: 0 idle, 1 primary, 2 backup.",
+                        &lr,
+                        e.selected as f64,
+                        ts,
+                    );
+                    self.counter(
+                        "webjet_route_path_switches",
+                        "Times the session to this route's destination moved its traffic to another circuit.",
+                        &lr,
+                        e.switches,
+                        ts,
+                    );
                 }
             }
         }
@@ -503,6 +517,33 @@ impl Exposition {
                 c.rx_errors,
                 ts,
             );
+        }
+        // Overlay traffic through the tun interface, by direction.
+        if let Some(t) = &rep.tun {
+            for (dir, packets, bytes) in [
+                ("rx", t.rx_packets, t.rx_bytes),
+                ("tx", t.tx_packets, t.tx_bytes),
+            ] {
+                let l = [
+                    ("node", node.as_str()),
+                    ("owner", owner.as_str()),
+                    ("direction", dir),
+                ];
+                self.counter(
+                    "webjet_tun_packets",
+                    "Overlay packets read from the tun interface (rx) or written to it (tx); reverse proxy traffic excluded.",
+                    &l,
+                    packets,
+                    ts,
+                );
+                self.counter(
+                    "webjet_tun_bytes",
+                    "Bytes of overlay packets read from the tun interface (rx) or written to it (tx).",
+                    &l,
+                    bytes,
+                    ts,
+                );
+            }
         }
         // Reverse proxy traffic (§11.11), apart from the overlay's series.
         for m in rep.proxy.clone().unwrap_or_default() {
@@ -696,6 +737,12 @@ mod tests {
                     name: Some("queue".into()),
                     value: 2,
                 }]),
+                e2e: Some(Box::new(wp::RouteE2e {
+                    rtt_ms: 31,
+                    loss_pct: 2,
+                    selected: 1,
+                    switches: 4,
+                })),
                 ..Default::default()
             }]),
             links: Some(vec![wp::LinkMetrics {
@@ -736,6 +783,12 @@ mod tests {
                 to_client_bytes: 9000,
                 refused: 1,
             }]),
+            tun: Some(Box::new(wp::TunMetrics {
+                rx_packets: 11,
+                rx_bytes: 1100,
+                tx_packets: 7,
+                tx_bytes: 700,
+            })),
             compression: Some(vec![wp::CompressionMetrics {
                 plane: Some("control".into()),
                 tx_messages: 10,
@@ -763,6 +816,20 @@ mod tests {
         );
         assert!(t.contains("webjet_load_cpu_ratio{node=\"n1\",owner=\"alice\"} 0.34 "));
         assert!(t.contains("webjet_load_ratio{node=\"n1\",owner=\"alice\"} 0.3 "));
+        let rl = "node=\"n1\",owner=\"alice\",role=\"source\",route_id=\"0909090909090909\",src=\"n1\",dst=\"n2\"";
+        assert!(
+            t.contains(&format!("webjet_route_e2e_rtt_ms{{{rl}}} 31 ")),
+            "{t}"
+        );
+        assert!(t.contains(&format!("webjet_route_e2e_loss_ratio{{{rl}}} 0.02 ")));
+        assert!(t.contains(&format!("webjet_route_selected{{{rl}}} 1 ")));
+        assert!(t.contains(&format!("webjet_route_path_switches_total{{{rl}}} 4 ")));
+        assert!(t.contains(
+            "webjet_tun_packets_total{node=\"n1\",owner=\"alice\",direction=\"rx\"} 11 "
+        ));
+        assert!(
+            t.contains("webjet_tun_bytes_total{node=\"n1\",owner=\"alice\",direction=\"tx\"} 700 ")
+        );
         // Proxy traffic has its own families.
         assert!(t.contains("webjet_proxy_bytes_total{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\",direction=\"to_client\"} 9000 "), "{t}");
         assert!(t.contains("webjet_proxy_active_flows{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\"} 2 "));

@@ -21,6 +21,8 @@ pub const REJECT_AFTER: Duration = Duration::from_secs(180);
 pub const OLD_KEY_GRACE: Duration = Duration::from_secs(10);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 const HS_GIVE_UP: Duration = Duration::from_secs(30);
+/// Largest probe echoed back (§11.4); an encoded `Probe` is 66 bytes.
+const PROBE_ECHO_MAX: usize = 128;
 
 struct SendKey {
     key: SessionKey,
@@ -770,8 +772,12 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
             }
         }
         ftype::PROBE => {
+            // Echo the probe, bounded so a reply is never large. A probe
+            // encodes to 66 bytes; the old bound of 64 cut every probe, so
+            // no circuit was ever measured (rtt 0, loss → 1, circuits closed
+            // as dead, path choice blind).
             let mut reply = plain;
-            reply.truncate(64);
+            reply.truncate(PROBE_ECHO_MAX);
             send_on(n, &s, c, ftype::PROBE_ACK, &reply);
         }
         ftype::PROBE_ACK => crate::paths::on_probe_ack(n, c, &plain),
@@ -908,4 +914,25 @@ pub fn summary(s: &Session) -> serde_json::Value {
         "rx_packets": s.rx_packets.load(Ordering::Relaxed),
         "path_switches": s.path_switches.load(Ordering::Relaxed),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use webjet_proto::{self as wp, Decodable, Encodable};
+
+    /// A probe must survive the echo bound, or no circuit is ever measured.
+    #[test]
+    fn probe_survives_echo() {
+        let p = wp::Probe {
+            route_id: Some(crypto::k32(&[0xff; 32])),
+            probe_seq: u64::MAX,
+            sent_at_us: u64::MAX,
+        };
+        let mut echo = p.encode_bytes();
+        echo.truncate(PROBE_ECHO_MAX);
+        let back = wp::Probe::decode_bytes(&echo).unwrap();
+        assert_eq!(back.probe_seq, u64::MAX);
+        assert_eq!(back.route_id, p.route_id);
+    }
 }

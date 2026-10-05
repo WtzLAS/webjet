@@ -1,11 +1,11 @@
 //! Counters, relay load (§11.8.1) and metric reports (§12.3-§12.5).
 
 use crate::node::Node;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use webjet_core::crypto;
+use webjet_core::crypto::{self, Bytes32};
 use webjet_core::types::now_ms;
 use webjet_proto::{self as wp, RpcBody, msg_type as mt};
 
@@ -18,8 +18,12 @@ pub struct Counters {
     pub cryptokey_dropped: AtomicU64,
     pub conntrack_limit: AtomicU64,
     pub snat_exhausted: AtomicU64,
+    /// Overlay packets and bytes read from the tun interface (rx) and
+    /// written to it (tx); reverse proxy traffic is counted apart.
     pub tun_rx: AtomicU64,
     pub tun_tx: AtomicU64,
+    pub tun_rx_bytes: AtomicU64,
+    pub tun_tx_bytes: AtomicU64,
     pub report_seq: AtomicU64,
     /// Bytes sent on hops that have since closed (keeps totals monotonic).
     pub retired_tx: AtomicU64,
@@ -32,6 +36,18 @@ pub struct Counters {
 }
 
 impl Counters {
+    /// A packet read from the tun interface into the overlay.
+    pub fn tun_in(&self, len: usize) {
+        self.tun_rx.fetch_add(1, Ordering::Relaxed);
+        self.tun_rx_bytes.fetch_add(len as u64, Ordering::Relaxed);
+    }
+
+    /// A packet the overlay delivered to the tun interface.
+    pub fn tun_out(&self, len: usize) {
+        self.tun_tx.fetch_add(1, Ordering::Relaxed);
+        self.tun_tx_bytes.fetch_add(len as u64, Ordering::Relaxed);
+    }
+
     pub fn rule_hit(&self, rule: &str, allow: bool) {
         *self
             .rule_hits
@@ -113,11 +129,67 @@ fn counter(name: &str, v: u64) -> wp::Counter {
     }
 }
 
+/// End-to-end figures of the routes this node is an end of (§12.3), from the
+/// probes of their local circuits: RTT and loss, whether the session sends on
+/// it, and the session's path switches.
+fn route_e2e(
+    t: &crate::circuit::Table,
+    sessions: &HashMap<Bytes32, (Option<u32>, u64)>,
+) -> HashMap<Bytes32, wp::RouteE2e> {
+    let mut out: HashMap<Bytes32, (u64, wp::RouteE2e)> = HashMap::new();
+    for e in t.entries.values() {
+        let crate::circuit::Kind::Local(c) = &e.kind else {
+            continue;
+        };
+        if !c.is_source {
+            continue; // source only (§12.3)
+        }
+        let p = c.probes.lock();
+        if p.samples == 0 {
+            continue;
+        }
+        let (primary, switches) = sessions.get(&c.peer).copied().unwrap_or((None, 0));
+        let selected = match primary {
+            Some(l) if l == c.label => 1,
+            Some(_) => 2,
+            None => 0,
+        };
+        let fig = wp::RouteE2e {
+            rtt_ms: p.srtt_ms.ceil() as u32,
+            loss_pct: (p.loss.max(p.window_loss()) * 100.0).round() as u8,
+            selected,
+            switches,
+        };
+        // Several circuits on one route (a rebuild): the best measured.
+        let keep = out
+            .get(&c.route_id)
+            .is_none_or(|(s, f)| selected == 1 && f.selected != 1 || p.samples > *s);
+        if keep {
+            out.insert(c.route_id, (p.samples, fig));
+        }
+    }
+    out.into_iter().map(|(k, (_, f))| (k, f)).collect()
+}
+
 /// Build this node's signed metric report (§12.5).
 pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
     let now = now_ms();
+    // Which circuit each session sends on, and its path switches; taken
+    // before the circuit table (a session's lock is never taken inside it).
+    let sessions: HashMap<Bytes32, (Option<u32>, u64)> = n
+        .e2e
+        .all()
+        .iter()
+        .map(|s| {
+            (
+                s.peer,
+                (s.primary(), s.path_switches.load(Ordering::Relaxed)),
+            )
+        })
+        .collect();
     let routes: Vec<wp::RouteMetrics> = {
         let t = n.circuits.lock();
+        let e2e = route_e2e(&t, &sessions);
         t.routes
             .iter()
             .map(|(rid, r)| {
@@ -149,7 +221,7 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                     ecn_marked: r.ecn_marked.load(Ordering::Relaxed),
                     circuit_setups: r.setups.load(Ordering::Relaxed),
                     active_since: r.active_since.load(Ordering::Relaxed),
-                    e2e: None,
+                    e2e: e2e.get(rid).cloned().map(Box::new),
                 }
             })
             .collect()
@@ -251,6 +323,12 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                 .unwrap_or_default(),
         ),
         compression: Some(m.compression.report()),
+        tun: Some(Box::new(wp::TunMetrics {
+            rx_packets: m.tun_rx.load(Ordering::Relaxed),
+            rx_bytes: m.tun_rx_bytes.load(Ordering::Relaxed),
+            tx_packets: m.tun_tx.load(Ordering::Relaxed),
+            tx_bytes: m.tun_tx_bytes.load(Ordering::Relaxed),
+        })),
     };
     n.kp.sign_obj(mt::METRIC_REPORT, &rep)
 }

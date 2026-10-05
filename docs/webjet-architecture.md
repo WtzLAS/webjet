@@ -1557,8 +1557,8 @@ Transport overhead (TLS records, KCP headers, FEC parity) differs per hop and is
 | Metric | Type | Notes |
 |---|---|---|
 | `e2e_rtt_ms`, `e2e_loss_pct` | gauge (EWMA) | end-to-end probe results used by path selection |
-| `selected` | gauge | primary, backup, or idle |
-| `switches` | monotonic | how often traffic moved onto or off this route |
+| `selected` | gauge | 0 idle, 1 primary, 2 backup |
+| `switches` | monotonic | how often the session to the route's destination moved its traffic to another circuit |
 
 **Per link**, keyed by `(peer, transport)`:
 
@@ -1566,13 +1566,21 @@ Transport overhead (TLS records, KCP headers, FEC parity) differs per hop and is
 |---|---|---|
 | `wire_bytes_tx`, `wire_bytes_rx` | monotonic | actual bytes on the socket |
 | `payload_bytes_tx`, `payload_bytes_rx` | monotonic | inner frame bytes carried |
-| `fec_parity_bytes_tx`, `kcp_retrans_bytes` | monotonic | KCP links only |
+| `fec_parity_bytes_tx` | monotonic | KCP links only |
+| `kcp_retrans` | monotonic | KCP links only: data segments sent again (after a timeout or a fast resend) |
 | `fec_recovered_packets` | monotonic | KCP links only: packets rebuilt from parity |
 | `fec_ratio_pct`, `bw_estimate_mbps` | gauge | KCP links only: current parity ratio and bandwidth estimate (§17.5, §17.6) |
 | `queue_delay_ms` | gauge | time frames spend in the hop queue (§17.2) |
 | `rtt_ms`, `loss_pct` | gauge | the same values that feed link-state adverts |
 
 Wire bytes divided by payload bytes gives each link's **overhead ratio**, showing the real cost of FEC and TLS.
+
+**Per node**, the tun interface:
+
+| Counter | Type | Notes |
+|---|---|---|
+| `tun_rx_packets`, `tun_rx_bytes` | monotonic | overlay packets read from the interface: what this host (or a gateway's LAN) sent into the overlay |
+| `tun_tx_packets`, `tun_tx_bytes` | monotonic | overlay packets written to the interface: what the overlay delivered here; reverse proxy traffic is counted apart (§11.11) |
 
 **Per policy rule**, at every node that enforces policy:
 
@@ -1627,6 +1635,8 @@ MetricReport {
     compression: [{ plane: control | data,          // §9.8; webjet_compression_*
                     tx_{messages,raw_bytes,wire_bytes,skipped},
                     rx_{messages,raw_bytes,wire_bytes,errors} }]
+    tun: { rx_packets, rx_bytes,                    // overlay packets through the tun
+           tx_packets, tx_bytes }?                  // interface; webjet_tun_*
 }
 signed by: node identity key
 ```
@@ -2184,7 +2194,8 @@ KCP's own congestion window is turned off. It backs off on every loss, which col
 - **In flight:** capped at about twice the bandwidth-delay product, which also sizes KCP's send window.
 - **Loss is not a congestion signal.** Random line loss doesn't reduce the rate. Only loss that stays well above the link's usual level while probing for bandwidth lowers the estimate.
 - **Everything is paced together:** data, retransmissions and FEC parity share the one rate.
-- **KCP settings:** no-delay mode, 10 ms interval, fast retransmit after 2 duplicate acknowledgements.
+- **KCP settings:** no-delay mode, 10 ms interval, fast retransmit after 2 duplicate acknowledgements. New data and received packets are flushed at once rather than at the next interval, so neither data nor acknowledgements wait up to 10 ms at each end of a hop.
+- **Application-limited samples.** A delivery-rate sample taken while the sender had less to send than the window allowed may raise the bandwidth estimate but never lowers it, so a quiet period doesn't throttle the next burst.
 
 **Optional ceiling.** A node may have `rate_ceiling_mbps` set, in its node configuration (§6.19) or through a Limits override (§16.4), for example to match a purchased uplink. The pacing rate never exceeds it. Unset by default.
 
@@ -2193,7 +2204,7 @@ The bandwidth estimates also feed the relay capacity estimate used by load-aware
 ### 17.6 Adaptive FEC
 
 - **Coding:** Reed–Solomon parity over groups of KCP packets, below KCP, so KCP sees fewer losses and retransmits less.
-- **Adaptive ratio.** The share of parity follows the hop's measured loss, aiming for under **0.1% residual loss** after recovery. It ranges from **0 to 30%** and changes gradually. A clean link sends almost no parity.
+- **Adaptive ratio.** The share of parity follows the hop's measured loss, aiming for under **0.1% residual loss** after recovery. It ranges from **0 to 30%** and changes gradually. A clean link sends almost no parity. The loss is measured by the receiver before recovery, from the gaps in each parity group's data packets (a group whose parity hasn't flowed yet counts up to its highest packet seen), and reported to the sender once a second.
 - **Parity counts toward the paced rate** (§17.5), so FEC can never push a link past its capacity or make real congestion worse.
 - Packets recovered by FEC don't count as loss for the rate controller.
 
