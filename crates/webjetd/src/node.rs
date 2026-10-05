@@ -161,6 +161,8 @@ pub struct Node {
     pub boot_id: [u8; 16],
     pub started: Instant,
     pub dialing: Mutex<HashSet<(Bytes32, Transport)>>,
+    /// The router's port mapping for the UDP socket (§11.7), if any.
+    pub port_mapping: Mutex<Option<crate::nat::Mapped>>,
     pub node_file: Mutex<state::NodeFile>,
     pub circuits: Mutex<crate::circuit::Table>,
     pub e2e: crate::e2e::Sessions,
@@ -232,6 +234,7 @@ impl Node {
             boot_id: crypto::random16(),
             started: Instant::now(),
             dialing: Mutex::new(HashSet::new()),
+            port_mapping: Mutex::new(None),
             node_file: Mutex::new(node_file),
             circuits: Mutex::new(crate::circuit::Table::default()),
             e2e: crate::e2e::Sessions::default(),

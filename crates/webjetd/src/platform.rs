@@ -566,13 +566,7 @@ pub fn proxy_clear(tun: &str) {
 
 // ---------------------------------------------------------------- interfaces
 
-fn is_overlay_if(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n.starts_with("webjet")
-        || n.starts_with("utun")
-        || n.starts_with("tun")
-        || n.starts_with("wintun")
-}
+use crate::nat::is_overlay_if;
 
 fn interfaces() -> Vec<if_addrs::Interface> {
     if_addrs::get_if_addrs().unwrap_or_default()
@@ -586,23 +580,6 @@ pub fn iface_up(name: &str) -> bool {
         return s.trim() != "down";
     }
     interfaces().iter().any(|i| i.name == name)
-}
-
-/// Addresses of local interfaces, for HOST candidates (§11.7).
-pub fn local_ips() -> Vec<IpAddr> {
-    let mut v: Vec<IpAddr> = interfaces()
-        .into_iter()
-        .filter(|i| !i.is_loopback() && !i.is_link_local() && !is_overlay_if(&i.name))
-        .map(|i| i.ip())
-        .filter(|a| {
-            !a.is_unspecified()
-                && !matches!(a, IpAddr::V6(x) if (x.segments()[0] & 0xffc0) == 0xfe80)
-        })
-        .collect();
-    v.sort();
-    v.dedup();
-    v.truncate(4);
-    v
 }
 
 /// Directly connected networks, to detect clashes with published prefixes.
@@ -693,6 +670,5 @@ mod tests {
         // Every machine running the tests has some non-overlay network.
         let nets = local_networks();
         assert!(nets.iter().all(|n| n.prefix_len() > 0));
-        assert!(local_ips().iter().all(|a| !a.is_loopback()));
     }
 }

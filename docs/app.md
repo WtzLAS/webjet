@@ -101,7 +101,10 @@ isn't available.
   with the round trip. While the tab is open the agent also subscribes to
   every node's attachment records, so an edge node shows the links and delays
   of all nodes, not only of the peers it talks to. Selecting a node highlights
-  its edges and shows its record, relay load, and every report of each of
+  its edges and shows its record, relay load, its NAT type (none,
+  consistent, symmetric or unknown, from its endpoint record; for this
+  agent also the router port mapping) and advertised addresses (public,
+  reflexive, host), and every report of each of
   its links (who reported it, transport, round trip, loss, use, address,
   bytes), along with the changes the account may make.
 

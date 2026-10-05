@@ -1267,27 +1267,33 @@ DATA nodes behind NAT try to establish direct routes to each other. Relays make 
   - different ports from different relays: symmetric NAT; hole punching works only if the other side's NAT maps consistently
 - The node publishes its `HOST` and `REFLEXIVE` addresses and its NAT type in its EndpointRecord (§6.2).
 
+**Candidates.** In this order: a port mapping the node got from its router (PCP / NAT-PMP, then UPnP IGD; only when the mapping has a public address), `PUBLIC` addresses, `REFLEXIVE` addresses, then `HOST` addresses (public ones before LAN ones), at most 12. **Another VPN is not a direct path:** addresses of tunnel interfaces (point-to-point interfaces and well-known VPN interface names such as `wg*`, `utun*`, `tailscale*`) are not offered, a relay observation made through a tunnel doesn't count, and a peer candidate the system would reach through a tunnel interface is not dialed, unless the default route goes through that interface too (a full-tunnel VPN). Operators can add or allow interfaces and exclude prefixes (`[nat]` in webjetd.toml). The overlay's own pool is never a candidate.
+
 **2. Coordination** through the already-established end-to-end session over the relayed route:
 1. A sends `PUNCH_OFFER { candidates, nonce }` to B.
-2. B replies with its own `PUNCH_OFFER`.
+2. B replies with its own `PUNCH_OFFER` (same nonce).
 3. The initiator sends `PUNCH_GO`. It carries no timestamp, because two nodes' clocks are rarely within the tens of milliseconds this needs.
-4. The responder starts sending UDP probes as soon as `PUNCH_GO` arrives. The initiator starts **half a round trip after sending it**, using the end-to-end RTT it already measures (§9.4.3), so both sides start at about the same moment. Each sends to every candidate of the other, several times at 50 ms intervals.
+4. The responder starts its connectivity checks as soon as `PUNCH_GO` arrives. The initiator starts **half a round trip after sending it**, using the end-to-end RTT it already measures (§9.4.3), so both sides start at about the same moment.
 
 These messages are encrypted and authenticated end to end, so relays can't read or alter the candidates.
 
-**3. Establishing the direct hop.**
-- Probes are the first packet of a **UDP + KCP + FEC + TLS** hop and carry the PSK-gate MAC (§9.1), so the other side accepts them. The normal hop handshake (§9.2) then authenticates both sides.
+**3. Connectivity checks** (as in ICE). Each side sends a check (a PUNCH datagram with type PING and the nonce, under the PSK gate) to every candidate of the other, every 50 ms for the first second and every 200 ms up to 6 s. A PING that arrives is answered with a PONG to the address it came from (rate-limited, so a replayed PING can't make a node a reflector).
+- A PING from an address the peer never offered is a **peer-reflexive** candidate: the peer's NAT gave this flow a new port. It is checked too.
+- **Port prediction:** when the peer's NAT is symmetric and ours is not, we also check the ports just after (96) and before (8) the peer's public reflexive ports, for 3 s; many symmetric NATs hand out ports in sequence. Two symmetric NATs: no attempt; the pair stays relayed.
+- **Nomination:** the first address that answers with a PONG is reachable both ways. The lower node ID dials it at once; the higher one 1.5 s later if no hop came up. When no check is ever answered (a peer from before checks were answered), the lower ID dials all candidates at once at the end of the window.
+
+**4. Establishing the direct hop.**
+- The dial is a normal **UDP + KCP + FEC + TLS** hop through the mappings the checks opened: its first packets carry the PSK-gate MAC (§9.1), and the normal hop handshake (§9.2) authenticates both sides.
 - Once the hop is up, the source sends a CircuitSetup with an empty `hops` list over it, and the direct route becomes a candidate in path selection (§11.4). With hysteresis satisfied, the session moves over without renegotiating (§9.4.1).
 
-**4. Keeping it alive.**
-- Keepalives every 20 s on the direct hop keep the NAT mapping open.
-- If the direct hop fails, traffic falls back to the relayed route, which stays open as a backup.
+**5. Keeping it alive.**
+- Keepalives on the direct hop keep the NAT mapping open.
+- If the direct hop fails, traffic falls back to the relayed route, which stays open as a backup, and punching starts again.
 
 **Rules:**
 - **UDP only.** TCP simultaneous open through NAT is unreliable, so TCP+TLS and AnyTLS are used only toward `PUBLIC` addresses.
-- **Candidate order:** `HOST` addresses first (same LAN), then `REFLEXIVE`.
-- **Retry:** if punching fails, retry with backoff (1 min, doubling to 30 min), and immediately when either side's EndpointRecord changes.
-- **Symmetric NAT on both sides:** no attempt; the pair stays relayed. Port prediction is not attempted.
+- **Either side may start.** The lower node ID starts first; the higher one starts 5 s after it would have, so a pair still punches when only one side sees traffic. Simultaneous offers resolve to the lower ID's attempt.
+- **Retry** while the session is in use: after 15 s, doubling to 5 min; immediately when either side's EndpointRecord changes or the direct hop goes down. Success resets the backoff.
 - A direct route between two DATA nodes is not relaying, so it doesn't need `RELAY`. Its `route_id` has an empty relay list (§11.5), and accounting treats it like any other route.
 
 ### 11.8 Load-aware routing

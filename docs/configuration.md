@@ -387,6 +387,30 @@ This node as a reverse proxy target (§11.11).
 accept_real_ip = true
 ```
 
+### `[nat]`
+
+Direct paths and hole punching (architecture §11.7). Webjet offers its
+interface addresses, the addresses relays see it at and a router port
+mapping as candidates, checks every candidate pair from both sides, and
+dials the first one that answers.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `skip_tunnels` | `true` | Another VPN is not a direct path. Addresses of tunnel interfaces (point-to-point ones, and names starting `wg`, `tun`, `utun`, `tap`, `tailscale`, `zt`, `ppp`, `ipsec`, `nordlynx`, …) are not offered, and a peer address the system would reach through such an interface is not dialed — unless the default route goes through it too (a full-tunnel VPN, where every path uses it anyway). |
+| `exclude_interfaces` | `[]` | More interfaces to leave out; `*` matches any characters (`["eth9", "vpn*"]`). |
+| `allow_interfaces` | `[]` | Interfaces to use although they look like tunnels (a WireGuard link that is your real LAN). |
+| `exclude_cidrs` | `[]` | Addresses never offered nor dialed for direct paths (`["10.1.1.0/24"]`). The overlay's own pool is always excluded. |
+| `port_mapping` | `true` | Ask the router for a UDP port mapping (PCP / NAT-PMP, then UPnP IGD) and offer it as a public candidate. Only used when the router has a public address; given back when the agent stops. |
+
+```toml
+[nat]
+exclude_cidrs = ["10.1.1.0/24"]
+allow_interfaces = ["wg-office"]
+```
+
+`webjetctl local sessions` shows the candidates and the state of each
+peer's last attempt under `punch`.
+
 ### `[key]`
 
 Where the identity key is stored at rest (§8.3).

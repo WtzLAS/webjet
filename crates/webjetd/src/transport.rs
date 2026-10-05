@@ -1,6 +1,7 @@
 //! Transport priorities, camouflage material and the listeners (§9.1, §9.6, §9.7).
 
 use crate::node::Node;
+#[cfg(feature = "anytls")]
 use crate::state;
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -364,22 +365,23 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
     if let Some(a) = n.cfg.listen.kcp {
         push(a, Transport::KcpFecTls, wp::AddrKind::Public);
     }
-    // Reflexive UDP addresses from relays' observations (§11.7).
+    // The router's port mapping, reachable from anywhere (§11.7).
+    if let Some(m) = *n.port_mapping.lock() {
+        push(m.external, Transport::KcpFecTls, wp::AddrKind::Public);
+    }
+    // Reflexive UDP addresses from relays' observations (§11.7), then the
+    // interface addresses; never those of tunnels (another VPN is no
+    // direct path) or excluded ones.
     if let Some(port) = n
         .udp
         .get()
         .and_then(|u| u.local_addr().ok())
         .map(|a| a.port())
     {
-        for h in n.hops.lock().values() {
-            if h.transport == Transport::KcpFecTls
-                && let Some(o) = *h.observed.lock()
-                && o.port() != 0
-            {
-                push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
-            }
+        for o in observed(n) {
+            push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
         }
-        for ip in crate::platform::local_ips() {
+        for ip in crate::nat::candidate_ips(&n.cfg.nat) {
             push(
                 std::net::SocketAddr::new(ip, port),
                 Transport::KcpFecTls,
@@ -391,33 +393,137 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
     v
 }
 
-pub fn nat_type(n: &Node) -> wp::NatType {
-    let obs: Vec<std::net::SocketAddr> = n
+/// Our UDP address as relays saw it, over hops not carried by a tunnel
+/// interface (a relay reached through another VPN sees its address).
+fn observed(n: &Node) -> Vec<std::net::SocketAddr> {
+    let hops: Vec<(std::net::SocketAddr, Option<std::net::SocketAddr>)> = n
         .hops
         .lock()
         .values()
         .filter(|h| h.transport == Transport::KcpFecTls)
-        .filter_map(|h| *h.observed.lock())
+        .map(|h| (h.remote, *h.observed.lock()))
         .collect();
-    if obs.len() < 2 {
-        return wp::NatType::Unknown;
-    }
-    if obs.windows(2).all(|w| w[0] == w[1]) {
-        let local = n.udp.get().and_then(|u| u.local_addr().ok());
-        if local
-            .map(|l| {
-                l.port() == obs[0].port() && crate::platform::local_ips().contains(&obs[0].ip())
-            })
-            .unwrap_or(false)
-        {
-            wp::NatType::NoNat
-        } else {
-            wp::NatType::Consistent
-        }
-    } else {
-        wp::NatType::Symmetric
+    let tunnels = crate::nat::tunnel_ips(&n.cfg.nat);
+    let mut v: Vec<std::net::SocketAddr> = hops
+        .into_iter()
+        .filter(|(remote, _)| !crate::nat::via_tunnel(&n.cfg.nat, remote.ip()))
+        .filter_map(|(_, o)| o)
+        .filter(|o| {
+            o.port() != 0
+                && !tunnels.contains(&o.ip())
+                && !crate::nat::excluded(&n.cfg.nat, &o.ip())
+        })
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// The NAT type as the CLI and webjet-app show it.
+pub fn nat_name(t: wp::NatType) -> &'static str {
+    match t {
+        wp::NatType::NoNat => "none",
+        wp::NatType::Consistent => "consistent",
+        wp::NatType::Symmetric => "symmetric",
+        _ => "unknown",
     }
 }
 
-#[allow(unused)]
-fn _assert_state(_: &state::NodeFile) {}
+/// Advertised addresses for JSON: `{addr, transport, kind}`.
+pub fn addrs_json(addrs: &[wp::EndpointAddr]) -> Vec<serde_json::Value> {
+    addrs
+        .iter()
+        .filter_map(|a| {
+            Some(serde_json::json!({
+                "addr": a.addr.as_ref()?.to_sock()?.to_string(),
+                "transport": a.transport.name(),
+                "kind": match a.kind {
+                    wp::AddrKind::Public => "public",
+                    wp::AddrKind::Host => "host",
+                    wp::AddrKind::Reflexive => "reflexive",
+                },
+            }))
+        })
+        .collect()
+}
+
+/// How this node's NAT maps UDP (§11.7), from what relays observe: the
+/// same address and port everywhere is consistent (or no NAT at all when
+/// it is our own address and port), different ports are symmetric.
+/// Only relays count (§11.7): a data node's observation can come from a
+/// hole-punched flow whose mapping a NAT had to change.
+pub fn nat_type(n: &Node) -> wp::NatType {
+    // Clone the hops first: the store lock is taken below (lock order).
+    let hops: Vec<(Bytes32, std::net::SocketAddr, Option<std::net::SocketAddr>)> = n
+        .hops
+        .lock()
+        .values()
+        .filter(|h| h.transport == Transport::KcpFecTls)
+        .map(|h| (h.peer, h.remote, *h.observed.lock()))
+        .collect();
+    let relays: Vec<Bytes32> = {
+        let s = n.store.read();
+        let v = s.view();
+        hops.iter()
+            .filter(|(p, _, _)| v.nodes.get(p).is_some_and(|x| x.relay))
+            .map(|(p, _, _)| *p)
+            .collect()
+    };
+    let obs: Vec<std::net::SocketAddr> = hops
+        .into_iter()
+        .filter(|(p, remote, _)| {
+            relays.contains(p) && !crate::nat::via_tunnel(&n.cfg.nat, remote.ip())
+        })
+        .filter_map(|(_, _, o)| o)
+        .collect();
+    let local = n.udp.get().and_then(|u| u.local_addr().ok());
+    classify_nat(
+        &obs,
+        local.map(|l| l.port()),
+        &crate::nat::candidate_ips(&n.cfg.nat),
+    )
+}
+
+fn classify_nat(
+    obs: &[std::net::SocketAddr],
+    local_port: Option<u16>,
+    local_ips: &[std::net::IpAddr],
+) -> wp::NatType {
+    let Some(first) = obs.first() else {
+        return wp::NatType::Unknown;
+    };
+    if obs.iter().any(|o| o != first) {
+        return wp::NatType::Symmetric;
+    }
+    if local_port == Some(first.port()) && local_ips.contains(&first.ip()) {
+        return wp::NatType::NoNat;
+    }
+    if obs.len() < 2 {
+        return wp::NatType::Unknown;
+    }
+    wp::NatType::Consistent
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nat_classification() {
+        let a: std::net::SocketAddr = "47.1.2.3:6969".parse().unwrap();
+        let b: std::net::SocketAddr = "47.1.2.3:7000".parse().unwrap();
+        let ip = a.ip();
+        assert_eq!(classify_nat(&[], Some(6969), &[ip]), wp::NatType::Unknown);
+        // One relay seeing our own address and port: no NAT.
+        assert_eq!(classify_nat(&[a], Some(6969), &[ip]), wp::NatType::NoNat);
+        assert_eq!(classify_nat(&[a], Some(5000), &[]), wp::NatType::Unknown);
+        assert_eq!(
+            classify_nat(&[a, a], Some(5000), &[]),
+            wp::NatType::Consistent
+        );
+        assert_eq!(
+            classify_nat(&[a, b], Some(6969), &[ip]),
+            wp::NatType::Symmetric
+        );
+    }
+}

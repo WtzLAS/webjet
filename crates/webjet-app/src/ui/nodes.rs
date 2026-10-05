@@ -934,6 +934,24 @@ impl WebjetApp {
                 ),
             ));
         }
+        // NAT type and advertised addresses (§11.7), from the node's
+        // EndpointRecord as this agent knows it.
+        if let Ok(t) = &s.topology
+            && let Some(tn) = t.nodes.iter().find(|x| x.id == n.id)
+        {
+            if let Some(nat) = tn.nat_text() {
+                d = d.child(label_value("NAT", nat));
+            }
+            if !tn.endpoints.is_empty() {
+                d = d.child(label_value("Endpoints", tn.endpoints_text()));
+            }
+            if let Some(m) = &tn.port_mapping {
+                d = d.child(label_value(
+                    "Port mapping",
+                    format!("{} ({})", m.external, m.protocol),
+                ));
+            }
+        }
         d = d.child(self.render_links(n));
         let Some(si) = &self.signed_in else {
             return d.into_any_element();

@@ -414,6 +414,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     }
     tokio::spawn(crate::health::run(n.clone()));
     tokio::spawn(crate::punch::run(n.clone()));
+    tokio::spawn(crate::nat::run_port_mapping(n.clone()));
     tokio::spawn(connections(n.clone()));
     tokio::spawn(secrets(n.clone()));
     tokio::spawn(start_dataplane_when_ready(n.clone()));
@@ -440,6 +441,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     if let Some(dp) = n.dataplane.get() {
         dp.shutdown();
     }
+    crate::nat::release_mapping().await;
     Ok(())
 }
 

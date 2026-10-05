@@ -29,6 +29,10 @@ pub struct Config {
     /// This node as a reverse proxy target (§11.11).
     #[serde(default)]
     pub proxy: ProxyCfg,
+    /// Direct paths and hole punching (§11.7): which local addresses are
+    /// offered as candidates and which peer addresses may be dialed.
+    #[serde(default)]
+    pub nat: NatCfg,
     /// Removed in 0.4.0 (now node-scope configuration in the tree); kept
     /// only to explain the move when an old file still has it.
     #[serde(default)]
@@ -131,6 +135,43 @@ pub struct ProxyCfg {
     pub accept_real_ip: bool,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatCfg {
+    /// Leave out tunnel interfaces (point-to-point ones, and names like
+    /// `wg*`, `tun*`, `utun*`, `tailscale*`, `zt*`, `ppp*`): another VPN is
+    /// not a direct path. Peer addresses the system would reach through
+    /// such an interface aren't dialed either, unless all traffic goes
+    /// through it (a full-tunnel VPN).
+    #[serde(default = "yes")]
+    pub skip_tunnels: bool,
+    /// More interfaces to leave out (`*` matches any characters).
+    #[serde(default)]
+    pub exclude_interfaces: Vec<String>,
+    /// Interfaces to use even though they look like tunnels.
+    #[serde(default)]
+    pub allow_interfaces: Vec<String>,
+    /// Addresses never offered nor dialed for direct paths (`10.1.1.0/24`).
+    #[serde(default, deserialize_with = "nets")]
+    pub exclude_cidrs: Vec<ipnet::IpNet>,
+    /// Ask the router for a port mapping (UPnP IGD, NAT-PMP, PCP) and
+    /// offer it as a candidate.
+    #[serde(default = "yes")]
+    pub port_mapping: bool,
+}
+
+impl Default for NatCfg {
+    fn default() -> Self {
+        NatCfg {
+            skip_tunnels: true,
+            exclude_interfaces: Vec::new(),
+            allow_interfaces: Vec::new(),
+            exclude_cidrs: Vec::new(),
+            port_mapping: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsCfg {
@@ -166,6 +207,18 @@ impl Default for ControllerCfg {
 
 fn yes() -> bool {
     true
+}
+
+fn nets<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ipnet::IpNet>, D::Error> {
+    Vec::<String>::deserialize(d)?
+        .iter()
+        .map(|s| {
+            s.parse::<ipnet::IpNet>()
+                .or_else(|_| s.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
+                .map(|n| n.trunc())
+                .map_err(|_| serde::de::Error::custom(format!("{s:?} is not an address or prefix")))
+        })
+        .collect()
 }
 fn default_mtu() -> u16 {
     1280
@@ -273,6 +326,20 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nat_section() {
+        let c: Config = toml::from_str("").unwrap();
+        assert!(c.nat.skip_tunnels && c.nat.port_mapping);
+        let c: Config = toml::from_str(
+            "[nat]\nskip_tunnels = false\nexclude_interfaces = [\"eth9\"]\nallow_interfaces = [\"wg-lan\"]\nexclude_cidrs = [\"10.1.1.7/24\", \"192.0.2.1\"]\nport_mapping = false\n",
+        )
+        .unwrap();
+        assert!(!c.nat.skip_tunnels && !c.nat.port_mapping);
+        assert_eq!(c.nat.exclude_cidrs[0].to_string(), "10.1.1.0/24");
+        assert_eq!(c.nat.exclude_cidrs[1].to_string(), "192.0.2.1/32");
+        assert!(toml::from_str::<Config>("[nat]\nexclude_cidrs = [\"nope\"]\n").is_err());
+    }
     #[test]
     fn parses_example() {
         let c: Config = toml::from_str(

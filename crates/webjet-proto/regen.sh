@@ -3,3 +3,6 @@
 set -e
 cd "$(dirname "$0")"
 planus rust -o src/generated.rs schema/wire.fbs
+# The fixed-size structs get hand-written serde impls in lib.rs (hex ids,
+# "ip:port" addresses, "ip/prefix" CIDRs), so drop their derived ones.
+perl -0pi -e 's/\s*::serde::Serialize,\s*::serde::Deserialize,(\s*\)\]\s*pub struct (?:Key32|Sig64|Id16|Cidr|IpAddress|SockAddr) \{)/$1/g' src/generated.rs

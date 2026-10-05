@@ -80,8 +80,18 @@ impl Dataplane {
     }
 
     pub(crate) fn write_tun(&self, p: Vec<u8>) {
-        // Replies to our own pings (control channel `ping`) stop here.
-        if let Some(pp) = packet::parse(&p)
+        if self.own_ping_reply(&p) {
+            return;
+        }
+        if let Some(n) = self.node() {
+            n.metrics.tun_out(p.len());
+        }
+        self.write_tun_raw(p);
+    }
+
+    /// Replies to our own pings (control channel `ping`) stop here.
+    fn own_ping_reply(&self, p: &[u8]) -> bool {
+        if let Some(pp) = packet::parse(p)
             && pp.icmp == Some(packet::IcmpKind::Echo { request: false })
             && p.len() >= pp.l4_offset + 8
         {
@@ -89,11 +99,26 @@ impl Dataplane {
             let seq = u16::from_be_bytes([p[pp.l4_offset + 6], p[pp.l4_offset + 7]]);
             if let Some(tx) = self.pings.lock().get(&id) {
                 let _ = tx.send(seq);
-                return;
+                return true;
             }
         }
-        if let Some(n) = self.node() {
-            n.metrics.tun_out(p.len());
+        false
+    }
+
+    /// A packet the host sent to one of this node's own overlay addresses:
+    /// hand it straight back, so the host's own stack answers it. Linux and
+    /// Windows keep such packets on their loopback, but macOS routes them
+    /// into the utun interface. Not overlay traffic: no counters, no policy.
+    /// The agent's own pings (control channel `ping` to itself) are answered
+    /// here, since the kernel's reply may never come back through the tun.
+    fn loopback(&self, p: Vec<u8>) {
+        if self.own_ping_reply(&p) {
+            return;
+        }
+        if let Some(reply) = packet::echo_reply(&p)
+            && self.own_ping_reply(&reply)
+        {
+            return;
         }
         self.write_tun_raw(p);
     }
@@ -226,6 +251,10 @@ impl Dataplane {
                     dp.write_tun(reply);
                 }
             });
+            return;
+        }
+        if self.is_mine(&dst) {
+            self.loopback(p);
             return;
         }
         // Gateway return traffic: LAN → overlay (§11.9.4).

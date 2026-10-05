@@ -7,7 +7,11 @@ license.workspace = true
 [dependencies]
 planus.workspace = true
 serde.workspace = true
+hex.workspace = true
 thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

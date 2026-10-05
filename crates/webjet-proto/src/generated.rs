@@ -26421,8 +26421,6 @@ mod root {
             Ord,
             Hash,
             Default,
-            ::serde::Serialize,
-            ::serde::Deserialize,
         )]
         pub struct Key32 {
             /// The field `b0` in the struct `Key32`
@@ -26665,8 +26663,6 @@ mod root {
             Ord,
             Hash,
             Default,
-            ::serde::Serialize,
-            ::serde::Deserialize,
         )]
         pub struct Sig64 {
             /// The field `b0` in the struct `Sig64`
@@ -26977,8 +26973,6 @@ mod root {
             Ord,
             Hash,
             Default,
-            ::serde::Serialize,
-            ::serde::Deserialize,
         )]
         pub struct Id16 {
             /// The field `b0` in the struct `Id16`
@@ -27186,8 +27180,6 @@ mod root {
             Ord,
             Hash,
             Default,
-            ::serde::Serialize,
-            ::serde::Deserialize,
         )]
         pub struct Cidr {
             /// The field `family` in the struct `Cidr`
@@ -27431,8 +27423,6 @@ mod root {
             Ord,
             Hash,
             Default,
-            ::serde::Serialize,
-            ::serde::Deserialize,
         )]
         pub struct IpAddress {
             /// The field `family` in the struct `IpAddress`
@@ -27659,8 +27649,6 @@ mod root {
             Ord,
             Hash,
             Default,
-            ::serde::Serialize,
-            ::serde::Deserialize,
         )]
         pub struct SockAddr {
             /// The field `family` in the struct `SockAddr`

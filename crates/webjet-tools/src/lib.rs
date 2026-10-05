@@ -432,9 +432,194 @@ pub fn tags(v: &[String]) -> Result<Vec<String>> {
     Ok(webjet_core::types::sort_dedup(v.to_vec()))
 }
 
+/// Find a node or account in a control-channel list (`nodes`, `accounts`)
+/// by what a person typed: its name, its id in hex (all 64 digits, or a
+/// prefix of at least 4 that only one entry has, like the 12 digits the
+/// logs print), or its key in base64. With `suffix` (the magic DNS suffix),
+/// `name.suffix` works too. `skip` leaves entries out (revoked accounts).
+pub fn find_id(
+    items: &[serde_json::Value],
+    query: &str,
+    suffix: Option<&str>,
+    what: &str,
+    skip: impl Fn(&serde_json::Value) -> bool,
+) -> Result<Bytes32> {
+    let q = query.trim();
+    let name = suffix
+        .and_then(|s| q.strip_suffix(&format!(".{s}")))
+        .unwrap_or(q);
+    let id_of = |v: &serde_json::Value| -> Result<Bytes32> {
+        crypto::parse_hex32(v["id"].as_str().unwrap_or(""))
+            .ok_or_else(|| anyhow!("the agent sent a bad {what} id"))
+    };
+    let live: Vec<&serde_json::Value> = items.iter().filter(|v| !skip(v)).collect();
+    if let Some(v) = live.iter().find(|v| {
+        v["name"].as_str() == Some(name)
+            || v["id"].as_str().is_some_and(|i| i.eq_ignore_ascii_case(q))
+            || v["key"].as_str() == Some(q)
+    }) {
+        return id_of(v);
+    }
+    let lower = q.to_ascii_lowercase();
+    if lower.len() >= 4 && lower.len() < 64 && lower.chars().all(|c| c.is_ascii_hexdigit()) {
+        let hits: Vec<&&serde_json::Value> = live
+            .iter()
+            .filter(|v| v["id"].as_str().is_some_and(|i| i.starts_with(&lower)))
+            .collect();
+        match hits.as_slice() {
+            [one] => return id_of(one),
+            [] => {}
+            many => bail!(
+                "{q} matches {} {what}s ({}); give more digits",
+                many.len(),
+                many.iter()
+                    .filter_map(|v| v["name"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+    bail!("no {what} named {q} (give its name or its id in hex)")
+}
+
+/// Turn `{"b0": …, "b1": …, "b2": …, "b3": …}` (a 32-byte id as agents
+/// before 0.7 printed it) into its hex string, anywhere in a document.
+pub fn legacy_ids(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Object(o) => {
+            if o.len() == 4
+                && let Ok(k) =
+                    serde_json::from_value::<webjet_proto::Key32>(Value::Object(o.clone()))
+            {
+                return Value::String(hex::encode(k.to_bytes()));
+            }
+            Value::Object(o.into_iter().map(|(k, x)| (k, legacy_ids(x))).collect())
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(legacy_ids).collect()),
+        other => other,
+    }
+}
+
+/// Add `"node_names": {id: name}` to a JSON object for every node id (hex)
+/// that appears in it as a value, so people see names while scripts keep
+/// the ids where they were.
+pub fn with_node_names(
+    v: serde_json::Value,
+    names: &std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    fn walk(
+        v: &serde_json::Value,
+        names: &std::collections::HashMap<String, String>,
+        out: &mut std::collections::BTreeMap<String, String>,
+    ) {
+        match v {
+            serde_json::Value::String(s) => {
+                if let Some(n) = names.get(s) {
+                    out.insert(s.clone(), n.clone());
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, names, out)),
+            serde_json::Value::Object(o) => o.values().for_each(|x| walk(x, names, out)),
+            _ => {}
+        }
+    }
+    let mut found = std::collections::BTreeMap::new();
+    walk(&v, names, &mut found);
+    match v {
+        serde_json::Value::Object(mut o) if !found.is_empty() => {
+            o.insert("node_names".into(), serde_json::json!(found));
+            serde_json::Value::Object(o)
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_id_by_name_hex_prefix_and_suffix() {
+        let a = "af26bc854c76b23e4d039cb77aedc9ed867878e13115ce3892b19b4d53e20a9f";
+        let b = "af27000000000000000000000000000000000000000000000000000000000000";
+        let items = vec![
+            serde_json::json!({"name": "mbp", "id": a, "key": "K1"}),
+            serde_json::json!({"name": "pc", "id": b, "key": "K2", "gone": true}),
+        ];
+        let keep = |_: &serde_json::Value| false;
+        let ida = crypto::parse_hex32(a).unwrap();
+        assert_eq!(find_id(&items, "mbp", None, "node", keep).unwrap(), ida);
+        assert_eq!(find_id(&items, a, None, "node", keep).unwrap(), ida);
+        assert_eq!(
+            find_id(&items, &a.to_uppercase(), None, "node", keep).unwrap(),
+            ida
+        );
+        assert_eq!(
+            find_id(&items, "af26bc854c76", None, "node", keep).unwrap(),
+            ida
+        );
+        assert_eq!(find_id(&items, "K1", None, "node", keep).unwrap(), ida);
+        assert_eq!(
+            find_id(&items, "mbp.wj", Some("wj"), "node", keep).unwrap(),
+            ida
+        );
+        // Too short for a prefix, and a prefix nobody has.
+        let e = find_id(&items, "af2", None, "node", keep)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no node named af2"), "{e}");
+        assert!(find_id(&items, "af2a", None, "node", keep).is_err());
+        // "af2" + 6 is only a's.
+        assert_eq!(find_id(&items, "af26", None, "node", keep).unwrap(), ida);
+        // Skipped entries don't match.
+        let skip = |v: &serde_json::Value| v["gone"].as_bool() == Some(true);
+        assert!(find_id(&items, "pc", None, "node", skip).is_err());
+        assert!(find_id(&items, "pc", None, "node", keep).is_ok());
+    }
+
+    #[test]
+    fn find_id_ambiguous_prefix_names_the_candidates() {
+        let items = vec![
+            serde_json::json!({"name": "x", "id": format!("abcd{}", "0".repeat(60))}),
+            serde_json::json!({"name": "y", "id": format!("abce{}", "0".repeat(60))}),
+        ];
+        let e = find_id(&items, "abc0", None, "node", |_| false);
+        assert!(e.is_err());
+        let items2 = vec![
+            serde_json::json!({"name": "x", "id": format!("abcd1{}", "0".repeat(59))}),
+            serde_json::json!({"name": "y", "id": format!("abcd2{}", "0".repeat(59))}),
+        ];
+        let e = find_id(&items2, "abcd", None, "node", |_| false)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("matches 2 nodes") && e.contains("x, y"), "{e}");
+    }
+
+    #[test]
+    fn legacy_id_structs_become_hex() {
+        let k = webjet_proto::Key32::from_bytes(&[0xab; 32]);
+        let v = serde_json::json!({"leader": {"b0": k.b0, "b1": k.b1, "b2": k.b2, "b3": k.b3},
+            "voters": [{"b0": k.b0, "b1": k.b1, "b2": k.b2, "b3": k.b3}], "term": 1,
+            "other": {"a": 1, "b": 2, "c": 3, "d": 4}});
+        let out = legacy_ids(v);
+        assert_eq!(out["leader"], serde_json::json!("ab".repeat(32)));
+        assert_eq!(out["voters"][0], serde_json::json!("ab".repeat(32)));
+        assert_eq!(out["other"]["a"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn node_names_are_added_for_ids_in_values() {
+        let a = "a".repeat(64);
+        let mut names = std::collections::HashMap::new();
+        names.insert(a.clone(), "ctl-01".to_string());
+        let v = serde_json::json!({"raft": {"leader": a, "voters": [a, "other"]}, "term": 3});
+        let out = with_node_names(v.clone(), &names);
+        assert_eq!(out["raft"], v["raft"]);
+        assert_eq!(out["node_names"], serde_json::json!({a.as_str(): "ctl-01"}));
+        let none = with_node_names(serde_json::json!({"x": "y"}), &names);
+        assert!(none.get("node_names").is_none());
+    }
 
     #[test]
     fn account_selection() {

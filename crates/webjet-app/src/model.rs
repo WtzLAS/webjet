@@ -461,6 +461,75 @@ pub struct TopoNode {
     pub control: bool,
     pub me: bool,
     pub load: Option<Load>,
+    /// How the node's NAT maps UDP, from its EndpointRecord (§11.7):
+    /// `none`, `consistent`, `symmetric` or `unknown`; absent when this
+    /// agent has no record of the node (older agents don't send it).
+    pub nat: Option<String>,
+    /// The addresses it advertises.
+    pub endpoints: Vec<TopoAddr>,
+    /// This agent's router port mapping (only on `me`).
+    pub port_mapping: Option<PortMapping>,
+}
+
+/// An advertised address (§6.2).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TopoAddr {
+    pub addr: String,
+    pub transport: String,
+    pub kind: String,
+}
+
+/// A UDP port mapping the router gave (UPnP / NAT-PMP / PCP).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PortMapping {
+    pub external: String,
+    pub protocol: String,
+}
+
+impl TopoNode {
+    /// "symmetric NAT", "no NAT", …, for people.
+    pub fn nat_text(&self) -> Option<String> {
+        let t = self.nat.as_deref()?;
+        Some(match t {
+            "none" => "no NAT (public address)".into(),
+            "consistent" => "consistent NAT (hole punching works)".into(),
+            "symmetric" => "symmetric NAT (punching only toward non-symmetric peers)".into(),
+            _ => "unknown (fewer than two relays measured it)".into(),
+        })
+    }
+
+    /// Advertised addresses grouped by kind: "public 1.2.3.4:443 (kcp, tls) · …".
+    pub fn endpoints_text(&self) -> String {
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for kind in ["public", "reflexive", "host"] {
+            let mut addrs: Vec<(String, Vec<String>)> = Vec::new();
+            for e in self.endpoints.iter().filter(|e| e.kind == kind) {
+                match addrs.iter_mut().find(|(a, _)| *a == e.addr) {
+                    Some((_, ts)) => ts.push(e.transport.clone()),
+                    None => addrs.push((e.addr.clone(), vec![e.transport.clone()])),
+                }
+            }
+            if !addrs.is_empty() {
+                groups.push((
+                    kind.to_string(),
+                    addrs
+                        .into_iter()
+                        .map(|(a, ts)| format!("{a} ({})", ts.join(", ")))
+                        .collect(),
+                ));
+            }
+        }
+        if groups.is_empty() {
+            return "—".into();
+        }
+        groups
+            .into_iter()
+            .map(|(k, v)| format!("{k} {}", v.join(", ")))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
 }
 
 /// A link between two nodes as reported by one of them (`topology`):
@@ -1147,6 +1216,35 @@ mod tests {
         .unwrap();
         assert_eq!(t.nodes[0].load.as_ref().map(|l| l.util_pct), Some(3));
         assert_eq!(t.edges[0].remote.as_deref(), Some("127.0.0.1:1"));
+    }
+
+    #[test]
+    fn topology_nat_and_endpoints() {
+        let t: Topology = serde_json::from_value(json!({
+            "me": "aa", "nodes": [{"id": "aa", "name": "mbp", "nat": "symmetric",
+                "endpoints": [
+                    {"addr": "1.2.3.4:443", "transport": "kcp", "kind": "public"},
+                    {"addr": "1.2.3.4:443", "transport": "tls", "kind": "public"},
+                    {"addr": "5.6.7.8:6000", "transport": "kcp", "kind": "reflexive"},
+                    {"addr": "192.168.1.5:6000", "transport": "kcp", "kind": "host"}
+                ],
+                "port_mapping": {"external": "5.6.7.8:6000", "protocol": "upnp"}},
+                {"id": "bb", "name": "old"}],
+            "edges": []
+        }))
+        .unwrap();
+        let n = &t.nodes[0];
+        assert!(n.nat_text().unwrap().starts_with("symmetric NAT"));
+        assert_eq!(
+            n.endpoints_text(),
+            "public 1.2.3.4:443 (kcp, tls) · reflexive 5.6.7.8:6000 (kcp) · host 192.168.1.5:6000 (kcp)"
+        );
+        assert_eq!(
+            n.port_mapping.as_ref().map(|m| m.protocol.as_str()),
+            Some("upnp")
+        );
+        assert_eq!(t.nodes[1].nat_text(), None);
+        assert_eq!(t.nodes[1].endpoints_text(), "—");
     }
 
     #[test]

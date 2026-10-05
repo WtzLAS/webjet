@@ -11,6 +11,7 @@
 use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use webjet_core::crypto::{self, Bytes32, KeyPair};
 use webjet_core::types::{now_ms, parse_roles};
@@ -159,7 +160,7 @@ enum LocalCmd {
         #[arg(long)]
         all: bool,
     },
-    /// Ping a node (by name or overlay address) through the overlay.
+    /// Ping a node (by name, node id, overlay address or magic DNS name) through the overlay.
     Ping {
         target: String,
         #[arg(short, long, default_value_t = 3)]
@@ -243,6 +244,7 @@ enum AccountCmd {
     /// keeps its name, devices and policy; only the old key stops working.
     /// Admin accounts get a new key from the root (`root admin sign --replaces`).
     Rekey {
+        /// The account: name, account id in hex (or a unique prefix of it) or key.
         name: String,
         /// The new key's public file, from `network account keygen`.
         #[arg(long)]
@@ -250,6 +252,7 @@ enum AccountCmd {
     },
     /// Revoke an account and with it all its nodes.
     Revoke {
+        /// The account: name, account id in hex (or a unique prefix of it) or key.
         name: String,
         #[arg(long)]
         reason: Option<String>,
@@ -299,9 +302,11 @@ enum NodeCmd {
     },
     List,
     Show {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
     },
     Update {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
         /// The full role set: any of `data`, `relay`, `control`.
         #[arg(long)]
@@ -318,16 +323,19 @@ enum NodeCmd {
         owner: Option<String>,
     },
     Rename {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
         new_name: String,
     },
     Revoke {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
         #[arg(long)]
         reason: Option<String>,
     },
     /// Issue a re-key token for a reinstalled node (ops guide 2.7).
     Rekey {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
         #[arg(long)]
         revoke_old_now: bool,
@@ -370,6 +378,7 @@ enum ControllerCmd {
     /// certificate. The node needs the `control` role; its request is fetched
     /// from it over the overlay, or read from `--request`.
     Certify {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
         #[arg(long)]
         request: Option<PathBuf>,
@@ -379,20 +388,26 @@ enum ControllerCmd {
     CertRequest {
         #[arg(long)]
         out: PathBuf,
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         #[arg(long)]
         node: Option<String>,
     },
+    /// The controllers' Raft state (`node_names` gives the names of the node ids in it).
     List,
     AddLearner {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
     },
     Promote {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
     },
     Demote {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
     },
     Remove {
+        /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
     },
 }
@@ -459,7 +474,8 @@ async fn cert_request(cli: &Cli, node: Option<Bytes32>) -> Result<Vec<u8>> {
 }
 
 async fn call(cli: &Cli, req: Value) -> Result<Value> {
-    client::call(&cli.socket, req).await
+    // Agents before 0.7 printed ids as `{"b0": …}` word structs.
+    Ok(legacy_ids(client::call(&cli.socket, req).await?))
 }
 
 async fn submit(cli: &Cli, signed: Vec<u8>) -> Result<Value> {
@@ -474,28 +490,41 @@ async fn nodes(cli: &Cli) -> Result<Vec<Value>> {
         .unwrap_or_default())
 }
 
+/// A node by name, `name.<suffix>`, hex id (or a unique prefix of it) or key.
 async fn node_id(cli: &Cli, name: &str) -> Result<Bytes32> {
-    for n in nodes(cli).await? {
-        if n["name"].as_str() == Some(name)
-            || n["id"].as_str() == Some(name)
-            || n["key"].as_str() == Some(name)
-        {
-            return crypto::parse_hex32(n["id"].as_str().unwrap_or(""))
-                .ok_or_else(|| anyhow!("bad id"));
-        }
-    }
-    bail!("no node named {name}")
+    let suffix = call(cli, json!({"cmd": "status"}))
+        .await
+        .ok()
+        .and_then(|s| s["dns_suffix"].as_str().map(String::from));
+    webjet_tools::find_id(&nodes(cli).await?, name, suffix.as_deref(), "node", |_| {
+        false
+    })
 }
 
+/// Node names by hex id, to label ids in JSON answers.
+async fn node_names(cli: &Cli) -> Result<HashMap<String, String>> {
+    Ok(nodes(cli)
+        .await?
+        .iter()
+        .filter_map(|n| {
+            Some((
+                n["id"].as_str()?.to_string(),
+                n["name"].as_str()?.to_string(),
+            ))
+        })
+        .collect())
+}
+
+/// A valid account by name, hex id (or a unique prefix of it) or key.
 async fn account_id(cli: &Cli, name: &str) -> Result<Bytes32> {
     let accts = call(cli, json!({"cmd": "accounts"})).await?;
-    for a in accts.as_array().cloned().unwrap_or_default() {
-        if a["name"].as_str() == Some(name) && a["valid"].as_bool() == Some(true) {
-            return crypto::parse_hex32(a["id"].as_str().unwrap_or(""))
-                .ok_or_else(|| anyhow!("bad id"));
-        }
-    }
-    bail!("no valid account named {name}")
+    webjet_tools::find_id(
+        accts.as_array().map(Vec::as_slice).unwrap_or_default(),
+        name,
+        None,
+        "valid account",
+        |a| a["valid"].as_bool() != Some(true),
+    )
 }
 
 /// Pick a free address from the overlay pool.
@@ -577,6 +606,20 @@ fn print(cli: &Cli, v: &Value) {
         ),
         other => println!("{other}"),
     }
+}
+
+/// The result of a command: a sentence for people, an object with `--json`.
+fn report(cli: &Cli, text: impl std::fmt::Display, v: Value) {
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+    } else {
+        println!("{text}");
+    }
+}
+
+/// The log entry index a submit reply names.
+fn entry(r: &Value) -> Value {
+    r["index"].clone()
 }
 
 fn print_table(rows: &[Vec<String>]) {
@@ -732,18 +775,32 @@ async fn apply_network(cli: &Cli, f: &ConfigFile, base: &Path, what: Option<&str
     let (version, domain) = (p.version, p.new_certificate_domain());
     let what = what.map_or_else(|| p.sections.join(", "), String::from);
     let mut ops = p.ops().into_iter().peekable();
+    let mut entries = Vec::new();
     while let Some(op) = ops.next() {
         let r = submit(cli, a.sign(op)?).await?;
+        entries.push(entry(&r));
         if ops.peek().is_some() {
-            println!(
-                "refuse mode: made a self-signed camouflage certificate for {} (key stored, entry {})",
-                domain.clone().unwrap_or_default(),
-                r["index"]
-            );
+            if !cli.json {
+                println!(
+                    "refuse mode: made a self-signed camouflage certificate for {} (key stored, entry {})",
+                    domain.clone().unwrap_or_default(),
+                    r["index"]
+                );
+            }
         } else {
-            println!(
-                "network configuration version {version} applied: {what} (entry {})",
-                r["index"]
+            report(
+                cli,
+                format!(
+                    "network configuration version {version} applied: {what} (entry {})",
+                    r["index"]
+                ),
+                json!({
+                    "applied": "network",
+                    "version": version,
+                    "changed": what,
+                    "self_signed_camouflage": domain,
+                    "entries": entries,
+                }),
             );
         }
     }
@@ -766,10 +823,14 @@ async fn network_config(cli: &Cli, cmd: &ConfigCmd) -> Result<()> {
             if let Some(n) = config::camouflage_note(&f) {
                 eprintln!("note: {n}");
             }
-            println!(
-                "{} is valid: {} (sections left out stay as they are)",
-                file.display(),
-                f.sections().join(", ")
+            report(
+                cli,
+                format!(
+                    "{} is valid: {} (sections left out stay as they are)",
+                    file.display(),
+                    f.sections().join(", ")
+                ),
+                json!({"valid": true, "file": file, "sections": f.sections(), "base_version": from}),
             );
             if let Ok(t) = tree(cli).await
                 && let Some(now) = t["network_version"].as_u64()
@@ -786,7 +847,7 @@ async fn network_config(cli: &Cli, cmd: &ConfigCmd) -> Result<()> {
         ConfigCmd::Edit => {
             let t = tree(cli).await?;
             let Some((f, path)) = edit_text(&render_network(&t)?, "network.toml")? else {
-                println!("no changes");
+                report(cli, "no changes", json!({"changed": false}));
                 return Ok(());
             };
             apply_edited(&path, apply_network(cli, &f, Path::new("."), None)).await?;
@@ -847,9 +908,13 @@ async fn node_conf(cli: &Cli, node: Option<&str>) -> Result<NodeConf> {
 /// empty one clears it), submitted as the next version.
 async fn apply_node(cli: &Cli, n: &NodeConf, f: &ConfigFile) -> Result<()> {
     let Some(w) = config::node_apply(f, &n.id, &n.name, n.current.as_ref())? else {
-        println!(
-            "{} has no configuration of its own; nothing to apply",
-            n.name
+        report(
+            cli,
+            format!(
+                "{} has no configuration of its own; nothing to apply",
+                n.name
+            ),
+            json!({"node": n.name, "node_id": hex::encode(n.id), "changed": false}),
         );
         return Ok(());
     };
@@ -859,12 +924,28 @@ async fn apply_node(cli: &Cli, n: &NodeConf, f: &ConfigFile) -> Result<()> {
         config: Some(Box::new(w)),
     }));
     let r = submit(cli, a.sign(op)?).await?;
+    let v = json!({
+        "applied": "node",
+        "node": n.name,
+        "node_id": hex::encode(n.id),
+        "version": version,
+        "cleared": f.is_empty(),
+        "entry": entry(&r),
+    });
     if f.is_empty() {
-        println!("configuration of {} cleared (entry {})", n.name, r["index"]);
+        report(
+            cli,
+            format!("configuration of {} cleared (entry {})", n.name, r["index"]),
+            v,
+        );
     } else {
-        println!(
-            "configuration of {} version {version} applied (entry {})",
-            n.name, r["index"]
+        report(
+            cli,
+            format!(
+                "configuration of {} version {version} applied (entry {})",
+                n.name, r["index"]
+            ),
+            v,
         );
     }
     Ok(())
@@ -887,16 +968,20 @@ async fn local_config(cli: &Cli, node: Option<&str>, cmd: &ConfigCmd) -> Result<
         ConfigCmd::Check { file } => {
             let f = ConfigFile::load(file)?;
             f.to_node(&n.id, f.base_version()? + 1)?;
-            println!(
-                "{} is valid for a node's configuration (the controllers check the seeds and DNS names)",
-                file.display()
+            report(
+                cli,
+                format!(
+                    "{} is valid for a node's configuration (the controllers check the seeds and DNS names)",
+                    file.display()
+                ),
+                json!({"valid": true, "file": file}),
             );
         }
         ConfigCmd::Apply { file } => apply_node(cli, &n, &ConfigFile::load(file)?).await?,
         ConfigCmd::Edit => {
             let text = render_node(&n.name, n.current.as_ref())?;
             let Some((f, path)) = edit_text(&text, &format!("{}.toml", n.name))? else {
-                println!("no changes");
+                report(cli, "no changes", json!({"changed": false}));
                 return Ok(());
             };
             apply_edited(&path, apply_node(cli, &n, &f)).await?;
@@ -1003,28 +1088,42 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
             count,
             size,
         } => {
+            // Names, ids and id prefixes are resolved here; addresses and
+            // magic DNS names go to the agent as they are.
+            let to = if target.parse::<std::net::IpAddr>().is_ok() {
+                target.clone()
+            } else {
+                match node_id(cli, target).await {
+                    // By address: every agent version takes that.
+                    Ok(id) => nodes(cli)
+                        .await?
+                        .iter()
+                        .find(|n| n["id"].as_str() == Some(&hex::encode(id)))
+                        .and_then(|n| n["ips"][0].as_str())
+                        .and_then(|ip| ip.split('/').next())
+                        .map(String::from)
+                        .unwrap_or_else(|| target.clone()),
+                    Err(_) => target.clone(),
+                }
+            };
             let v = call(
                 cli,
-                json!({"cmd": "ping", "target": target, "count": count, "size": size}),
+                json!({"cmd": "ping", "target": to, "count": count, "size": size}),
             )
             .await?;
-            let mut ok = 0;
-            for (i, r) in v["replies"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .enumerate()
-            {
-                match r.as_f64() {
-                    Some(ms) => {
-                        ok += 1;
-                        println!(
+            let replies = v["replies"].as_array().cloned().unwrap_or_default();
+            let ok = replies.iter().filter(|r| r.is_number()).count();
+            if cli.json {
+                print(cli, &v);
+            } else {
+                for (i, r) in replies.iter().enumerate() {
+                    match r.as_f64() {
+                        Some(ms) => println!(
                             "reply from {}: seq={i} time={ms:.2} ms",
                             v["target"].as_str().unwrap_or("")
-                        );
+                        ),
+                        None => println!("seq={i}: timeout"),
                     }
-                    None => println!("seq={i}: timeout"),
                 }
             }
             if ok == 0 {
@@ -1033,7 +1132,11 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
         }
         LocalCmd::Metrics { all } => {
             let v = call(cli, json!({"cmd": "metrics", "all": all})).await?;
-            print!("{}", v["openmetrics"].as_str().unwrap_or(""));
+            if cli.json {
+                print(cli, &v);
+            } else {
+                print!("{}", v["openmetrics"].as_str().unwrap_or(""));
+            }
         }
         LocalCmd::Inject { file } => {
             let raw = read(file)?;
@@ -1072,10 +1175,14 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 let pj = serde_json::to_vec_pretty(&p)?;
                 write_public(&dir.join(format!("{name}.pub")), &pj)?;
                 write_public(pub_out, &pj)?;
-                println!(
-                    "account key for {name} created in {}; public part in {}",
-                    dir.display(),
-                    pub_out.display()
+                report(
+                    cli,
+                    format!(
+                        "account key for {name} created in {}; public part in {}",
+                        dir.display(),
+                        pub_out.display()
+                    ),
+                    json!({"account": name, "account_id": p.account_id, "key": p.key, "key_file": path, "pub_file": pub_out}),
                 );
             }
             AccountCmd::Create { name, key } => {
@@ -1091,18 +1198,21 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     })))?,
                 )
                 .await?;
-                println!("account {name} created (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("account {name} created (entry {})", r["index"]),
+                    json!({"account": name, "account_id": p.account_id, "created": true, "entry": entry(&r)}),
+                );
             }
             AccountCmd::Rekey { name, key } => {
                 let a = load_account(cli).await?;
+                let wanted = hex::encode(account_id(cli, name).await?);
                 let accts = call(cli, json!({"cmd": "accounts"})).await?;
                 let cur = accts
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .find(|x| {
-                        x["name"].as_str() == Some(name) && x["valid"].as_bool() == Some(true)
-                    })
+                    .find(|x| x["id"].as_str() == Some(&wanted))
                     .ok_or_else(|| anyhow!("no valid account named {name}"))?;
                 if cur["admin"].as_bool() == Some(true) {
                     bail!(
@@ -1131,10 +1241,14 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 // The public file now names the account it belongs to, so
                 // later uses of it (`root admin sign`) find the account.
                 write_public(key, &serde_json::to_vec_pretty(&p)?)?;
-                println!(
-                    "account {name} has a new key (entry {}); the old key no longer signs. {} now carries the account's ID",
-                    r["index"],
-                    key.display()
+                report(
+                    cli,
+                    format!(
+                        "account {name} has a new key (entry {}); the old key no longer signs. {} now carries the account's ID",
+                        r["index"],
+                        key.display()
+                    ),
+                    json!({"account": name, "account_id": hex::encode(id), "key": p.key, "rekeyed": true, "entry": entry(&r)}),
                 );
             }
             AccountCmd::Revoke {
@@ -1160,7 +1274,11 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     )))?,
                 )
                 .await?;
-                println!("account {name} revoked (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("account {name} revoked (entry {})", r["index"]),
+                    json!({"account": name, "account_id": hex::encode(id), "revoked": true, "entry": entry(&r)}),
+                );
             }
             AccountCmd::List => {
                 let v = call(cli, json!({"cmd": "accounts"})).await?;
@@ -1203,20 +1321,45 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 let file = dir.join(DEFAULT_ACCOUNT_FILE);
                 if *clear {
                     set_default_account(&dir, None)?;
-                    println!("no default account ({} removed)", file.display());
+                    report(
+                        cli,
+                        format!("no default account ({} removed)", file.display()),
+                        json!({"default": null, "file": file}),
+                    );
                 } else if let Some(n) = name {
                     set_default_account(&dir, Some(n))?;
-                    println!("default account: {n} ({})", file.display());
+                    report(
+                        cli,
+                        format!("default account: {n} ({})", file.display()),
+                        json!({"default": n, "file": file}),
+                    );
                 } else {
+                    let default = default_account(&dir)?;
+                    let only = match &default {
+                        Some(_) => None,
+                        None => Some(pick_account(&dir, None)),
+                    };
+                    if cli.json {
+                        print(
+                            cli,
+                            &json!({
+                                "default": default,
+                                "file": file,
+                                "override": cli.account,
+                                "only_key": only.as_ref().and_then(|r| r.as_ref().ok()),
+                                "error": only.as_ref().and_then(|r| r.as_ref().err().map(|e| e.to_string())),
+                            }),
+                        );
+                        return Ok(());
+                    }
                     if let Some(a) = &cli.account {
                         println!("--account / WEBJET_ACCOUNT overrides it here: {a}");
                     }
-                    match default_account(&dir)? {
-                        Some(n) => println!("default account: {n} ({})", file.display()),
-                        None => match pick_account(&dir, None) {
-                            Ok(n) => println!("no default set; using the only key: {n}"),
-                            Err(e) => println!("no default account: {e}"),
-                        },
+                    match (default, only) {
+                        (Some(n), _) => println!("default account: {n} ({})", file.display()),
+                        (None, Some(Ok(n))) => println!("no default set; using the only key: {n}"),
+                        (None, Some(Err(e))) => println!("no default account: {e}"),
+                        (None, None) => {}
                     }
                 }
             }
@@ -1256,12 +1399,20 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     node_id: None,
                 };
                 let r = submit(cli, a.sign(AccountOp::CreateEnrollment(Box::new(op)))?).await?;
-                eprintln!(
-                    "enrollment for {name} ({}) created (entry {}); on the node run:",
-                    ips.join(", "),
-                    r["index"]
-                );
-                println!("{}", ticket(cli, &token, controller).await?);
+                let t = ticket(cli, &token, controller).await?;
+                if cli.json {
+                    print(
+                        cli,
+                        &json!({"node": name, "ips": ips, "entry": entry(&r), "enroll": t}),
+                    );
+                } else {
+                    eprintln!(
+                        "enrollment for {name} ({}) created (entry {}); on the node run:",
+                        ips.join(", "),
+                        r["index"]
+                    );
+                    println!("{t}");
+                }
             }
             NodeCmd::List => {
                 let v = nodes(cli).await?;
@@ -1353,7 +1504,11 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     },
                 };
                 let r = submit(cli, a.sign(AccountOp::UpdateNode(Box::new(op)))?).await?;
-                println!("{name} updated (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("{name} updated (entry {})", r["index"]),
+                    json!({"node": name, "node_id": hex::encode(id), "updated": true, "entry": entry(&r)}),
+                );
             }
             NodeCmd::Rename { name, new_name } => {
                 let a = load_account(cli).await?;
@@ -1366,7 +1521,11 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     })))?,
                 )
                 .await?;
-                println!("{name} is now {new_name} (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("{name} is now {new_name} (entry {})", r["index"]),
+                    json!({"node": new_name, "old_name": name, "node_id": hex::encode(id), "entry": entry(&r)}),
+                );
             }
             NodeCmd::Revoke { name, reason } => {
                 let a = load_account(cli).await?;
@@ -1379,7 +1538,11 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     })))?,
                 )
                 .await?;
-                println!("{name} revoked (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("{name} revoked (entry {})", r["index"]),
+                    json!({"node": name, "node_id": hex::encode(id), "revoked": true, "entry": entry(&r)}),
+                );
             }
             NodeCmd::Rekey {
                 name,
@@ -1397,11 +1560,19 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     revoke_old_now: *revoke_old_now,
                 };
                 let r = submit(cli, a.sign(AccountOp::RekeyNode(Box::new(op)))?).await?;
-                eprintln!(
-                    "re-key for {name} issued (entry {}); on the node run `webjetup enroll` (or `webjetctl enroll`) with:",
-                    r["index"]
-                );
-                println!("{}", ticket(cli, &token, controller).await?);
+                let t = ticket(cli, &token, controller).await?;
+                if cli.json {
+                    print(
+                        cli,
+                        &json!({"node": name, "node_id": hex::encode(id), "entry": entry(&r), "enroll": t}),
+                    );
+                } else {
+                    eprintln!(
+                        "re-key for {name} issued (entry {}); on the node run `webjetup enroll` (or `webjetctl enroll`) with:",
+                        r["index"]
+                    );
+                    println!("{t}");
+                }
             }
         },
         NetworkCmd::Psk {
@@ -1417,10 +1588,14 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 })))?,
             )
             .await?;
-            println!(
-                "PSK rotated to epoch {} (entry {})",
-                cur.wrapping_add(1),
-                r["index"]
+            report(
+                cli,
+                format!(
+                    "PSK rotated to epoch {} (entry {})",
+                    cur.wrapping_add(1),
+                    r["index"]
+                ),
+                json!({"psk_epoch": cur.wrapping_add(1), "entry": entry(&r)}),
             );
         }
         NetworkCmd::Camouflage { cmd } => match cmd {
@@ -1435,7 +1610,11 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     site: Some(site_bundle(site)?),
                 };
                 let r = submit(cli, a.sign(AccountOp::SetCamouflageSecret(Box::new(op)))?).await?;
-                println!("camouflage secret stored (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("camouflage secret stored (entry {})", r["index"]),
+                    json!({"camouflage_secret": true, "entry": entry(&r)}),
+                );
             }
             #[cfg(feature = "anytls")]
             CamouflageCmd::Selfsign {
@@ -1455,10 +1634,14 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 );
                 write_public(cert_out, pem.as_bytes())?;
                 write_private(key_out, &key)?;
-                println!(
-                    "self-signed certificate for {domain}: {} / {}",
-                    cert_out.display(),
-                    key_out.display()
+                report(
+                    cli,
+                    format!(
+                        "self-signed certificate for {domain}: {} / {}",
+                        cert_out.display(),
+                        key_out.display()
+                    ),
+                    json!({"domain": domain, "cert_file": cert_out, "key_file": key_out}),
                 );
             }
             #[cfg(not(feature = "anytls"))]
@@ -1484,10 +1667,14 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 let record = webjetd::state::unb64(&record)?;
                 let (cert, kid) = webjet_tools::certify(&req, Some(id), &a.kp, Some(record))?;
                 let r = call(cli, json!({"cmd": "submit_signed", "signed": b64(&cert)})).await?;
-                println!(
-                    "certified {name}'s signing key {} (added: {})",
-                    hex::encode(kid),
-                    r["added"]
+                report(
+                    cli,
+                    format!(
+                        "certified {name}'s signing key {} (added: {})",
+                        hex::encode(kid),
+                        r["added"]
+                    ),
+                    json!({"node": name, "node_id": hex::encode(id), "signing_key_id": hex::encode(kid), "added": r["added"]}),
                 );
             }
             ControllerCmd::CertRequest { out, node } => {
@@ -1497,12 +1684,20 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                 };
                 let raw = cert_request(cli, target).await?;
                 write_public(out, &raw)?;
-                println!(
-                    "certificate request → {} (sign it offline: webjetctl root controller sign)",
-                    out.display()
+                report(
+                    cli,
+                    format!(
+                        "certificate request → {} (sign it offline: webjetctl root controller sign)",
+                        out.display()
+                    ),
+                    json!({"node_id": target.map(hex::encode), "request_file": out}),
                 );
             }
-            ControllerCmd::List => print(cli, &call(cli, json!({"cmd": "controller"})).await?),
+            ControllerCmd::List => {
+                let v = call(cli, json!({"cmd": "controller"})).await?;
+                let names = node_names(cli).await.unwrap_or_default();
+                print(cli, &with_node_names(v, &names));
+            }
             ControllerCmd::AddLearner { name }
             | ControllerCmd::Promote { name }
             | ControllerCmd::Demote { name }
@@ -1525,7 +1720,11 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                     )))?,
                 )
                 .await?;
-                println!("{change:?} {name} (entry {})", r["index"]);
+                report(
+                    cli,
+                    format!("{change:?} {name} (entry {})", r["index"]),
+                    json!({"change": format!("{change:?}"), "node": name, "node_id": hex::encode(id), "entry": entry(&r)}),
+                );
             }
         },
         NetworkCmd::Submit { file } => {

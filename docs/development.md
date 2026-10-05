@@ -65,7 +65,11 @@ leaves) and `wire.fbs` (hop messages, RPC, Raft). After editing them, run
 
 - planus 1.3 has no fixed-size arrays in structs, so 32-byte keys, 64-byte
   signatures, 16-byte ids and CIDRs are structs of little-endian `u64` words
-  (`b0..b3`) with the same byte layout.
+  (`b0..b3`) with the same byte layout. Their JSON form (control channel,
+  `--json`) is hand-written in `webjet-proto/src/serde_impls.rs`: ids, keys
+  and signatures as hex, addresses as `ip`, `ip:port`, `ip/prefix`.
+  `regen.sh` strips the derived serde impls of those structs; reading still
+  accepts the old `{"b0": …}` form.
 - Only **append** fields to tables, never reorder or remove them: older nodes
   must still decode new messages (§15.7). New union variants go at the end.
 - Signed objects are envelopes: `type || body`, signed with Ed25519 over a
@@ -158,6 +162,7 @@ common bug. Rules:
 | `scripts/soak-test.sh [s]` | nothing | Runs the local network past the e2e re-key interval (120 s) and checks every agent still answers. Catches timer-driven deadlocks. |
 | `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account), and the data behind its tabs. Skipped without a network. |
 | `docker/e2e.sh` | Docker, image `webjet:test` | Real tun interfaces: kernel ping, magic DNS, policy, subnet gateway. |
+| `docker/nat-test.sh` | Docker, image `webjet:test` | Hole punching through two NAT routers (`MODE=symmetric` for a symmetric NAT), a public node without NAT, a fake `wg0` VPN that must not be used as a direct path, and loopback pings. |
 | `docker/deploy-test.sh` | Docker | The deployment image as documented in docs/docker.md. |
 | `docker/tpm-test.sh` | Docker | TPM key sealing against a software TPM (swtpm), refusal by another TPM. |
 | `docker/windows-test.sh` | Docker, `cargo-xwin`, LLVM | Windows unit tests under Wine. |
@@ -169,7 +174,7 @@ Notes:
   `/tmp/webjet-local/keys`. Query a node with
   `target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local status`.
 - macOS has no `timeout`; use `perl -e 'alarm shift; exec @ARGV' 5 <cmd>`.
-- `docker/e2e.sh` uses the `test` image: `docker build --target test -t webjet:test .`
+- `docker/e2e.sh` and `docker/nat-test.sh` use the `test` image: `docker build --target test -t webjet:test .`
 - `docker/tpm-test.sh` sets `TPM2TOOLS_TCTI` to the software TPM and runs
   the TPM unit test with `WEBJET_TEST_TPM=1`. Without a kernel resource
   manager, every TPM operation must flush transient objects or the TPM runs

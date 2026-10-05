@@ -44,6 +44,9 @@ snap = "1"
 tun-rs = { workspace = true }
 libc = "0.2"
 if-addrs = "0.15"
+netdev = { version = "0.46", default-features = false, features = ["gateway"] }
+crab_nat = "0.8"
+igd-next = { version = "0.18", default-features = false, features = ["aio_tokio"] }
 boring = { version = "5", optional = true }
 
 [target.'cfg(windows)'.dependencies]

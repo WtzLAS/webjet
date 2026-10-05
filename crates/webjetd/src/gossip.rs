@@ -1321,6 +1321,20 @@ pub fn topology(n: &Node) -> serde_json::Value {
             "age_s": h.created.elapsed().as_secs(),
         }));
     }
+    // NAT type and addresses from each node's EndpointRecord (§6.2); this
+    // node's own are current rather than as last published.
+    let mut endpoints: HashMap<Bytes32, (wp::NatType, Vec<wp::EndpointAddr>)> = n
+        .records
+        .lock()
+        .endpoints
+        .iter()
+        .map(|(id, (r, _))| (*id, (r.nat, r.addrs.clone().unwrap_or_default())))
+        .collect();
+    endpoints.insert(
+        n.me,
+        (crate::transport::nat_type(n), crate::transport::my_addrs(n)),
+    );
+    let mapping = *n.port_mapping.lock();
     let s = n.store.read();
     let v = s.view();
     let nodes: Vec<serde_json::Value> = v
@@ -1328,12 +1342,16 @@ pub fn topology(n: &Node) -> serde_json::Value {
         .values()
         .filter(|x| x.valid)
         .map(|x| {
+            let ep = endpoints.get(&x.id);
             json!({
                 "id": hex::encode(x.id), "name": x.name,
                 "ips": x.ips.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
                 "relay": x.relay, "data": x.data, "control": x.control,
                 "me": x.id == n.me,
                 "load": loads.get(&hex::encode(x.id)),
+                "nat": ep.map(|(t, _)| crate::transport::nat_name(*t)),
+                "endpoints": ep.map(|(_, a)| crate::transport::addrs_json(a)),
+                "port_mapping": (x.id == n.me).then_some(mapping).flatten().map(|m| json!({"external": m.external.to_string(), "protocol": m.protocol})),
             })
         })
         .collect();

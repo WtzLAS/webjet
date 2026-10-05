@@ -8,6 +8,7 @@
 #[rustfmt::skip]
 #[allow(unused_imports, dead_code, non_camel_case_types, clippy::all, clippy::unwrap_used, clippy::expect_used)]
 mod generated;
+mod serde_impls;
 
 pub use generated::webjet::*;
 pub use planus;

@@ -18,6 +18,7 @@ pub mod keystore;
 pub mod load;
 pub mod logging;
 pub mod metrics;
+pub mod nat;
 pub mod node;
 pub mod paths;
 pub mod platform;

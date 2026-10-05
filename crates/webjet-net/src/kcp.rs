@@ -8,7 +8,9 @@
 //! inner = kind[1] || conv[4] || body
 //! kind  = 1 SHARD (FEC shard of KCP packets)
 //!       | 2 OPEN  (ts[8] || nonce[16] || shard)  — first packets of a dial
-//!       | 3 PUNCH (padding only)                 — opens NAT mappings
+//!       | 3 PUNCH (type[1] || token[16])         — connectivity checks (§11.7):
+//!                                                  type 1 PING is answered with
+//!                                                  type 2 PONG to its source
 //!       | 4 STATS (received[4] || expected[4])   — loss feedback for FEC
 //! ```
 //!
@@ -35,6 +37,21 @@ const K_SHARD: u8 = 1;
 const K_OPEN: u8 = 2;
 const K_PUNCH: u8 = 3;
 const K_STATS: u8 = 4;
+const PUNCH_PING: u8 = 1;
+const PUNCH_PONG: u8 = 2;
+/// PONGs sent per second at most (a captured PING replayed with a forged
+/// source must not turn this socket into a reflector).
+const PONGS_PER_S: u32 = 2000;
+
+/// A connectivity check that arrived (§11.7): `from` is the address the
+/// datagram came from (peer-reflexive when it's not a known candidate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PunchEvent {
+    pub from: SocketAddr,
+    pub token: [u8; 16],
+    /// A PONG: our PING to `from` got through and back.
+    pub pong: bool,
+}
 
 /// KCP MTU: leaves room for FEC (9), the inner header (5+24 on OPEN) and
 /// obfuscation (42+2) inside a 1400-byte datagram.
@@ -79,6 +96,9 @@ pub struct UdpEndpoint {
     pub rate_ceiling_bps: AtomicU64,
     /// Handshakes per source IP per 10 s (`hop_handshakes_per_ip`).
     pub per_ip_limit: std::sync::atomic::AtomicU32,
+    /// Where arriving connectivity checks are reported (the punch module).
+    pub punch_events: Mutex<Option<mpsc::Sender<PunchEvent>>>,
+    pongs: Mutex<(Instant, u32)>,
 }
 
 impl UdpEndpoint {
@@ -104,6 +124,8 @@ impl UdpEndpoint {
             listening,
             rate_ceiling_bps: AtomicU64::new(0),
             per_ip_limit: std::sync::atomic::AtomicU32::new(5),
+            punch_events: Mutex::new(None),
+            pongs: Mutex::new((Instant::now(), 0)),
         });
         let e2 = ep.clone();
         tokio::spawn(async move { e2.recv_loop().await });
@@ -125,12 +147,47 @@ impl UdpEndpoint {
             .seal(epoch, inner, small_packet_padding(inner.len()))
     }
 
-    /// Send PUNCH datagrams to open a NAT mapping toward `to` (§11.7).
-    pub async fn punch(&self, to: SocketAddr) {
-        let mut inner = vec![K_PUNCH, 0, 0, 0, 0];
-        inner.extend_from_slice(&rand::random::<[u8; 8]>());
-        if let Some(d) = self.seal(&inner) {
+    fn punch_datagram(&self, kind: u8, token: &[u8; 16]) -> Option<Vec<u8>> {
+        let mut inner = vec![K_PUNCH, 0, 0, 0, 0, kind];
+        inner.extend_from_slice(token);
+        self.seal(&inner)
+    }
+
+    /// Send a connectivity check (PING) to `to` (§11.7). It opens this
+    /// side's NAT mapping toward `to`; a PONG comes back when it got
+    /// through. `token` ties the answer to one punching attempt.
+    pub async fn punch(&self, to: SocketAddr, token: &[u8; 16]) {
+        if let Some(d) = self.punch_datagram(PUNCH_PING, token) {
             let _ = self.sock.send_to(&d, to).await;
+        }
+    }
+
+    fn on_punch(&self, from: SocketAddr, body: &[u8]) {
+        let (Some(&kind), Some(token)) = (body.first(), webjet_core::bytes::array::<16>(body, 1))
+        else {
+            return; // 0.6 and earlier: padding only
+        };
+        if kind == PUNCH_PING {
+            let allowed = {
+                let mut p = self.pongs.lock();
+                if p.0.elapsed() >= Duration::from_secs(1) {
+                    *p = (Instant::now(), 0);
+                }
+                p.1 += 1;
+                p.1 <= PONGS_PER_S
+            };
+            if allowed && let Some(d) = self.punch_datagram(PUNCH_PONG, &token) {
+                let _ = self.sock.try_send_to(&d, from);
+            }
+        } else if kind != PUNCH_PONG {
+            return;
+        }
+        if let Some(tx) = self.punch_events.lock().as_ref() {
+            let _ = tx.try_send(PunchEvent {
+                from,
+                token,
+                pong: kind == PUNCH_PONG,
+            });
         }
     }
 
@@ -154,6 +211,7 @@ impl UdpEndpoint {
             };
             let body = &inner[5..];
             if kind == K_PUNCH {
+                self.on_punch(from, body);
                 continue;
             }
             let key = (from, conv);
@@ -1008,5 +1066,45 @@ mod tests {
         })
         .await;
         assert!(r.is_err(), "no session must be created");
+    }
+
+    #[tokio::test]
+    async fn punch_ping_is_answered_with_a_pong() {
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        let (ta, mut ra) = mpsc::channel(8);
+        let (tb, mut rb) = mpsc::channel(8);
+        *ep_a.punch_events.lock() = Some(ta);
+        *ep_b.punch_events.lock() = Some(tb);
+        let token = [7u8; 16];
+        ep_a.punch(ep_b.local_addr().unwrap(), &token).await;
+        let at_b = tokio::time::timeout(Duration::from_secs(2), rb.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(at_b.from, ep_a.local_addr().unwrap());
+        assert!(!at_b.pong);
+        assert_eq!(at_b.token, token);
+        let at_a = tokio::time::timeout(Duration::from_secs(2), ra.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(at_a.from, ep_b.local_addr().unwrap());
+        assert!(at_a.pong);
+        assert_eq!(at_a.token, token);
+        // Another network's checks are dropped silently.
+        let ep_c = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[2; 32], epochs(), true)
+            .await
+            .unwrap();
+        ep_c.punch(ep_b.local_addr().unwrap(), &token).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), rb.recv())
+                .await
+                .is_err()
+        );
     }
 }

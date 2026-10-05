@@ -141,7 +141,9 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                     j
                 })
                 .collect();
-            Ok(json!({"sessions": v, "circuits": crate::circuit::summary(n)}))
+            Ok(
+                json!({"sessions": v, "circuits": crate::circuit::summary(n), "punch": crate::punch::status(n)}),
+            )
         }
         "conntrack" => Ok(crate::dataplane::flows(n)),
         "proxy" => Ok(crate::proxy::status(n)),
@@ -277,9 +279,13 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 Ok(ip) => ip,
                 Err(_) => {
                     let v = admin_view(n);
-                    let id = v
-                        .by_name
-                        .get(target.trim_end_matches(&format!(".{}", v.suffix())))
+                    let by_id = crypto::parse_hex32(target).filter(|id| v.nodes.contains_key(id));
+                    let id = by_id
+                        .as_ref()
+                        .or_else(|| {
+                            v.by_name
+                                .get(target.trim_end_matches(&format!(".{}", v.suffix())))
+                        })
                         .ok_or_else(|| anyhow!("unknown node {target}"))?;
                     v.nodes
                         .get(id)
@@ -689,6 +695,9 @@ pub fn status(n: &Arc<Node>) -> Value {
         "tree_root": s.head().map(|h| hex::encode(h.root())),
         "head_expires": s.head().map(|h| h.head.expires_at),
         "valid_until": v.valid_until,
+        "dns_suffix": v.suffix(),
+        "nat": crate::transport::nat_name(crate::transport::nat_type(n)),
+        "port_mapping": n.port_mapping.lock().map(|m| json!({"external": m.external.to_string(), "protocol": m.protocol})),
         "nodes": v.nodes.len(),
         "controllers": v.controllers.len(),
         "psk_epoch": n.epochs.read().current,
