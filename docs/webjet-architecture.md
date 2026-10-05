@@ -339,7 +339,8 @@ Tells the network which relays a DATA node can be reached through. These are als
 ```
 E2EFrame {
     type:     u8     // DATA | HANDSHAKE | PROBE | PROBE_ACK |
-                     // PUNCH_OFFER | PUNCH_GO | CLOSE
+                     // PUNCH_OFFER | PUNCH_GO | CLOSE | RPC | PROXY |
+                     // DATA_LZ4 | PROXY_LZ4 | RPC_ZSTD
     key_id:   u32    // receiver's key id (absent in HANDSHAKE)
     counter:  u64    // per-key, strictly increasing, never reused
     body:     AEAD(key, nonce = 0u32 || counter,
@@ -348,7 +349,7 @@ E2EFrame {
 }
 ```
 
-`HANDSHAKE` frames carry raw TLS handshake bytes and are not AEAD-protected (TLS protects them). All other types are encrypted. Overhead is 13 bytes of header plus a 16-byte tag. See §9.4 for how each type is used.
+`HANDSHAKE` frames carry raw TLS handshake bytes and are not AEAD-protected (TLS protects them). All other types are encrypted. Overhead is 13 bytes of header plus a 16-byte tag. See §9.4 for how each type is used; the `_LZ4` and `_ZSTD` types carry their payload compressed (§9.8).
 
 ### 6.10 AccountRecord (signed by the root or an admin)
 
@@ -494,6 +495,10 @@ TransportConfig {
         next_spki:    [u8; 32]?                // announced ahead of a key change
     }
     padding: PaddingScheme                     // §9.7.4
+    compression: {                             // §9.8
+        control:  UNSET | OFF | ZSTD           // built-in ZSTD
+        data:     UNSET | OFF | LZ4            // built-in OFF
+    }
 }
 ```
 
@@ -529,6 +534,8 @@ NodeConfig {
     seeds:       [SeedEntry]          // tried before the network's (§10.7)
     dns_records: [DnsRecord]          // answered by this node's resolver only
     dns_forward: [ForwardZone]        // forwarded by this node's resolver only
+    proxy:       [ProxyRule]          // reverse proxy ports (§11.11)
+    compression: { control, data }    // replace the network's, per plane (§9.8)
 }
 ```
 
@@ -791,7 +798,7 @@ The end-to-end session is a WireGuard-style packet protocol whose handshake is o
 Frames use the format in §6.9.
 
 - **AEAD:** ChaCha20-Poly1305 by default; AES-256-GCM where hardware AES is available.
-- **`DATA`:** one inner IP packet, never fragmented.
+- **`DATA`:** one inner IP packet, never fragmented. **`DATA_LZ4`** carries it LZ4-compressed (§9.8).
 - **`PROBE` / `PROBE_ACK`:** `{ route_id, probe_seq, sent_at }`. Encrypted end to end, so a relay can delay or drop probes but never forge an answer. This is what makes path selection by measured end-to-end cost (§11.4) safe.
 - **`PUNCH_OFFER` / `PUNCH_GO`:** hole-punching coordination (§11.7).
 - **`CLOSE`:** the peer tears down the session.
@@ -827,7 +834,7 @@ Each rekey is a full new handshake in the background over the current circuit, g
 
 #### 9.4.7 MTU
 
-Per-packet overhead is 29 bytes (e2e) + 5 bytes (relay frame header) + the hop transport's own overhead. The e2e layer never fragments. The tun MTU defaults to **1280 bytes**, the IPv6 minimum, which fits through every hop type; admins may raise it after measuring their paths.
+Per-packet overhead is 29 bytes (e2e) + 5 bytes (relay frame header) + the hop transport's own overhead. The e2e layer never fragments. Compression (§9.8) only ever makes a frame smaller, so it doesn't change the MTU. The tun MTU defaults to **1280 bytes**, the IPv6 minimum, which fits through every hop type; admins may raise it after measuring their paths.
 
 ### 9.5 Cryptokey routing (mandatory, at the endpoint)
 
@@ -940,6 +947,26 @@ masked_epoch = epoch_id XOR first 2 bytes of BLAKE3-keyed(k_obfs, nonce)
 - **Random-looking UDP** is not recognizable as Webjet, but some networks throttle or block all unrecognized UDP. Its measured cost then rises and traffic moves to TCP+AnyTLS (§9.6). Imitating QUIC is not attempted; a careful observer can tell an imitation from the real protocol.
 - **`REFUSE` mode and plain TCP+TLS** don't withstand active probing or fingerprinting, as §9.7.1 shows.
 - **Traffic volume and long-term patterns** of a busy relay are not hidden.
+
+### 9.8 Compression
+
+Two planes, two algorithms, two defaults:
+
+| Plane | What | Algorithm | Default |
+|---|---|---|---|
+| Control | Hop control records (gossip, Merkle sync, lookups, circuit setup) and RPCs over end-to-end sessions (operations, metric uploads, controller status, the audit log) | zstd, level 3, one message at a time | on |
+| Data | Inner packets in `DATA` and `PROXY` frames | LZ4 block, one packet at a time | off |
+
+- **One message at a time.** Neither plane keeps a dictionary or stream state between messages, so loss, reordering and switching circuits (§9.4.1) never break decompression, and a relay needs no state for it.
+- **Only when it pays.** Control messages under 256 bytes and packets under 128 bytes are sent as they are, and so is anything that doesn't get smaller (a packet must save at least 16 bytes). The data plane also skips traffic that is encrypted already (TCP or UDP port 443, 853 or 22, and ESP) and backs off per flow: after three packets in a row that didn't shrink, a flow's next 32 packets are sent without trying, doubling with each further miss up to 1,024.
+- **Where.** Data compression happens inside the end-to-end session, before encryption: relays see the same opaque frames as before, only shorter. The compressed payload of a `DATA_LZ4` / `PROXY_LZ4` frame is `len[2] || LZ4 block`, `len` being the inner packet's length. Control records are compressed per hop (hop records are `type[1] || len[3] || payload`; a compressed control record has its own type), RPCs per session (`RPC_ZSTD` frames); zstd frames declare their size.
+- **Negotiation.** A node advertises the planes it has turned on as the EndpointRecord features `zstd` and `lz4` (§6.2, §15.8). A sender compresses only when it has the plane on and the receiver advertises it, so both ends must have it on, and nodes without compression support never receive compressed messages. A receiver accepts compressed messages whatever its own settings, because a peer's copy of its features lags a change.
+- **Limits.** Decompression never produces more than the receiver's cap: a hop record's maximum (1 MiB) for control messages, 65,535 bytes for a packet. A zstd frame that doesn't declare its size, or declares more than the cap, is dropped before anything is allocated. A message that fails to decompress is dropped and counted.
+- **Secrets are never compressed.** Compressing secrets together with data an attacker can influence leaks the secrets through message lengths (CRIME, BREACH). RPCs carrying PSKs or the camouflage key, and Raft traffic (log entries and snapshots hold both), are always sent uncompressed.
+- **Why data compression is off by default.** Packet lengths are visible to everyone on the path. Compressing before encrypting makes those lengths depend on the content, so an attacker who can inject data into a flow next to a secret (a cookie in a web page, for example) can learn the secret byte by byte from the frame sizes (the VORACLE attack on OpenVPN). WireGuard has no compression for this reason. Most traffic today is encrypted already and doesn't shrink. Turn the data plane on for links where bandwidth is expensive, the traffic is compressible (plain HTTP, file shares, databases, logs) and this risk is acceptable, network-wide or only for some nodes.
+- **Settings:** `[transport.compression]` in the network configuration (§6.17) with `control` (`zstd` or `off`) and `data` (`lz4` or `off`), and the same keys in a node's configuration (§6.19), which replace the network's per plane: node, then network, then built-in. A value a node doesn't know counts as off.
+- **Upgrading.** Nodes may mix versions: compressed messages go only to peers that advertise support. The setting itself is new tree content, so every controller must run a version that knows it before the first change to `[transport.compression]`; an older controller recomputes different leaf bytes and halts on divergence (§15.5).
+- **Accounting.** Route counters (§12.1) count frames as sent, so compressed frames count with their compressed size; link counters likewise. Each node also counts, per plane, the messages it compressed and decompressed, their bytes before and after, the messages it sent uncompressed although the plane was on, and decompression errors (`webjet_compression_*`, §12.5).
 
 ---
 
@@ -1597,6 +1624,9 @@ MetricReport {
               flows, active, refused,               // apart from routes/links/policy;
               to_target_{packets,bytes},            // exported as webjet_proxy_*
               to_client_{packets,bytes} }]
+    compression: [{ plane: control | data,          // §9.8; webjet_compression_*
+                    tx_{messages,raw_bytes,wire_bytes,skipped},
+                    rx_{messages,raw_bytes,wire_bytes,errors} }]
 }
 signed by: node identity key
 ```
@@ -2026,7 +2056,7 @@ signed by: the root key
 - **Hop sessions** negotiate the protocol version with TLS ALPN (`webjet/1`, `webjet/2`, …).
 - **AnyTLS** must present a browser's ALPN values (`h2`, `http/1.1`, §9.7.2), so it negotiates with a version hello as the first message after authentication instead.
 - **End-to-end sessions** use ALPN on their internal TLS handshake (`webjet-e2e/1`, …).
-- **Feature flags:** each node lists optional features in its EndpointRecord (§6.2), for example a new transport, so peers know what it supports before dialing.
+- **Feature flags:** each node lists optional features in its EndpointRecord (§6.2), for example a new transport, so peers know what it supports before dialing. New record and frame types are sent only to peers that advertise them: `zstd` and `lz4` (compression, §9.8), `proxy`.
 - Software supports the current and previous wire protocol versions. Peers refuse protocols below the StateVersion's `min_wire_protocol`.
 
 ---

@@ -22,8 +22,11 @@ Edition 2024, `rust-version = "1.88"`.
 
 ```sh
 cargo build --workspace                       # needs cmake and Go for BoringSSL
-cargo build --workspace --no-default-features # without AnyTLS: no C toolchain needed
+cargo build --workspace --no-default-features # without AnyTLS: no cmake or Go needed
 ```
+
+A C compiler is always needed: aws-lc (rustls) and zstd (`zstd-sys`, control
+plane compression, architecture §9.8) are C libraries built by their crates.
 
 BoringSSL makes the first build slow (several minutes). For quick iteration on
 code that doesn't touch AnyTLS, use `--no-default-features`.
@@ -67,6 +70,12 @@ leaves) and `wire.fbs` (hop messages, RPC, Raft). After editing them, run
   must still decode new messages (§15.7). New union variants go at the end.
 - Signed objects are envelopes: `type || body`, signed with Ed25519 over a
   context string per message type (`webjet-proto` message-type registry).
+- New hop record types (`webjet-net` `hop::rec`) and e2e frame types
+  (`webjet-core` `frames::ftype`) are sent only to peers that advertise a
+  feature for them in their EndpointRecord (`gossip::features`); older nodes
+  drop types they don't know. Compression works this way: `CONTROL_ZSTD`,
+  `RPC_ZSTD`, `DATA_LZ4`, `PROXY_LZ4` behind the `zstd`/`lz4` features
+  (`webjetd/src/compression.rs`, `webjet-core/src/compress.rs`).
 
 ## The controller state machine
 

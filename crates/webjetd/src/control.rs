@@ -208,6 +208,10 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                     "seeds": view.seeds_for(&id),
                     "dns_records": view.dns_records_for(&id),
                     "dns_forward": view.dns_forward_for(&id),
+                    "compression": {
+                        "control": webjet_core::compress::algo::name(view.compression(&id).control),
+                        "data": webjet_core::compress::algo::name(view.compression(&id).data),
+                    },
                     "suffix": view.suffix(),
                     "resolver": view.resolver_ips(&s.overlay_pool).iter().map(|i| i.to_string()).collect::<Vec<_>>(),
                 },
@@ -259,6 +263,12 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
         "ping" => {
             let target = str_arg(&req, "target")?;
             let count = req.get("count").and_then(|c| c.as_u64()).unwrap_or(3) as u16;
+            // Payload bytes, up to what fits a 1280-byte packet (§9.4.7).
+            let size = req
+                .get("size")
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0)
+                .min(1280 - 48) as usize;
             let ip: std::net::IpAddr = match target.parse() {
                 Ok(ip) => ip,
                 Err(_) => {
@@ -278,7 +288,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 .dataplane
                 .get()
                 .ok_or_else(|| anyhow!("the data plane isn't running yet"))?;
-            let r = dp.ping(ip, count).await;
+            let r = dp.ping(ip, count, size).await;
             Ok(
                 json!({"target": ip.to_string(), "replies": r.iter().map(|d| d.map(|x| x.as_secs_f64() * 1000.0)).collect::<Vec<_>>()}),
             )
@@ -682,8 +692,33 @@ pub fn status(n: &Arc<Node>) -> Value {
         "sessions": n.e2e.all().len(),
         "alarms": n.alarms.lock().iter().map(|(k, (sev, since))| json!({"name": k, "severity": sev, "since": since})).collect::<Vec<_>>(),
         "controller": n.controller.get().map(|c| c.status()),
+        "compression": compression_status(n),
         "uptime_s": n.started.elapsed().as_secs(),
         "version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
+/// Compression in force and its counters (§9.8).
+fn compression_status(n: &Node) -> Value {
+    use std::sync::atomic::Ordering::Relaxed;
+    let set = crate::compression::mine(n);
+    let plane = |p: &crate::compression::Plane, algo: u8| {
+        json!({
+            "algorithm": webjet_core::compress::algo::name(algo),
+            "tx_messages": p.tx_messages.load(Relaxed),
+            "tx_raw_bytes": p.tx_raw_bytes.load(Relaxed),
+            "tx_wire_bytes": p.tx_wire_bytes.load(Relaxed),
+            "tx_skipped": p.tx_skipped.load(Relaxed),
+            "rx_messages": p.rx_messages.load(Relaxed),
+            "rx_raw_bytes": p.rx_raw_bytes.load(Relaxed),
+            "rx_wire_bytes": p.rx_wire_bytes.load(Relaxed),
+            "rx_errors": p.rx_errors.load(Relaxed),
+        })
+    };
+    let c = &n.metrics.compression;
+    json!({
+        "control": plane(&c.control, set.control),
+        "data": plane(&c.data, set.data),
     })
 }
 

@@ -2,6 +2,7 @@
 //! routing and packet-level logic shared by all programs.
 
 pub mod bytes;
+pub mod compress;
 pub mod conntrack;
 pub mod crypto;
 pub mod frames;

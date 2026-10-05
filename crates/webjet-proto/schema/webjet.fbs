@@ -192,12 +192,23 @@ table PaddingScheme {
     lines: [string];          // AnyTLS style: "<pkt>=<min>-<max>[,c,...]"
 }
 
+// Compression (§9.8). Plain ubytes rather than an enum, so a node decodes
+// values from later versions (and treats them as off):
+// 0 = unset (the next level decides), 1 = off, 2 = zstd, 3 = lz4.
+// `control` may be off or zstd (built-in zstd), `data` off or lz4
+// (built-in off).
+table CompressionConfig {
+    control: ubyte;
+    data: ubyte;
+}
+
 table TransportConfig {
     version: uint64;
     defaults: [TransportPriority];
     overrides: [PriorityOverride];
     camouflage: Camouflage;
     padding: PaddingScheme;
+    compression: CompressionConfig;
 }
 
 // The network-scope configuration as one document (§6.18). Applying it
@@ -224,6 +235,7 @@ table NodeConfig {
     dns_records: [DnsRecord];          // answered by this node's resolver only
     dns_forward: [ForwardZone];        // forwarded by this node's resolver only
     proxy: [ProxyRule];                // reverse proxy ports this node listens on
+    compression: CompressionConfig;    // replaces the network's, per plane
 }
 
 // A reverse proxy rule (§11.11): a Linux data node listens on `listen_port`
@@ -447,6 +459,24 @@ table MetricReport {
     alarms: [Alarm];
     load: RelayLoad;          // this node's load figures (§11.8.1)
     proxy: [ProxyMetrics];    // reverse proxy traffic, kept apart (§11.11)
+    compression: [CompressionMetrics];   // per plane (§9.8)
+}
+
+// Compression on this node (§9.8) for one plane, "control" or "data".
+// Sent: messages compressed, their bytes before and after, and messages
+// that could have been compressed but went out as they were (no gain, or
+// the flow is backed off). Received: compressed messages, their bytes as
+// received and after decompression, and those that failed to decompress.
+table CompressionMetrics {
+    plane: string;
+    tx_messages: uint64;
+    tx_raw_bytes: uint64;
+    tx_wire_bytes: uint64;
+    tx_skipped: uint64;
+    rx_messages: uint64;
+    rx_raw_bytes: uint64;
+    rx_wire_bytes: uint64;
+    rx_errors: uint64;
 }
 
 // One reverse proxy rule's traffic on this node, as the listening node

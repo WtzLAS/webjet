@@ -63,6 +63,8 @@ struct Inner {
     hyst: webjet_core::routing::Hysteresis,
     hs_times: VecDeque<Instant>,
     last_unknown_hs: Option<Instant>,
+    /// Flows whose packets don't compress (§9.8).
+    lz4_backoff: webjet_core::compress::Backoff,
 }
 
 pub struct Session {
@@ -75,6 +77,9 @@ pub struct Session {
     pub tx_packets: AtomicU64,
     pub rx_packets: AtomicU64,
     pub path_switches: AtomicU64,
+    /// Whether the peer takes LZ4 data frames, and when that was looked up
+    /// (its EndpointRecord, re-read every few seconds, not per packet).
+    lz4_peer: Mutex<Option<(Instant, bool)>>,
 }
 
 impl Session {
@@ -137,6 +142,7 @@ impl Sessions {
             tx_packets: AtomicU64::new(0),
             rx_packets: AtomicU64::new(0),
             path_switches: AtomicU64::new(0),
+            lz4_peer: Mutex::new(None),
         });
         m.insert(*peer, s.clone());
         Some(s)
@@ -192,6 +198,7 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
         return SendResult::NoRoute;
     };
     *s.last_used.lock() = Instant::now();
+    let lz4 = (ty == ftype::DATA || ty == ftype::PROXY) && lz4_to(n, &s);
     let mut i = s.inner.lock();
     let usable = i
         .send
@@ -200,7 +207,17 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
         .unwrap_or(false);
     if usable {
         let circ = pick_circuit(n, &s, &mut i);
+        let packed = if lz4 && circ.is_some() {
+            compress_packet(n, &mut i.lz4_backoff, payload)
+        } else {
+            None
+        };
         if let (Some(c), Some(k)) = (circ, i.send.as_mut()) {
+            let (ty, payload) = match &packed {
+                Some(z) if ty == ftype::DATA => (ftype::DATA_LZ4, &z[..]),
+                Some(z) => (ftype::PROXY_LZ4, &z[..]),
+                None => (ty, payload),
+            };
             let ctr = k.counter;
             k.counter += 1;
             let Some(f) = k.key.seal(ty, k.peer_kid, ctr, payload) else {
@@ -226,6 +243,50 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
     drop(i);
     ensure(n, &s);
     SendResult::Queued
+}
+
+/// Whether DATA/PROXY to this session's peer may be LZ4-compressed (§9.8):
+/// this node has it on and the peer advertises it. The peer's side is
+/// cached for a few seconds.
+fn lz4_to(n: &Node, s: &Session) -> bool {
+    if !crate::compression::mine(n).data_on() {
+        return false;
+    }
+    if let Some((at, yes)) = *s.lz4_peer.lock()
+        && at.elapsed() < Duration::from_secs(5)
+    {
+        return yes;
+    }
+    let yes = crate::compression::data_to(n, &s.peer);
+    *s.lz4_peer.lock() = Some((Instant::now(), yes));
+    yes
+}
+
+/// One inner packet LZ4-compressed, or `None` to send it as it is: known
+/// encrypted traffic, a flow that has stopped compressing, or no gain.
+fn compress_packet(
+    n: &Node,
+    backoff: &mut webjet_core::compress::Backoff,
+    p: &[u8],
+) -> Option<Vec<u8>> {
+    use webjet_core::compress;
+    let stats = &n.metrics.compression.data;
+    if p.len() < compress::MIN_DATA || compress::incompressible(p) {
+        stats.skipped();
+        return None;
+    }
+    let flow = compress::flow_key(p);
+    if !backoff.should_try(flow) {
+        stats.skipped();
+        return None;
+    }
+    let z = compress::lz4_compress(p);
+    backoff.record(flow, z.is_some());
+    match &z {
+        Some(z) => stats.sent(p.len(), z.len()),
+        None => stats.skipped(),
+    }
+    z
 }
 
 fn pick_circuit(n: &Node, s: &Session, i: &mut Inner) -> Option<Arc<LocalCircuit>> {
@@ -659,7 +720,37 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
     };
     *s.last_used.lock() = Instant::now();
     s.rx_packets.fetch_add(1, Ordering::Relaxed);
-    match h.ty {
+    // Compressed payloads (§9.8) are accepted whatever this node's settings.
+    let (ty, plain) = match h.ty {
+        ftype::DATA_LZ4 | ftype::PROXY_LZ4 => {
+            let stats = &n.metrics.compression.data;
+            let Some(p) = webjet_core::compress::lz4_decompress(&plain, usize::from(u16::MAX))
+            else {
+                stats.error();
+                return;
+            };
+            stats.received(p.len(), plain.len());
+            let ty = if h.ty == ftype::DATA_LZ4 {
+                ftype::DATA
+            } else {
+                ftype::PROXY
+            };
+            (ty, p)
+        }
+        ftype::RPC_ZSTD => {
+            let stats = &n.metrics.compression.control;
+            let Some(p) =
+                webjet_core::compress::zstd_decompress(&plain, webjet_net::hop::MAX_RECORD)
+            else {
+                stats.error();
+                return;
+            };
+            stats.received(p.len(), plain.len());
+            (ftype::RPC, p)
+        }
+        t => (t, plain),
+    };
+    match ty {
         ftype::DATA => {
             if let Some(dp) = n.dataplane.get() {
                 let mut p = plain;
@@ -684,7 +775,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
             send_on(n, &s, c, ftype::PROBE_ACK, &reply);
         }
         ftype::PROBE_ACK => crate::paths::on_probe_ack(n, c, &plain),
-        ftype::PUNCH_OFFER | ftype::PUNCH_GO => crate::punch::on_message(n, &c.peer, h.ty, &plain),
+        ftype::PUNCH_OFFER | ftype::PUNCH_GO => crate::punch::on_message(n, &c.peer, ty, &plain),
         ftype::RPC => crate::rpc::on_frame(n, &c.peer, &plain),
         ftype::CLOSE => {
             tracing::debug!(peer = %n.name_of(&c.peer), "session closed by peer");

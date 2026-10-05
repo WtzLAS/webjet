@@ -42,6 +42,8 @@ reed-solomon-erasure = "6"
 tun-rs = { version = "2.8", features = ["async_tokio"] }
 hickory-proto = "0.24"
 proptest = "1"
+zstd = { version = "0.14", default-features = false }
+lz4_flex = { version = "0.14", default-features = false, features = ["safe-encode", "safe-decode", "std"] }
 
 # Production code handles every error; unwrap/expect are fine only in tests
 # (see clippy.toml).

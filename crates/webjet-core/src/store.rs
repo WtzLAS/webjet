@@ -278,6 +278,22 @@ impl View {
         builtin_priority(t)
     }
 
+    /// Compression in force for a node (§9.8), per plane: the node's own
+    /// configuration, the network's, built-in (control zstd, data off).
+    pub fn compression(&self, node: &Bytes32) -> crate::compress::Settings {
+        let pair = |c: &wp::CompressionConfig| (c.control, c.data);
+        crate::compress::Settings::resolve(
+            self.node_configs
+                .get(node)
+                .and_then(|c| c.compression.as_deref())
+                .map(pair),
+            self.transport
+                .as_ref()
+                .and_then(|t| t.compression.as_deref())
+                .map(pair),
+        )
+    }
+
     /// The seed list a node uses (§10.7.1): its own seeds first, then the
     /// network's.
     pub fn seeds_for(&self, node: &Bytes32) -> Vec<wp::SeedEntry> {

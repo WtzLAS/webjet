@@ -10,7 +10,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use webjet_core::crypto::Bytes32;
-use webjet_core::frames::ftype;
 use webjet_proto::{self as wp, Decodable, Encodable, RpcBody};
 
 const REQUEST: u8 = 0;
@@ -24,12 +23,15 @@ fn pending() -> &'static Mutex<HashMap<u64, oneshot::Sender<RpcBody>>> {
     P.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn encode(id: u64, kind: u8, body: RpcBody) -> Vec<u8> {
+/// An RPC frame for `peer`: its type (RPC, or RPC_ZSTD when compressed,
+/// §9.8) and payload.
+fn encode(n: &Node, peer: &Bytes32, id: u64, kind: u8, body: RpcBody) -> (u8, Vec<u8>) {
+    let secret = crate::compression::secret_rpc(&body);
     let mut v = Vec::with_capacity(64);
     v.extend_from_slice(&id.to_be_bytes());
     v.push(kind);
     v.extend_from_slice(&wp::Rpc { body: Some(body) }.encode_bytes());
-    v
+    crate::compression::rpc_frame(n, peer, secret, v)
 }
 
 /// Call `peer` and wait for its answer.
@@ -42,12 +44,12 @@ pub async fn call(
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     pending().lock().insert(id, tx);
-    let msg = encode(id, REQUEST, body);
+    let (ty, msg) = encode(n, peer, id, REQUEST, body);
     // Retransmit while the session/circuit comes up; responses are idempotent.
     let res = tokio::time::timeout(timeout, async {
         let mut rx = rx;
         loop {
-            crate::e2e::send(n, peer, ftype::RPC, &msg, 0);
+            crate::e2e::send(n, peer, ty, &msg, 0);
             tokio::select! {
                 r = &mut rx => return r.map_err(|_| anyhow!("rpc cancelled")),
                 _ = tokio::time::sleep(Duration::from_secs(3)) => {}
@@ -61,7 +63,8 @@ pub async fn call(
 
 /// Fire and forget (Raft messages, which carry their own retries).
 pub fn send_oneway(n: &Arc<Node>, peer: &Bytes32, body: RpcBody) {
-    crate::e2e::send(n, peer, ftype::RPC, &encode(0, ONEWAY, body), 0);
+    let (ty, msg) = encode(n, peer, 0, ONEWAY, body);
+    crate::e2e::send(n, peer, ty, &msg, 0);
 }
 
 pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
@@ -92,7 +95,8 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
                 if kind == REQUEST
                     && let Some(r) = reply
                 {
-                    crate::e2e::send(&n, &from, ftype::RPC, &encode(id, RESPONSE, r), 0);
+                    let (ty, msg) = encode(&n, &from, id, RESPONSE, r);
+                    crate::e2e::send(&n, &from, ty, &msg, 0);
                 }
             });
         }

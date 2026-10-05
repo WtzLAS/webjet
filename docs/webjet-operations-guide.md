@@ -832,7 +832,7 @@ Each release speaks the current and the previous wire protocol, so a network run
    ```
 7. Watch for the "doesn't support the active StateVersion" alarm, and upgrade any node that raises it.
 
-**Releases without a StateVersion step.** Some releases add operations or tree records without a new StateVersion; their release notes say which order they need instead. 0.4.0 (one network configuration, node configurations) is one: upgrade every controller before the first `webjetctl network config apply`, and every node before the first `webjetctl local config` change, because older software can't apply or sync them. Before upgrading a node, move any `[transport]` or `[limits]` section out of its `webjetd.toml` (0.4.0 refuses to start with them and names the replacement): for example `[transport] kcp = 0` becomes `webjetctl local config --node <name> set transport.priority.kcp 0`.
+**Releases without a StateVersion step.** Some releases add operations or tree records without a new StateVersion; their release notes say which order they need instead. 0.4.0 (one network configuration, node configurations) is one: upgrade every controller before the first `webjetctl network config apply`, and every node before the first `webjetctl local config` change, because older software can't apply or sync them. Compression (0.5.2) is another: upgrade every controller before the first change to `[transport.compression]`, network-wide or for a node, because controllers that don't know the setting compute different leaf bytes and halt on divergence. Nodes need no order: compressed messages go only to peers that advertise support, and control compression (on by default) needs no configuration change. Before upgrading a node, move any `[transport]` or `[limits]` section out of its `webjetd.toml` (0.4.0 refuses to start with them and names the replacement): for example `[transport] kcp = 0` becomes `webjetctl local config --node <name> set transport.priority.kcp 0`.
 
 **Rollback:** binaries can be downgraded freely **until step 6** (`sudo webjetup install <older version> --force`). After activation there is no way back; fix forward.
 
@@ -842,7 +842,7 @@ Each release speaks the current and the previous wire protocol, so a network run
 
 ## 3.5 Change the network configuration
 
-**When:** to change the policy, DNS, seeds, transport priorities, camouflage, padding or limits for the whole network. References: §6.7, §11.10, §9.6, §16.2; all keys are in [configuration.md](configuration.md#network-scope).
+**When:** to change the policy, DNS, seeds, transport priorities, camouflage, padding, compression or limits for the whole network. References: §6.7, §11.10, §9.6, §9.8, §16.2; all keys are in [configuration.md](configuration.md#network-scope).
 
 **You need:** an admin account.
 
@@ -871,6 +871,8 @@ The network configuration is one TOML document with a version. Every change subm
 
 **Seeds:** keep at least two, on relays or controllers with stable addresses. Nodes returning after a PSK rotation find the network through them.
 
+**Compression:** control messages are zstd-compressed by default. Packet compression (`set transport.compression.data lz4`) is off by default: it saves bandwidth only on compressible traffic (plain HTTP, file shares, logs) and lets an attacker who can both inject data into a connection and watch packet sizes learn secrets from that connection (architecture §9.8). Prefer turning it on for the few nodes behind expensive links (section 3.6); both ends of a session must have it on. `webjetctl local status --json` shows the bytes saved under `compression`.
+
 **Check:** `webjetctl network config show` prints the new version; `webjetctl local status` on a node shows the new tree version and no alarms.
 
 ---
@@ -888,6 +890,7 @@ The network configuration is one TOML document with a version. Every change subm
 [admin]    webjetctl local config --node relay-07 set limits.value.relay_capacity_mbps 1000
 [admin]    webjetctl local config --node laptop-17 set transport.priority.kcp 0   # never UDP from this node
 [admin]    webjetctl local config --node laptop-17 unset transport.priority.kcp   # back to the network's
+[admin]    webjetctl local config --node branch-gw set transport.compression.data lz4   # compress packets (section 3.5)
 [admin]    webjetctl local config --node relay-07 edit                  # several values at once
 ```
 

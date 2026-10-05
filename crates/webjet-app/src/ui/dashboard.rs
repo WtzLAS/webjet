@@ -299,6 +299,16 @@ impl WebjetApp {
                 s.tree.policy_version.to_string(),
             ))
             .child(label_value("PSK epoch", st.psk_epoch.to_string()))
+            .children(st.compression.as_ref().map(|c| {
+                label_value(
+                    "Compression",
+                    format!(
+                        "control {} · data {}",
+                        c.control.summary(),
+                        c.data.summary()
+                    ),
+                )
+            }))
             .child(label_value(
                 "This agent",
                 format!(

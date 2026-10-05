@@ -164,6 +164,9 @@ enum LocalCmd {
         target: String,
         #[arg(short, long, default_value_t = 3)]
         count: u16,
+        /// Payload bytes (filled with a pattern, as ping(8) does); at most 1232
+        #[arg(short, long, default_value_t = 0)]
+        size: u16,
     },
     /// Inject offline-signed material into this node (spreads by gossip).
     Inject { file: PathBuf },
@@ -990,10 +993,14 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
         LocalCmd::Conntrack => print(cli, &call(cli, json!({"cmd": "conntrack"})).await?),
         LocalCmd::Proxy => print(cli, &call(cli, json!({"cmd": "proxy"})).await?),
         LocalCmd::Topology => print(cli, &call(cli, json!({"cmd": "topology"})).await?),
-        LocalCmd::Ping { target, count } => {
+        LocalCmd::Ping {
+            target,
+            count,
+            size,
+        } => {
             let v = call(
                 cli,
-                json!({"cmd": "ping", "target": target, "count": count}),
+                json!({"cmd": "ping", "target": target, "count": count, "size": size}),
             )
             .await?;
             let mut ok = 0;

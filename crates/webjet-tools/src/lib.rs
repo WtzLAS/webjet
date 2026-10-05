@@ -531,6 +531,7 @@ mod tests {
             overrides: Some(vec![]),
             camouflage: Some(Box::new(cam)),
             padding: None,
+            compression: None,
         };
         webjet_core::validate::transport(&t).unwrap();
     }

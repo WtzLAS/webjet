@@ -985,6 +985,9 @@ impl Machine {
         })?;
         let proxy = cfg.proxy.clone().unwrap_or_default();
         crate::proxy::rules(&proxy).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        if let Some(c) = &cfg.compression {
+            crate::validate::compression(c).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        }
         if !proxy.is_empty()
             && !rec
                 .roles
@@ -1004,7 +1007,11 @@ impl Machine {
             cfg.dns_forward.as_ref().map(Vec::len),
         ]
         .iter()
-        .all(|n| n.unwrap_or(0) == 0);
+        .all(|n| n.unwrap_or(0) == 0)
+            && cfg
+                .compression
+                .as_ref()
+                .is_none_or(|c| c.control == 0 && c.data == 0);
         if empty {
             if current == 0 {
                 return rej("the node has no configuration to clear");
@@ -2734,6 +2741,10 @@ mod tests {
                 }]),
                 camouflage: None,
                 padding: None,
+                compression: Some(Box::new(wp::CompressionConfig {
+                    control: crate::compress::algo::UNSET,
+                    data: crate::compress::algo::LZ4,
+                })),
             })),
         }
     }
@@ -2817,6 +2828,7 @@ mod tests {
             dns_records: None,
             dns_forward: None,
             proxy: None,
+            compression: None,
         }
     }
 
@@ -2942,6 +2954,57 @@ mod tests {
         })))
         .unwrap();
         assert!(h.m.tree.get(kind::NODE_CONFIG, &b).is_none());
+    }
+
+    #[test]
+    fn compression_settings_network_and_node() {
+        use crate::compress::algo;
+        let mut h = H::new();
+        let a = enroll(&mut h, "a", "10.7.0.5", &KeyPair::generate());
+        let b = enroll(&mut h, "b", "10.7.0.6", &KeyPair::generate());
+        // Built-in: control zstd, data off.
+        let d = h.m.view().compression(&a);
+        assert!(d.control_on() && !d.data_on());
+        // The network turns data on (control stays at its built-in).
+        set_network(&mut h, net_config(1)).unwrap();
+        let v = h.m.view().compression(&a);
+        assert!(v.control_on() && v.data_on());
+        // Node a turns control off and keeps the network's data setting.
+        let only = |version, control, data| wp::NodeConfig {
+            node_id: Some(crypto::k32(&a)),
+            version,
+            compression: Some(Box::new(wp::CompressionConfig { control, data })),
+            ..Default::default()
+        };
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(only(1, algo::OFF, algo::UNSET))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_some());
+        let v = h.m.view();
+        assert!(!v.compression(&a).control_on() && v.compression(&a).data_on());
+        assert!(v.compression(&b).control_on());
+        // Wrong algorithm for a plane: refused, for the node and the network.
+        assert!(
+            h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                config: Some(Box::new(only(2, algo::LZ4, algo::UNSET))),
+            })))
+            .is_err()
+        );
+        let mut bad = net_config(2);
+        if let Some(t) = bad.transport.as_mut() {
+            t.compression = Some(Box::new(wp::CompressionConfig {
+                control: algo::OFF,
+                data: algo::ZSTD,
+            }));
+        }
+        assert!(set_network(&mut h, bad).is_err());
+        // All unset is empty: clears the leaf.
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(only(2, algo::UNSET, algo::UNSET))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_none());
     }
 
     #[test]

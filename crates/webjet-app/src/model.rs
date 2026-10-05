@@ -522,6 +522,44 @@ pub struct Status {
     pub version: String,
     /// This agent's controller status, when it runs the controller role.
     pub controller: Option<Value>,
+    /// Compression in force and its counters (agents from 0.5.2 on).
+    pub compression: Option<Compression>,
+}
+
+/// Compression on the local agent (§9.8), per plane.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Compression {
+    pub control: CompressionPlane,
+    pub data: CompressionPlane,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CompressionPlane {
+    /// `zstd`, `lz4` or `off`.
+    pub algorithm: String,
+    pub tx_raw_bytes: u64,
+    pub tx_wire_bytes: u64,
+    pub rx_raw_bytes: u64,
+    pub rx_wire_bytes: u64,
+}
+
+impl CompressionPlane {
+    /// The algorithm and, once something was compressed, the bytes saved.
+    pub fn summary(&self) -> String {
+        let raw = self.tx_raw_bytes + self.rx_raw_bytes;
+        let wire = self.tx_wire_bytes + self.rx_wire_bytes;
+        if raw == 0 || wire >= raw {
+            return self.algorithm.clone();
+        }
+        format!(
+            "{} · {:.0}% smaller ({} saved)",
+            self.algorithm,
+            (raw - wire) as f64 * 100.0 / raw as f64,
+            bytes(raw - wire)
+        )
+    }
 }
 
 /// Network-wide settings (`tree`).
@@ -1041,6 +1079,18 @@ mod tests {
         let st: Status = serde_json::from_value(json!({"node_id": "ab", "tree_version": 7, "alarms": [{"name": "soft_mode", "severity": "warning", "since": 1}]})).unwrap();
         assert_eq!(st.tree_version, Some(7));
         assert_eq!(st.alarms.len(), 1);
+        assert!(st.compression.is_none(), "agents before 0.5.2");
+        let st: Status = serde_json::from_value(json!({"compression": {
+            "control": {"algorithm": "zstd", "tx_raw_bytes": 3000, "tx_wire_bytes": 1000, "rx_raw_bytes": 1000, "rx_wire_bytes": 1000, "rx_errors": 0},
+            "data": {"algorithm": "off"}
+        }}))
+        .unwrap();
+        let c = st.compression.unwrap();
+        assert_eq!(
+            c.control.summary(),
+            format!("zstd · 50% smaller ({} saved)", bytes(2000))
+        );
+        assert_eq!(c.data.summary(), "off");
     }
 
     #[test]

@@ -207,5 +207,13 @@ pub fn transport(t: &wp::TransportConfig) -> Result<()> {
             crate::padding::parse_line(&l)?;
         }
     }
+    if let Some(c) = &t.compression {
+        compression(c)?;
+    }
     Ok(())
+}
+
+/// Compression settings (§9.8): control off or zstd, data off or lz4.
+pub fn compression(c: &wp::CompressionConfig) -> Result<()> {
+    crate::compress::check(c.control, c.data)
 }

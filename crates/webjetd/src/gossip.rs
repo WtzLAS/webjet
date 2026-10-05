@@ -809,6 +809,14 @@ fn features(n: &Node) -> Vec<String> {
     }) {
         f.push(crate::proxy::FEATURE_REAL_IP.into());
     }
+    // Compression this node has turned on (§9.8): peers compress towards
+    // it only then.
+    f.extend(
+        crate::compression::mine(n)
+            .features()
+            .into_iter()
+            .map(String::from),
+    );
     f
 }
 

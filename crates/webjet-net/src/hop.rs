@@ -27,6 +27,9 @@ pub mod rec {
     pub const RELAY: u8 = 2;
     /// Padding, ignored (§9.7.4).
     pub const PAD: u8 = 3;
+    /// A zstd-compressed `HopControl` FlatBuffer (§9.8); sent only to peers
+    /// that advertise the `zstd` feature.
+    pub const CONTROL_ZSTD: u8 = 4;
 }
 
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send + Sync {}

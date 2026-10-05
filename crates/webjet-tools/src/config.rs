@@ -139,6 +139,51 @@ pub struct TransportSection {
     pub camouflage: Option<CamouflageFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub padding: Option<PaddingFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<CompressionFile>,
+}
+
+/// `[transport.compression]` (§9.8): `control` = `zstd` | `off` (built-in
+/// zstd), `data` = `lz4` | `off` (built-in off). A key left out takes the
+/// next level's value (node → network → built-in).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompressionFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+}
+
+impl CompressionFile {
+    fn to_wire(&self) -> Result<wp::CompressionConfig> {
+        use webjet_core::compress::algo;
+        let val = |v: &Option<String>, key: &str| -> Result<u8> {
+            match v.as_deref() {
+                None => Ok(algo::UNSET),
+                Some(s) => algo::parse(s)
+                    .ok_or_else(|| anyhow!("transport.compression.{key}: unknown value {s:?}")),
+            }
+        };
+        let c = wp::CompressionConfig {
+            control: val(&self.control, "control")?,
+            data: val(&self.data, "data")?,
+        };
+        webjet_core::validate::compression(&c)?;
+        Ok(c)
+    }
+
+    /// From the wire; `None` when nothing is set.
+    fn from_wire(c: Option<&wp::CompressionConfig>) -> Option<CompressionFile> {
+        use webjet_core::compress::algo;
+        let c = c?;
+        let name = |v: u8| (v != algo::UNSET).then(|| algo::name(v).to_string());
+        let f = CompressionFile {
+            control: name(c.control),
+            data: name(c.data),
+        };
+        (f != CompressionFile::default()).then_some(f)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -267,7 +312,7 @@ impl ConfigFile {
             return Ok(());
         }
         bail!(
-            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, limits.value, seeds, dns.record, dns.forward and proxy",
+            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, limits.value, seeds, dns.record, dns.forward and proxy",
             bad.join(", ")
         )
     }
@@ -306,6 +351,11 @@ impl ConfigFile {
                     lines: Some(p.lines.clone()),
                 })
             }),
+            compression: t
+                .compression
+                .as_ref()
+                .map(|c| c.to_wire().map(Box::new))
+                .transpose()?,
         };
         webjet_core::validate::transport(&transport)?;
         let limits = wp::Limits {
@@ -381,6 +431,12 @@ impl ConfigFile {
             dns_records: Some(records(&dns.records)?),
             dns_forward: Some(forwards(&dns.forward)?),
             proxy: Some(proxy_rules(&self.proxy.clone().unwrap_or_default())?),
+            compression: self
+                .transport
+                .as_ref()
+                .and_then(|t| t.compression.as_ref())
+                .map(|c| c.to_wire().map(Box::new))
+                .transpose()?,
         })
     }
 
@@ -838,8 +894,29 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         }),
         None => None,
     };
+    let compression = match CompressionFile::from_wire(tr.compression.as_deref()) {
+        Some(c) if fill => {
+            // Spell out the built-in value of a plane left unset.
+            let d = webjet_core::compress::Settings::default();
+            let name = |v: u8| webjet_core::compress::algo::name(v).to_string();
+            Some(CompressionFile {
+                control: c.control.or_else(|| Some(name(d.control))),
+                data: c.data.or_else(|| Some(name(d.data))),
+            })
+        }
+        None if fill => {
+            let d = webjet_core::compress::Settings::default();
+            let name = |v: u8| webjet_core::compress::algo::name(v).to_string();
+            Some(CompressionFile {
+                control: Some(name(d.control)),
+                data: Some(name(d.data)),
+            })
+        }
+        c => c,
+    };
     let transport = TransportSection {
         priority,
+        compression,
         overrides: tr
             .overrides
             .clone()
@@ -932,6 +1009,7 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
     let records = records_out(&c.dns_records.clone().unwrap_or_default());
     let forward = forwards_out(&c.dns_forward.clone().unwrap_or_default());
     let proxy = proxy_out(&c.proxy.clone().unwrap_or_default());
+    let compression = CompressionFile::from_wire(c.compression.as_deref());
     ConfigFile {
         proxy: (!proxy.is_empty()).then_some(proxy),
         version: Some(c.version),
@@ -942,8 +1020,9 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
             ..Default::default()
         }),
         seeds: Some(seeds_out(&c.seeds.clone().unwrap_or_default())).filter(|v| !v.is_empty()),
-        transport: (!priority.is_empty()).then(|| TransportSection {
+        transport: (!priority.is_empty() || compression.is_some()).then(|| TransportSection {
             priority,
+            compression,
             ..Default::default()
         }),
         limits: (!value.is_empty()).then(|| LimitsSection {
@@ -1030,7 +1109,8 @@ pub fn render_node(name: &str, c: Option<&wp::NodeConfig>) -> Result<String> {
         "# Configuration of node {name} (webjetctl local config)."
     );
     s.push_str("# Overrides the network configuration for this node: transport.priority,\n");
-    s.push_str("# limits.value; adds seeds (tried first), dns.record and dns.forward;\n");
+    s.push_str("# transport.compression, limits.value; adds seeds (tried first),\n");
+    s.push_str("# dns.record and dns.forward;\n");
     s.push_str("# [[proxy]] makes the node a reverse proxy (Linux data nodes; see\n");
     s.push_str("# `webjetctl local proxy` for the rules' status).\n");
     s.push_str("# `webjetctl local config show --effective` shows what is in force.\n");
@@ -1085,6 +1165,7 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
         seeds: Some(seeds_out(&seeds)),
         transport: Some(TransportSection {
             priority,
+            compression: serde_json::from_value(e["compression"].clone()).ok(),
             ..Default::default()
         }),
         limits: Some(LimitsSection {
@@ -1493,6 +1574,47 @@ value = { circuits_global = 9000 }
     }
 
     #[test]
+    fn compression_settings() {
+        use webjet_core::compress::algo;
+        // Built-in values are spelled out by show and apply as set.
+        let f = ConfigFile::parse(&render_network(&empty_tree()).unwrap()).unwrap();
+        let c = f.transport.as_ref().unwrap().compression.clone().unwrap();
+        assert_eq!(
+            (c.control.as_deref(), c.data.as_deref()),
+            (Some("zstd"), Some("off"))
+        );
+        let w = f.to_network(1, Path::new("/nonexistent")).unwrap();
+        let wc = w.transport.unwrap().compression.unwrap();
+        assert_eq!((wc.control, wc.data), (algo::ZSTD, algo::OFF));
+        // Network: data on.
+        let f =
+            ConfigFile::parse("version = 0\n[transport.compression]\ndata = \"lz4\"\n").unwrap();
+        let w = f.to_network(1, Path::new("/nonexistent")).unwrap();
+        let wc = w.transport.unwrap().compression.unwrap();
+        assert_eq!((wc.control, wc.data), (algo::UNSET, algo::LZ4));
+        // Wrong algorithm for a plane, unknown values and keys.
+        for bad in [
+            "[transport.compression]\ncontrol = \"lz4\"\n",
+            "[transport.compression]\ndata = \"zstd\"\n",
+            "[transport.compression]\ndata = \"gzip\"\n",
+        ] {
+            let f = ConfigFile::parse(&format!("version = 0\n{bad}")).unwrap();
+            assert!(f.to_network(1, Path::new("/x")).is_err(), "{bad}");
+            assert!(f.to_node(&[7; 32], 1).is_err(), "{bad}");
+        }
+        assert!(ConfigFile::parse("[transport.compression]\nlevel = 3\n").is_err());
+        // Node scope: an override that round-trips; a node config with only
+        // compression is not empty.
+        let node =
+            ConfigFile::parse("version = 0\n[transport.compression]\ncontrol = \"off\"\n").unwrap();
+        let c = node.to_node(&[7; 32], 1).unwrap();
+        let cc = c.compression.as_deref().unwrap();
+        assert_eq!((cc.control, cc.data), (algo::OFF, algo::UNSET));
+        assert_eq!(node_from_wire(Some(&c)).transport, node.transport);
+        assert!(!node_from_wire(Some(&c)).is_empty());
+    }
+
+    #[test]
     fn left_out_sections_stay() {
         let current = ConfigFile::parse(NETWORK).unwrap();
         let file = ConfigFile::parse("version = 3\n[limits]\n").unwrap();
@@ -1648,6 +1770,7 @@ value = { circuits_global = 9000 }
                 next_spki: Some(crypto::k32(&[9; 32])),
             })),
             padding: None,
+            compression: None,
         };
         let mut tree = empty_tree();
         tree["network_version"] = json!(5);

@@ -453,6 +453,57 @@ impl Exposition {
                 ts,
             );
         }
+        // Compression (§9.8), per plane.
+        for c in rep.compression.clone().unwrap_or_default() {
+            let plane = c.plane.clone().unwrap_or_default();
+            let l = [
+                ("node", node.as_str()),
+                ("owner", owner.as_str()),
+                ("plane", plane.as_str()),
+            ];
+            for (dir, msgs, raw, wire) in [
+                ("tx", c.tx_messages, c.tx_raw_bytes, c.tx_wire_bytes),
+                ("rx", c.rx_messages, c.rx_raw_bytes, c.rx_wire_bytes),
+            ] {
+                let mut ld = l.to_vec();
+                ld.push(("direction", dir));
+                self.counter(
+                    "webjet_compression_messages",
+                    "Compressed messages sent or received, by plane (control: zstd, data: lz4).",
+                    &ld,
+                    msgs,
+                    ts,
+                );
+                self.counter(
+                    "webjet_compression_raw_bytes",
+                    "Bytes of compressed messages before compression or after decompression.",
+                    &ld,
+                    raw,
+                    ts,
+                );
+                self.counter(
+                    "webjet_compression_wire_bytes",
+                    "Bytes of compressed messages as sent or received.",
+                    &ld,
+                    wire,
+                    ts,
+                );
+            }
+            self.counter(
+                "webjet_compression_skipped",
+                "Messages sent uncompressed although compression was on: no gain, known encrypted traffic or a backed-off flow.",
+                &l,
+                c.tx_skipped,
+                ts,
+            );
+            self.counter(
+                "webjet_compression_errors",
+                "Received compressed messages that failed to decompress.",
+                &l,
+                c.rx_errors,
+                ts,
+            );
+        }
         // Reverse proxy traffic (§11.11), apart from the overlay's series.
         for m in rep.proxy.clone().unwrap_or_default() {
             let rule = m.rule.clone().unwrap_or_default();
@@ -685,6 +736,14 @@ mod tests {
                 to_client_bytes: 9000,
                 refused: 1,
             }]),
+            compression: Some(vec![wp::CompressionMetrics {
+                plane: Some("control".into()),
+                tx_messages: 10,
+                tx_raw_bytes: 50000,
+                tx_wire_bytes: 12000,
+                tx_skipped: 3,
+                ..Default::default()
+            }]),
             ..Default::default()
         }
     }
@@ -707,6 +766,10 @@ mod tests {
         // Proxy traffic has its own families.
         assert!(t.contains("webjet_proxy_bytes_total{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\",direction=\"to_client\"} 9000 "), "{t}");
         assert!(t.contains("webjet_proxy_active_flows{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\"} 2 "));
+        assert!(t.contains("webjet_compression_raw_bytes_total{node=\"n1\",owner=\"alice\",plane=\"control\",direction=\"tx\"} 50000 "), "{t}");
+        assert!(t.contains(
+            "webjet_compression_skipped_total{node=\"n1\",owner=\"alice\",plane=\"control\"} 3 "
+        ));
         // Each family's metadata appears exactly once, before its samples.
         for line in t.lines().filter(|l| l.starts_with("# TYPE ")) {
             let name = line.split_whitespace().nth(2).unwrap();

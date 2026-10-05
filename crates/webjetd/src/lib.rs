@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod circuit;
+pub mod compression;
 pub mod config;
 pub mod control;
 pub mod controller;

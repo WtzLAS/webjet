@@ -385,6 +385,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     if is_seed(&n) {
         n.epochs.write().accept_all = true;
     }
+    crate::compression::refresh(&n);
     crate::transport::start_listeners(&n).await?;
     {
         let n2 = n.clone();
@@ -576,6 +577,10 @@ async fn connections(n: Arc<Node>) {
                     Ok(Event::HeadChanged) => {
                         n.enforce_revocations();
                         crate::transport::apply_limits(&n);
+                        // New compression settings: tell peers (§9.8).
+                        if crate::compression::refresh(&n) {
+                            crate::gossip::publish_endpoint(&n, true);
+                        }
                     }
                     Ok(Event::HopDown(_)) => {}
                     _ => continue,

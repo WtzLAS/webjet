@@ -115,6 +115,10 @@ mode = "refuse"                 # or "website"
 stop = 8
 lines = ["0=30-30", "1=100-400", "..."]
 
+[transport.compression]         # architecture §9.8
+control = "zstd"                # zstd | off: gossip, sync, RPCs (default zstd)
+data = "off"                    # lz4 | off: packets between nodes (default off)
+
 [limits.value]                  # resource limits (§16.2), see the table below
 circuits_global = 50000
 
@@ -138,6 +142,20 @@ again unchanged. For a key change, `next_certificate` (file or PEM) or
 (operations guide 3.2). The private key and the website are set separately with
 `webjetctl network camouflage set-secret`.
 
+**Compression.** `control` compresses control messages (gossip, Merkle
+sync, circuit setup, operations, metric uploads) with zstd; it is on by
+default and costs little. `data` compresses the packets nodes send each
+other with LZ4, one packet at a time; it is **off by default** because
+compressing before encrypting lets someone who can inject data into a
+connection and watch packet sizes learn secrets in the same connection
+(architecture §9.8). Turn it on where bandwidth is expensive and traffic is
+compressible (plain HTTP, file shares, logs); traffic that is encrypted
+already (HTTPS, QUIC, SSH) is skipped automatically. A message is
+compressed only when both ends have the plane on, so mixed versions and
+mixed settings keep working; secrets (PSKs, the camouflage key, Raft) are
+never compressed. `webjetctl local status` shows what is in force and the
+bytes saved; Prometheus gets `webjet_compression_*`.
+
 ### Node scope
 
 A node's configuration changes the network's for that node only. It holds a
@@ -146,6 +164,7 @@ subset of the same keys:
 | Key | Effect for this node |
 | --- | --- |
 | `transport.priority.<transport>` | Replaces the network's priority (and any override). Other nodes see it too: the node publishes its priorities, and peers use them when choosing a transport. |
+| `transport.compression.control`, `.data` | Replaces the network's value for that plane; the other plane keeps the network's. |
 | `limits.value.<name>` | Replaces the network's value and overrides. |
 | `[[seeds]]` | Tried before the network's seeds. |
 | `[[dns.record]]`, `[[dns.forward]]` | Answered or forwarded by this node's resolver only, before the network's. Checked like the network's (in the suffix or a forwarded zone, no shadowing of magic DNS names). |
@@ -160,6 +179,7 @@ webjetctl local config show --effective        # what is in force for it
 webjetctl local config set transport.priority.kcp 0       # no UDP from here
 webjetctl local config set limits.value.relay_capacity_mbps 900
 webjetctl local config unset transport.priority.kcp       # back to the network's
+webjetctl local config set transport.compression.data lz4 # compress packets to/from here
 webjetctl local config --node relay-fra edit   # another node
 ```
 

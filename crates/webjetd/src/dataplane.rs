@@ -136,7 +136,15 @@ impl Dataplane {
 
     /// Send `count` pings to `dst` through the overlay and wait for replies
     /// (control channel `ping`; works with or without a tun interface).
-    pub async fn ping(&self, dst: IpAddr, count: u16) -> Vec<Option<std::time::Duration>> {
+    /// Ping `dst` `count` times with `size` payload bytes (at least the
+    /// 11 of "webjet ping"; more are filled with an incrementing byte
+    /// pattern, as ping(8) does).
+    pub async fn ping(
+        &self,
+        dst: IpAddr,
+        count: u16,
+        size: usize,
+    ) -> Vec<Option<std::time::Duration>> {
         let Some(n) = self.node() else {
             return Vec::new();
         };
@@ -150,12 +158,14 @@ impl Dataplane {
             None => return Vec::new(),
         };
         let id: u16 = rand::random();
+        let mut payload = b"webjet ping".to_vec();
+        payload.extend((payload.len()..size).map(|i| i as u8));
         let (tx, mut rx) = mpsc::unbounded_channel();
         self.pings.lock().insert(id, tx);
         let mut out = Vec::new();
         for seq in 0..count {
             let t0 = Instant::now();
-            self.outbound(packet::icmp_echo(src, dst, true, id, seq, b"webjet ping"));
+            self.outbound(packet::icmp_echo(src, dst, true, id, seq, &payload));
             let got = tokio::time::timeout(std::time::Duration::from_secs(3), async {
                 while let Some(s) = rx.recv().await {
                     if s == seq {

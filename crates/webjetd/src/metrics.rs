@@ -27,6 +27,8 @@ pub struct Counters {
     pub last_report: parking_lot::Mutex<Option<serde_json::Value>>,
     /// For relay utilization: transit bytes at the last sample.
     pub load: parking_lot::Mutex<crate::load::LoadSampler>,
+    /// Compression counters and the settings in force (§9.8).
+    pub compression: crate::compression::Counters,
 }
 
 impl Counters {
@@ -248,6 +250,7 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                 .map(|d| d.proxy.metrics())
                 .unwrap_or_default(),
         ),
+        compression: Some(m.compression.report()),
     };
     n.kp.sign_obj(mt::METRIC_REPORT, &rep)
 }

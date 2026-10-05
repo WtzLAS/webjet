@@ -20,6 +20,13 @@ pub mod ftype {
     /// Reverse proxy traffic (§11.11): an inner IP packet, like DATA, kept
     /// apart so neither end mixes it with overlay traffic.
     pub const PROXY: u8 = 9;
+    /// DATA / PROXY with the inner packet LZ4-compressed (§9.8):
+    /// `len[2] || LZ4 block`. Sent only to peers advertising `lz4`.
+    pub const DATA_LZ4: u8 = 10;
+    pub const PROXY_LZ4: u8 = 11;
+    /// RPC with `req_id || kind || Rpc` zstd-compressed (§9.8). Sent only
+    /// to peers advertising `zstd`.
+    pub const RPC_ZSTD: u8 = 12;
 }
 
 /// type(1) + key_id(4) + counter(8)

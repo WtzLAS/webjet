@@ -556,7 +556,7 @@ impl WebjetApp {
             c.editor.clone()
         };
         let hint = if is_node {
-            "Node settings: transport.priority, limits.value, seeds, dns.record, dns.forward and [[proxy]]. An empty file removes them. ⌘Z undo · ⌘/ comment · Tab indent"
+            "Node settings: transport.priority, transport.compression, limits.value, seeds, dns.record, dns.forward and [[proxy]]. An empty file removes them. ⌘Z undo · ⌘/ comment · Tab indent"
         } else {
             "Sections: [policy], [dns], [[seeds]], [transport], [limits]. Sections left out stay as they are. ⌘Z undo · ⌘/ comment · Tab indent"
         };

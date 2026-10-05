@@ -722,12 +722,15 @@ async fn writer(
         if !hop.alive() {
             break;
         }
+        // Control records go out zstd-compressed where both ends have it
+        // on (§9.8).
+        let z = |c: Vec<u8>| crate::compression::control_record(&n, &hop.peer, c);
         // Gather what's ready.
         if q.is_empty() {
             tokio::select! {
-                m = ctl_rx.recv() => match m { Some(c) => q.push_control(c), None => break },
+                m = ctl_rx.recv() => match m { Some(c) => q.push_control(z(c)), None => break },
                 m = rx.recv() => match m {
-                    Some(Out::Control(c)) => q.push_control(c),
+                    Some(Out::Control(c)) => q.push_control(z(c)),
                     Some(Out::Relay { flow, frame }) => { let _ = q.push(Item { flow, data: frame, at: Instant::now(), ecn_offset: Some(RELAY_ECN_OFFSET) }); }
                     None => break,
                 },
@@ -735,11 +738,11 @@ async fn writer(
             }
         }
         while let Ok(c) = ctl_rx.try_recv() {
-            q.push_control(c);
+            q.push_control(z(c));
         }
         while let Ok(m) = rx.try_recv() {
             match m {
-                Out::Control(c) => q.push_control(c),
+                Out::Control(c) => q.push_control(z(c)),
                 Out::Relay { flow, frame } => {
                     let _ = q.push(Item {
                         flow,
@@ -814,6 +817,17 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
         *hop.last_rx.lock() = Instant::now();
         hop.rx_bytes
             .fetch_add(payload.len() as u64 + 4, Ordering::Relaxed);
+        let (ty, payload) = if ty == rec::CONTROL_ZSTD {
+            match crate::compression::control_payload(&n, &payload) {
+                Some(p) => (rec::CONTROL, p),
+                None => {
+                    tracing::debug!(peer = %n.name_of(&hop.peer), "bad compressed control record");
+                    continue;
+                }
+            }
+        } else {
+            (ty, payload)
+        };
         match ty {
             rec::CONTROL => match wp::HopControl::decode_bytes(&payload) {
                 Ok(c) => {
