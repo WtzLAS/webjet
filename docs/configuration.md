@@ -30,7 +30,8 @@ webjetctl network config check network.toml      # validate, run the policy test
 webjetctl network config apply network.toml      # submit it as the next version
 ```
 
-`edit` does the three steps in `$EDITOR`. For a single value, `get`, `set`
+`edit` does the three steps in `$EDITOR`. Admins can do the same in the
+desktop app's Config tab (docs/app.md), for the network and any node. For a single value, `get`, `set`
 and `unset` take a dotted key:
 
 ```sh

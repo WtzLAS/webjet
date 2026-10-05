@@ -528,6 +528,8 @@ pub struct Status {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Tree {
+    /// The network configuration's version in force.
+    pub network_version: u64,
     pub policy_version: u64,
     pub valid_until: u64,
     pub overlay_pool: Vec<String>,
@@ -814,6 +816,10 @@ pub enum Action {
     EnrollNode,
     RotatePsk,
     RevokeAccount,
+    /// Change the network's or a node's configuration (the Config tab;
+    /// admins only in the app, though controllers also let owners change
+    /// their nodes' own).
+    EditConfig,
 }
 
 /// The signed-in account, as found in the network.
@@ -984,6 +990,7 @@ mod tests {
             Action::EnrollNode,
             Action::RotatePsk,
             Action::RevokeAccount,
+            Action::EditConfig,
         ] {
             assert!(a.may(&act, Some(&node("bb"))), "{act:?}");
         }
@@ -1004,6 +1011,10 @@ mod tests {
         );
         assert!(!b.may(&Action::EnrollNode, None));
         assert!(!b.may(&Action::RotatePsk, None));
+        assert!(
+            !b.may(&Action::EditConfig, Some(&node("bb"))),
+            "configuration is for admins, even of their own nodes"
+        );
         let mut revoked = node("bb");
         revoked.valid = false;
         assert!(!b.may(&Action::RenameNode, Some(&revoked)));

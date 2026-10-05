@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use webjet_app::client::{self, Client, ops};
 use webjet_app::model::Action;
+use webjet_app::netconfig::Doc;
 
 fn net() -> Option<(Client, PathBuf)> {
     let dir = PathBuf::from(
@@ -251,6 +252,89 @@ async fn merkle_tree_and_operation_log_from_a_live_network() {
         .await
         .expect_err("members don't read the log");
     assert!(format!("{e:#}").contains("only admins"), "{e:#}");
+}
+
+/// The Config tab's path: an admin edits the network configuration and a
+/// remote node's own configuration through this agent, as the app does
+/// (load, check, plan against what is in force, sign, submit).
+#[tokio::test]
+async fn admin_edits_network_and_remote_node_configuration() {
+    let Some((c, keys)) = net() else { return };
+    let snap = wait_for(&c, |s| s.nodes.iter().any(|n| n.name == "ctl-01")).await;
+    let admin = client::sign_in(&keys, "alice", PASS, &snap).expect("admin sign-in");
+    let sign = |plan: webjet_app::netconfig::Plan| -> Vec<Vec<u8>> {
+        plan.ops()
+            .into_iter()
+            .map(|op| admin.account.sign(op).unwrap())
+            .collect()
+    };
+
+    // The network: add a DNS record at the end of the file shown.
+    let doc = c.network_config().await.expect("network config");
+    let name = format!("app-{}.internal", std::process::id());
+    let text = format!(
+        "{}\n[[dns.record]]\nname = \"{name}\"\ntype = \"A\"\nvalue = \"10.7.9.9\"\n",
+        doc.text.trim_end()
+    );
+    assert!(doc.check(&text).expect("valid").contains("dns"));
+    let plan = doc.plan(&text).expect("plan").expect("something to apply");
+    c.submit_all(sign(plan)).await.expect("applied");
+    let after = wait_doc(|| c.network_config(), doc.version).await;
+    assert!(after.text.contains(&name), "{}", after.text);
+    // The same file again is now stale: refused before anything is signed.
+    let e = after
+        .plan(&text)
+        .err()
+        .expect("stale file refused")
+        .to_string();
+    assert!(e.contains("someone applied a change"), "{e}");
+
+    // A remote node (ctl-01, seen from node-02's agent; the member test
+    // renames node-03 meanwhile): its own transport
+    // priority, then cleared again.
+    let remote = snap.nodes.iter().find(|n| n.name == "ctl-01").unwrap();
+    assert_ne!(remote.id, snap.status.node_id, "ctl-01 is remote here");
+    let doc = c.node_config(&remote.id).await.expect("node config");
+    assert_eq!(doc.title, "ctl-01");
+    let text = format!("{}\n[transport.priority]\nkcp = 7\n", doc.text.trim_end());
+    let text = if doc.version == 0 {
+        text
+    } else {
+        // Left over from an earlier run: start from an empty file.
+        format!("version = {}\n[transport.priority]\nkcp = 7\n", doc.version)
+    };
+    let plan = doc.plan(&text).expect("plan").expect("something to apply");
+    c.submit_all(sign(plan)).await.expect("node config applied");
+    let set = wait_doc(|| c.node_config(&remote.id), doc.version).await;
+    assert!(set.text.contains("kcp = 7"), "{}", set.text);
+    assert!(
+        set.effective.as_deref().unwrap().contains("kcp = 7"),
+        "in force for ctl-01"
+    );
+    let plan = set
+        .plan(&format!("version = {}\n", set.version))
+        .expect("plan")
+        .expect("clears");
+    assert_eq!(plan.describe(), "configuration of ctl-01 cleared");
+    c.submit_all(sign(plan)).await.expect("cleared");
+    let cleared = wait_doc(|| c.node_config(&remote.id), set.version).await;
+    assert!(!cleared.text.contains("kcp = 7"), "{}", cleared.text);
+}
+
+/// Load a configuration until its version moves past `old`.
+async fn wait_doc<F, Fut>(load: F, old: u64) -> Doc
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Doc>>,
+{
+    for _ in 0..100 {
+        let d = load().await.expect("load");
+        if d.version != old {
+            return d;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("the change didn't arrive at the agent");
 }
 
 async fn wait_for(

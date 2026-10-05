@@ -1235,6 +1235,126 @@ pub fn edit_doc(
     ConfigFile::parse(&text).context("the result isn't a valid configuration")
 }
 
+// ---------------------------------------------------------------- applying
+
+/// Check a network configuration file the way applying it does: the wire
+/// form validates and the policy tests pass (with node names unresolved;
+/// the controllers run them against the nodes).
+pub fn network_wire(f: &ConfigFile, version: u64, base: &Path) -> Result<wp::NetworkConfig> {
+    let w = f.to_network(version, base)?;
+    if let Some(p) = &w.policy {
+        webjet_core::policy::Policy::from_wire(p)?.run_tests(&|_| None)?;
+    }
+    Ok(w)
+}
+
+/// A note about settings the file sets but refuse mode ignores.
+pub fn camouflage_note(f: &ConfigFile) -> Option<String> {
+    let c = f.transport.as_ref()?.camouflage.as_ref()?;
+    let ignored = c.ignored();
+    (!ignored.is_empty())
+        .then(|| format!("camouflage mode is refuse; ignoring {}", ignored.join(", ")))
+}
+
+/// What applying a network configuration file submits.
+#[derive(Debug)]
+pub struct NetworkApply {
+    /// The version the file becomes.
+    pub version: u64,
+    /// The sections the file sets (the others stay as they are).
+    pub sections: Vec<&'static str>,
+    pub config: wp::NetworkConfig,
+    /// Refuse mode without a camouflage certificate yet: the key of the
+    /// self-signed one made for it, stored with the controllers first.
+    pub camouflage_key: Option<Vec<u8>>,
+    /// Something to tell the user ([`camouflage_note`]).
+    pub note: Option<String>,
+}
+
+impl NetworkApply {
+    /// The operations to sign and submit, in this order.
+    pub fn ops(self) -> Vec<wp::AccountOp> {
+        let mut ops = Vec::new();
+        if let Some(key) = self.camouflage_key {
+            ops.push(wp::AccountOp::SetCamouflageSecret(Box::new(
+                wp::SetCamouflageSecret {
+                    private_key: Some(key),
+                    site: Some(Vec::new()),
+                },
+            )));
+        }
+        ops.push(wp::AccountOp::SetNetworkConfig(Box::new(
+            wp::SetNetworkConfig {
+                config: Some(Box::new(self.config)),
+            },
+        )));
+        ops
+    }
+
+    /// The camouflage domain, when a certificate was made for it.
+    pub fn new_certificate_domain(&self) -> Option<String> {
+        self.camouflage_key.as_ref()?;
+        self.config
+            .transport
+            .as_ref()
+            .and_then(|t| t.camouflage.as_ref())
+            .and_then(|c| c.domain.clone())
+    }
+}
+
+/// Prepare applying a network configuration file over the configuration in
+/// `tree` (the `tree` control call): the file must be made from the version
+/// in force; its sections go over the current ones as the next version.
+pub fn network_apply(f: &ConfigFile, tree: &Value, base: &Path) -> Result<NetworkApply> {
+    let from = f.base_version()?;
+    let sections = f.sections();
+    if sections.is_empty() {
+        bail!("the file sets nothing: no [policy], [dns], seeds, [transport] or [limits]");
+    }
+    let now = tree["network_version"].as_u64().unwrap_or(0);
+    if from != now {
+        bail!(
+            "the file was made from network configuration version {from}, but version {now} is in force: someone applied a change meanwhile. Start again from the configuration in force (or set `version = {now}` to overwrite their change)."
+        );
+    }
+    let merged = f.over(&network_from_tree(tree, false)?);
+    let mut config = network_wire(&merged, now + 1, base)?;
+    let current: Option<wp::TransportConfig> = leaf(tree, "transport")?;
+    let current_cam = current.as_ref().and_then(|c| c.camouflage.as_deref());
+    let camouflage_key = fill_refuse_certificate(&mut config, current_cam)?;
+    Ok(NetworkApply {
+        version: now + 1,
+        sections,
+        config,
+        camouflage_key,
+        note: camouflage_note(&merged),
+    })
+}
+
+/// Prepare applying a node configuration file: it is the node's whole
+/// configuration (an empty one clears it), the next version after
+/// `current`. `None` when there is nothing to apply (empty, and the node
+/// has no configuration of its own).
+pub fn node_apply(
+    f: &ConfigFile,
+    node_id: &crypto::Bytes32,
+    name: &str,
+    current: Option<&wp::NodeConfig>,
+) -> Result<Option<wp::NodeConfig>> {
+    let from = f.base_version()?;
+    let now = current.map_or(0, |c| c.version);
+    if from != now {
+        bail!(
+            "the file was made from version {from} of {name}'s configuration, but version {now} is in force: someone changed it meanwhile. Start again from the configuration in force."
+        );
+    }
+    let w = f.to_node(node_id, now + 1)?;
+    if f.is_empty() && current.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

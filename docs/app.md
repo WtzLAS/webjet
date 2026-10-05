@@ -1,7 +1,7 @@
 # Webjet desktop app
 
 `webjet-app` shows a Webjet network: its state, its nodes and, for admins,
-its accounts. It talks to the `webjetd` agent on the same machine, like
+its accounts and configuration. It talks to the `webjetd` agent on the same machine, like
 `webjetctl` does, and signs changes with your account key.
 
 ## Running it
@@ -53,12 +53,14 @@ adds the account (`webjetctl network account create`).
 | Rename or revoke a node | any node | only nodes it owns |
 | Set a node's tags | yes | no |
 | Rotate the PSK | yes | no |
+| Config tab: edit the network's and any node's configuration | yes | no (the tab isn't shown) |
 
 The app only offers what the account may do. The controllers check every
 operation on their own, so a change the app wouldn't offer is refused
 anyway.
 
-Revoking a node and rotating the PSK need a second click.
+Revoking a node, rotating the PSK and applying a configuration need a
+second click.
 
 ## Tabs
 
@@ -146,13 +148,35 @@ isn't available.
   account), with role, status and number of nodes. Selecting one shows its
   id, key, record version, what it may do, and its nodes, which link to the
   Nodes tab.
+- **Config** (admins only): edit the network configuration (§6.18) and the
+  own configuration of any node (§6.19): this agent's node or a remote one,
+  picked from the list on the left (filter by name, tag or role). The editor
+  holds the same TOML file `webjetctl network config show` or `webjetctl
+  local config --node <name> show` prints (see docs/configuration.md), with
+  line numbers and highlighting. It is checked as you type, with the checks
+  `webjetctl … config check` runs (the policy tests included); the line
+  under the editor says what the file would change or why it is refused.
+  For a node, *in force* shows what applies to it: the network's values with
+  its own overrides and additions (read-only). *Apply* (a second click
+  confirms) loads what is in force again, refuses the file if someone applied
+  a newer version meanwhile, as `apply` does, then signs the operations with
+  your account key, submits them through the agent and waits until the agent
+  shows the new version. For a node, an empty file removes its own
+  configuration. *Revert* drops your edits, *Reload* fetches the
+  configuration again; leaving a configuration with unapplied edits needs a
+  second click. A refuse-mode camouflage section without a certificate gets
+  a self-signed one, as with `webjetctl`. Keys: arrows (with Shift to
+  select, ⌥ by word, ⌘ to the line or file ends), ⌘A, ⌘C/⌘X/⌘V, ⌘Z / ⇧⌘Z
+  undo and redo, Tab / ⇧Tab indent, ⌘/ comments lines out; double-click
+  selects a word, triple-click a line (Ctrl instead of ⌘ on Linux and
+  Windows).
 
 The separators between the panes of a tab can be moved: drag one to give
 either side more room, double-click it to put it back. On the Nodes tab
 that is the line between the graph and the node details, the one between
 the graph and the circuits, and the one between the circuit list and the
 selected circuit; on the other tabs it is the line beside the details
-column (on the Merkle tab also the one beside the operation log, on the
+column (on the Config tab, beside the list of configurations) (on the Merkle tab also the one beside the operation log, on the
 Dashboard the ones beside the hops and the relay load). A pane
 keeps the size you gave it when the window is resized, giving way only
 when the other side would get too small. Sizes last until the app quits.
@@ -161,7 +185,8 @@ when the other side would get too small. Sizes last until the app quits.
 
 ```sh
 cargo test -p webjet-app                 # permissions, decoding, signing, graph layout,
-                                         # metrics parsing; every tab rendered headless
+                                         # metrics parsing, the config editor; every tab
+                                         # rendered headless
 scripts/local-net.sh 2
 cargo test -p webjet-app --test live     # against the local network
 ```
@@ -176,7 +201,10 @@ tree from the agent's leaves and checks it against the signed root, every
 node's leaf and proof, the root signature on the first admin's record, and
 the operation log read through node-02 (genesis signed by the root key,
 alice's operations, paging), and that a normal account's log request is
-refused. They are skipped when no local network runs.
+refused. A fourth applies a network configuration change (a DNS record) and
+a remote node's own configuration (ctl-01 seen from node-02), checks that
+the stale file is then refused, and clears the node's configuration again.
+They are skipped when no local network runs.
 
 The headless render test draws every tab from `tests/fixtures/node-02.json`
 and drives the graph with simulated mouse events (drag a node, click it, pan,
@@ -184,3 +212,6 @@ wheel zoom),
 the agents' answers captured from `scripts/local-net.sh 4`. Capture it again
 after changing what the agent reports. `nodes_tab_fits` checks the Nodes
 tab's layout at several window sizes and drags its three separators.
+`config_tab_is_for_admins` types into the configuration editor (checked as
+typed, undo), switches to a remote node's configuration with unapplied
+edits, and checks that a demoted account loses the tab.

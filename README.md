@@ -21,7 +21,7 @@ A Rust implementation of the Webjet overlay VPN described in
 | `crates/webjet-net` | Transports: PSK gate and UDP obfuscation, raw-public-key TLS 1.3 with X25519MLKEM768 only, KCP + adaptive Reed–Solomon FEC with BBR-style pacing, AnyTLS (BoringSSL, Chrome-like ClientHello, camouflage website) |
 | `crates/webjetd` | The agent: hop sessions, gossip and Merkle anti-entropy, circuits (label switching), end-to-end sessions, path probing, hole punching, tun data plane, gateway, magic DNS, metrics, controller role (Raft, signing, enrollment), local control socket |
 | `crates/webjet-tools` | `webjetctl`: `network` (configuration and administration), `local` (this machine and node), `root` (offline keys); the TOML configuration documents |
-| `crates/webjet-app` | `webjet-app`, a GPUI desktop app: dashboard, connections, network graph and circuits, metrics, accounts; admin or read-only by account |
+| `crates/webjet-app` | `webjet-app`, a GPUI desktop app: dashboard, connections, network graph and circuits, Merkle tree and log, metrics, accounts, and for admins a configuration editor (network and any node); admin or read-only by account |
 
 ## Programs
 

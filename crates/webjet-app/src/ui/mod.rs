@@ -1,10 +1,13 @@
-//! The GPUI front end: a sign-in screen, then six tabs — Dashboard,
-//! Connections, Nodes, Merkle, Metrics and Accounts. What the account may change
-//! comes from `model::Session::may`; everything else is shown read-only.
+//! The GPUI front end: a sign-in screen, then the tabs — Dashboard,
+//! Connections, Nodes, Merkle, Metrics, Accounts and, for admins, Config.
+//! What the account may change comes from `model::Session::may`; everything
+//! else is shown read-only.
 
 mod accounts;
+mod config;
 mod connections;
 mod dashboard;
+mod editor;
 mod field;
 mod merkle;
 mod metrics;
@@ -64,22 +67,35 @@ enum Tab {
     Merkle,
     Metrics,
     Accounts,
+    Config,
 }
 
-const TABS: [(Tab, &str); 6] = [
+const TABS: [(Tab, &str); 7] = [
     (Tab::Dashboard, "Dashboard"),
     (Tab::Connections, "Connections"),
     (Tab::Nodes, "Nodes"),
     (Tab::Merkle, "Merkle"),
     (Tab::Metrics, "Metrics"),
     (Tab::Accounts, "Accounts"),
+    (Tab::Config, "Config"),
 ];
+
+impl Tab {
+    /// Tabs only admins get.
+    fn admin_only(self) -> bool {
+        self == Tab::Config
+    }
+}
 
 /// A confirmation waiting for a second click.
 #[derive(Clone, PartialEq, Eq)]
 enum Confirm {
     Revoke(String),
     RotatePsk,
+    /// Apply the edited configuration.
+    ApplyConfig,
+    /// Leave a configuration with unapplied edits (for this one).
+    Discard(crate::netconfig::Scope),
 }
 
 pub struct WebjetApp {
@@ -154,6 +170,8 @@ pub struct WebjetApp {
     metrics_all: bool,
     // Accounts tab
     account: Option<String>,
+    // Config tab
+    config: config::ConfigTab,
     /// Sizes of the panes beside the movable separators.
     splits: split::Splits,
 }
@@ -228,6 +246,7 @@ impl WebjetApp {
             family: None,
             metrics_all: false,
             account: None,
+            config: config::ConfigTab::new(cx),
             splits: split::Splits::default(),
         };
         // Refresh now and then periodically while the window exists.
@@ -278,6 +297,11 @@ impl WebjetApp {
                     self.sign_in_error = Some(format!("signed out: {e}"));
                 }
             }
+        }
+        // Admin-only tabs close when the account is no longer an admin.
+        if self.tab.admin_only() && !self.is_admin() {
+            self.tab = Tab::Dashboard;
+            self.confirm = None;
         }
         let sum = s.summary();
         self.traffic.push(now_ms(), sum.tx_bytes, sum.rx_bytes);
@@ -334,6 +358,8 @@ impl WebjetApp {
         self.account = None;
         self.confirm = None;
         self.tab = Tab::Dashboard;
+        // The next account starts from what is in force, not these edits.
+        self.config = config::ConfigTab::new(cx);
         cx.notify();
     }
 
@@ -685,7 +711,11 @@ impl WebjetApp {
                         .child(s.status.name.clone().unwrap_or_else(|| "Webjet".into())),
                 ),
         );
+        let admin = self.is_admin();
         for (i, (t, label)) in TABS.into_iter().enumerate() {
+            if t.admin_only() && !admin {
+                continue;
+            }
             let on = self.tab == t;
             tabs = tabs.child(
                 div()
@@ -758,6 +788,7 @@ impl Render for WebjetApp {
             Tab::Merkle => self.render_merkle(&s, cx),
             Tab::Metrics => self.render_metrics(&s, cx),
             Tab::Accounts => self.render_accounts(&s, cx),
+            Tab::Config => self.render_config(&s, cx),
         };
         let mut footer = div()
             .px_3()
@@ -1269,5 +1300,165 @@ mod tests {
         }
         frame(cx);
         assert_eq!(b(cx, "node-side").size.width, px(420.));
+    }
+
+    /// The Config tab: admins edit the network's and a remote node's
+    /// configuration in the editor, checked as they type; members don't get
+    /// the tab.
+    #[gpui::test]
+    fn config_tab_is_for_admins(cx: &mut TestAppContext) {
+        use crate::netconfig::{Doc, Scope};
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        cx.simulate_resize(size(px(1280.), px(820.)));
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        let raw: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/node-02.json")).unwrap();
+        let tree = raw["tree"].clone();
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        // Show a configuration as if the agent had answered.
+        let show = |cx: &mut gpui::VisualTestContext, doc: Doc| {
+            view.update(cx, |app, cx| {
+                app.config.target = doc.scope.clone();
+                app.config.seq += 1;
+                let seq = app.config.seq;
+                app.config_show(seq, Ok(doc), cx);
+            });
+        };
+        view.update(cx, |app, _| {
+            app.loaded(snap.clone());
+            app.signed_in = Some(si);
+            app.tab = Tab::Config;
+        });
+        frame(cx);
+        show(cx, Doc::network(tree.clone()).unwrap());
+        frame(cx);
+        assert!(
+            cx.debug_bounds("config-editor").is_some(),
+            "the editor is drawn"
+        );
+        let text = view.update(cx, |app, cx| {
+            assert!(!app.config.dirty(cx));
+            assert!(
+                matches!(&app.config.check, Some(Ok(_))),
+                "{:?}",
+                app.config.check
+            );
+            app.config.editor.read(cx).text()
+        });
+        assert!(text.contains("version = 1"), "{text}");
+        assert!(text.contains("[[policy.rule]]"), "{text}");
+
+        // Click into the editor and type at the end: checked as typed.
+        let at = cx.debug_bounds("config-editor").unwrap().center();
+        cx.simulate_click(at, gpui::Modifiers::default());
+        cx.simulate_keystrokes("cmd-down enter");
+        for line in ["[[dns.record]]", "name = \"web\"", "type = \"A\""] {
+            cx.simulate_input(line);
+            cx.simulate_keystrokes("enter");
+        }
+        cx.simulate_input("value = \"10.7.0.9\"");
+        frame(cx);
+        view.update(cx, |app, cx| {
+            let t = app.config.editor.read(cx).text();
+            assert!(
+                t.ends_with("\n[[dns.record]]\nname = \"web\"\ntype = \"A\"\nvalue = \"10.7.0.9\""),
+                "{t}"
+            );
+            assert!(app.config.dirty(cx));
+            let Some(Ok(m)) = &app.config.check else {
+                panic!("valid: {:?}", app.config.check)
+            };
+            assert!(m.contains("dns"), "{m}");
+            // What Apply would submit: version 2, with the limit.
+            let doc = app.config.doc.clone().unwrap().unwrap();
+            let plan = doc.plan(&t).unwrap().unwrap();
+            assert!(plan.describe().contains("version 2"), "{}", plan.describe());
+        });
+        // A broken file says why, and can't be applied.
+        cx.simulate_keystrokes("cmd-down");
+        cx.simulate_input(" = =");
+        frame(cx);
+        view.update(cx, |app, _| {
+            assert!(matches!(&app.config.check, Some(Err(_))));
+        });
+        // Undo takes the typing back.
+        cx.simulate_keystrokes("cmd-z");
+        frame(cx);
+        view.update(cx, |app, cx| {
+            assert!(matches!(&app.config.check, Some(Ok(_))));
+            assert!(app.config.editor.read(cx).text().ends_with("\"10.7.0.9\""));
+        });
+        // Leaving with unapplied edits needs a second click.
+        let remote = snap
+            .nodes
+            .iter()
+            .find(|n| n.id != snap.status.node_id && n.valid)
+            .unwrap()
+            .clone();
+        view.update(cx, |app, cx| {
+            app.config_select(Scope::Node(remote.id.clone()), cx);
+            assert_eq!(app.config.target, Scope::Network, "kept the edits");
+            assert!(matches!(app.confirm, Some(Confirm::Discard(_))));
+        });
+        frame(cx);
+
+        // A remote node's own configuration, and what is in force there.
+        let reply = serde_json::json!({
+            "node_id": remote.id,
+            "name": remote.name,
+            "config": null,
+            "effective": {
+                "priorities": {"kcp": 1, "anytls": 2, "tls": 3},
+                "limits": {"lookups_per_sec": 50},
+                "seeds": [], "dns_records": [], "dns_forward": [],
+                "suffix": "internal", "resolver": ["10.7.255.53"],
+            },
+        });
+        show(cx, Doc::node(&reply).unwrap());
+        frame(cx);
+        view.update(cx, |app, cx| {
+            assert_eq!(app.config.target, Scope::Node(remote.id.clone()));
+            assert!(!app.config.dirty(cx), "the edits were discarded");
+            app.config.show_effective = true;
+        });
+        frame(cx);
+        view.update(cx, |app, cx| {
+            let eff = app.config.effective.read(cx).text();
+            assert!(eff.contains("lookups_per_sec = 50"), "{eff}");
+            app.config.show_effective = false;
+        });
+        frame(cx);
+
+        // A member doesn't get the tab, and loses it when demoted.
+        let mut demoted = snap.clone();
+        if let Some(a) = demoted.accounts.iter_mut().find(|a| a.name == "tester") {
+            a.admin = false;
+        }
+        view.update(cx, |app, _| {
+            app.loaded(demoted);
+            assert!(!app.is_admin());
+            assert!(app.tab == Tab::Dashboard, "the Config tab closed");
+        });
+        frame(cx);
+        view.update(cx, |app, _| app.tab = Tab::Config);
+        frame(cx);
+        // (Debug bounds outlive their frame in GPUI 0.2.2: look for the
+        // refusal, not for a missing editor.)
+        assert!(
+            cx.debug_bounds("config-admins-only").is_some(),
+            "members are told it's for admins"
+        );
     }
 }

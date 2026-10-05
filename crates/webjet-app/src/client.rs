@@ -139,6 +139,30 @@ impl Client {
     pub async fn enroll_info(&self) -> Result<Value> {
         self.call(json!({"cmd": "enroll_info"})).await
     }
+
+    /// The network configuration in force, ready to edit.
+    pub async fn network_config(&self) -> Result<crate::netconfig::Doc> {
+        crate::netconfig::Doc::network(self.call(json!({"cmd": "tree"})).await?)
+    }
+
+    /// A node's own configuration (by id, hex) and what is in force for it,
+    /// ready to edit. The agent answers for any node in the tree, so this
+    /// works for remote nodes too.
+    pub async fn node_config(&self, node: &str) -> Result<crate::netconfig::Doc> {
+        let r = self
+            .call(json!({"cmd": "node_config", "node": node}))
+            .await?;
+        crate::netconfig::Doc::node(&r)
+    }
+
+    /// Submit signed operations in order; returns the last log index.
+    pub async fn submit_all(&self, signed: Vec<Vec<u8>>) -> Result<u64> {
+        let mut last = 0;
+        for s in signed {
+            last = self.submit(s).await?;
+        }
+        Ok(last)
+    }
 }
 
 /// An unlocked account and its place in the network.

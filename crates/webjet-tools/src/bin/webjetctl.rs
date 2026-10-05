@@ -16,8 +16,8 @@ use webjet_core::crypto::{self, Bytes32, KeyPair};
 use webjet_core::types::{now_ms, parse_roles};
 use webjet_proto::{self as wp, AccountOp};
 use webjet_tools::config::{
-    self, ConfigFile, effective_from_json, fill_refuse_certificate, network_from_tree,
-    node_from_wire, render_effective, render_network, render_node,
+    self, ConfigFile, effective_from_json, network_from_tree, node_from_wire, render_effective,
+    render_network, render_node,
 };
 use webjet_tools::*;
 use webjetd::control::client;
@@ -715,74 +715,35 @@ async fn apply_edited<F: std::future::Future<Output = Result<()>>>(
     }
 }
 
-/// Validate a network configuration file the way `apply` will (policy tests
-/// with names unresolved; the controllers run them against the nodes).
-fn network_wire(f: &ConfigFile, version: u64, base: &Path) -> Result<wp::NetworkConfig> {
-    let w = f.to_network(version, base)?;
-    if let Some(p) = &w.policy {
-        webjet_core::policy::Policy::from_wire(p)?.run_tests(&|_| None)?;
-    }
-    if let Some(c) = f.transport.as_ref().and_then(|t| t.camouflage.as_ref()) {
-        let ignored = c.ignored();
-        if !ignored.is_empty() {
-            eprintln!(
-                "note: camouflage mode is refuse; ignoring {}",
-                ignored.join(", ")
-            );
-        }
-    }
-    Ok(w)
-}
-
 /// `network config apply`: the file's sections over the configuration in
 /// force, as the next version. In refuse mode the network keeps its
 /// camouflage certificate; a network without one gets a self-signed one,
 /// whose key is stored with the controllers first so relays can serve it.
 async fn apply_network(cli: &Cli, f: &ConfigFile, base: &Path, what: Option<&str>) -> Result<()> {
-    let from = f.base_version()?;
-    let sections = f.sections();
-    if sections.is_empty() {
-        bail!("the file sets nothing: no [policy], [dns], seeds, [transport] or [limits]");
-    }
     let t = tree(cli).await?;
-    let now = t["network_version"].as_u64().unwrap_or(0);
-    if from != now {
-        bail!(
-            "the file was made from network configuration version {from}, but version {now} is in force: someone applied a change meanwhile. Start again from `webjetctl network config show` (or set `version = {now}` to overwrite their change)."
-        );
+    let p = config::network_apply(f, &t, base)?;
+    if let Some(n) = &p.note {
+        eprintln!("note: {n}");
     }
-    let merged = f.over(&network_from_tree(&t, false)?);
-    let mut w = network_wire(&merged, now + 1, base)?;
     let a = load_account(cli).await?;
-    let current: Option<wp::TransportConfig> = from_json(&t["transport"])?;
-    let current_cam = current.as_ref().and_then(|c| c.camouflage.as_deref());
-    if let Some(key_pem) = fill_refuse_certificate(&mut w, current_cam)? {
-        let op = wp::SetCamouflageSecret {
-            private_key: Some(key_pem),
-            site: Some(Vec::new()),
-        };
-        let r = submit(cli, a.sign(AccountOp::SetCamouflageSecret(Box::new(op)))?).await?;
-        let domain = w
-            .transport
-            .as_ref()
-            .and_then(|t| t.camouflage.as_ref())
-            .and_then(|c| c.domain.clone())
-            .unwrap_or_default();
-        println!(
-            "refuse mode: made a self-signed camouflage certificate for {domain} (key stored, entry {})",
-            r["index"]
-        );
+    let (version, domain) = (p.version, p.new_certificate_domain());
+    let what = what.map_or_else(|| p.sections.join(", "), String::from);
+    let mut ops = p.ops().into_iter().peekable();
+    while let Some(op) = ops.next() {
+        let r = submit(cli, a.sign(op)?).await?;
+        if ops.peek().is_some() {
+            println!(
+                "refuse mode: made a self-signed camouflage certificate for {} (key stored, entry {})",
+                domain.clone().unwrap_or_default(),
+                r["index"]
+            );
+        } else {
+            println!(
+                "network configuration version {version} applied: {what} (entry {})",
+                r["index"]
+            );
+        }
     }
-    let op = AccountOp::SetNetworkConfig(Box::new(wp::SetNetworkConfig {
-        config: Some(Box::new(w)),
-    }));
-    let r = submit(cli, a.sign(op)?).await?;
-    let what = what.map_or_else(|| sections.join(", "), String::from);
-    println!(
-        "network configuration version {} applied: {what} (entry {})",
-        now + 1,
-        r["index"]
-    );
     Ok(())
 }
 
@@ -798,7 +759,10 @@ async fn network_config(cli: &Cli, cmd: &ConfigCmd) -> Result<()> {
         ConfigCmd::Check { file } => {
             let f = ConfigFile::load(file)?;
             let from = f.base_version()?;
-            network_wire(&f, from + 1, &base_dir(file))?;
+            config::network_wire(&f, from + 1, &base_dir(file))?;
+            if let Some(n) = config::camouflage_note(&f) {
+                eprintln!("note: {n}");
+            }
             println!(
                 "{} is valid: {} (sections left out stay as they are)",
                 file.display(),
@@ -874,22 +838,14 @@ async fn node_conf(cli: &Cli, node: Option<&str>) -> Result<NodeConf> {
 /// `local config apply`: the file is the node's whole configuration (an
 /// empty one clears it), submitted as the next version.
 async fn apply_node(cli: &Cli, n: &NodeConf, f: &ConfigFile) -> Result<()> {
-    let from = f.base_version()?;
-    let now = n.current.as_ref().map_or(0, |c| c.version);
-    if from != now {
-        bail!(
-            "the file was made from version {from} of {}'s configuration, but version {now} is in force: someone changed it meanwhile. Start again from `webjetctl local config show`.",
-            n.name
-        );
-    }
-    let w = f.to_node(&n.id, now + 1)?;
-    if f.is_empty() && n.current.is_none() {
+    let Some(w) = config::node_apply(f, &n.id, &n.name, n.current.as_ref())? else {
         println!(
             "{} has no configuration of its own; nothing to apply",
             n.name
         );
         return Ok(());
-    }
+    };
+    let version = w.version;
     let a = load_account(cli).await?;
     let op = AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
         config: Some(Box::new(w)),
@@ -899,10 +855,8 @@ async fn apply_node(cli: &Cli, n: &NodeConf, f: &ConfigFile) -> Result<()> {
         println!("configuration of {} cleared (entry {})", n.name, r["index"]);
     } else {
         println!(
-            "configuration of {} version {} applied (entry {})",
-            n.name,
-            now + 1,
-            r["index"]
+            "configuration of {} version {version} applied (entry {})",
+            n.name, r["index"]
         );
     }
     Ok(())
