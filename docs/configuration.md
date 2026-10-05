@@ -50,7 +50,7 @@ a file whose version is no longer the one in force: someone applied a change
 in between, and applying would undo it. Start again from `show`.
 
 **Sections.** A file may contain only some of the sections (`[policy]`,
-`[dns]`, `seeds`, `[transport]`, `[limits]`). Sections left out stay as they
+`[dns]`, `seeds`, `[transport]`, `[limits]`, `[controllers]`). Sections left out stay as they
 are; a section that is present replaces the current one completely. An empty
 `[limits]` goes back to the built-in limits; `seeds = []` removes all seeds.
 
@@ -125,6 +125,11 @@ circuits_global = 50000
 [[limits.override]]             # all matching overrides apply; the highest value wins
 select = ["tag:big-relay"]
 value = { circuits_global = 200000 }
+
+[controllers]                   # the controller cluster (§7.5); not spelled out by show
+auto_membership = true          # the leader adds, promotes, demotes and removes members (default true)
+voters = 5                      # 1, 3, 5 or 7: voters the leader aims for (default 5)
+dead_voter_after_s = 3600       # a voter unreachable this long gives its seat to a healthy learner; 0 = never
 ```
 
 Selectors (`src`, `dst`, `select`): `*`, `tag:<tag>`, `node:<name>`,
@@ -155,6 +160,20 @@ compressed only when both ends have the plane on, so mixed versions and
 mixed settings keep working; secrets (PSKs, the camouflage key, Raft) are
 never compressed. `webjetctl local status` shows what is in force and the
 bytes saved; Prometheus gets `webjet_compression_*`.
+
+**Controllers.** With `auto_membership` on, an admin only makes nodes
+controllers (the `control` role and a certificate); the Raft leader does the
+rest. It adds every valid controller as a learner, makes the earliest-joined
+healthy ones voters (always an odd number, at most `voters`, so two
+controllers have one voter and four have three), removes members that are
+revoked or lost their role or certificate, and replaces a voter it hasn't
+heard from for `dead_voter_after_s` with a healthy learner. It changes one
+member at a time. `webjetctl network controller add-learner|promote|demote|remove`
+still work; with automatic membership on, the leader may undo a change that
+breaks those rules, but doesn't add back a controller an admin removed. Turn
+it off to manage membership only by hand. The section is written only when a
+file has it (controllers before 0.7.0 can't apply it); `show` names the
+built-in values in a comment instead.
 
 ### Node scope
 

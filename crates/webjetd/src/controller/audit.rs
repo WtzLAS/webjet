@@ -85,6 +85,7 @@ fn payload_name(p: &EntryPayload) -> &'static str {
         EntryPayload::NoopEntry(_) => "NoopEntry",
         EntryPayload::GenesisEntry(_) => "GenesisEntry",
         EntryPayload::MembershipEntry(_) => "MembershipEntry",
+        EntryPayload::AutoMembershipEntry(_) => "AutoMembershipEntry",
     }
 }
 

@@ -514,10 +514,11 @@ NetworkConfig {
     seeds:     Seeds             // §6.14
     limits:    Limits            // §6.15
     transport: TransportConfig   // §6.17
+    controllers: ControllerSettings?  // §7.5: { auto_membership, voters, dead_voter_after_s }
 }
 ```
 
-The network's settings are one document with one version. `SetNetworkConfig` (§7.2) checks every part as before and writes the five leaves in **one log entry**, each carrying the document's version, so a node never sees half of a change, and one signed operation records who changed what. A part left out of the operation is written empty, which means its built-in defaults; admin tools send the whole document (the parts a file leaves out are taken from the tree first). The configuration's version is the highest version of the five leaves.
+The network's settings are one document with one version. `SetNetworkConfig` (§7.2) checks every part as before and writes the five leaves in **one log entry**, each carrying the document's version, so a node never sees half of a change, and one signed operation records who changed what. A part left out of the operation is written empty, which means its built-in defaults; admin tools send the whole document (the parts a file leaves out are taken from the tree first). The configuration's version is the highest version of the five leaves. `controllers` (from 0.7.0) is different: it is written as a sixth leaf (kind CONTROLLERS) only when the operation has it, and an operation without it leaves that leaf as it is, so a document from an older tool, or one that leaves the section out, computes the same leaves on controllers from before 0.7.0.
 
 - **Optimistic concurrency:** `version` must be above the one in force. `webjetctl network config apply` submits the file's version plus one and refuses a file made from an older version, so two admins can't overwrite each other's change unseen.
 - Admins edit it as TOML (`network.toml`; schema in [configuration.md](configuration.md)). The wire form stays FlatBuffers; TOML exists only in the tools.
@@ -557,7 +558,7 @@ One node's overrides of, and additions to, the network configuration: a leaf of 
 ### 7.1 Cluster and consensus
 
 - The `CONTROL` nodes form one **Raft** cluster. The deployment has 8–16 controllers (§18.1), which is more than Raft should have as voting members, so controllers are either **voters** or **learners**:
-  - **Voters: 5 by default** (always an odd number, at most 7). A write needs a majority of voters: 5 tolerate 2 failures, 7 tolerate 3.
+  - **Voters: 5 by default** (always an odd number, at most 7). A write needs a majority of voters: 5 tolerate 2 failures, 7 tolerate 3. The leader picks them by itself (automatic membership, §7.5).
   - **Learners:** every other controller. A learner replicates the log, applies it, signs tree heads, accepts operations, enrollments and metric reports, and forwards writes to the leader. It doesn't vote, so it never slows down or blocks a commit.
   - More voters would not help: each write would need more acknowledgements across wide-area links, and an even number tolerates no more failures than the odd number below it.
 - **Raft traffic runs over the overlay itself**, inside end-to-end sessions (§9.4) between controllers. It gets the same authentication and encryption as any traffic, and controllers don't need public IPs to reach each other, although `CONTROL+RELAY` makes it shorter (§4.1). This works because the overlay never depends on controllers.
@@ -581,7 +582,7 @@ Every controller applies committed operations to the same deterministic state ma
 | `RekeyNode { node_id, token_hash, expires_at, revoke_old_now }` | Adds a pending re-key for an existing node (§8.1) | ✓ |
 | `PutAccount { record }` | Stores a signed AccountRecord (§6.10) | |
 | `TombstoneAccount { tombstone }` | Stores a signed AccountTombstone (§6.11) | |
-| `SetNetworkConfig { config }` | Replaces the policy, DNS, seed-list, limits and transport leaves together, all at the document's version (§6.18). Validated as in §14.5, §11.10.6, §10.7.2, §16.4 | |
+| `SetNetworkConfig { config }` | Replaces the policy, DNS, seed-list, limits and transport leaves together, all at the document's version, and the controller settings when present (§6.18). Validated as in §14.5, §11.10.6, §10.7.2, §16.4, §7.5 | |
 | `SetNodeConfig { config }` | Sets or removes one node's configuration leaf (§6.19) | ✓ |
 | `SetCamouflageSecret { private_key, site }` | Stores the camouflage certificate's private key and the website. Kept in controller state, encrypted at rest; never in the tree (§9.7.2) | |
 | `ChangeMembership { add learner / promote / demote / remove }` | Raft membership change (§7.5) | |
@@ -608,6 +609,7 @@ Every controller applies committed operations to the same deterministic state ma
 |---|---|
 | `ExtendValidity { valid_until }` | Sets the validity leaf (§6.16) to 30 days ahead. Proposed daily. It covers **every** non-tombstoned node at once, **whether or not the node has been seen online** (§10.5) |
 | `ExpireEnrollments` | Removes pending enrollments whose token has expired |
+| `AutoMembership { add learner / promote / demote / remove }` | A membership change the leader decided by itself (§7.5). Applied with the same checks as `ChangeMembership`, and refused when automatic membership is off |
 
 Every controller validates each entry's shape before applying it. For example, an `ExtendValidity` entry may only move `valid_until` forward, to exactly the standard period after the entry's timestamp. This catches bugs in the leader. It is not protection against a compromised leader (§21.18).
 
@@ -631,7 +633,7 @@ Every controller validates each entry's shape before applying it. For example, a
 | Situation | Effect |
 |---|---|
 | Leader dies | Raft elects a new leader within seconds. Writes and the daily validity extension resume automatically. Nodes notice nothing |
-| A minority of voters down | Nothing visible. Remaining controllers keep committing and signing. An admin promotes a learner to restore the voter count (§7.5) |
+| A minority of voters down | Nothing visible. Remaining controllers keep committing and signing. After `dead_voter_after_s` (an hour by default) the leader gives a dead voter's seat to a healthy learner (§7.5), or an admin does sooner |
 | Any number of learners down | No effect on writes |
 | A majority of voters down or partitioned away | No new writes (no enrollment, changes or validity extension). Surviving controllers keep re-signing the last committed state, so tree heads stay fresh. Traffic is unaffected |
 | All controllers down | Heads expire after 24–72 h and the network enters **soft mode** (§21.2). Records remain valid until the validity horizon, up to 30 days ahead (§6.16, §22) |
@@ -646,8 +648,18 @@ A controller that has died but is not suspected of compromise can stay a Raft me
 3. The cert spreads by gossip, and the admin submits `ChangeMembership { add learner }`, which is accepted only for a valid node with the `control` role. The new controller receives a snapshot, catches up, and starts signing heads.
 4. To make it a voter, the admin submits `ChangeMembership { promote }`, usually together with demoting or removing another voter so the count stays odd.
 
+**Automatic membership** (from 0.7.0, on by default) does steps 3 and 4, and the cleanup, without an admin. Once a second after each commit, the leader computes one change and proposes it as an `AutoMembership` entry; Raft applies membership changes one at a time, so the next follows once it has committed. In order:
+1. **Remove** a member that is no longer a valid controller: its node is revoked or lost the `control` role, or its SigningKeyCert is gone (its key retired, or its certifying admin revoked) while the leader's own is valid. Learners go first; the leader and the last voter never go.
+2. **Add as a learner** every valid controller (role and cert) that isn't a member, unless an admin removed it with `ChangeMembership { remove }` (a manual `add learner` clears that).
+3. **Replace a dead voter:** a voter the leader hasn't heard from for `dead_voter_after_s` (default 3600 s; 0 = never) is demoted, but only while a healthy learner (heard from within 30 s, at most 64 entries behind) can take its place.
+4. **Voter count:** the target is the largest odd number no larger than both `voters` (default 5) and the number of members. Above it, the latest-joined voter is demoted (an unreachable one first, never the leader). Below it, the earliest-joined healthy learner is promoted, and only when the count can end odd: from an odd count, two healthy learners are needed.
+
+"Joined" is the log index at which a node became a member, kept in controller state and snapshots (members from before 0.7.0 count as the earliest). Health, silence and certificates are the leader's own view; replicas check an `AutoMembership` entry only against replicated state, like a manual change. A new leader waits 30 s, so it has heard from its peers, before changing anything. The settings are the network configuration's `[controllers]` section (§6.18); with `auto_membership = false`, only admins change membership, as before.
+
+**Upgrading to 0.7.0:** a controller from before 0.7.0 can't apply an `AutoMembership` entry and would halt. Controllers from 0.7.0 advertise `auto-membership` in their EndpointRecord, and the leader proposes nothing until every reachable member, and a node it is about to add, advertises it. An old controller that is unreachable for good is removed or replaced without that check; one that comes back must be upgraded. Upgrade every controller before the first change to `[controllers]` (a new leaf kind older controllers can't write).
+
 **Removing:**
-1. The admin submits `ChangeMembership { remove }`, then removes the node's `control` role (refused while it is still a member).
+1. The admin submits `ChangeMembership { remove }`, then removes the node's `control` role (refused while it is still a member). With automatic membership, revoking the node or retiring its signing key (step 2) is enough: the leader removes it.
 2. If the controller is being decommissioned, or might be compromised, its key is **retired** with a SigningKeyTombstone (§22.1), so the key can't be used again even if its disk is later recovered.
 
 ### 7.6 Network PSK epochs

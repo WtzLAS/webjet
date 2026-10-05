@@ -89,8 +89,9 @@ scripts/local-net.sh stop
 ```
 
 `scripts/cluster-test.sh` turns two nodes into controllers: it signs their
-certificates, adds them as learners and promotes them to voters. It then
-stops the leader and checks that writes still commit.
+certificates and waits for the leader to add them and make them voters by
+itself (automatic membership). It then stops the leader and checks that
+writes still commit.
 
 `docker/e2e.sh` runs Linux containers with real tun interfaces (image
 `webjet:test`, see above). It checks kernel ping across the overlay, magic DNS
@@ -125,7 +126,7 @@ webjetctl local config --node relay-1 set limits.value.relay_capacity_mbps 900  
 webjetctl network node enroll --owner bob --name laptop --tags tag:laptop
 webjetctl network node revoke laptop;  webjetctl network node rekey server-1
 webjetctl network account rekey bob --key bob-new.pub   # a lost account key; admins: root admin sign --replaces
-webjetctl network psk rotate;  webjetctl network controller add-learner ctl-02 / promote / demote / remove
+webjetctl network psk rotate;  webjetctl network controller add-learner ctl-02 / promote / demote / remove   # by hand; the leader does it by default ([controllers])
 ```
 
 The agent's configuration lives in `/etc/webjet/webjetd.toml`; every setting

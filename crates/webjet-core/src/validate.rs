@@ -213,6 +213,26 @@ pub fn transport(t: &wp::TransportConfig) -> Result<()> {
     Ok(())
 }
 
+/// `[controllers]` (§7.5): an odd voter target of at most 7, and a dead
+/// voter delay of 0 (never) or at least a minute.
+pub fn controller_settings(c: &wp::ControllerSettings) -> Result<()> {
+    if let Some(v) = c.voters
+        && !matches!(v, 1 | 3 | 5 | 7)
+    {
+        bail!("controllers.voters must be 1, 3, 5 or 7 (an odd number, at most 7), not {v}");
+    }
+    if let Some(d) = c.dead_voter_after_s
+        && d != 0
+        && d < crate::membership::MIN_DEAD_AFTER_S
+    {
+        bail!(
+            "controllers.dead_voter_after_s must be 0 (never) or at least {} seconds, not {d}",
+            crate::membership::MIN_DEAD_AFTER_S
+        );
+    }
+    Ok(())
+}
+
 /// Compression settings (§9.8): control off or zstd, data off or lz4.
 pub fn compression(c: &wp::CompressionConfig) -> Result<()> {
     crate::compress::check(c.control, c.data)

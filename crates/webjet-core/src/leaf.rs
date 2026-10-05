@@ -1,7 +1,8 @@
 //! Tree leaf encodings (§6.4, §15.3).
 //!
 //! Controller-built leaves (NodeRecord, committed Tombstone, Policy, DnsConfig,
-//! Seeds, Limits, Validity, TransportConfig, NodeConfig) are unsigned `Leaf`
+//! Seeds, Limits, Validity, TransportConfig, NodeConfig, ControllerSettings)
+//! are unsigned `Leaf`
 //! wrappers.
 //! Account leaves keep their own signature: their bytes are the `Signed`
 //! envelope of the AccountRecord or AccountTombstone (§6.10).
@@ -35,6 +36,7 @@ pub enum LeafValue {
     Validity(wp::Validity),
     Transport(wp::TransportConfig),
     NodeConfig(wp::NodeConfig),
+    Controllers(wp::ControllerSettings),
     /// A leaf kind this software doesn't know (added by a later release):
     /// kept and hashed, otherwise ignored, so the tree still syncs (§15.7).
     Unknown,
@@ -109,7 +111,8 @@ pub fn decode(k: u8, key: &Bytes32, bytes: &[u8]) -> Result<LeafValue> {
         | kind::SEEDS
         | kind::LIMITS
         | kind::VALIDITY
-        | kind::TRANSPORT => {
+        | kind::TRANSPORT
+        | kind::CONTROLLERS => {
             if *key != SINGLETON {
                 bail!("singleton leaf with a non-zero key");
             }
@@ -124,6 +127,9 @@ pub fn decode(k: u8, key: &Bytes32, bytes: &[u8]) -> Result<LeafValue> {
                 }
                 (kind::TRANSPORT, mt::TRANSPORT_CONFIG) => {
                     LeafValue::Transport(wp::TransportConfig::decode_bytes(&body)?)
+                }
+                (kind::CONTROLLERS, mt::CONTROLLER_SETTINGS) => {
+                    LeafValue::Controllers(wp::ControllerSettings::decode_bytes(&body)?)
                 }
                 _ => bail!("leaf kind {k} with type {}", mt::name(ty)),
             }
@@ -147,6 +153,7 @@ pub fn version(v: &LeafValue) -> u64 {
         LeafValue::Validity(v) => v.valid_until,
         LeafValue::Transport(t) => t.version,
         LeafValue::NodeConfig(c) => c.version,
+        LeafValue::Controllers(c) => c.version,
         LeafValue::Unknown => 0,
     }
 }
@@ -177,4 +184,7 @@ pub fn encode_transport(t: &wp::TransportConfig) -> Vec<u8> {
 }
 pub fn encode_node_config(c: &wp::NodeConfig) -> Vec<u8> {
     wrap(mt::NODE_CONFIG, c.encode_bytes())
+}
+pub fn encode_controllers(c: &wp::ControllerSettings) -> Vec<u8> {
+    wrap(mt::CONTROLLER_SETTINGS, c.encode_bytes())
 }

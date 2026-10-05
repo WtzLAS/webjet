@@ -99,6 +99,8 @@ pub struct View {
     pub seeds: Option<wp::Seeds>,
     pub limits: Option<wp::Limits>,
     pub transport: Option<wp::TransportConfig>,
+    /// `[controllers]` (§7.5); absent = the built-in values.
+    pub controller_settings: Option<wp::ControllerSettings>,
     /// The network configuration's version (§6.18): the highest version of
     /// the Policy, DnsConfig, Seeds, Limits and TransportConfig leaves
     /// (0 = nothing applied yet).
@@ -1137,6 +1139,10 @@ pub fn build_view(
             LeafValue::Transport(t) => {
                 v.network_version = v.network_version.max(t.version);
                 v.transport = Some(t);
+            }
+            LeafValue::Controllers(c) => {
+                v.network_version = v.network_version.max(c.version);
+                v.controller_settings = Some(c);
             }
             LeafValue::NodeConfig(c) => {
                 v.node_configs.insert(crypto::opt_k32(&c.node_id), c);

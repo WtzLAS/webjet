@@ -289,6 +289,7 @@ pub fn kind_name(k: u8) -> &'static str {
         kind::VALIDITY => "validity",
         kind::TRANSPORT => "transport",
         kind::NODE_CONFIG => "node config",
+        kind::CONTROLLERS => "controllers",
         _ => "unknown",
     }
 }
@@ -544,6 +545,20 @@ fn decode_leaf(k: u8, key: Bytes32, bytes: &[u8], names: &Names) -> Leaf {
                     c.seeds.as_ref().map(|v| v.len()).unwrap_or(0),
                     c.dns_records.as_ref().map(|v| v.len()).unwrap_or(0),
                 ),
+            );
+        }
+        LeafValue::Controllers(c) => {
+            l.record = "ControllerSettings".into();
+            let s = webjet_core::membership::Settings::of(Some(c));
+            put("Automatic membership", s.auto_membership.to_string());
+            put("Voters", s.voters.to_string());
+            put(
+                "Dead voter after",
+                if s.dead_voter_after_s == 0 {
+                    "never".into()
+                } else {
+                    format!("{} s", s.dead_voter_after_s)
+                },
             );
         }
         LeafValue::Unknown => {

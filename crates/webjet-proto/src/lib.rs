@@ -95,6 +95,7 @@ codec! {
     AccountRecord => AccountRecordRef, AccountTombstone => AccountTombstoneRef, Policy => PolicyRef,
     DnsConfig => DnsConfigRef, Seeds => SeedsRef, Limits => LimitsRef, Validity => ValidityRef,
     TransportConfig => TransportConfigRef, NodeConfig => NodeConfigRef,
+    ControllerSettings => ControllerSettingsRef,
     NetworkConfig => NetworkConfigRef, SignedTreeHead => SignedTreeHeadRef,
     SigningKeyCert => SigningKeyCertRef, SigningKeyTombstone => SigningKeyTombstoneRef,
     EmergencyKeyCert => EmergencyKeyCertRef, StateVersion => StateVersionRef, Genesis => GenesisRef,
@@ -309,6 +310,7 @@ pub mod msg_type {
     pub const CERT_REQUEST: u16 = 25;
     pub const NODE_CONFIG: u16 = 26;
     pub const LOG_REQUEST: u16 = 27;
+    pub const CONTROLLER_SETTINGS: u16 = 28;
 
     pub fn name(t: u16) -> &'static str {
         match t {
@@ -339,6 +341,7 @@ pub mod msg_type {
             CERT_REQUEST => "SigningKeyCert request",
             NODE_CONFIG => "NodeConfig",
             LOG_REQUEST => "LogRequest",
+            CONTROLLER_SETTINGS => "ControllerSettings",
             _ => "unknown",
         }
     }

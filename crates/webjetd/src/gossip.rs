@@ -801,6 +801,8 @@ fn features(n: &Node) -> Vec<String> {
         "kcp".to_string(),
         "anytls".into(),
         crate::proxy::FEATURE.into(),
+        // Applies automatic membership entries (§7.5).
+        webjet_core::membership::FEATURE.into(),
     ];
     if n.dataplane.get().is_some_and(|d| {
         d.proxy

@@ -7,6 +7,7 @@ pub mod conntrack;
 pub mod crypto;
 pub mod frames;
 pub mod leaf;
+pub mod membership;
 pub mod merkle;
 pub mod packet;
 pub mod padding;

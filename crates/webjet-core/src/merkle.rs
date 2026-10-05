@@ -23,6 +23,8 @@ pub mod kind {
     pub const TRANSPORT: u8 = 8;
     /// Node-scope configuration, keyed by node_id (§6.19).
     pub const NODE_CONFIG: u8 = 9;
+    /// How the leader manages the controller cluster (§7.5), from 0.7.0.
+    pub const CONTROLLERS: u8 = 10;
 }
 
 pub fn path_of(kind: u8, key: &Bytes32) -> Bytes32 {

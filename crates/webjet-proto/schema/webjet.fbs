@@ -211,9 +211,21 @@ table TransportConfig {
     compression: CompressionConfig;
 }
 
+// How the leader manages the controller cluster's membership (§7.5).
+// Unset fields take the built-in default. Leaf kind CONTROLLERS, written
+// only when the network configuration has a `[controllers]` section (so
+// controllers from before 0.7.0 don't diverge on configs without one).
+table ControllerSettings {
+    version: uint64;
+    auto_membership: bool = null;     // built-in true
+    voters: ubyte = null;             // target number of voters: 1, 3, 5 or 7; built-in 5
+    dead_voter_after_s: uint32 = null; // replace a voter unheard for this long; 0 = never; built-in 3600
+}
+
 // The network-scope configuration as one document (§6.18). Applying it
-// writes the Policy, DnsConfig, Seeds, Limits and TransportConfig leaves in
-// one log entry, each with the document's version.
+// writes the Policy, DnsConfig, Seeds, Limits and TransportConfig leaves
+// (and the ControllerSettings leaf when `controllers` is present) in one
+// log entry, each with the document's version.
 table NetworkConfig {
     version: uint64;
     policy: Policy;
@@ -221,6 +233,7 @@ table NetworkConfig {
     seeds: Seeds;
     limits: Limits;
     transport: TransportConfig;
+    controllers: ControllerSettings;
 }
 
 // Node-scope configuration (§6.19): one node's overrides of the network
@@ -604,6 +617,8 @@ table ExpireEnrollmentsEntry { now: uint64; }
 table NoopEntry { term: uint64; }
 table GenesisEntry { genesis: [ubyte]; }
 table MembershipEntry { voters: [Key32]; learners: [Key32]; }
+// A membership change the leader proposes by itself (§7.5, automatic membership).
+table AutoMembershipEntry { change: MembershipChange = AddLearner; node_id: Key32; }
 
 union EntryPayload {
     OpEntry,
@@ -616,6 +631,7 @@ union EntryPayload {
     NoopEntry,
     GenesisEntry,
     MembershipEntry,
+    AutoMembershipEntry,
 }
 
 // Random values chosen by the leader before proposing (§15.5).

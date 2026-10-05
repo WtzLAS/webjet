@@ -3,7 +3,8 @@
 //!
 //! One schema, two scopes:
 //! - **network scope** (`network.toml`, admins): `[policy]`, `[dns]`,
-//!   `[[seeds]]`, `[transport]`, `[limits]` — the same on every node.
+//!   `[[seeds]]`, `[transport]`, `[limits]`, `[controllers]` — the same on
+//!   every node.
 //! - **node scope** (one node, its owner or an admin): a subset that
 //!   overrides or extends the network's for that node only:
 //!   `[transport.priority]`, `[limits.value]`, `[[seeds]]` (tried first),
@@ -15,7 +16,7 @@
 //! next version itself.
 //!
 //! A top-level section the file leaves out (`[policy]`, `[dns]`, `seeds`,
-//! `[transport]`, `[limits]`) stays as it is; a section that is present
+//! `[transport]`, `[limits]`, `[controllers]`) stays as it is; a section that is present
 //! replaces the current one completely, so an empty `[limits]` goes back to
 //! the built-in limits and `seeds = []` removes the seeds.
 
@@ -59,6 +60,49 @@ pub struct ConfigFile {
     /// Reverse proxy ports (node scope only, §11.11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<Vec<ProxyFile>>,
+    /// The controller cluster's membership (network scope only, §7.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controllers: Option<ControllersSection>,
+}
+
+/// `[controllers]` (§7.5): how the Raft leader manages membership. A key
+/// left out takes the built-in value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControllersSection {
+    /// The leader adds controllers as learners, promotes the earliest-joined
+    /// ones to voters (an odd number, at most `voters`), removes revoked
+    /// ones and replaces dead voters. Built-in true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_membership: Option<bool>,
+    /// Target number of voters: 1, 3, 5 or 7. Built-in 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voters: Option<u8>,
+    /// Seconds a voter may be unreachable before a healthy learner takes
+    /// its place; 0 = never. Built-in 3600.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dead_voter_after_s: Option<u32>,
+}
+
+impl ControllersSection {
+    fn to_wire(&self, version: u64) -> Result<wp::ControllerSettings> {
+        let c = wp::ControllerSettings {
+            version,
+            auto_membership: self.auto_membership,
+            voters: self.voters,
+            dead_voter_after_s: self.dead_voter_after_s,
+        };
+        webjet_core::validate::controller_settings(&c)?;
+        Ok(c)
+    }
+
+    fn from_wire(c: &wp::ControllerSettings) -> ControllersSection {
+        ControllersSection {
+            auto_membership: c.auto_membership,
+            voters: c.voters,
+            dead_voter_after_s: c.dead_voter_after_s,
+        }
+    }
 }
 
 /// `[[proxy]]`: listen on a TCP or UDP port of this node and forward each
@@ -284,6 +328,9 @@ impl ConfigFile {
         if self.policy.is_some() {
             bad.push("policy");
         }
+        if self.controllers.is_some() {
+            bad.push("controllers");
+        }
         if let Some(d) = &self.dns {
             if d.suffix.is_some() {
                 bad.push("dns.suffix");
@@ -397,6 +444,11 @@ impl ConfigFile {
             })),
             limits: Some(Box::new(limits)),
             transport: Some(Box::new(transport)),
+            controllers: self
+                .controllers
+                .as_ref()
+                .map(|c| c.to_wire(version).map(Box::new))
+                .transpose()?,
         })
     }
 
@@ -451,6 +503,10 @@ impl ConfigFile {
             transport: self.transport.clone().or_else(|| current.transport.clone()),
             limits: self.limits.clone().or_else(|| current.limits.clone()),
             proxy: self.proxy.clone().or_else(|| current.proxy.clone()),
+            controllers: self
+                .controllers
+                .clone()
+                .or_else(|| current.controllers.clone()),
         }
     }
 
@@ -463,6 +519,7 @@ impl ConfigFile {
             ("transport", self.transport.is_some()),
             ("limits", self.limits.is_some()),
             ("proxy", self.proxy.is_some()),
+            ("controllers", self.controllers.is_some()),
         ]
         .into_iter()
         .filter_map(|(k, set)| set.then_some(k))
@@ -802,6 +859,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
     let sd: Option<wp::Seeds> = leaf(tree, "seeds")?;
     let lim: Option<wp::Limits> = leaf(tree, "limits")?;
     let tr: Option<wp::TransportConfig> = leaf(tree, "transport")?;
+    let ctl: Option<wp::ControllerSettings> = leaf(tree, "controllers")?;
     let policy = pol
         .map(|p| PolicyFile {
             default: action(p.default_action).into(),
@@ -960,6 +1018,10 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         transport: Some(transport),
         limits: Some(limits),
         proxy: None,
+        // Not spelled out with `fill` (render_network explains the built-in
+        // values in a comment): a file with `[controllers]` writes a leaf
+        // controllers before 0.7.0 don't know.
+        controllers: ctl.as_ref().map(ControllersSection::from_wire),
     })
 }
 
@@ -1029,6 +1091,7 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
             value,
             ..Default::default()
         }),
+        controllers: None,
     }
 }
 
@@ -1093,6 +1156,25 @@ pub fn render_network(tree: &Value) -> Result<String> {
             s,
             "# Limits not set (no limit by default): {}.",
             unset.join(", ")
+        );
+    }
+    let d = webjet_core::membership::Settings::of(None);
+    let c = f.controllers.clone().unwrap_or_default();
+    let mut builtin = Vec::new();
+    if c.auto_membership.is_none() {
+        builtin.push(format!("auto_membership = {}", d.auto_membership));
+    }
+    if c.voters.is_none() {
+        builtin.push(format!("voters = {}", d.voters));
+    }
+    if c.dead_voter_after_s.is_none() {
+        builtin.push(format!("dead_voter_after_s = {}", d.dead_voter_after_s));
+    }
+    if !builtin.is_empty() {
+        let _ = writeln!(
+            s,
+            "# [controllers] built-in values in force: {} (the leader manages\n# the Raft membership; set auto_membership = false to do it by hand).",
+            builtin.join(", ")
         );
     }
     s.push('\n');
@@ -1172,6 +1254,7 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
             value,
             ..Default::default()
         }),
+        controllers: None,
         proxy: None,
     })
 }
@@ -1390,7 +1473,9 @@ pub fn network_apply(f: &ConfigFile, tree: &Value, base: &Path) -> Result<Networ
     let from = f.base_version()?;
     let sections = f.sections();
     if sections.is_empty() {
-        bail!("the file sets nothing: no [policy], [dns], seeds, [transport] or [limits]");
+        bail!(
+            "the file sets nothing: no [policy], [dns], seeds, [transport], [limits] or [controllers]"
+        );
     }
     let now = tree["network_version"].as_u64().unwrap_or(0);
     if from != now {
@@ -1571,6 +1656,55 @@ value = { circuits_global = 9000 }
             assert!(e.contains(k), "{k}: {e}");
         }
         assert!(node_from_wire(None).is_empty());
+    }
+
+    #[test]
+    fn controller_settings() {
+        // Not spelled out (an older controller would diverge on the leaf),
+        // but `show` names the built-in values.
+        let text = render_network(&empty_tree()).unwrap();
+        assert!(
+            text.contains("auto_membership = true, voters = 5, dead_voter_after_s = 3600"),
+            "{text}"
+        );
+        let f = ConfigFile::parse(&text).unwrap();
+        assert!(f.controllers.is_none());
+        assert!(
+            f.to_network(1, Path::new("/x"))
+                .unwrap()
+                .controllers
+                .is_none()
+        );
+        // Set: written with the document's version, and read back.
+        let f = ConfigFile::parse("version = 0\n[controllers]\nvoters = 3\n").unwrap();
+        let w = f.to_network(4, Path::new("/x")).unwrap();
+        let c = w.controllers.clone().unwrap();
+        assert_eq!((c.version, c.voters, c.auto_membership), (4, Some(3), None));
+        let mut t = empty_tree();
+        t["controllers"] = serde_json::to_value(&*c).unwrap();
+        let back = network_from_tree(&t, false).unwrap();
+        assert_eq!(back.controllers, f.controllers);
+        assert!(
+            render_network(&t)
+                .unwrap()
+                .contains("[controllers]\nvoters = 3")
+        );
+        // A file without the section keeps it.
+        let other = ConfigFile::parse("version = 0\n[limits]\n").unwrap();
+        assert_eq!(other.over(&back).controllers, f.controllers);
+        // Bad values; node scope doesn't take it.
+        for bad in [
+            "voters = 4",
+            "voters = 9",
+            "voters = 0",
+            "dead_voter_after_s = 10",
+        ] {
+            let f = ConfigFile::parse(&format!("version = 0\n[controllers]\n{bad}\n")).unwrap();
+            assert!(f.to_network(1, Path::new("/x")).is_err(), "{bad}");
+        }
+        let f = ConfigFile::parse("version = 0\n[controllers]\nauto_membership = false\n").unwrap();
+        assert!(f.check_scope(Scope::Node).is_err());
+        assert!(ConfigFile::parse("[controllers]\nmax = 3\n").is_err());
     }
 
     #[test]

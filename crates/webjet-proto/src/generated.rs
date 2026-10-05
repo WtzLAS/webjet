@@ -22488,10 +22488,322 @@ mod root {
             }
         }
 
+        /// The table `MemberSince` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `MemberSince` in the file `schema/wire.fbs:242`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct MemberSince {
+            /// The field `node_id` in the table `MemberSince`
+            pub node_id: ::core::option::Option<self::Key32>,
+            /// The field `index` in the table `MemberSince`
+            pub index: u64,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for MemberSince {
+            fn default() -> Self {
+                Self {
+                    node_id: ::core::default::Default::default(),
+                    index: 0,
+                }
+            }
+        }
+
+        impl MemberSince {
+            /// Creates a [MemberSinceBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> MemberSinceBuilder<()> {
+                MemberSinceBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_node_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_index: impl ::planus::WriteAsDefault<u64, u64>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_node_id = field_node_id.prepare(builder);
+                let prepared_index = field_index.prepare(builder, &0);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<8> =
+                    ::core::default::Default::default();
+                if prepared_node_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+                if prepared_index.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_node_id) = prepared_node_id {
+                            object_writer.write::<_, _, 32>(&prepared_node_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_index) = prepared_index {
+                            object_writer.write::<_, _, 8>(&prepared_index);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<MemberSince>> for MemberSince {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<MemberSince> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<MemberSince>> for MemberSince {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<MemberSince>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<MemberSince> for MemberSince {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<MemberSince> {
+                MemberSince::create(builder, self.node_id, self.index)
+            }
+        }
+
+        /// Builder for serializing an instance of the [MemberSince] type.
+        ///
+        /// Can be created using the [MemberSince::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct MemberSinceBuilder<State>(State);
+
+        impl MemberSinceBuilder<()> {
+            /// Setter for the [`node_id` field](MemberSince#structfield.node_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id<T0>(self, value: T0) -> MemberSinceBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                MemberSinceBuilder((value,))
+            }
+
+            /// Sets the [`node_id` field](MemberSince#structfield.node_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id_as_null(self) -> MemberSinceBuilder<((),)> {
+                self.node_id(())
+            }
+        }
+
+        impl<T0> MemberSinceBuilder<(T0,)> {
+            /// Setter for the [`index` field](MemberSince#structfield.index).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn index<T1>(self, value: T1) -> MemberSinceBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                MemberSinceBuilder((v0, value))
+            }
+
+            /// Sets the [`index` field](MemberSince#structfield.index) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn index_as_default(self) -> MemberSinceBuilder<(T0, ::planus::DefaultValue)> {
+                self.index(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> MemberSinceBuilder<(T0, T1)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [MemberSince].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<MemberSince>
+            where
+                Self: ::planus::WriteAsOffset<MemberSince>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAs<::planus::Offset<MemberSince>> for MemberSinceBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<MemberSince>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<MemberSince> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOptional<::planus::Offset<MemberSince>>
+            for MemberSinceBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<MemberSince>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<MemberSince>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOffset<MemberSince> for MemberSinceBuilder<(T0, T1)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<MemberSince> {
+                let (v0, v1) = &self.0;
+                MemberSince::create(builder, v0, v1)
+            }
+        }
+
+        /// Reference to a deserialized [MemberSince].
+        #[derive(Copy, Clone)]
+        pub struct MemberSinceRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> MemberSinceRef<'a> {
+            /// Getter for the [`node_id` field](MemberSince#structfield.node_id).
+            #[inline]
+            pub fn node_id(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "MemberSince", "node_id")
+            }
+
+            /// Getter for the [`index` field](MemberSince#structfield.index).
+            #[inline]
+            pub fn index(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(1, "MemberSince", "index")?.unwrap_or(0))
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for MemberSinceRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("MemberSinceRef");
+                if let ::core::option::Option::Some(field_node_id) = self.node_id().transpose() {
+                    f.field("node_id", &field_node_id);
+                }
+                f.field("index", &self.index());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<MemberSinceRef<'a>> for MemberSince {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: MemberSinceRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    node_id: value.node_id()?.map(::core::convert::Into::into),
+                    index: ::core::convert::TryInto::try_into(value.index()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for MemberSinceRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for MemberSinceRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[MemberSinceRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<MemberSince>> for MemberSince {
+            type Value = ::planus::Offset<MemberSince>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<MemberSince>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for MemberSinceRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[MemberSinceRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `ControllerSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:242`
+        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:244`
         #[derive(
             Clone,
             Debug,
@@ -22534,6 +22846,10 @@ mod root {
                 ::core::option::Option<::planus::alloc::vec::Vec<::planus::alloc::string::String>>,
             /// The field `genesis` in the table `ControllerSnapshot`
             pub genesis: ::core::option::Option<::planus::alloc::vec::Vec<u8>>,
+            /// The field `member_since` in the table `ControllerSnapshot`
+            pub member_since: ::core::option::Option<::planus::alloc::vec::Vec<self::MemberSince>>,
+            /// The field `removed_by_admin` in the table `ControllerSnapshot`
+            pub removed_by_admin: ::core::option::Option<::planus::alloc::vec::Vec<self::Key32>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -22554,6 +22870,8 @@ mod root {
                     state_version: ::core::default::Default::default(),
                     retired_names: ::core::default::Default::default(),
                     genesis: ::core::default::Default::default(),
+                    member_since: ::core::default::Default::default(),
+                    removed_by_admin: ::core::default::Default::default(),
                 }
             }
         }
@@ -22594,6 +22912,10 @@ mod root {
                     ::planus::Offset<[::planus::Offset<str>]>,
                 >,
                 field_genesis: impl ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+                field_member_since: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::MemberSince>]>,
+                >,
+                field_removed_by_admin: impl ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
             ) -> ::planus::Offset<Self> {
                 let prepared_last_index = field_last_index.prepare(builder, &0);
                 let prepared_last_term = field_last_term.prepare(builder, &0);
@@ -22609,8 +22931,10 @@ mod root {
                 let prepared_state_version = field_state_version.prepare(builder);
                 let prepared_retired_names = field_retired_names.prepare(builder);
                 let prepared_genesis = field_genesis.prepare(builder);
+                let prepared_member_since = field_member_since.prepare(builder);
+                let prepared_removed_by_admin = field_removed_by_admin.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<32> =
+                let mut table_writer: ::planus::table_writer::TableWriter<36> =
                     ::core::default::Default::default();
                 if prepared_last_index.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -22653,6 +22977,13 @@ mod root {
                 }
                 if prepared_genesis.is_some() {
                     table_writer.write_entry::<::planus::Offset<[u8]>>(13);
+                }
+                if prepared_member_since.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::MemberSince>]>>(14);
+                }
+                if prepared_removed_by_admin.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[self::Key32]>>(15);
                 }
                 if prepared_psk_current.is_some() {
                     table_writer.write_entry::<u16>(6);
@@ -22711,6 +23042,16 @@ mod root {
                         if let ::core::option::Option::Some(prepared_genesis) = prepared_genesis {
                             object_writer.write::<_, _, 4>(&prepared_genesis);
                         }
+                        if let ::core::option::Option::Some(prepared_member_since) =
+                            prepared_member_since
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_member_since);
+                        }
+                        if let ::core::option::Option::Some(prepared_removed_by_admin) =
+                            prepared_removed_by_admin
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_removed_by_admin);
+                        }
                         if let ::core::option::Option::Some(prepared_psk_current) =
                             prepared_psk_current
                         {
@@ -22768,6 +23109,8 @@ mod root {
                     &self.state_version,
                     &self.retired_names,
                     &self.genesis,
+                    &self.member_since,
+                    &self.removed_by_admin,
                 )
             }
         }
@@ -23156,6 +23499,165 @@ mod root {
         impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>
             ControllerSnapshotBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
         {
+            /// Setter for the [`member_since` field](ControllerSnapshot#structfield.member_since).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn member_since<T14>(
+                self,
+                value: T14,
+            ) -> ControllerSnapshotBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+            )>
+            where
+                T14: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::MemberSince>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13) = self.0;
+                ControllerSnapshotBuilder((
+                    v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, value,
+                ))
+            }
+
+            /// Sets the [`member_since` field](ControllerSnapshot#structfield.member_since) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn member_since_as_null(
+                self,
+            ) -> ControllerSnapshotBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                (),
+            )> {
+                self.member_since(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>
+            ControllerSnapshotBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+            )>
+        {
+            /// Setter for the [`removed_by_admin` field](ControllerSnapshot#structfield.removed_by_admin).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn removed_by_admin<T15>(
+                self,
+                value: T15,
+            ) -> ControllerSnapshotBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                T15,
+            )>
+            where
+                T15: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14) = self.0;
+                ControllerSnapshotBuilder((
+                    v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, value,
+                ))
+            }
+
+            /// Sets the [`removed_by_admin` field](ControllerSnapshot#structfield.removed_by_admin) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn removed_by_admin_as_null(
+                self,
+            ) -> ControllerSnapshotBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                (),
+            )> {
+                self.removed_by_admin(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>
+            ControllerSnapshotBuilder<(
+                T0,
+                T1,
+                T2,
+                T3,
+                T4,
+                T5,
+                T6,
+                T7,
+                T8,
+                T9,
+                T10,
+                T11,
+                T12,
+                T13,
+                T14,
+                T15,
+            )>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [ControllerSnapshot].
             #[inline]
             pub fn finish(
@@ -23186,6 +23688,8 @@ mod root {
                 T11: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
                 T12: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
                 T13: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+                T14: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::MemberSince>]>>,
+                T15: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
             > ::planus::WriteAs<::planus::Offset<ControllerSnapshot>>
             for ControllerSnapshotBuilder<(
                 T0,
@@ -23202,6 +23706,8 @@ mod root {
                 T11,
                 T12,
                 T13,
+                T14,
+                T15,
             )>
         {
             type Prepared = ::planus::Offset<ControllerSnapshot>;
@@ -23232,6 +23738,8 @@ mod root {
                 T11: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
                 T12: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
                 T13: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+                T14: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::MemberSince>]>>,
+                T15: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
             > ::planus::WriteAsOptional<::planus::Offset<ControllerSnapshot>>
             for ControllerSnapshotBuilder<(
                 T0,
@@ -23248,6 +23756,8 @@ mod root {
                 T11,
                 T12,
                 T13,
+                T14,
+                T15,
             )>
         {
             type Prepared = ::planus::Offset<ControllerSnapshot>;
@@ -23278,6 +23788,8 @@ mod root {
                 T11: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
                 T12: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
                 T13: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+                T14: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::MemberSince>]>>,
+                T15: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
             > ::planus::WriteAsOffset<ControllerSnapshot>
             for ControllerSnapshotBuilder<(
                 T0,
@@ -23294,6 +23806,8 @@ mod root {
                 T11,
                 T12,
                 T13,
+                T14,
+                T15,
             )>
         {
             #[inline]
@@ -23301,9 +23815,10 @@ mod root {
                 &self,
                 builder: &mut ::planus::Builder,
             ) -> ::planus::Offset<ControllerSnapshot> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13) = &self.0;
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) =
+                    &self.0;
                 ControllerSnapshot::create(
-                    builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13,
+                    builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15,
                 )
             }
         }
@@ -23448,6 +23963,27 @@ mod root {
             pub fn genesis(&self) -> ::planus::Result<::core::option::Option<&'a [u8]>> {
                 self.0.access(13, "ControllerSnapshot", "genesis")
             }
+
+            /// Getter for the [`member_since` field](ControllerSnapshot#structfield.member_since).
+            #[inline]
+            pub fn member_since(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::MemberSinceRef<'a>>>,
+                >,
+            > {
+                self.0.access(14, "ControllerSnapshot", "member_since")
+            }
+
+            /// Getter for the [`removed_by_admin` field](ControllerSnapshot#structfield.removed_by_admin).
+            #[inline]
+            pub fn removed_by_admin(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<::planus::Vector<'a, self::Key32Ref<'a>>>>
+            {
+                self.0.access(15, "ControllerSnapshot", "removed_by_admin")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for ControllerSnapshotRef<'a> {
@@ -23497,6 +24033,16 @@ mod root {
                 }
                 if let ::core::option::Option::Some(field_genesis) = self.genesis().transpose() {
                     f.field("genesis", &field_genesis);
+                }
+                if let ::core::option::Option::Some(field_member_since) =
+                    self.member_since().transpose()
+                {
+                    f.field("member_since", &field_member_since);
+                }
+                if let ::core::option::Option::Some(field_removed_by_admin) =
+                    self.removed_by_admin().transpose()
+                {
+                    f.field("removed_by_admin", &field_removed_by_admin);
                 }
                 f.finish()
             }
@@ -23566,6 +24112,20 @@ mod root {
                         ::core::option::Option::None
                     },
                     genesis: value.genesis()?.map(|v| v.to_vec()),
+                    member_since: if let ::core::option::Option::Some(member_since) =
+                        value.member_since()?
+                    {
+                        ::core::option::Option::Some(member_since.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    removed_by_admin: if let ::core::option::Option::Some(removed_by_admin) =
+                        value.removed_by_admin()?
+                    {
+                        ::core::option::Option::Some(removed_by_admin.to_vec()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
                 })
             }
         }
@@ -23646,7 +24206,7 @@ mod root {
         /// The table `EnrollRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollRequest` in the file `schema/wire.fbs:261`
+        /// * Table `EnrollRequest` in the file `schema/wire.fbs:265`
         #[derive(
             Clone,
             Debug,
@@ -24065,7 +24625,7 @@ mod root {
         /// The table `MerkleProof` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MerkleProof` in the file `schema/wire.fbs:268`
+        /// * Table `MerkleProof` in the file `schema/wire.fbs:272`
         #[derive(
             Clone,
             Debug,
@@ -24386,7 +24946,7 @@ mod root {
         /// The table `EnrollResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollResponse` in the file `schema/wire.fbs:270`
+        /// * Table `EnrollResponse` in the file `schema/wire.fbs:274`
         #[derive(
             Clone,
             Debug,
@@ -25341,7 +25901,7 @@ mod root {
         /// The table `EnrollmentTicket` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:287`
+        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:291`
         #[derive(
             Clone,
             Debug,
@@ -39284,10 +39844,470 @@ mod root {
             }
         }
 
+        /// The table `ControllerSettings` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:218`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct ControllerSettings {
+            /// The field `version` in the table `ControllerSettings`
+            pub version: u64,
+            /// The field `auto_membership` in the table `ControllerSettings`
+            pub auto_membership: ::core::option::Option<bool>,
+            /// The field `voters` in the table `ControllerSettings`
+            pub voters: ::core::option::Option<u8>,
+            /// The field `dead_voter_after_s` in the table `ControllerSettings`
+            pub dead_voter_after_s: ::core::option::Option<u32>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for ControllerSettings {
+            fn default() -> Self {
+                Self {
+                    version: 0,
+                    auto_membership: ::core::default::Default::default(),
+                    voters: ::core::default::Default::default(),
+                    dead_voter_after_s: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl ControllerSettings {
+            /// Creates a [ControllerSettingsBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> ControllerSettingsBuilder<()> {
+                ControllerSettingsBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_version: impl ::planus::WriteAsDefault<u64, u64>,
+                field_auto_membership: impl ::planus::WriteAsOptional<bool>,
+                field_voters: impl ::planus::WriteAsOptional<u8>,
+                field_dead_voter_after_s: impl ::planus::WriteAsOptional<u32>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_version = field_version.prepare(builder, &0);
+                let prepared_auto_membership = field_auto_membership.prepare(builder);
+                let prepared_voters = field_voters.prepare(builder);
+                let prepared_dead_voter_after_s = field_dead_voter_after_s.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_version.is_some() {
+                    table_writer.write_entry::<u64>(0);
+                }
+                if prepared_dead_voter_after_s.is_some() {
+                    table_writer.write_entry::<u32>(3);
+                }
+                if prepared_auto_membership.is_some() {
+                    table_writer.write_entry::<bool>(1);
+                }
+                if prepared_voters.is_some() {
+                    table_writer.write_entry::<u8>(2);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_version) = prepared_version {
+                            object_writer.write::<_, _, 8>(&prepared_version);
+                        }
+                        if let ::core::option::Option::Some(prepared_dead_voter_after_s) =
+                            prepared_dead_voter_after_s
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_dead_voter_after_s);
+                        }
+                        if let ::core::option::Option::Some(prepared_auto_membership) =
+                            prepared_auto_membership
+                        {
+                            object_writer.write::<_, _, 1>(&prepared_auto_membership);
+                        }
+                        if let ::core::option::Option::Some(prepared_voters) = prepared_voters {
+                            object_writer.write::<_, _, 1>(&prepared_voters);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<ControllerSettings>> for ControllerSettings {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ControllerSettings> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<ControllerSettings>> for ControllerSettings {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ControllerSettings>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<ControllerSettings> for ControllerSettings {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ControllerSettings> {
+                ControllerSettings::create(
+                    builder,
+                    self.version,
+                    self.auto_membership,
+                    self.voters,
+                    self.dead_voter_after_s,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [ControllerSettings] type.
+        ///
+        /// Can be created using the [ControllerSettings::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct ControllerSettingsBuilder<State>(State);
+
+        impl ControllerSettingsBuilder<()> {
+            /// Setter for the [`version` field](ControllerSettings#structfield.version).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version<T0>(self, value: T0) -> ControllerSettingsBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<u64, u64>,
+            {
+                ControllerSettingsBuilder((value,))
+            }
+
+            /// Sets the [`version` field](ControllerSettings#structfield.version) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version_as_default(
+                self,
+            ) -> ControllerSettingsBuilder<(::planus::DefaultValue,)> {
+                self.version(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> ControllerSettingsBuilder<(T0,)> {
+            /// Setter for the [`auto_membership` field](ControllerSettings#structfield.auto_membership).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn auto_membership<T1>(self, value: T1) -> ControllerSettingsBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<bool>,
+            {
+                let (v0,) = self.0;
+                ControllerSettingsBuilder((v0, value))
+            }
+
+            /// Sets the [`auto_membership` field](ControllerSettings#structfield.auto_membership) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn auto_membership_as_null(self) -> ControllerSettingsBuilder<(T0, ())> {
+                self.auto_membership(())
+            }
+        }
+
+        impl<T0, T1> ControllerSettingsBuilder<(T0, T1)> {
+            /// Setter for the [`voters` field](ControllerSettings#structfield.voters).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn voters<T2>(self, value: T2) -> ControllerSettingsBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<u8>,
+            {
+                let (v0, v1) = self.0;
+                ControllerSettingsBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`voters` field](ControllerSettings#structfield.voters) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn voters_as_null(self) -> ControllerSettingsBuilder<(T0, T1, ())> {
+                self.voters(())
+            }
+        }
+
+        impl<T0, T1, T2> ControllerSettingsBuilder<(T0, T1, T2)> {
+            /// Setter for the [`dead_voter_after_s` field](ControllerSettings#structfield.dead_voter_after_s).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dead_voter_after_s<T3>(
+                self,
+                value: T3,
+            ) -> ControllerSettingsBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<u32>,
+            {
+                let (v0, v1, v2) = self.0;
+                ControllerSettingsBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`dead_voter_after_s` field](ControllerSettings#structfield.dead_voter_after_s) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn dead_voter_after_s_as_null(self) -> ControllerSettingsBuilder<(T0, T1, T2, ())> {
+                self.dead_voter_after_s(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> ControllerSettingsBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [ControllerSettings].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ControllerSettings>
+            where
+                Self: ::planus::WriteAsOffset<ControllerSettings>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsOptional<bool>,
+                T2: ::planus::WriteAsOptional<u8>,
+                T3: ::planus::WriteAsOptional<u32>,
+            > ::planus::WriteAs<::planus::Offset<ControllerSettings>>
+            for ControllerSettingsBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<ControllerSettings>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ControllerSettings> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsOptional<bool>,
+                T2: ::planus::WriteAsOptional<u8>,
+                T3: ::planus::WriteAsOptional<u32>,
+            > ::planus::WriteAsOptional<::planus::Offset<ControllerSettings>>
+            for ControllerSettingsBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<ControllerSettings>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ControllerSettings>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<u64, u64>,
+                T1: ::planus::WriteAsOptional<bool>,
+                T2: ::planus::WriteAsOptional<u8>,
+                T3: ::planus::WriteAsOptional<u32>,
+            > ::planus::WriteAsOffset<ControllerSettings>
+            for ControllerSettingsBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ControllerSettings> {
+                let (v0, v1, v2, v3) = &self.0;
+                ControllerSettings::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [ControllerSettings].
+        #[derive(Copy, Clone)]
+        pub struct ControllerSettingsRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> ControllerSettingsRef<'a> {
+            /// Getter for the [`version` field](ControllerSettings#structfield.version).
+            #[inline]
+            pub fn version(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(0, "ControllerSettings", "version")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`auto_membership` field](ControllerSettings#structfield.auto_membership).
+            #[inline]
+            pub fn auto_membership(&self) -> ::planus::Result<::core::option::Option<bool>> {
+                self.0.access(1, "ControllerSettings", "auto_membership")
+            }
+
+            /// Getter for the [`voters` field](ControllerSettings#structfield.voters).
+            #[inline]
+            pub fn voters(&self) -> ::planus::Result<::core::option::Option<u8>> {
+                self.0.access(2, "ControllerSettings", "voters")
+            }
+
+            /// Getter for the [`dead_voter_after_s` field](ControllerSettings#structfield.dead_voter_after_s).
+            #[inline]
+            pub fn dead_voter_after_s(&self) -> ::planus::Result<::core::option::Option<u32>> {
+                self.0.access(3, "ControllerSettings", "dead_voter_after_s")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for ControllerSettingsRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("ControllerSettingsRef");
+                f.field("version", &self.version());
+                if let ::core::option::Option::Some(field_auto_membership) =
+                    self.auto_membership().transpose()
+                {
+                    f.field("auto_membership", &field_auto_membership);
+                }
+                if let ::core::option::Option::Some(field_voters) = self.voters().transpose() {
+                    f.field("voters", &field_voters);
+                }
+                if let ::core::option::Option::Some(field_dead_voter_after_s) =
+                    self.dead_voter_after_s().transpose()
+                {
+                    f.field("dead_voter_after_s", &field_dead_voter_after_s);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<ControllerSettingsRef<'a>> for ControllerSettings {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: ControllerSettingsRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    version: ::core::convert::TryInto::try_into(value.version()?)?,
+                    auto_membership: if let ::core::option::Option::Some(auto_membership) =
+                        value.auto_membership()?
+                    {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(
+                            auto_membership,
+                        )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    voters: if let ::core::option::Option::Some(voters) = value.voters()? {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(voters)?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    dead_voter_after_s: if let ::core::option::Option::Some(dead_voter_after_s) =
+                        value.dead_voter_after_s()?
+                    {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(
+                            dead_voter_after_s,
+                        )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for ControllerSettingsRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for ControllerSettingsRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[ControllerSettingsRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<ControllerSettings>> for ControllerSettings {
+            type Value = ::planus::Offset<ControllerSettings>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<ControllerSettings>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for ControllerSettingsRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[ControllerSettingsRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `NetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:217`
+        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:229`
         #[derive(
             Clone,
             Debug,
@@ -39313,6 +40333,9 @@ mod root {
             /// The field `transport` in the table `NetworkConfig`
             pub transport:
                 ::core::option::Option<::planus::alloc::boxed::Box<self::TransportConfig>>,
+            /// The field `controllers` in the table `NetworkConfig`
+            pub controllers:
+                ::core::option::Option<::planus::alloc::boxed::Box<self::ControllerSettings>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -39325,6 +40348,7 @@ mod root {
                     seeds: ::core::default::Default::default(),
                     limits: ::core::default::Default::default(),
                     transport: ::core::default::Default::default(),
+                    controllers: ::core::default::Default::default(),
                 }
             }
         }
@@ -39345,6 +40369,9 @@ mod root {
                 field_seeds: impl ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
                 field_limits: impl ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
                 field_transport: impl ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+                field_controllers: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<self::ControllerSettings>,
+                >,
             ) -> ::planus::Offset<Self> {
                 let prepared_version = field_version.prepare(builder, &0);
                 let prepared_policy = field_policy.prepare(builder);
@@ -39352,8 +40379,9 @@ mod root {
                 let prepared_seeds = field_seeds.prepare(builder);
                 let prepared_limits = field_limits.prepare(builder);
                 let prepared_transport = field_transport.prepare(builder);
+                let prepared_controllers = field_controllers.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<16> =
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
                     ::core::default::Default::default();
                 if prepared_version.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -39372,6 +40400,9 @@ mod root {
                 }
                 if prepared_transport.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::TransportConfig>>(5);
+                }
+                if prepared_controllers.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::ControllerSettings>>(6);
                 }
 
                 unsafe {
@@ -39394,6 +40425,11 @@ mod root {
                         if let ::core::option::Option::Some(prepared_transport) = prepared_transport
                         {
                             object_writer.write::<_, _, 4>(&prepared_transport);
+                        }
+                        if let ::core::option::Option::Some(prepared_controllers) =
+                            prepared_controllers
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_controllers);
                         }
                     });
                 }
@@ -39433,6 +40469,7 @@ mod root {
                     &self.seeds,
                     &self.limits,
                     &self.transport,
+                    &self.controllers,
                 )
             }
         }
@@ -39564,6 +40601,29 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5> NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`controllers` field](NetworkConfig#structfield.controllers).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn controllers<T6>(
+                self,
+                value: T6,
+            ) -> NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::ControllerSettings>>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                NetworkConfigBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`controllers` field](NetworkConfig#structfield.controllers) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn controllers_as_null(self) -> NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5, ())> {
+                self.controllers(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NetworkConfig].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig>
@@ -39581,8 +40641,9 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
                 T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::ControllerSettings>>,
             > ::planus::WriteAs<::planus::Offset<NetworkConfig>>
-            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<NetworkConfig>;
 
@@ -39599,8 +40660,9 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
                 T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::ControllerSettings>>,
             > ::planus::WriteAsOptional<::planus::Offset<NetworkConfig>>
-            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<NetworkConfig>;
 
@@ -39620,13 +40682,14 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::Seeds>>,
                 T4: ::planus::WriteAsOptional<::planus::Offset<self::Limits>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::TransportConfig>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::ControllerSettings>>,
             > ::planus::WriteAsOffset<NetworkConfig>
-            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            for NetworkConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NetworkConfig> {
-                let (v0, v1, v2, v3, v4, v5) = &self.0;
-                NetworkConfig::create(builder, v0, v1, v2, v3, v4, v5)
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                NetworkConfig::create(builder, v0, v1, v2, v3, v4, v5, v6)
             }
         }
 
@@ -39675,6 +40738,15 @@ mod root {
             {
                 self.0.access(5, "NetworkConfig", "transport")
             }
+
+            /// Getter for the [`controllers` field](NetworkConfig#structfield.controllers).
+            #[inline]
+            pub fn controllers(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::ControllerSettingsRef<'a>>>
+            {
+                self.0.access(6, "NetworkConfig", "controllers")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for NetworkConfigRef<'a> {
@@ -39696,6 +40768,11 @@ mod root {
                 if let ::core::option::Option::Some(field_transport) = self.transport().transpose()
                 {
                     f.field("transport", &field_transport);
+                }
+                if let ::core::option::Option::Some(field_controllers) =
+                    self.controllers().transpose()
+                {
+                    f.field("controllers", &field_controllers);
                 }
                 f.finish()
             }
@@ -39739,6 +40816,15 @@ mod root {
                     transport: if let ::core::option::Option::Some(transport) = value.transport()? {
                         ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
                             ::core::convert::TryInto::try_into(transport)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    controllers: if let ::core::option::Option::Some(controllers) =
+                        value.controllers()?
+                    {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(controllers)?,
                         ))
                     } else {
                         ::core::option::Option::None
@@ -39823,7 +40909,7 @@ mod root {
         /// The table `NodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NodeConfig` in the file `schema/webjet.fbs:229`
+        /// * Table `NodeConfig` in the file `schema/webjet.fbs:242`
         #[derive(
             Clone,
             Debug,
@@ -40596,7 +41682,7 @@ mod root {
         /// The table `ProxyRule` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyRule` in the file `schema/webjet.fbs:245`
+        /// * Table `ProxyRule` in the file `schema/webjet.fbs:258`
         #[derive(
             Clone,
             Debug,
@@ -41116,7 +42202,7 @@ mod root {
         /// The table `SignedTreeHead` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:256`
+        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:269`
         #[derive(
             Clone,
             Debug,
@@ -41642,7 +42728,7 @@ mod root {
         /// The table `SigningKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:265`
+        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:278`
         #[derive(
             Clone,
             Debug,
@@ -42121,7 +43207,7 @@ mod root {
         /// The table `SigningKeyTombstone` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:273`
+        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:286`
         #[derive(
             Clone,
             Debug,
@@ -42519,7 +43605,7 @@ mod root {
         /// The table `EmergencyKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:280`
+        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:293`
         #[derive(
             Clone,
             Debug,
@@ -42802,7 +43888,7 @@ mod root {
         /// The table `TypeSchema` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchema` in the file `schema/webjet.fbs:284`
+        /// * Table `TypeSchema` in the file `schema/webjet.fbs:297`
         #[derive(
             Clone,
             Debug,
@@ -43106,7 +44192,7 @@ mod root {
         /// The table `TypeSchemas` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:285`
+        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:298`
         #[derive(
             Clone,
             Debug,
@@ -43424,7 +44510,7 @@ mod root {
         /// The table `StateVersion` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `StateVersion` in the file `schema/webjet.fbs:287`
+        /// * Table `StateVersion` in the file `schema/webjet.fbs:300`
         #[derive(
             Clone,
             Debug,
@@ -43984,7 +45070,7 @@ mod root {
         /// The table `Genesis` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Genesis` in the file `schema/webjet.fbs:297`
+        /// * Table `Genesis` in the file `schema/webjet.fbs:310`
         #[derive(
             Clone,
             Debug,
@@ -44457,7 +45543,7 @@ mod root {
         /// The table `LogRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRequest` in the file `schema/webjet.fbs:309`
+        /// * Table `LogRequest` in the file `schema/webjet.fbs:322`
         #[derive(
             Clone,
             Debug,
@@ -44871,7 +45957,7 @@ mod root {
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:318`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:331`
         #[derive(
             Clone,
             Debug,
@@ -45281,7 +46367,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:325`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:338`
         #[derive(
             Clone,
             Debug,
@@ -46123,7 +47209,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:339`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:352`
         #[derive(
             Clone,
             Debug,
@@ -46578,7 +47664,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:347`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:360`
         #[derive(
             Clone,
             Debug,
@@ -47037,7 +48123,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:355`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:368`
         #[derive(
             Clone,
             Debug,
@@ -47585,7 +48671,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:364`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:377`
         #[derive(
             Clone,
             Debug,
@@ -48021,7 +49107,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:371`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:384`
         #[derive(
             Clone,
             Debug,
@@ -48525,7 +49611,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:379`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:392`
         #[derive(
             Clone,
             Debug,
@@ -49035,7 +50121,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:390`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:403`
         #[derive(
             Clone,
             Debug,
@@ -49397,7 +50483,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:398`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:411`
         #[derive(
             Copy,
             Clone,
@@ -49570,7 +50656,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:400`
+        /// * Table `Counter` in the file `schema/webjet.fbs:413`
         #[derive(
             Clone,
             Debug,
@@ -49879,7 +50965,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:402`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:415`
         #[derive(
             Clone,
             Debug,
@@ -50178,7 +51264,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:404`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:417`
         #[derive(
             Clone,
             Debug,
@@ -50576,7 +51662,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:411`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:424`
         #[derive(
             Clone,
             Debug,
@@ -51442,7 +52528,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:426`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:439`
         #[derive(
             Clone,
             Debug,
@@ -52467,7 +53553,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:443`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:456`
         #[derive(
             Clone,
             Debug,
@@ -52823,7 +53909,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:445`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:458`
         #[derive(
             Clone,
             Debug,
@@ -53178,7 +54264,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:447`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:460`
         #[derive(
             Clone,
             Debug,
@@ -54510,7 +55596,7 @@ mod root {
         /// The table `TunMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TunMetrics` in the file `schema/webjet.fbs:470`
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:483`
         #[derive(
             Clone,
             Debug,
@@ -54923,7 +56009,7 @@ mod root {
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:482`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:495`
         #[derive(
             Clone,
             Debug,
@@ -55643,7 +56729,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:496`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:509`
         #[derive(
             Clone,
             Debug,
@@ -56377,7 +57463,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:511`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:524`
         #[derive(
             Clone,
             Debug,
@@ -57226,7 +58312,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:525`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:538`
         #[derive(
             Clone,
             Debug,
@@ -57542,7 +58628,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:527`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:540`
         #[derive(
             Clone,
             Debug,
@@ -58353,7 +59439,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:541`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:554`
         #[derive(
             Clone,
             Debug,
@@ -58670,7 +59756,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:543`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:556`
         #[derive(
             Clone,
             Debug,
@@ -59095,7 +60181,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:550`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:563`
         #[derive(
             Clone,
             Debug,
@@ -59361,7 +60447,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:551`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:564`
         #[derive(
             Clone,
             Debug,
@@ -59646,7 +60732,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:554`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:567`
         #[derive(
             Clone,
             Debug,
@@ -59918,7 +61004,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:555`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:568`
         #[derive(
             Clone,
             Debug,
@@ -60188,7 +61274,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:556`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:569`
         #[derive(
             Clone,
             Debug,
@@ -60456,7 +61542,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:557`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:570`
         #[derive(
             Clone,
             Debug,
@@ -60728,7 +61814,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:558`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:571`
         #[derive(
             Clone,
             Debug,
@@ -61004,7 +62090,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:559`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:572`
         #[derive(
             Clone,
             Debug,
@@ -61341,7 +62427,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:560`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:573`
         #[derive(
             Clone,
             Debug,
@@ -61632,7 +62718,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:561`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:574`
         #[derive(
             Clone,
             Debug,
@@ -61907,7 +62993,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:563`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:576`
         #[derive(
             Copy,
             Clone,
@@ -62085,7 +63171,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:564`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:577`
         #[derive(
             Clone,
             Debug,
@@ -62421,7 +63507,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:566`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:579`
         #[derive(
             Clone,
             Debug,
@@ -62683,7 +63769,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:568`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:581`
         #[derive(
             Clone,
             Debug,
@@ -63707,7 +64793,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:588`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:601`
         #[derive(
             Clone,
             Debug,
@@ -64112,7 +65198,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:597`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:610`
         #[derive(
             Clone,
             Debug,
@@ -64376,7 +65462,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:598`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:611`
         #[derive(
             Clone,
             Debug,
@@ -64659,7 +65745,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:599`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:612`
         #[derive(
             Clone,
             Debug,
@@ -64948,7 +66034,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:600`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:613`
         #[derive(
             Clone,
             Debug,
@@ -65344,7 +66430,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:601`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:614`
         #[derive(
             Clone,
             Debug,
@@ -65627,7 +66713,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:602`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:615`
         #[derive(
             Clone,
             Debug,
@@ -65916,7 +67002,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:603`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:616`
         #[derive(
             Clone,
             Debug,
@@ -66207,7 +67293,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:604`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:617`
         #[derive(
             Clone,
             Debug,
@@ -66469,7 +67555,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:605`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:618`
         #[derive(
             Clone,
             Debug,
@@ -66736,7 +67822,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:606`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:619`
         #[derive(
             Clone,
             Debug,
@@ -67077,10 +68163,351 @@ mod root {
             }
         }
 
+        /// The table `AutoMembershipEntry` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:621`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct AutoMembershipEntry {
+            /// The field `change` in the table `AutoMembershipEntry`
+            pub change: self::MembershipChange,
+            /// The field `node_id` in the table `AutoMembershipEntry`
+            pub node_id: ::core::option::Option<self::Key32>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for AutoMembershipEntry {
+            fn default() -> Self {
+                Self {
+                    change: self::MembershipChange::AddLearner,
+                    node_id: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl AutoMembershipEntry {
+            /// Creates a [AutoMembershipEntryBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> AutoMembershipEntryBuilder<()> {
+                AutoMembershipEntryBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_change: impl ::planus::WriteAsDefault<
+                    self::MembershipChange,
+                    self::MembershipChange,
+                >,
+                field_node_id: impl ::planus::WriteAsOptional<self::Key32>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_change =
+                    field_change.prepare(builder, &self::MembershipChange::AddLearner);
+                let prepared_node_id = field_node_id.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<8> =
+                    ::core::default::Default::default();
+                if prepared_node_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(1);
+                }
+                if prepared_change.is_some() {
+                    table_writer.write_entry::<self::MembershipChange>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_node_id) = prepared_node_id {
+                            object_writer.write::<_, _, 32>(&prepared_node_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_change) = prepared_change {
+                            object_writer.write::<_, _, 1>(&prepared_change);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<AutoMembershipEntry>> for AutoMembershipEntry {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<AutoMembershipEntry> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<AutoMembershipEntry>> for AutoMembershipEntry {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<AutoMembershipEntry>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<AutoMembershipEntry> for AutoMembershipEntry {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<AutoMembershipEntry> {
+                AutoMembershipEntry::create(builder, self.change, self.node_id)
+            }
+        }
+
+        /// Builder for serializing an instance of the [AutoMembershipEntry] type.
+        ///
+        /// Can be created using the [AutoMembershipEntry::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct AutoMembershipEntryBuilder<State>(State);
+
+        impl AutoMembershipEntryBuilder<()> {
+            /// Setter for the [`change` field](AutoMembershipEntry#structfield.change).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn change<T0>(self, value: T0) -> AutoMembershipEntryBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<self::MembershipChange, self::MembershipChange>,
+            {
+                AutoMembershipEntryBuilder((value,))
+            }
+
+            /// Sets the [`change` field](AutoMembershipEntry#structfield.change) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn change_as_default(
+                self,
+            ) -> AutoMembershipEntryBuilder<(::planus::DefaultValue,)> {
+                self.change(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> AutoMembershipEntryBuilder<(T0,)> {
+            /// Setter for the [`node_id` field](AutoMembershipEntry#structfield.node_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id<T1>(self, value: T1) -> AutoMembershipEntryBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0,) = self.0;
+                AutoMembershipEntryBuilder((v0, value))
+            }
+
+            /// Sets the [`node_id` field](AutoMembershipEntry#structfield.node_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id_as_null(self) -> AutoMembershipEntryBuilder<(T0, ())> {
+                self.node_id(())
+            }
+        }
+
+        impl<T0, T1> AutoMembershipEntryBuilder<(T0, T1)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [AutoMembershipEntry].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<AutoMembershipEntry>
+            where
+                Self: ::planus::WriteAsOffset<AutoMembershipEntry>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<self::MembershipChange, self::MembershipChange>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAs<::planus::Offset<AutoMembershipEntry>>
+            for AutoMembershipEntryBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<AutoMembershipEntry>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<AutoMembershipEntry> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<self::MembershipChange, self::MembershipChange>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAsOptional<::planus::Offset<AutoMembershipEntry>>
+            for AutoMembershipEntryBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<AutoMembershipEntry>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<AutoMembershipEntry>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<self::MembershipChange, self::MembershipChange>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAsOffset<AutoMembershipEntry>
+            for AutoMembershipEntryBuilder<(T0, T1)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<AutoMembershipEntry> {
+                let (v0, v1) = &self.0;
+                AutoMembershipEntry::create(builder, v0, v1)
+            }
+        }
+
+        /// Reference to a deserialized [AutoMembershipEntry].
+        #[derive(Copy, Clone)]
+        pub struct AutoMembershipEntryRef<'a>(
+            #[allow(dead_code)] ::planus::table_reader::Table<'a>,
+        );
+
+        impl<'a> AutoMembershipEntryRef<'a> {
+            /// Getter for the [`change` field](AutoMembershipEntry#structfield.change).
+            #[inline]
+            pub fn change(&self) -> ::planus::Result<self::MembershipChange> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(0, "AutoMembershipEntry", "change")?
+                        .unwrap_or(self::MembershipChange::AddLearner),
+                )
+            }
+
+            /// Getter for the [`node_id` field](AutoMembershipEntry#structfield.node_id).
+            #[inline]
+            pub fn node_id(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(1, "AutoMembershipEntry", "node_id")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for AutoMembershipEntryRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("AutoMembershipEntryRef");
+                f.field("change", &self.change());
+                if let ::core::option::Option::Some(field_node_id) = self.node_id().transpose() {
+                    f.field("node_id", &field_node_id);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<AutoMembershipEntryRef<'a>> for AutoMembershipEntry {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: AutoMembershipEntryRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    change: ::core::convert::TryInto::try_into(value.change()?)?,
+                    node_id: value.node_id()?.map(::core::convert::Into::into),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for AutoMembershipEntryRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for AutoMembershipEntryRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[AutoMembershipEntryRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<AutoMembershipEntry>> for AutoMembershipEntry {
+            type Value = ::planus::Offset<AutoMembershipEntry>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<AutoMembershipEntry>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for AutoMembershipEntryRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[AutoMembershipEntryRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:608`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:623`
         #[derive(
             Clone,
             Debug,
@@ -67122,6 +68549,9 @@ mod root {
 
             /// The variant of type `MembershipEntry` in the union `EntryPayload`
             MembershipEntry(::planus::alloc::boxed::Box<self::MembershipEntry>),
+
+            /// The variant of type `AutoMembershipEntry` in the union `EntryPayload`
+            AutoMembershipEntry(::planus::alloc::boxed::Box<self::AutoMembershipEntry>),
         }
 
         impl EntryPayload {
@@ -67210,6 +68640,14 @@ mod root {
             ) -> ::planus::UnionOffset<Self> {
                 ::planus::UnionOffset::new(10, value.prepare(builder).downcast())
             }
+
+            #[inline]
+            pub fn create_auto_membership_entry(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::AutoMembershipEntry>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(11, value.prepare(builder).downcast())
+            }
         }
 
         impl ::planus::WriteAsUnion<EntryPayload> for EntryPayload {
@@ -67238,6 +68676,9 @@ mod root {
                     Self::NoopEntry(value) => Self::create_noop_entry(builder, value),
                     Self::GenesisEntry(value) => Self::create_genesis_entry(builder, value),
                     Self::MembershipEntry(value) => Self::create_membership_entry(builder, value),
+                    Self::AutoMembershipEntry(value) => {
+                        Self::create_auto_membership_entry(builder, value)
+                    }
                 }
             }
         }
@@ -67370,6 +68811,18 @@ mod root {
             ) -> EntryPayloadBuilder<::planus::Initialized<10, T>>
             where
                 T: ::planus::WriteAsOffset<self::MembershipEntry>,
+            {
+                EntryPayloadBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`AutoMembershipEntry` variant](EntryPayload#variant.AutoMembershipEntry).
+            #[inline]
+            pub fn auto_membership_entry<T>(
+                self,
+                value: T,
+            ) -> EntryPayloadBuilder<::planus::Initialized<11, T>>
+            where
+                T: ::planus::WriteAsOffset<self::AutoMembershipEntry>,
             {
                 EntryPayloadBuilder(::planus::Initialized(value))
             }
@@ -67649,6 +69102,32 @@ mod root {
                 ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
             }
         }
+        impl<T> ::planus::WriteAsUnion<EntryPayload> for EntryPayloadBuilder<::planus::Initialized<11, T>>
+        where
+            T: ::planus::WriteAsOffset<self::AutoMembershipEntry>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::UnionOffset<EntryPayload> {
+                ::planus::UnionOffset::new(11, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<EntryPayload>
+            for EntryPayloadBuilder<::planus::Initialized<11, T>>
+        where
+            T: ::planus::WriteAsOffset<self::AutoMembershipEntry>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<EntryPayload>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
 
         /// Reference to a deserialized [EntryPayload].
         #[derive(Copy, Clone, Debug)]
@@ -67663,6 +69142,7 @@ mod root {
             NoopEntry(self::NoopEntryRef<'a>),
             GenesisEntry(self::GenesisEntryRef<'a>),
             MembershipEntry(self::MembershipEntryRef<'a>),
+            AutoMembershipEntry(self::AutoMembershipEntryRef<'a>),
         }
 
         impl<'a> ::core::convert::TryFrom<EntryPayloadRef<'a>> for EntryPayload {
@@ -67729,6 +69209,12 @@ mod root {
                             ::core::convert::TryFrom::try_from(value)?,
                         ))
                     }
+
+                    EntryPayloadRef::AutoMembershipEntry(value) => {
+                        Self::AutoMembershipEntry(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
                 })
             }
         }
@@ -67770,6 +69256,9 @@ mod root {
                     10 => ::core::result::Result::Ok(Self::MembershipEntry(
                         ::planus::TableRead::from_buffer(buffer, field_offset)?,
                     )),
+                    11 => ::core::result::Result::Ok(Self::AutoMembershipEntry(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
                     _ => {
                         ::core::result::Result::Err(::planus::errors::ErrorKind::UnknownUnionTag {
                             tag,
@@ -67786,7 +69275,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:622`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:638`
         #[derive(
             Clone,
             Debug,
@@ -68100,7 +69589,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:627`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:643`
         #[derive(
             Clone,
             Debug,
@@ -68456,7 +69945,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:633`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:649`
         #[derive(
             Clone,
             Debug,

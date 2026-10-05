@@ -238,10 +238,19 @@ wait_for ctl-02 'webjetctl network controller cert-request --out /tmp/ctl-02.req
 docker cp "$P-ctl-02:/tmp/ctl-02.req" "$out/ctl-02.req" && docker cp "$out/ctl-02.req" "$P-ctl-01:/offline/ctl-02.req"
 on ctl-01 'webjetctl root --dir /offline/root controller sign /offline/ctl-02.req --out /offline/ctl-02.cert' | grep -q "key id" || fail "sign ctl-02"
 admin "network submit /offline/ctl-02.cert" >/dev/null 2>&1 || fail "submit ctl-02 cert"
-admin "network controller add-learner ctl-02" >/dev/null || fail "add-learner"
-wait_for ctl-02 'webjetctl network controller list | grep -q "role: Learner"' "ctl-02 not a learner"
+# Automatic membership (§7.5): the leader adds the certified controller as
+# a learner by itself; with two controllers one voter stays (an odd count).
+wait_for ctl-02 'webjetctl network controller list | grep -q "role: Learner"' "ctl-02 not added as a learner automatically"
+sleep 3
+ctl_voters() { on ctl-01 'webjetctl network controller list' | sed -n '/^  voters:/,/^ \{0,2\}[a-z_]*:/p' | grep -c "^  *- "; }
+[ "$(ctl_voters)" = 1 ] || fail "two controllers should keep one voter"
+# By hand, with automatic membership off.
+admin "network config set controllers.auto_membership false" >/dev/null || fail "turn automatic membership off"
 admin "network controller promote ctl-02" >/dev/null || fail "promote"
-wait_for ctl-01 'webjetctl network controller list | grep -A3 "voters:" | grep -c "^  *- " | grep -qx 2' "two voters"
+wait_for ctl-01 '[ "$(webjetctl network controller list | sed -n "/^  voters:/,/^ \{0,2\}[a-z_]*:/p" | grep -c "^  *- ")" = 2 ]' "two voters"
+admin "network controller demote ctl-02" >/dev/null || fail "demote"
+admin "network config unset controllers.auto_membership" >/dev/null || fail "turn automatic membership back on"
+admin "network config show" | grep -q "built-in values in force: auto_membership = true" || fail "[controllers] not back to built-in"
 
 echo "== 3.1: rotate the PSK"
 before=$(on ctl-02 'webjetctl local status' | sed -n 's/^psk_epoch: //p')

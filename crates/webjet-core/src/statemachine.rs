@@ -75,6 +75,15 @@ pub struct Machine {
     pub psk_current: u16,
     pub camouflage: Option<(Vec<u8>, Vec<u8>)>,
     pub members: Membership,
+    /// The log index at which each member joined (automatic membership
+    /// prefers the earliest-joined, §7.5). Not part of the tree; members
+    /// that joined before 0.7.0 have no entry and count as the earliest.
+    pub member_since: BTreeMap<Bytes32, u64>,
+    /// Controllers an admin removed from the cluster (`ChangeMembership {
+    /// remove }`): automatic membership doesn't add them back, so the
+    /// `control` role can then be taken away (§7.5). A manual `add learner`
+    /// clears the mark.
+    pub removed_by_admin: BTreeSet<Bytes32>,
     pub used_keys: BTreeSet<Bytes32>,
     pub retired_names: BTreeSet<String>,
     pub state_version: Option<Vec<u8>>,
@@ -142,6 +151,8 @@ struct Effects {
     psk: Option<(u16, Bytes32)>,
     camouflage: Option<(Vec<u8>, Vec<u8>)>,
     members: Option<Membership>,
+    /// A manual membership change: (node, removed) updates `removed_by_admin`.
+    admin_member_change: Option<(Bytes32, bool)>,
     used_keys: Vec<Bytes32>,
     retired_names: Vec<String>,
     state_version: Option<Vec<u8>>,
@@ -163,6 +174,8 @@ impl Default for Machine {
             psk_current: 0,
             camouflage: None,
             members: Membership::default(),
+            member_since: BTreeMap::new(),
+            removed_by_admin: BTreeSet::new(),
             used_keys: BTreeSet::new(),
             retired_names: BTreeSet::new(),
             state_version: None,
@@ -340,7 +353,20 @@ impl Machine {
             self.camouflage = Some(c);
         }
         if let Some(m) = fx.members {
+            for id in m.all() {
+                self.member_since.entry(id).or_insert(entry.index);
+            }
+            self.member_since.retain(|id, _| m.contains(id));
             self.members = m;
+        }
+        match fx.admin_member_change {
+            Some((id, true)) => {
+                self.removed_by_admin.insert(id);
+            }
+            Some((id, false)) => {
+                self.removed_by_admin.remove(&id);
+            }
+            None => {}
         }
         self.used_keys.extend(fx.used_keys);
         self.retired_names.extend(fx.retired_names);
@@ -490,6 +516,19 @@ impl Machine {
             }
             EntryPayload::MembershipEntry(_) => {
                 return rej("raw membership entries are not accepted");
+            }
+            EntryPayload::AutoMembershipEntry(a) => {
+                // Proposed by the leader itself (§7.5). Checked against
+                // replicated state only; the leader's own reasons (who is
+                // healthy, who is silent) aren't replicated.
+                let id = opt_k32(&a.node_id);
+                let settings =
+                    crate::membership::Settings::of(self.view.controller_settings.as_ref());
+                crate::membership::check(settings).map_err(ApplyError::Rejected)?;
+                fx.members = Some(self.change_members(a.change, &id)?);
+                fx.outcome.membership_changed = true;
+                fx.outcome.description =
+                    format!("automatic membership {:?} {}", a.change, crypto::short(&id));
             }
         }
         Ok(fx)
@@ -782,51 +821,12 @@ impl Machine {
             AccountOp::ChangeMembership(c) => {
                 need_admin()?;
                 let id = opt_k32(&c.node_id);
-                let mut m = self.members.clone();
+                fx.members = Some(self.change_members(c.change, &id)?);
                 match c.change {
-                    wp::MembershipChange::AddLearner => {
-                        if m.contains(&id) {
-                            return rej("already a member");
-                        }
-                        let Some(node) = self.view.nodes.get(&id).filter(|n| n.valid) else {
-                            return rej("learner must be a valid enrolled node");
-                        };
-                        if node.rec.control != Some(true) {
-                            return rej(
-                                "learner must hold the control role (webjetctl network node update --roles)",
-                            );
-                        }
-                        m.learners.insert(id);
-                    }
-                    wp::MembershipChange::Promote => {
-                        if !m.learners.remove(&id) {
-                            return rej("not a learner");
-                        }
-                        if m.voters.len() >= 7 {
-                            return rej("at most 7 voters");
-                        }
-                        m.voters.insert(id);
-                    }
-                    wp::MembershipChange::Demote => {
-                        if !m.voters.remove(&id) {
-                            return rej("not a voter");
-                        }
-                        if m.voters.is_empty() {
-                            return rej("can't demote the last voter");
-                        }
-                        m.learners.insert(id);
-                    }
-                    wp::MembershipChange::Remove => {
-                        let was_voter = m.voters.remove(&id);
-                        if !was_voter && !m.learners.remove(&id) {
-                            return rej("not a member");
-                        }
-                        if m.voters.is_empty() {
-                            return rej("can't remove the last voter");
-                        }
-                    }
+                    wp::MembershipChange::Remove => fx.admin_member_change = Some((id, true)),
+                    wp::MembershipChange::AddLearner => fx.admin_member_change = Some((id, false)),
+                    _ => {}
                 }
-                fx.members = Some(m);
                 fx.outcome.membership_changed = true;
                 fx.outcome.description =
                     format!("membership {:?} {}", c.change, crypto::short(&id));
@@ -935,6 +935,20 @@ impl Machine {
         let mut tr = cfg.transport.map(|b| *b).unwrap_or_default();
         tr.version = version;
         crate::validate::transport(&tr).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        // `[controllers]` (§7.5) only when the document has it: a document
+        // without it (or from an older tool) leaves the leaf as it is, and
+        // controllers from before 0.7.0 compute the same leaves.
+        if let Some(c) = cfg.controllers {
+            let mut c = *c;
+            c.version = version;
+            crate::validate::controller_settings(&c)
+                .map_err(|e| ApplyError::Rejected(e.to_string()))?;
+            fx.leaves.push((
+                kind::CONTROLLERS,
+                SINGLETON,
+                Some(leaf::encode_controllers(&c)),
+            ));
+        }
         fx.leaves.extend([
             (kind::POLICY, SINGLETON, Some(leaf::encode_policy(&pol))),
             (kind::DNS, SINGLETON, Some(leaf::encode_dns(&dns))),
@@ -948,6 +962,60 @@ impl Machine {
         ]);
         fx.outcome.description = format!("set network config version {version}");
         Ok(())
+    }
+
+    /// The membership after `change` of `id` (manual or automatic).
+    fn change_members(
+        &self,
+        change: wp::MembershipChange,
+        id: &Bytes32,
+    ) -> std::result::Result<Membership, ApplyError> {
+        let id = *id;
+        let mut m = self.members.clone();
+        match change {
+            wp::MembershipChange::AddLearner => {
+                if m.contains(&id) {
+                    return rej("already a member");
+                }
+                let Some(node) = self.view.nodes.get(&id).filter(|n| n.valid) else {
+                    return rej("learner must be a valid enrolled node");
+                };
+                if node.rec.control != Some(true) {
+                    return rej(
+                        "learner must hold the control role (webjetctl network node update --roles)",
+                    );
+                }
+                m.learners.insert(id);
+            }
+            wp::MembershipChange::Promote => {
+                if !m.learners.remove(&id) {
+                    return rej("not a learner");
+                }
+                if m.voters.len() >= 7 {
+                    return rej("at most 7 voters");
+                }
+                m.voters.insert(id);
+            }
+            wp::MembershipChange::Demote => {
+                if !m.voters.remove(&id) {
+                    return rej("not a voter");
+                }
+                if m.voters.is_empty() {
+                    return rej("can't demote the last voter");
+                }
+                m.learners.insert(id);
+            }
+            wp::MembershipChange::Remove => {
+                let was_voter = m.voters.remove(&id);
+                if !was_voter && !m.learners.remove(&id) {
+                    return rej("not a member");
+                }
+                if m.voters.is_empty() {
+                    return rej("can't remove the last voter");
+                }
+            }
+        }
+        Ok(m)
     }
 
     /// One node's configuration (§6.19). An empty one removes the leaf.
@@ -1645,6 +1713,16 @@ impl Machine {
             state_version: self.state_version.clone(),
             retired_names: Some(self.retired_names.iter().cloned().collect()),
             genesis: self.genesis.as_ref().map(|g| g.0.clone()),
+            member_since: Some(
+                self.member_since
+                    .iter()
+                    .map(|(id, i)| wp::MemberSince {
+                        node_id: Some(crypto::k32(id)),
+                        index: *i,
+                    })
+                    .collect(),
+            ),
+            removed_by_admin: Some(self.removed_by_admin.iter().map(crypto::k32).collect()),
         }
     }
 
@@ -1689,6 +1767,21 @@ impl Machine {
             .collect();
         m.members.learners = s
             .learners
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|k| k.to_bytes())
+            .collect();
+        m.member_since = s
+            .member_since
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|x| (opt_k32(&x.node_id), x.index))
+            .filter(|(id, _)| m.members.contains(id))
+            .collect();
+        m.removed_by_admin = s
+            .removed_by_admin
             .clone()
             .unwrap_or_default()
             .iter()
@@ -1803,6 +1896,7 @@ fn leaf_equal(k: u8, key: &Bytes32, mine: &[u8], theirs: &[u8]) -> bool {
         (LeafValue::Limits(a), LeafValue::Limits(b)) => a == b,
         (LeafValue::Validity(a), LeafValue::Validity(b)) => a == b,
         (LeafValue::Transport(a), LeafValue::Transport(b)) => a == b,
+        (LeafValue::Controllers(a), LeafValue::Controllers(b)) => a == b,
         _ => false,
     }
 }
@@ -2461,6 +2555,119 @@ mod tests {
         assert!(n.control_role && n.data && !n.relay);
     }
 
+    /// §7.5 automatic membership: the leader's entry goes through the same
+    /// checks as a manual change, is refused when the setting is off, and
+    /// remembers when each member joined (also across a snapshot).
+    #[test]
+    fn automatic_membership_entries() {
+        let mut h = H::new();
+        let genesis_voter = *h.m.members.voters.first().unwrap();
+        let (ka, kb) = (KeyPair::generate(), KeyPair::generate());
+        let ctl = enroll_roles(&mut h, "ctl", "10.7.0.10", &ka, true);
+        let plain = enroll_roles(&mut h, "plain", "10.7.0.11", &kb, false);
+        let auto = |h: &mut H, change, id: &Bytes32| {
+            h.run(EntryPayload::AutoMembershipEntry(Box::new(
+                wp::AutoMembershipEntry {
+                    change,
+                    node_id: Some(crypto::k32(id)),
+                },
+            )))
+        };
+        // The same rules as a manual change.
+        assert!(auto(&mut h, wp::MembershipChange::AddLearner, &plain).is_err());
+        assert!(auto(&mut h, wp::MembershipChange::Promote, &ctl).is_err());
+        let o = auto(&mut h, wp::MembershipChange::AddLearner, &ctl).unwrap();
+        assert!(o.membership_changed);
+        assert!(o.description.starts_with("automatic membership"));
+        let joined = h.idx;
+        assert_eq!(h.m.member_since.get(&ctl), Some(&joined));
+        assert_eq!(h.m.member_since.get(&genesis_voter), Some(&1));
+        auto(&mut h, wp::MembershipChange::Promote, &ctl).unwrap();
+        assert!(h.m.members.voters.contains(&ctl));
+        // Promotion keeps the join index.
+        assert_eq!(h.m.member_since.get(&ctl), Some(&joined));
+        // A snapshot keeps it too.
+        let r = Machine::restore(&h.m.snapshot()).unwrap();
+        assert_eq!(r.member_since, h.m.member_since);
+        // Turned off: refused.
+        let mut cfg = net_config(1);
+        cfg.controllers = Some(Box::new(wp::ControllerSettings {
+            version: 0,
+            auto_membership: Some(false),
+            voters: None,
+            dead_voter_after_s: None,
+        }));
+        set_network(&mut h, cfg).unwrap();
+        let e = auto(&mut h, wp::MembershipChange::Demote, &ctl)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("automatic membership is off"), "{e}");
+        // A manual change still works.
+        h.admin_op(AccountOp::ChangeMembership(Box::new(
+            wp::ChangeMembership {
+                change: wp::MembershipChange::Demote,
+                node_id: Some(crypto::k32(&ctl)),
+            },
+        )))
+        .unwrap();
+        // Removing it leaves no join index behind.
+        h.admin_op(AccountOp::ChangeMembership(Box::new(
+            wp::ChangeMembership {
+                change: wp::MembershipChange::Remove,
+                node_id: Some(crypto::k32(&ctl)),
+            },
+        )))
+        .unwrap();
+        assert!(!h.m.member_since.contains_key(&ctl));
+        // An admin's removal is remembered (also in a snapshot), so the
+        // leader doesn't add it back; a manual add clears it.
+        assert!(h.m.removed_by_admin.contains(&ctl));
+        let r = Machine::restore(&h.m.snapshot()).unwrap();
+        assert!(r.removed_by_admin.contains(&ctl));
+        h.admin_op(AccountOp::ChangeMembership(Box::new(
+            wp::ChangeMembership {
+                change: wp::MembershipChange::AddLearner,
+                node_id: Some(crypto::k32(&ctl)),
+            },
+        )))
+        .unwrap();
+        assert!(!h.m.removed_by_admin.contains(&ctl));
+    }
+
+    /// `[controllers]` is a leaf only when the document has it, so a
+    /// document without it computes the same leaves as before 0.7.0; one
+    /// without it later leaves the settings as they are.
+    #[test]
+    fn controller_settings_leaf() {
+        let mut h = H::new();
+        set_network(&mut h, net_config(1)).unwrap();
+        assert!(h.m.tree.get(kind::CONTROLLERS, &SINGLETON).is_none());
+        let with = |v: u64, voters: Option<u8>| {
+            let mut c = net_config(v);
+            c.controllers = Some(Box::new(wp::ControllerSettings {
+                version: 0,
+                auto_membership: None,
+                voters,
+                dead_voter_after_s: None,
+            }));
+            c
+        };
+        let e = set_network(&mut h, with(2, Some(4)))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("1, 3, 5 or 7"), "{e}");
+        set_network(&mut h, with(2, Some(3))).unwrap();
+        let v = h.m.view();
+        assert_eq!(v.network_version, 2);
+        let c = v.controller_settings.clone().unwrap();
+        assert_eq!((c.version, c.voters), (2, Some(3)));
+        set_network(&mut h, net_config(3)).unwrap();
+        assert_eq!(
+            h.m.view().controller_settings.as_ref().unwrap().voters,
+            Some(3)
+        );
+    }
+
     /// §13.4: revoking an admin without `revoke_issued` keeps the normal
     /// accounts it created; with it, they go too. A normal account given a
     /// new key by an admin stays valid and only the new key signs.
@@ -2746,6 +2953,7 @@ mod tests {
                     data: crate::compress::algo::LZ4,
                 })),
             })),
+            controllers: None,
         }
     }
 

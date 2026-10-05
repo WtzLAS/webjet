@@ -91,7 +91,7 @@ Times in `webjetctl local status` and `webjetctl network controller list` (`vali
 - 2.1 Bootstrap a new network
 - 2.2 Add a data node (a device for a person)
 - 2.3 Add a relay node
-- 2.4 Add a control node and promote it to voter
+- 2.4 Add a control node
 - 2.5 Add a gateway to a LAN
 - 2.6 Revoke a lost or compromised node
 - 2.7 Re-key or replace a node
@@ -408,7 +408,7 @@ A node is one machine in the network, owned by an account. Its **roles** decide 
      The certificate is read when you apply and sent with the configuration; `show` prints it back as PEM text, so a shown file applies again unchanged. `network camouflage set-secret` supplies the certificate's private key and the website relays serve. `webjetctl network camouflage selfsign --domain cdn.example.com --cert-out site.crt --key-out site.key` makes a self-signed certificate for testing website mode in a lab.
 
    Without `[transport.camouflage]` the priorities still apply, and relays don't offer AnyTLS.
-8. Grow the cluster: add two more controllers and promote them, so there are three voters, then continue to five (section 2.4). Add relays (section 2.3), and update the seed list to at least two entries.
+8. Grow the cluster: give two more nodes the `control` role and certify them (section 2.4). The leader adds them and makes them voters by itself, so there are three voters; with five or more controllers it keeps five. Add relays (section 2.3), and update the seed list to at least two entries.
 9. Set up monitoring. Set `[metrics] listen` on the controllers (for example their overlay address and port 9469). Each controller then serves every node's latest report as OpenMetrics text at `/metrics`, so Prometheus can scrape any one of them. There's no authentication on that endpoint, so don't expose it to the internet (§12.5).
 10. Enroll the admin's own device with `webjetup` and an enrollment string (section 2.2), and add a policy rule that lets admin devices reach the controllers. From then on, run `webjetctl` there against the device's own agent; the SSH forward from step 5 is no longer needed.
 11. Add a second admin (section 1.2), and make the backups of section 3.8.
@@ -544,9 +544,11 @@ A data node is the default kind of node: it sends and receives its own traffic, 
 
 ---
 
-## 2.4 Add a control node and promote it to voter
+## 2.4 Add a control node
 
 **When:** building the cluster up, or adding spare learners. References: §7.1, §7.5.
+
+**Automatic membership** (on by default, `[controllers]` in section 3.5): once a node is a valid controller (steps 1 and 2), the leader adds it to the cluster as a learner within seconds. It makes the earliest-joined healthy controllers voters: always an odd number, at most `voters` (5 by default). With two controllers there is one voter, with three or four there are three, from five on there are five, and the rest are learners. It changes one member at a time, so growing from one voter to three takes a few seconds. Steps 3 to 5 are only needed with `auto_membership = false`.
 
 **You need:** a Linux node that is already enrolled (section 2.3 without the relay-specific steps; giving controllers `relay` as well is recommended). A new node can be enrolled with the `control` role right away (`--roles data,relay,control`); then skip step 1. In a network upgraded from 0.3.0 or earlier, every controller must run a release with the `control` role before you grant it (older controllers would diverge on the operation), and every node before you use `certify` (older nodes accept only root-signed certificates).
 
@@ -566,7 +568,7 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    [offline]  webjetctl root controller sign ctl-06.req --out ctl-06.cert
    [admin]    webjetctl network submit ctl-06.cert
    ```
-3. Add it to the cluster as a learner. It receives a snapshot, catches up and starts signing tree heads.
+3. Add it to the cluster as a learner (automatic membership does this by itself). It receives a snapshot, catches up and starts signing tree heads.
    ```
    [admin]    webjetctl network controller add-learner ctl-06
    ```
@@ -574,14 +576,14 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    ```
    [node]     webjetctl network controller list      # role: Learner; applied matches the leader's
    ```
-5. To make it a voter, promote it. Keep the number of voters odd: promote two at a time when growing from three to five, or pair a promotion with a demotion (`webjetctl network controller demote`).
+5. To make it a voter, promote it (automatic membership does this by itself when a voter seat is free). Keep the number of voters odd: promote two at a time when growing from three to five, or pair a promotion with a demotion (`webjetctl network controller demote`). With automatic membership on, a manual promotion that makes the count even or exceeds `voters` is undone by the leader.
    ```
    [admin]    webjetctl network controller promote ctl-06
    ```
 
 **Check:** `webjetctl network controller list` on a controller shows the intended voters and learners (by node ID) and a leader. `webjetctl local status` shows no alarms.
 
-**If it goes wrong:** a learner that never catches up can be removed with `webjetctl network controller remove` without affecting writes.
+**If it goes wrong:** a learner that never catches up can be removed with `webjetctl network controller remove` without affecting writes. A controller an admin removed isn't added back automatically until `add-learner` is run for it again. If the leader doesn't add a certified controller, check the leader's log for "automatic membership": it waits until every reachable controller runs 0.7.0 or later.
 
 ---
 
@@ -681,6 +683,8 @@ A gateway is a node on that LAN that forwards overlay traffic into it. Connectio
 
 **When:** a voter is down and won't be back soon, or the "voters below a majority plus one" alarm fires. If most voters are lost, see section 4.1 instead. References: §7.4, §7.5.
 
+With automatic membership (section 2.4), the leader does steps 2 and 3 by itself: a voter it hasn't heard from for `dead_voter_after_s` (an hour by default) is demoted, and the earliest-joined healthy learner is promoted in its place. That needs a learner that is up and caught up; with no spare learner the dead voter keeps its seat. When the voter comes back, it stays a learner. Then only steps 4 and 5 remain. Do the steps by hand to act sooner.
+
 **Steps:**
 
 1. Find out whether the voter is dead or only unreachable. Check `webjetctl network controller list` on two other controllers. If it will be back within hours, do nothing: five voters tolerate two failures.
@@ -712,7 +716,7 @@ A gateway is a node on that LAN that forwards overlay traffic into it. Connectio
                   --reason decommissioned --out ctl-03.keytomb
    [admin]    webjetctl network submit ctl-03.keytomb
    ```
-3. Remove the controller from the cluster, then take away its `control` role (refused while it is a member).
+3. Remove the controller from the cluster, then take away its `control` role (refused while it is a member). With automatic membership the leader removes it by itself once its certificate is gone (step 2), and doesn't add a controller back that an admin removed.
    ```
    [admin]    webjetctl network controller remove ctl-03
    [admin]    webjetctl network node update ctl-03 --roles data,relay
@@ -832,7 +836,7 @@ Each release speaks the current and the previous wire protocol, so a network run
    ```
 7. Watch for the "doesn't support the active StateVersion" alarm, and upgrade any node that raises it.
 
-**Releases without a StateVersion step.** Some releases add operations or tree records without a new StateVersion; their release notes say which order they need instead. 0.4.0 (one network configuration, node configurations) is one: upgrade every controller before the first `webjetctl network config apply`, and every node before the first `webjetctl local config` change, because older software can't apply or sync them. Compression (0.6.0) is another: upgrade every controller before the first change to `[transport.compression]`, network-wide or for a node, because controllers that don't know the setting compute different leaf bytes and halt on divergence. Nodes need no order: compressed messages go only to peers that advertise support, and control compression (on by default) needs no configuration change. Reverse proxy rules (0.6.0) are a third: upgrade every controller before the first `[[proxy]]` rule in a node's configuration, because older controllers drop the field when they re-encode it; older nodes are never chosen as proxy targets. Before upgrading a node, move any `[transport]` or `[limits]` section out of its `webjetd.toml` (0.4.0 refuses to start with them and names the replacement): for example `[transport] kcp = 0` becomes `webjetctl local config --node <name> set transport.priority.kcp 0`.
+**Releases without a StateVersion step.** Some releases add operations or tree records without a new StateVersion; their release notes say which order they need instead. 0.4.0 (one network configuration, node configurations) is one: upgrade every controller before the first `webjetctl network config apply`, and every node before the first `webjetctl local config` change, because older software can't apply or sync them. Compression (0.6.0) is another: upgrade every controller before the first change to `[transport.compression]`, network-wide or for a node, because controllers that don't know the setting compute different leaf bytes and halt on divergence. Nodes need no order: compressed messages go only to peers that advertise support, and control compression (on by default) needs no configuration change. Reverse proxy rules (0.6.0) are a third: upgrade every controller before the first `[[proxy]]` rule in a node's configuration, because older controllers drop the field when they re-encode it; older nodes are never chosen as proxy targets. Automatic controller membership (0.7.0) needs no order: the leader changes nothing until every reachable controller runs 0.7.0, but upgrade every controller before the first change to `[controllers]`, because older controllers can't apply that leaf. Before upgrading a node, move any `[transport]` or `[limits]` section out of its `webjetd.toml` (0.4.0 refuses to start with them and names the replacement): for example `[transport] kcp = 0` becomes `webjetctl local config --node <name> set transport.priority.kcp 0`.
 
 **Rollback:** binaries can be downgraded freely **until step 6** (`sudo webjetup install <older version> --force`). After activation there is no way back; fix forward.
 
@@ -842,7 +846,7 @@ Each release speaks the current and the previous wire protocol, so a network run
 
 ## 3.5 Change the network configuration
 
-**When:** to change the policy, DNS, seeds, transport priorities, camouflage, padding, compression or limits for the whole network. References: §6.7, §11.10, §9.6, §9.8, §16.2; all keys are in [configuration.md](configuration.md#network-scope).
+**When:** to change the policy, DNS, seeds, transport priorities, camouflage, padding, compression, limits or how the controller cluster is managed for the whole network. References: §6.7, §11.10, §9.6, §9.8, §16.2; all keys are in [configuration.md](configuration.md#network-scope).
 
 **You need:** an admin account.
 
@@ -857,7 +861,7 @@ The network configuration is one TOML document with a version. Every change subm
    [admin]    webjetctl network config check network.toml      # validates, runs the policy tests
    [admin]    webjetctl network config apply network.toml
    ```
-   `webjetctl network config edit` does the same in one step. A file may hold only some sections (`[policy]`, `[dns]`, `seeds`, `[transport]`, `[limits]`); a section that is present replaces the current one completely, and those left out stay as they are.
+   `webjetctl network config edit` does the same in one step. A file may hold only some sections (`[policy]`, `[dns]`, `seeds`, `[transport]`, `[limits]`, `[controllers]`); a section that is present replaces the current one completely, and those left out stay as they are.
 2. For a single value, `get`, `set` and `unset` take a dotted key (array entries are numbered from 0) and apply at once:
    ```
    [admin]    webjetctl network config get dns
@@ -872,6 +876,11 @@ The network configuration is one TOML document with a version. Every change subm
 **Seeds:** keep at least two, on relays or controllers with stable addresses. Nodes returning after a PSK rotation find the network through them.
 
 **Compression:** control messages are zstd-compressed by default. Packet compression (`set transport.compression.data lz4`) is off by default: it saves bandwidth only on compressible traffic (plain HTTP, file shares, logs) and lets an attacker who can both inject data into a connection and watch packet sizes learn secrets from that connection (architecture §9.8). Prefer turning it on for the few nodes behind expensive links (section 3.6); both ends of a session must have it on. `webjetctl local status --json` shows the bytes saved under `compression`.
+
+**Controllers:** `[controllers]` sets how the Raft leader manages the cluster (section 2.4). `auto_membership` (default `true`) turns automatic membership on or off; `voters` (1, 3, 5 or 7; default 5) is the number of voters it aims for; `dead_voter_after_s` (default 3600; 0 = never) is how long a voter may be unreachable before a healthy learner takes its seat. `show` names the built-in values in a comment. Turn it off before managing membership by hand:
+   ```
+   [admin]    webjetctl network config set controllers.auto_membership false
+   ```
 
 **Check:** `webjetctl network config show` prints the new version; `webjetctl local status` on a node shows the new tree version and no alarms.
 
@@ -974,7 +983,7 @@ The validity horizon is the hard deadline. Check how much time is left:
    1. Stop Raft on every surviving controller.
    2. Find the survivor with the highest applied log index (`applied` in `webjetctl network controller list`).
    3. Restart it as the only voter of a new cluster that continues from its log.
-   4. Re-add the other survivors as learners and promote until there are five voters (section 2.4).
+   4. Re-add the other survivors as learners and promote until there are five voters (section 2.4; automatic membership does this by itself).
    5. Retire the lost controllers' signing keys (section 2.9), so they can never return with a different history. Never start a lost voter again without wiping it.
 4. **If no controller survives:** rebuild from the latest snapshot (§19.9). The architecture leaves this as a manual procedure (§2), and it loses everything committed after the snapshot. There is no snapshot export or restore tool yet. Keeping a copy of a controller's data directory (section 3.8) is the closest thing available.
    1. Restore the snapshot onto a new controller host.

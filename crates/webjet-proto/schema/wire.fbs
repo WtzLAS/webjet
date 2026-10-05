@@ -238,6 +238,8 @@ table PendingEnrollment {
 }
 
 table OpSeq { account_id: Key32; seq: uint64; }
+// The log index at which a controller joined the cluster (automatic membership, §7.5).
+table MemberSince { node_id: Key32; index: uint64; }
 
 table ControllerSnapshot {
     last_index: uint64;
@@ -254,6 +256,8 @@ table ControllerSnapshot {
     state_version: [ubyte];
     retired_names: [string];
     genesis: [ubyte];
+    member_since: [MemberSince];
+    removed_by_admin: [Key32];
 }
 
 // ---------------------------------------------------------------- enrollment (§8)

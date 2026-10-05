@@ -805,7 +805,12 @@ async fn network_config(cli: &Cli, cmd: &ConfigCmd) -> Result<()> {
         ConfigCmd::Unset { key } => {
             let t = tree(cli).await?;
             let cur = network_from_tree(&t, false)?;
-            let f = config::edit_doc(&cur, |d| config::unset(d, key))?;
+            let mut f = config::edit_doc(&cur, |d| config::unset(d, key))?;
+            // A section left out stays as it is: unsetting the last key of
+            // [controllers] (or all of it) means the built-in values.
+            if f.controllers.is_none() && cur.controllers.is_some() {
+                f.controllers = Some(Default::default());
+            }
             apply_network(cli, &f, Path::new("."), Some(&format!("{key} unset"))).await?;
         }
     }

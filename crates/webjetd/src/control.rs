@@ -173,6 +173,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                 "seeds": v.seeds.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "limits": v.limits.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "transport": v.transport.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
+                "controllers": v.controller_settings.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "policy": v.policy_wire.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
                 "resolver": v.resolver_ips(&s.overlay_pool).iter().map(|i| i.to_string()).collect::<Vec<_>>(),
                 "suffix": v.suffix(),
@@ -335,10 +336,10 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
                     Duration::from_secs(10),
                 )
                 .await?;
-                Ok(serde_json::to_value(match r {
-                    RpcBody::ControllerStatus(s) => *s,
+                match r {
+                    RpcBody::ControllerStatus(s) => Ok(crate::controller::remote_status_json(&s)),
                     _ => bail!("unexpected reply"),
-                })?)
+                }
             }
         },
         "redeem_self" => {

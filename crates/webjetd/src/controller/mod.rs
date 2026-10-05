@@ -19,6 +19,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use webjet_core::crypto::{self, Bytes32, opt_k32};
+use webjet_core::membership;
 use webjet_core::statemachine::{ApplyError, Machine, Membership, Outcome};
 use webjet_core::store::HeadOutcome;
 use webjet_core::types::{HOUR, VALIDITY_PERIOD, now_ms};
@@ -65,6 +66,15 @@ pub fn classify_entry(bytes: &[u8]) -> Option<raft::ConfChange> {
                 _ => None,
             }
         }
+        EntryPayload::AutoMembershipEntry(a) => {
+            let id = opt_k32(&a.node_id);
+            Some(match a.change {
+                wp::MembershipChange::AddLearner => ConfChange::AddLearner(id),
+                wp::MembershipChange::Promote => ConfChange::Promote(id),
+                wp::MembershipChange::Demote => ConfChange::Demote(id),
+                wp::MembershipChange::Remove => ConfChange::Remove(id),
+            })
+        }
         _ => None,
     }
 }
@@ -86,6 +96,9 @@ pub struct Controller {
     apply_lock: Mutex<()>,
     waiters: Mutex<HashMap<u64, Waiter>>,
     propose_lock: tokio::sync::Mutex<()>,
+    /// An automatic membership change is being proposed (leader duties run
+    /// every second and may overlap).
+    membership_busy: std::sync::atomic::AtomicBool,
     last_signed: Mutex<(u64, u64)>,
     pub halted: Mutex<Option<String>>,
     pub reports: Mutex<HashMap<Bytes32, StoredReport>>,
@@ -167,6 +180,7 @@ impl Controller {
             signer,
             waiters: Mutex::new(HashMap::new()),
             propose_lock: tokio::sync::Mutex::new(()),
+            membership_busy: std::sync::atomic::AtomicBool::new(false),
             last_signed: Mutex::new((0, 0)),
             halted: Mutex::new(None),
             reports: Mutex::new(HashMap::new()),
@@ -541,6 +555,146 @@ impl Controller {
                 )))
                 .await;
         }
+        self.auto_membership().await;
+    }
+
+    /// Automatic membership (§7.5): propose the next change, if any. One at a
+    /// time; the next round (a second later) proposes the following one.
+    async fn auto_membership(&self) {
+        if self.membership_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.auto_membership_once().await;
+        self.membership_busy.store(false, Ordering::SeqCst);
+    }
+
+    async fn auto_membership_once(&self) {
+        let Some(n) = self.node() else { return };
+        let Some((change, id)) = self.membership_plan(&n) else {
+            return;
+        };
+        let name = n
+            .store
+            .read()
+            .view()
+            .node(&id)
+            .map(|x| x.name.clone())
+            .unwrap_or_else(|| crypto::short(&id));
+        match self
+            .propose(EntryPayload::AutoMembershipEntry(Box::new(
+                wp::AutoMembershipEntry {
+                    change,
+                    node_id: Some(crypto::k32(&id)),
+                },
+            )))
+            .await
+        {
+            Ok(_) => tracing::info!("automatic membership: {change:?} {name}"),
+            Err(e) => tracing::warn!("automatic membership {change:?} {name}: {e}"),
+        }
+    }
+
+    /// The next automatic membership change, when this controller is the
+    /// leader, no change is pending and every controller involved runs
+    /// software that applies it.
+    fn membership_plan(&self, n: &Node) -> Option<membership::Change> {
+        use webjet_core::membership::{self as mb, Input, Peer};
+        let (members, member_since, settings, eligible, joinable) = {
+            let m = self.machine.lock();
+            let v = m.view();
+            let settings = mb::Settings::of(v.controller_settings.as_ref());
+            if !settings.auto_membership || m.genesis.is_none() {
+                return None;
+            }
+            let valid = || v.nodes.values().filter(|x| x.valid);
+            let eligible: BTreeSet<Bytes32> = valid()
+                .filter(|x| x.rec.control != Some(false))
+                .map(|x| x.id)
+                .collect();
+            let joinable: BTreeSet<Bytes32> = valid()
+                .filter(|x| x.rec.control == Some(true) && !m.removed_by_admin.contains(&x.id))
+                .map(|x| x.id)
+                .collect();
+            (
+                m.members.clone(),
+                m.member_since.clone(),
+                settings,
+                eligible,
+                joinable,
+            )
+        };
+        // Certificates aren't replicated state: the leader's own view
+        // decides who is a valid controller.
+        let controllers: BTreeSet<Bytes32> =
+            n.store.read().view().controllers.keys().copied().collect();
+        let peers: BTreeMap<Bytes32, Peer> = {
+            let r = self.raft.lock();
+            if r.role != Role::Leader || r.conf_change_pending() {
+                return None;
+            }
+            // The log's configuration is the applied one (nothing pending).
+            if r.config() != &members {
+                return None;
+            }
+            // Give a new leader time to hear from everyone first.
+            if r.leader_for()? < mb::HEALTHY_WITHIN {
+                return None;
+            }
+            let last = r.last_index();
+            members
+                .all()
+                .into_iter()
+                // A peer that never answered this leader has been silent
+                // for as long as it has been leader.
+                .filter_map(|p| {
+                    Some((
+                        p,
+                        Peer {
+                            silent: r.silent_for(&p)?,
+                            lag: last.saturating_sub(r.match_of(&p)),
+                        },
+                    ))
+                })
+                .collect()
+        };
+        let plan = mb::plan(&Input {
+            settings,
+            leader: n.me,
+            members: &members,
+            controllers: &controllers,
+            eligible: &eligible,
+            joinable: &joinable,
+            member_since: &member_since,
+            peers: &peers,
+        })?;
+        // Rolling upgrades: controllers from before 0.7.0 can't apply the
+        // entry and would halt. Every reachable member and the node joining
+        // must advertise support; unreachable members are being replaced
+        // or removed, and an old one coming back is upgraded by the admin.
+        let recs = n.records.lock();
+        let supports = |id: &Bytes32| {
+            *id == n.me
+                || recs.endpoints.get(id).is_some_and(|(r, _)| {
+                    r.features
+                        .as_ref()
+                        .is_some_and(|f| f.iter().any(|x| x == mb::FEATURE))
+                })
+        };
+        let reachable = |id: &Bytes32| peers.get(id).is_some_and(|p| p.silent < mb::HEALTHY_WITHIN);
+        let joining = plan.0 == wp::MembershipChange::AddLearner;
+        let ok = members
+            .all()
+            .iter()
+            .filter(|id| reachable(id))
+            .all(supports)
+            && (!joining || supports(&plan.1));
+        if !ok {
+            tracing::debug!(
+                "automatic membership: waiting for every controller to run 0.7.0 or later"
+            );
+            return None;
+        }
+        Some(plan)
     }
 
     /// Propose an entry as the leader and wait for it to be applied here.
@@ -1143,8 +1297,47 @@ impl Controller {
             "psk_epoch": m.psk_current,
             "valid_until": m.view().valid_until,
             "camouflage_secret": m.camouflage.is_some(),
+            "membership": {
+                "settings": membership_settings_json(
+                    &membership::Settings::of(m.view().controller_settings.as_ref()),
+                ),
+                "joined_at": m.member_since.iter().map(|(k, v)| (hex::encode(k), *v)).collect::<BTreeMap<_, _>>(),
+            },
         })
     }
+}
+
+fn membership_settings_json(s: &membership::Settings) -> serde_json::Value {
+    serde_json::json!({
+        "auto_membership": s.auto_membership,
+        "voters": s.voters,
+        "dead_voter_after_s": s.dead_voter_after_s,
+    })
+}
+
+/// A controller's status as another node received it (`GetControllerStatus`),
+/// with hex node ids like the local status.
+pub fn remote_status_json(s: &wp::ControllerStatus) -> serde_json::Value {
+    let id = |k: &Option<wp::Key32>| k.as_ref().map(|k| hex::encode(k.to_bytes()));
+    let ids = |v: &Option<Vec<wp::Key32>>| {
+        v.iter()
+            .flatten()
+            .map(|k| hex::encode(k.to_bytes()))
+            .collect::<Vec<_>>()
+    };
+    serde_json::json!({
+        "answered_by": id(&s.node_id),
+        "raft": {
+            "role": if s.is_leader { "Leader" } else if ids(&s.voters).contains(&id(&s.node_id).unwrap_or_default()) { "Follower" } else { "Learner" },
+            "term": s.term,
+            "leader": id(&s.leader),
+            "commit": s.commit_index,
+            "voters": ids(&s.voters),
+            "learners": ids(&s.learners),
+        },
+        "applied": s.applied_index,
+        "signed_version": s.signed_version,
+    })
 }
 
 /// The log payload for a root-signed item submitted by an admin.

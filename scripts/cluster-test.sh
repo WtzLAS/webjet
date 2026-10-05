@@ -22,11 +22,14 @@ C ctl-01 network controller certify node-02
 C node-03 network controller cert-request --out node-03.req > /dev/null
 "$B/webjetctl" root --dir root controller sign node-03.req --out node-03.cert > /dev/null
 C ctl-01 network submit node-03.cert > /dev/null 2>&1
-for n in node-02 node-03; do C ctl-01 network controller add-learner $n; done
-sleep 5
-C ctl-01 network controller promote node-02
-C ctl-01 network controller promote node-03
-sleep 3
+# Automatic membership (§7.5): the leader adds both as learners and promotes
+# them to three voters by itself, one change at a time.
+for i in $(seq 1 60); do
+  v=$(C ctl-01 network controller list | sed -n '/^  voters:/,/^ \{0,2\}[a-z_]*:/p' | grep -c "^  *- " || true)
+  [ "$v" = 3 ] && break
+  sleep 1
+done
+[ "$v" = 3 ] || { echo "automatic membership: $v voters, not 3"; exit 1; }
 echo "== cluster:"; C ctl-01 network controller list | grep -E "role|applied"
 for n in node-02 node-03; do echo "== $n:"; C $n network controller list | grep -E "role|applied|halted"; done
 echo "== stopping the leader ctl-01"

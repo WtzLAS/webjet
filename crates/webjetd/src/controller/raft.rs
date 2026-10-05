@@ -514,6 +514,44 @@ impl Raft {
         self.configs.last().map(|c| c.0).unwrap_or(0)
     }
 
+    /// A membership change is in the log but not yet committed in this
+    /// leader's term, so another one would be refused (`propose`).
+    pub fn conf_change_pending(&self) -> bool {
+        self.config_index() > self.commit || self.term_at(self.commit) != Some(self.term)
+    }
+
+    /// Leader: how long `peer` has been silent — since its last answer, or
+    /// since this node became leader when it hasn't answered yet. `None`
+    /// when this node isn't the leader.
+    pub fn silent_for(&self, peer: &Bytes32) -> Option<Duration> {
+        if self.role != Role::Leader {
+            return None;
+        }
+        if *peer == self.id {
+            return Some(Duration::ZERO);
+        }
+        let since = self
+            .last_ack
+            .get(peer)
+            .copied()
+            .unwrap_or(self.leader_since)
+            .max(self.leader_since);
+        Some(self.now.saturating_duration_since(since))
+    }
+
+    /// Leader: how long this node has been leader.
+    pub fn leader_for(&self) -> Option<Duration> {
+        (self.role == Role::Leader).then(|| self.now.saturating_duration_since(self.leader_since))
+    }
+
+    /// Leader: the highest log index known to be replicated on `peer`.
+    pub fn match_of(&self, peer: &Bytes32) -> u64 {
+        if *peer == self.id {
+            return self.last_index();
+        }
+        self.match_index.get(peer).copied().unwrap_or(0)
+    }
+
     pub fn is_voter(&self) -> bool {
         self.voters().contains(&self.id)
     }
