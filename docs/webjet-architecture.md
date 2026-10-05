@@ -2321,7 +2321,7 @@ The state directory is readable only by the agent's user, and `webjet-signer`'s 
 
 ### 19.5 Diagnostics
 
-`webjetctl local` talks to the local agent over the control channel, whose file permissions decide who may use it.
+`webjetctl local` talks to the local agent over the control channel. Every local user may use it: it shows the network, and every change through it carries its own account, root or emergency signature, so the channel itself grants no rights. The signer's socket (§4.1) stays private to the agent's user.
 
 | Command | Shows |
 |---|---|

@@ -88,6 +88,8 @@ pub struct WebjetApp {
     snapshot: Option<Snapshot>,
     load_error: Option<String>,
     accounts_on_disk: Vec<String>,
+    /// The default account in the key directory (`webjetctl network account use`).
+    default_account: Option<String>,
     chosen: Option<String>,
     passphrase: Entity<Field>,
     signed_in: Option<SignedIn>,
@@ -156,10 +158,9 @@ impl WebjetApp {
         cx: &mut Context<Self>,
     ) -> Self {
         let accounts_on_disk = webjet_tools::account_names(&keys).unwrap_or_default();
-        let chosen = match accounts_on_disk.as_slice() {
-            [only] => Some(only.clone()),
-            _ => None,
-        };
+        let given = std::env::var("WEBJET_ACCOUNT").ok();
+        let default_account = webjet_tools::default_account(&keys).ok().flatten();
+        let chosen = client::preselected_account(&keys, &accounts_on_disk, given.as_deref());
         let app = WebjetApp {
             rt,
             client: Client::new(socket),
@@ -167,6 +168,7 @@ impl WebjetApp {
             snapshot: None,
             load_error: None,
             accounts_on_disk,
+            default_account,
             chosen,
             passphrase: cx.new(|cx| Field::new(cx, "passphrase", true)),
             signed_in: None,
@@ -521,6 +523,13 @@ fn scroll(id: &str) -> gpui::Stateful<gpui::Div> {
         .overflow_y_scroll()
 }
 
+/// A scrolling column of a fixed width beside other content in a row.
+/// `scroll`'s `flex_1` would give it a zero basis and let it grow like its
+/// neighbours, ignoring the width.
+fn side_scroll(id: &str, width: f32) -> gpui::Stateful<gpui::Div> {
+    scroll(id).flex_none().flex_basis(px(width)).w(px(width))
+}
+
 /// The color for a link's quality: round-trip time and loss.
 fn link_level(rtt_ms: f64, loss: f64) -> Level {
     if loss >= 0.05 || rtt_ms >= 300.0 {
@@ -569,6 +578,7 @@ impl WebjetApp {
         }
         for (i, name) in self.accounts_on_disk.clone().into_iter().enumerate() {
             let chosen = self.chosen.as_deref() == Some(name.as_str());
+            let is_default = self.default_account.as_deref() == Some(name.as_str());
             let n2 = name.clone();
             list = list.child(
                 div()
@@ -580,7 +590,10 @@ impl WebjetApp {
                     .border_1()
                     .border_color(rgb(if chosen { theme::ACCENT } else { theme::BORDER }))
                     .bg(rgb(if chosen { theme::INPUT } else { theme::PANEL }))
+                    .flex()
+                    .justify_between()
                     .child(name)
+                    .when(is_default, |d| d.child(muted("default").text_xs()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.chosen = Some(n2.clone());
                         this.passphrase.read(cx).focus(window);
@@ -1120,6 +1133,67 @@ mod tests {
         for (tab, _) in TABS {
             view.update(cx, |app, _| app.tab = tab);
             draw(cx);
+        }
+    }
+
+    /// The Nodes tab fits a laptop-sized window: the legend stays inside the
+    /// graph panel and a circuit's details get room beside the list.
+    #[gpui::test]
+    fn nodes_tab_fits(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        let node = snap.nodes.iter().find(|n| n.control).unwrap().id.clone();
+        let circuit = snap.sessions.as_ref().unwrap().circuits.local[0].label;
+        view.update(cx, |app, _| {
+            app.loaded(snap.clone());
+            app.signed_in = Some(si);
+            app.tab = Tab::Nodes;
+            app.selected = Some(node);
+            app.circuit = Some(circuit);
+        });
+        // The window in the bug report (2870×1704 pixels at 2×) and smaller.
+        for (w, h) in [(1435., 852.), (1280., 820.), (1100., 760.)] {
+            cx.simulate_resize(size(px(w), px(h)));
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            let b = |cx: &mut gpui::VisualTestContext, s: &'static str| {
+                cx.debug_bounds(s).unwrap_or_else(|| panic!("{s} drawn"))
+            };
+            let left = b(cx, "nodes-left");
+            let legend = b(cx, "legend-last");
+            let list = b(cx, "circuit-list");
+            let detail = b(cx, "circuit-detail");
+            let side = b(cx, "node-side");
+            assert!(
+                legend.right() <= left.right(),
+                "{w}: legend {legend:?} inside {left:?}"
+            );
+            assert!(
+                left.right() <= side.left(),
+                "{w}: graph column ends before the node details"
+            );
+            assert_eq!(
+                side.size.width,
+                px(420.),
+                "{w}: node details keep their width"
+            );
+            if w >= 1280. {
+                assert_eq!(list.size.width, px(440.), "{w}: circuit list at full width");
+            }
+            assert!(list.size.width >= px(300.), "{w}: circuit list {list:?}");
+            assert!(
+                detail.size.width >= px(240.),
+                "{w}: circuit details {detail:?} get room"
+            );
         }
     }
 }

@@ -7,7 +7,8 @@
 # (a container booting systemd) runs what an operator runs:
 #
 #   1. curl …/install.sh | sh -s -- --enroll <string>   install and enroll
-#   2. the agent runs under systemd and reaches the controller (ping)
+#   2. the agent runs under systemd and reaches the controller (ping);
+#      an ordinary user can use webjetctl
 #   3. webjetup install again: "already installed"; --force reinstalls
 #   4. webjetup remove: programs and service gone, identity kept
 #   5. webjetup install: back up without enrolling again
@@ -140,6 +141,9 @@ until on_host 'webjetctl local ping ctl-01 -c 1' 2>/dev/null | grep -q "reply fr
     i=$((i + 1))
     [ $i -lt 60 ] || fail "no ping reply from ctl-01"
 done
+# The control socket is open to every local user (no sudo for webjetctl).
+on_host 'useradd -m wjuser 2>/dev/null; su wjuser -c "webjetctl local status"' | grep -q "^name: laptop" ||
+    fail "an unprivileged user can't use the control socket"
 on_host 'webjetup status' | tee /tmp/$P-status.txt
 grep -q "service   active" /tmp/$P-status.txt || fail "status: service"
 grep -q "node      laptop" /tmp/$P-status.txt || fail "status: node"

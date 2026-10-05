@@ -232,6 +232,7 @@ impl WebjetApp {
     pub(super) fn render_nodes(&mut self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         let sessions = s.sessions.as_ref().ok();
         let left = div()
+            .debug_selector(|| "nodes-left".into())
             .flex()
             .flex_col()
             .gap_3()
@@ -466,23 +467,35 @@ impl WebjetApp {
         let legend_item = |color: u32, t: &str| {
             div()
                 .flex()
+                .flex_none()
                 .items_center()
                 .gap_1()
                 .child(dot(color))
-                .child(muted(t.to_string()).text_xs())
+                .child(muted(t.to_string()).text_xs().whitespace_nowrap())
         };
+        let legend_note = |t: &str| {
+            muted(t.to_string())
+                .text_xs()
+                .flex_none()
+                .whitespace_nowrap()
+        };
+        // Wraps onto more lines when the graph panel is narrow.
         let legend = div()
+            .debug_selector(|| "graph-legend".into())
             .flex()
-            .gap_3()
+            .flex_wrap()
+            .gap_x_3()
+            .gap_y_1()
             .items_center()
+            .min_w(px(0.))
             .child(legend_item(theme::CONTROL, "controller"))
             .child(legend_item(theme::RELAY, "relay"))
             .child(legend_item(theme::ACCENT, "data node"))
-            .child(muted("·").text_xs())
             .child(legend_item(theme::OK, "good link"))
             .child(legend_item(theme::WARN, "slow or lossy"))
             .child(legend_item(theme::BAD, "bad"))
-            .child(muted("thick: this agent's hops · dashed: attachments").text_xs());
+            .child(legend_note("thick: this agent's hops"))
+            .child(legend_note("dashed: attachments").debug_selector(|| "legend-last".into()));
         let hint = muted(
             "Drag the background to move the picture, drag a node to place it · scroll to move, \
              mouse wheel or ⌘/Ctrl + scroll to zoom",
@@ -592,7 +605,13 @@ impl WebjetApp {
                     .text_xs(),
                 ),
         );
-        let mut list = scroll("circuit-list").gap_1().w(px(470.)).flex_shrink_0();
+        // 440 wide when there's room; in a narrow window it gives way (down
+        // to 300) so the details beside it keep theirs.
+        let mut list = side_scroll("circuit-list", 440.)
+            .flex_shrink()
+            .min_w(px(300.))
+            .gap_1()
+            .debug_selector(|| "circuit-list".into());
         if ss.circuits.local.is_empty() {
             list = list.child(muted(
                 "No circuits. One opens when this node talks to another node.",
@@ -622,16 +641,18 @@ impl WebjetApp {
                         theme::MUTED
                     }))
                     .child(cell(14., if c.primary { "★" } else { "" }).text_color(rgb(theme::WARN)))
-                    .child(cell(90., c.peer.clone()))
+                    .child(cell(120., c.peer.clone()).flex_shrink().min_w(px(0.)))
                     .child(
                         cell(
-                            190.,
+                            120.,
                             if c.direct {
                                 "direct".to_string()
                             } else {
                                 format!("via {}", c.hops.join(" → "))
                             },
                         )
+                        .flex_shrink()
+                        .min_w(px(0.))
                         .text_color(rgb(if c.direct {
                             theme::OK
                         } else {
@@ -653,7 +674,10 @@ impl WebjetApp {
         let chosen: Option<&Circuit> = self
             .circuit
             .and_then(|l| ss.circuits.local.iter().find(|c| c.label == l));
-        let mut detail = div().flex().flex_col().gap_1().flex_1().min_w(px(0.));
+        let mut detail = scroll("circuit-detail")
+            .gap_1()
+            .min_w(px(240.))
+            .debug_selector(|| "circuit-detail".into());
         match chosen {
             None => {
                 detail = detail.child(muted(
@@ -807,9 +831,8 @@ impl WebjetApp {
                 .child(muted("Select a node in the graph or the list."))
                 .into_any_element(),
         };
-        scroll("node-side")
-            .w(px(380.))
-            .flex_shrink_0()
+        side_scroll("node-side", 420.)
+            .debug_selector(|| "node-side".into())
             .gap_3()
             .child(finder)
             .child(detail)

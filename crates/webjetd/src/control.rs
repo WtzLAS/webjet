@@ -1,5 +1,6 @@
 //! The local control channel (§13.1): newline-delimited JSON over a Unix
-//! socket readable only by root/the agent's user. `webjetctl` uses it to
+//! socket (named pipe on Windows) every local user may use; operations carry
+//! their own signatures (see `ipc`). `webjetctl` uses it to
 //! inspect the agent and to submit signed operations; the agent forwards
 //! operations to a controller over the overlay (or applies them itself when
 //! it is one).
@@ -16,7 +17,7 @@ use webjet_proto::{self as wp, RpcBody};
 
 pub async fn serve(n: Arc<Node>) -> Result<()> {
     let path = n.cfg.control_socket.clone();
-    let mut l = crate::ipc::Listener::bind(&path)?;
+    let mut l = crate::ipc::Listener::bind(&path, crate::ipc::Access::Everyone)?;
     tracing::info!("control channel at {}", path.display());
     loop {
         let s = l.accept().await?;
@@ -691,15 +692,16 @@ pub mod client {
 
     pub async fn call(path: &std::path::Path, req: Value) -> Result<Value> {
         let s = crate::ipc::connect(path).await.map_err(|e| {
-            anyhow!(
-                "connect to {}: {e} (is webjetd running? are you {}?)",
-                path.display(),
+            let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
                 if cfg!(windows) {
-                    "an administrator"
+                    "agents up to 0.5.0 let only administrators in"
                 } else {
-                    "root"
+                    "agents up to 0.5.0 let only root in"
                 }
-            )
+            } else {
+                "is webjetd running?"
+            };
+            anyhow!("connect to {}: {e} ({hint})", path.display())
         })?;
         let (r, mut w) = tokio::io::split(s);
         let mut line = serde_json::to_vec(&req)?;

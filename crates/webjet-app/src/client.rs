@@ -25,6 +25,16 @@ pub fn default_keys() -> PathBuf {
         .unwrap_or_else(webjet_tools::default_key_dir)
 }
 
+/// The account the sign-in screen starts with, among the keys in `names`
+/// (from `dir`): `given` (`WEBJET_ACCOUNT`), else the default set with
+/// `webjetctl network account use`, else the only key — the account
+/// `webjetctl` would sign with. None when that account has no key here.
+pub fn preselected_account(dir: &Path, names: &[String], given: Option<&str>) -> Option<String> {
+    webjet_tools::pick_account(dir, given)
+        .ok()
+        .filter(|n| names.contains(n))
+}
+
 #[derive(Clone, Debug)]
 pub struct Client {
     pub socket: PathBuf,
@@ -246,6 +256,49 @@ mod tests {
         )
         .unwrap();
         webjet_tools::Account::unlock(dir, "bob", "pw").unwrap()
+    }
+
+    #[test]
+    fn sign_in_starts_with_the_default_account() {
+        let d = tmp();
+        for n in ["alice", "bob"] {
+            std::fs::write(d.join(format!("{n}.key")), b"x").unwrap();
+        }
+        let names = webjet_tools::account_names(&d).unwrap();
+        assert_eq!(
+            preselected_account(&d, &names, None),
+            None,
+            "two keys, no default"
+        );
+        webjet_tools::set_default_account(&d, Some("bob")).unwrap();
+        assert_eq!(
+            preselected_account(&d, &names, None).as_deref(),
+            Some("bob")
+        );
+        assert_eq!(
+            preselected_account(&d, &names, Some("alice")).as_deref(),
+            Some("alice"),
+            "WEBJET_ACCOUNT wins"
+        );
+        assert_eq!(
+            preselected_account(&d, &names, Some("carol")),
+            None,
+            "an account without a key here isn't offered"
+        );
+        std::fs::remove_file(d.join("bob.key")).unwrap();
+        let names = webjet_tools::account_names(&d).unwrap();
+        assert_eq!(
+            preselected_account(&d, &names, None),
+            None,
+            "a stale default selects nothing"
+        );
+        webjet_tools::set_default_account(&d, None).unwrap();
+        assert_eq!(
+            preselected_account(&d, &names, None).as_deref(),
+            Some("alice"),
+            "the only key"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     fn tmp() -> PathBuf {

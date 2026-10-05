@@ -142,7 +142,7 @@ macOS (x86_64 and aarch64) and Windows (x86_64).
 root:
 
 ```sh
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.5.0/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.5.1/install.sh | sudo sh
 sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl network node enroll`
 ```
 
@@ -151,13 +151,13 @@ otherwise (Forgejo has no "latest" download link, so the URL names a tag).
 It downloads `webjetup` for the machine, checks it against its `.sha256` and
 runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
-`… | sudo sh -s -- v0.5.0` picks a version.
+`… | sudo sh -s -- v0.5.1` picks a version.
 
 On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
 release page and, in an Administrator prompt:
 
 ```powershell
-.\webjetup-v0.5.0-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
+.\webjetup-v0.5.1-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
 ```
 
 Then, on any platform:
@@ -182,7 +182,7 @@ repository.
 | Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) |
 | Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) |
 | Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` |
-| Control channel | Unix socket, 0600 | Unix socket, 0600 | named pipe `\\.\pipe\webjet`, SYSTEM + Administrators |
+| Control channel (open to every local user; changes need a signature) | Unix socket, 0666 | Unix socket, 0666 | named pipe `\\.\pipe\webjet`, everyone reads and writes |
 | Key storage (`[key] storage`) | `tpm` (tpm2-tools) when a TPM is usable, else `file` | `keychain` (System keychain) | `dpapi` (machine scope) |
 | Roles | all | DATA | DATA |
 

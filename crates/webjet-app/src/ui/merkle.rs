@@ -437,9 +437,7 @@ impl WebjetApp {
                 ))
                 .into_any_element()
         };
-        scroll("merkle-detail")
-            .w(px(380.))
-            .flex_shrink_0()
+        side_scroll("merkle-detail", 380.)
             .child(body)
             .into_any_element()
     }

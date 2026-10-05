@@ -333,9 +333,7 @@ impl WebjetApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let me = s.status.name.clone().unwrap_or_else(|| "this node".into());
-        let mut p = scroll("sessions-side")
-            .w(px(340.))
-            .flex_shrink_0()
+        let mut p = side_scroll("sessions-side", 340.)
             .gap_1()
             .p_3()
             .rounded_md()

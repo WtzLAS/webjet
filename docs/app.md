@@ -16,9 +16,11 @@ webjet-app --socket /var/run/webjet/control.sock --keys ~/.config/webjet/account
 | `--socket` | `WEBJET_SOCKET`, else the agent's default control socket | The local agent to talk to. |
 | `--keys` | `WEBJET_KEYS`, else `~/.config/webjet/accounts` | Where account keys are (`<name>.key` and `<name>.pub`). |
 
-The control socket is readable only by the agent's user (root on a default
-install), so either run the app as that user, or point `control_socket` in
-`webjetd.toml` to a socket your user can open.
+Since 0.5.1 every local user can open the agent's control socket, so the app
+runs as your own user, without `sudo`. (Agents up to 0.5.0 let only root, or
+administrators on Windows, in.) The socket shows the network and passes on
+operations; every change still needs a signature from an account key, which
+the app makes with your key.
 
 Building needs no extra tools on macOS: the app compiles GPUI's Metal shaders
 at run time, so the Xcode Command Line Tools are enough. On Linux, GPUI needs
@@ -27,7 +29,10 @@ the usual X11/Wayland and Vulkan development packages.
 ## Signing in
 
 The app lists the account keys in the key directory. Pick one and enter its
-passphrase. The app then checks the account against the network:
+passphrase. The account `webjetctl` would sign with is already selected:
+`WEBJET_ACCOUNT` if set, else the default account
+(`webjetctl network account use <name>`, marked "default" in the list), else
+the only key. The app then checks the account against the network:
 
 - an account that isn't in this network, or has been revoked, can't sign in;
 - a key that doesn't match the account's current record can't sign in;

@@ -137,7 +137,7 @@ impl Signer for SocketSigner {
 /// Serve the signer protocol for `kp` (`webjetd signer`).
 pub async fn serve(path: &std::path::Path, kp: KeyPair) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let mut l = crate::ipc::Listener::bind(path)?;
+    let mut l = crate::ipc::Listener::bind(path, crate::ipc::Access::Private)?;
     tracing::info!("signer listening on {}", path.display());
     let kp = std::sync::Arc::new(kp);
     loop {
