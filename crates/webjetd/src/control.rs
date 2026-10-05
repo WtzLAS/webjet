@@ -145,7 +145,10 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
         }
         "conntrack" => Ok(crate::dataplane::flows(n)),
         "proxy" => Ok(crate::proxy::status(n)),
-        "topology" => Ok(crate::gossip::topology(n)),
+        "topology" => {
+            crate::gossip::watch_all(n);
+            Ok(crate::gossip::topology(n))
+        }
         "nodes" => {
             let view = admin_view(n);
             let mut v: Vec<Value> = view.nodes.keys().map(|id| node_json(&view, id)).collect();

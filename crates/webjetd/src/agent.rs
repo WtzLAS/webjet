@@ -560,12 +560,116 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
     out
 }
 
-/// Keep the hops this node needs (§10.6): edge nodes 2–3 home relays;
-/// relays the other relays and controllers; controllers each other.
+/// Home relays an edge node keeps (§10.6).
+const HOME_RELAYS: usize = 3;
+/// How often an edge node dials every relay to compare them, and how long
+/// it measures them before keeping the best [`HOME_RELAYS`].
+const EXPLORE_EVERY: Duration = Duration::from_secs(60);
+const EXPLORE_MEASURE: Duration = Duration::from_secs(15);
+/// A current home relay stays unless a newcomer is this much cheaper.
+const HOME_HYSTERESIS: f64 = 0.1;
+
+type Backoff = Arc<parking_lot::Mutex<std::collections::HashMap<Bytes32, (Instant, Duration)>>>;
+
+/// Dial a node, backing off from it after a failure.
+async fn dial_tracked(n: &Arc<Node>, peer: Bytes32, backoff: &Backoff) {
+    let r = tokio::time::timeout(Duration::from_secs(12), n.dial_node(peer)).await;
+    let mut b = backoff.lock();
+    match r {
+        Ok(Ok(_)) => {
+            b.remove(&peer);
+        }
+        _ => {
+            let e = b
+                .entry(peer)
+                .or_insert((Instant::now(), Duration::from_secs(2)));
+            e.1 = (e.1 * 2).min(Duration::from_secs(300));
+            e.0 = Instant::now() + e.1;
+        }
+    }
+}
+
+/// The lowest long-term cost recorded for links to `peer` (infinite when
+/// none was ever measured).
+fn history_cost(n: &Node, peer: &Bytes32) -> f64 {
+    n.link_history
+        .lock()
+        .iter()
+        .filter(|((p, _), h)| p == peer && h.samples > 0)
+        .map(|(_, h)| h.cost())
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The `k` relays to keep among the measured ones (relay, cost): lowest cost
+/// first, the current home relays counted [`HOME_HYSTERESIS`] cheaper so the
+/// set doesn't flap; unmeasured relays last.
+fn pick_home(
+    measured: &[(Bytes32, f64)],
+    current: &HashSet<Bytes32>,
+    k: usize,
+) -> HashSet<Bytes32> {
+    let mut v: Vec<(f64, Bytes32)> = measured
+        .iter()
+        .map(|(r, c)| {
+            let c = if !c.is_finite() {
+                f64::MAX
+            } else if current.contains(r) {
+                c * (1.0 - HOME_HYSTERESIS)
+            } else {
+                *c
+            };
+            (c, *r)
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    v.into_iter().take(k).map(|x| x.1).collect()
+}
+
+/// Edge nodes, after exploring: keep the best [`HOME_RELAYS`] relays and
+/// close the hops to the others, except those a circuit of ours goes
+/// through (they go at a later round, once the circuits moved).
+fn prune_home_relays(
+    n: &Arc<Node>,
+    relays: &[Bytes32],
+    home: &HashSet<Bytes32>,
+) -> HashSet<Bytes32> {
+    let measured: Vec<(Bytes32, f64)> = relays
+        .iter()
+        .filter_map(|r| n.best_hop(r).map(|h| (*r, h.cost())))
+        .collect();
+    let keep = pick_home(&measured, home, HOME_RELAYS);
+    let in_use: HashSet<Bytes32> = {
+        let t = n.circuits.lock();
+        t.entries
+            .values()
+            .filter_map(|e| match &e.kind {
+                crate::circuit::Kind::Local(c) => Some(c.next),
+                _ => None,
+            })
+            .collect()
+    };
+    for (r, _) in &measured {
+        if keep.contains(r) || in_use.contains(r) {
+            continue;
+        }
+        for h in n.hops_to(r) {
+            tracing::debug!(peer = %n.name_of(r), "not a home relay any more");
+            h.retire();
+            n.hop_down(&h);
+        }
+    }
+    keep
+}
+
+/// Keep the hops this node needs (§10.6): edge nodes their 3 best relays,
+/// trying every relay each minute; relays the other relays and
+/// controllers; controllers each other.
 async fn connections(n: Arc<Node>) {
     let mut tick = tokio::time::interval(Duration::from_secs(5));
-    let mut backoff: std::collections::HashMap<Bytes32, (Instant, Duration)> =
-        std::collections::HashMap::new();
+    let backoff: Backoff = Arc::default();
+    let mut next_explore = Instant::now() + EXPLORE_MEASURE;
+    let mut prune_at: Option<Instant> = None;
+    let mut home: HashSet<Bytes32> = HashSet::new();
     let mut seed_backoff = Duration::from_secs(1);
     let mut next_seed = Instant::now();
     let mut ev = n.events.subscribe();
@@ -609,57 +713,57 @@ async fn connections(n: Arc<Node>) {
                 ctl,
             )
         };
-        let mut want: Vec<Bytes32> = Vec::new();
-        if me_relay || me_ctl {
-            want.extend(relays.iter().copied());
-            want.extend(controllers.iter().copied());
+        let core = me_relay || me_ctl;
+        // Edge: relays; fall back to controllers when there are none.
+        let mut want: Vec<Bytes32> = if core {
+            relays.iter().chain(controllers.iter()).copied().collect()
+        } else if relays.is_empty() {
+            controllers.clone()
         } else {
-            // Edge: the closest relays; fall back to controllers when there are none.
-            let mut cands: Vec<Bytes32> = if relays.is_empty() {
-                controllers.clone()
-            } else {
-                relays.clone()
-            };
-            let have: HashSet<Bytes32> = n.peers().into_iter().collect();
-            cands.sort_by_key(|r| !have.contains(r));
-            want.extend(cands.into_iter().take(3));
-        }
+            relays.clone()
+        };
         want.sort();
         want.dedup();
         let have: HashSet<Bytes32> = n.peers().into_iter().collect();
-        let target = if me_relay || me_ctl {
-            want.len()
-        } else {
-            2.min(want.len())
+        let now = Instant::now();
+        let dialable = |p: &Bytes32| {
+            !n.endpoint_addrs(p).is_empty()
+                && backoff.lock().get(p).is_none_or(|(at, _)| now >= *at)
         };
-        let connected = want.iter().filter(|w| have.contains(*w)).count();
-        for peer in want.iter().filter(|w| !have.contains(*w)) {
-            if !(me_relay || me_ctl) && connected >= target {
-                break;
+        let missing: Vec<Bytes32> = want
+            .iter()
+            .filter(|w| !have.contains(*w) && dialable(w))
+            .copied()
+            .collect();
+        if core {
+            for peer in missing {
+                dial_tracked(&n, peer, &backoff).await;
             }
-            if n.endpoint_addrs(peer).is_empty() {
-                continue;
+        } else if now >= next_explore {
+            // Try every relay now and then, so a better one (e.g. one just
+            // enrolled) becomes a home relay; the measurements decide below.
+            next_explore = now + EXPLORE_EVERY;
+            prune_at = Some(now + EXPLORE_MEASURE);
+            for peer in missing {
+                let (n, backoff) = (n.clone(), backoff.clone());
+                tokio::spawn(async move { dial_tracked(&n, peer, &backoff).await });
             }
-            if let Some((at, _)) = backoff.get(peer)
-                && Instant::now() < *at
+        } else {
+            let connected = want.iter().filter(|w| have.contains(*w)).count();
+            // The best known first, from the links' long-term records.
+            let mut cands: Vec<(f64, Bytes32)> =
+                missing.iter().map(|p| (history_cost(&n, p), *p)).collect();
+            cands.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            for (_, peer) in cands
+                .into_iter()
+                .take(HOME_RELAYS.saturating_sub(connected))
             {
-                continue;
+                dial_tracked(&n, peer, &backoff).await;
             }
-            let n2 = n.clone();
-            let p = *peer;
-            let r = tokio::time::timeout(Duration::from_secs(12), n2.dial_node(p)).await;
-            match r {
-                Ok(Ok(_)) => {
-                    backoff.remove(peer);
-                }
-                _ => {
-                    let e = backoff
-                        .entry(*peer)
-                        .or_insert((Instant::now(), Duration::from_secs(2)));
-                    e.1 = (e.1 * 2).min(Duration::from_secs(300));
-                    e.0 = Instant::now() + e.1;
-                }
-            }
+        }
+        if !core && prune_at.is_some_and(|t| now >= t) {
+            prune_at = None;
+            home = prune_home_relays(&n, &want, &home);
         }
         // Not enough hops: use the seeds (§10.7.1).
         let connected = n.peers().iter().filter(|p| want.contains(p)).count();
@@ -786,5 +890,36 @@ async fn secrets(n: Arc<Node>) {
             let _ = state::save_json(&n.paths.camouflage(), &f);
             crate::transport::refresh_anytls(&n);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_relays_keep_the_cheapest_with_hysteresis() {
+        let r = |b: u8| [b; 32];
+        let measured = [
+            (r(1), 50.0),
+            (r(2), 40.0),
+            (r(3), 30.0),
+            (r(4), 10.0), // a new, much better relay
+            (r(5), f64::INFINITY),
+        ];
+        let current: HashSet<Bytes32> = [r(1), r(2), r(3)].into();
+        let keep = pick_home(&measured, &current, 3);
+        assert_eq!(
+            keep,
+            [r(4), r(3), r(2)].into(),
+            "the new relay replaces the worst"
+        );
+        // Slightly better than a current one is not enough to switch.
+        let measured = [(r(1), 50.0), (r(2), 40.0), (r(3), 30.0), (r(4), 47.0)];
+        let keep = pick_home(&measured, &current, 3);
+        assert_eq!(keep, current);
+        // Unmeasured relays come last but still fill the set.
+        let keep = pick_home(&[(r(5), f64::INFINITY), (r(1), 9.0)], &HashSet::new(), 3);
+        assert_eq!(keep, [r(1), r(5)].into());
     }
 }

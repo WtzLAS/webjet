@@ -37,7 +37,7 @@ the only key. The app then checks the account against the network:
 - an account that isn't in this network, or has been revoked, can't sign in;
 - a key that doesn't match the account's current record can't sign in;
 - if the account is revoked or demoted while the app runs, you are signed out
-  or lose admin rights at the next refresh (every 5 s).
+  or lose admin rights at the next refresh (every 2 s).
 
 Accounts are created as before: `webjetctl network account keygen`, then an admin
 adds the account (`webjetctl network account create`).
@@ -64,7 +64,7 @@ second click.
 
 ## Tabs
 
-Everything is seen from the local agent and refreshes every 5 s. The
+Everything is seen from the local agent and refreshes every 2 s. The
 Connections, Nodes, Merkle and Metrics tabs need webjetd's `sessions`,
 `conntrack`, `topology`, `merkle`, `log` and `metrics` control commands
 (`merkle` and `log` are new in 0.5.0). With an older agent the app says the data
@@ -93,9 +93,14 @@ isn't available.
   accepts real client addresses, and each rule's traffic.
 - **Nodes**: a graph of the network. It has one vertex per node (controllers
   and relays marked) and one edge per pair of nodes that report a link: relay
-  links from link-state adverts, edge nodes' attachments to their home relays
-  (dashed), and this agent's own hops (thick). Edges are colored by round
-  trip and loss and labeled with the round trip. Selecting a node highlights
+  links from link-state adverts, edge nodes' attachments to their home relays,
+  and this agent's own hops. Links that a session's circuit sends on (★ in
+  the circuit list) are drawn bold and fully opaque; the others are thinner
+  and faded to 70%, and the labels' backgrounds are 70% opaque so crowded
+  links stay visible. Edges are colored by round trip and loss and labeled
+  with the round trip. While the tab is open the agent also subscribes to
+  every node's attachment records, so an edge node shows the links and delays
+  of all nodes, not only of the peers it talks to. Selecting a node highlights
   its edges and shows its record, relay load, and every report of each of
   its links (who reported it, transport, round trip, loss, use, address,
   bytes), along with the changes the account may make.

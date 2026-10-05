@@ -57,7 +57,7 @@ pub mod theme {
     }
 }
 
-const REFRESH: Duration = Duration::from_secs(5);
+const REFRESH: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -104,6 +104,8 @@ pub struct WebjetApp {
     keys: PathBuf,
     snapshot: Option<Snapshot>,
     load_error: Option<String>,
+    /// A snapshot is being fetched: the periodic refresh waits for it.
+    refreshing: bool,
     accounts_on_disk: Vec<String>,
     /// The default account in the key directory (`webjetctl network account use`).
     default_account: Option<String>,
@@ -193,6 +195,7 @@ impl WebjetApp {
             keys,
             snapshot: None,
             load_error: None,
+            refreshing: false,
             accounts_on_disk,
             default_account,
             chosen,
@@ -252,7 +255,12 @@ impl WebjetApp {
         // Refresh now and then periodically while the window exists.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
-                if this.update(cx, |app, cx| app.refresh(cx)).is_err() {
+                let r = this.update(cx, |app, cx| {
+                    if !app.refreshing {
+                        app.refresh(cx);
+                    }
+                });
+                if r.is_err() {
                     break;
                 }
                 cx.background_executor().timer(REFRESH).await;
@@ -270,12 +278,14 @@ impl WebjetApp {
         if merkle && self.log.is_none() {
             self.fetch_log(0, cx);
         }
+        self.refreshing = true;
         let job = self
             .rt
             .spawn(async move { client.snapshot(all, merkle).await });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let r = job.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = this.update(cx, |app, cx| {
+                app.refreshing = false;
                 match r {
                     Ok(s) => app.loaded(s),
                     Err(e) => app.load_error = Some(format!("{e:#}")),

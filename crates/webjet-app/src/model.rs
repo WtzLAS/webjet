@@ -799,8 +799,8 @@ pub struct Traffic {
 }
 
 impl Traffic {
-    /// Samples kept: five minutes at one refresh every 5 s.
-    pub const KEEP: usize = 61;
+    /// Samples kept: five minutes at one refresh every 2 s.
+    pub const KEEP: usize = 151;
 
     pub fn push(&mut self, ms: u64, tx: u64, rx: u64) {
         if self.samples.back().is_some_and(|(t, _, _)| *t >= ms) {
@@ -1190,7 +1190,7 @@ mod tests {
         t.push(2000, 9, 9); // same time: ignored
         t.push(4000, 1000, 600); // counter went down
         assert_eq!(t.rates(), vec![(1000.0, 200.0), (0.0, 100.0)]);
-        for i in 0..100 {
+        for i in 0..200 {
             t.push(10_000 + i, i, i);
         }
         assert_eq!(t.rates().len(), Traffic::KEEP - 1);

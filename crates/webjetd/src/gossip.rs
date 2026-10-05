@@ -13,12 +13,20 @@ use webjet_core::store::HeadOutcome;
 use webjet_core::types::{MINUTE, SECOND, SKEW_SHORT_RECORD, now_ms};
 use webjet_proto::{self as wp, HopMsg, Transport, msg_type as mt};
 
-pub const LSA_REFRESH: u64 = 5 * MINUTE;
-pub const LSA_LIFETIME: u64 = 15 * MINUTE;
+/// Unchanged LinkStateAdverts are refreshed every minute (§11.3), so the
+/// graph and its delays stay current everywhere.
+pub const LSA_REFRESH: u64 = MINUTE;
+pub const LSA_LIFETIME: u64 = 5 * MINUTE;
 pub const ENDPOINT_REFRESH: u64 = 5 * MINUTE;
 pub const ENDPOINT_LIFETIME: u64 = 15 * MINUTE;
-pub const ATTACH_REFRESH: u64 = 20 * SECOND;
-pub const ATTACH_LIFETIME: u64 = 60 * SECOND;
+pub const ATTACH_REFRESH: u64 = 10 * SECOND;
+pub const ATTACH_LIFETIME: u64 = 30 * SECOND;
+/// How long a `topology` request keeps an edge node subscribed to every
+/// node's AttachmentRecord, and how often the subscription is renewed.
+const WATCH_FOR: Duration = Duration::from_secs(120);
+const WATCH_RENEW: Duration = Duration::from_secs(60);
+/// A link cost change of more than this share is advertised at once.
+const LSA_CHANGE: f64 = 0.1;
 
 /// One Merkle walk toward a newer head, run against one peer.
 struct Walk {
@@ -51,6 +59,10 @@ pub struct SyncState {
     pub last_load_step: Mutex<u8>,
     pub last_attach: Mutex<Option<(Vec<Bytes32>, u64)>>,
     pub lookups_pending: Mutex<HashMap<Bytes32, Instant>>,
+    /// Someone looks at the whole graph (`topology`) until then, and when
+    /// the subscriptions to every node's records were last sent.
+    watch_until: Mutex<Option<Instant>>,
+    watch_sent: Mutex<Option<Instant>>,
 }
 
 fn head_msg(n: &Node) -> Option<HopMsg> {
@@ -763,8 +775,14 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
                 }
                 held += 1;
             }
+            // A shorter renewal (a graph watch) never cuts a longer one short.
+            let keep = v
+                .iter()
+                .filter(|(h, _)| *h == hop.id)
+                .map(|(_, u)| *u)
+                .fold(until, Instant::max);
             v.retain(|(h, _)| *h != hop.id);
-            v.push((hop.id, until));
+            v.push((hop.id, keep));
         }
     }
     send_records(hop, items);
@@ -791,6 +809,66 @@ pub fn lookup(n: &Arc<Node>, peer: &Bytes32) {
         subscribe_ttl_s: 300,
     }));
     n.broadcast_control(msg, None);
+}
+
+/// Someone looks at the whole graph (the `topology` control command, e.g.
+/// webjet-app's Nodes tab): an edge node, which holds attachment records only
+/// for the peers it talks to (§10.6.1), subscribes at its home relays to
+/// every node's records for a while, so it can show the links (and their
+/// delays) of all nodes. Core nodes hold everything already.
+pub fn watch_all(n: &Arc<Node>) {
+    *n.sync.watch_until.lock() = Some(Instant::now() + WATCH_FOR);
+    renew_watch(n);
+}
+
+fn renew_watch(n: &Arc<Node>) {
+    let now = Instant::now();
+    if n.sync.watch_until.lock().is_none_or(|t| now >= t) {
+        return;
+    }
+    if n.sync
+        .watch_sent
+        .lock()
+        .is_some_and(|t| now < t + WATCH_RENEW)
+    {
+        return;
+    }
+    if is_core(n, &n.me) {
+        return;
+    }
+    let (ids, relays): (Vec<Bytes32>, Vec<Arc<Hop>>) = {
+        let s = n.store.read();
+        let v = s.view();
+        let ids = v
+            .nodes
+            .values()
+            .filter(|x| x.valid && x.id != n.me && !x.relay)
+            .map(|x| x.id)
+            .collect();
+        let relays = n
+            .hops
+            .lock()
+            .values()
+            .filter(|h| h.alive() && !h.restricted && is_core(n, &h.peer))
+            .cloned()
+            .collect();
+        (ids, relays)
+    };
+    if relays.is_empty() {
+        return;
+    }
+    *n.sync.watch_sent.lock() = Some(now);
+    // Past WATCH_FOR without a new request the subscriptions lapse.
+    let ttl = (WATCH_FOR + WATCH_RENEW).as_secs() as u32;
+    for chunk in ids.chunks(64) {
+        let msg = crate::node::ctl(HopMsg::Lookup(Box::new(wp::Lookup {
+            node_ids: Some(chunk.iter().map(crypto::k32).collect()),
+            subscribe_ttl_s: ttl,
+        })));
+        for h in &relays {
+            h.send_raw_control(msg.clone());
+        }
+    }
 }
 
 // ---------------------------------------------------------------- publishing our own records
@@ -912,7 +990,7 @@ pub fn publish_lsa(n: &Arc<Node>, force: bool) {
             let changed = prev.len() != summary.len()
                 || prev.iter().zip(summary.iter()).any(|(a, b)| {
                     a.0 != b.0
-                        || (a.1 as f64 - b.1 as f64).abs() > a.1 as f64 * 0.2 + 1.0
+                        || (a.1 as f64 - b.1 as f64).abs() > a.1 as f64 * LSA_CHANGE + 1.0
                         || a.2.abs_diff(b.2) > 2
                 });
             // A load step change is advertised at most every 10 s (§11.8.1).
@@ -1159,11 +1237,14 @@ pub async fn run(n: Arc<Node>) {
         }
         if i % 5 == 1 {
             publish_endpoint(&n, false);
-            publish_lsa(&n, false);
         }
-        if i % 5 == 3 {
+        // Changed links are advertised within 2 s (§11.3).
+        if i % 2 == 1 {
+            publish_lsa(&n, false);
+        } else {
             publish_attachment(&n);
         }
+        renew_watch(&n);
         if i.is_multiple_of(30) {
             expire_records(&n);
             n.sync.subs.lock().retain(|_, v| {

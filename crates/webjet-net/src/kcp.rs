@@ -359,6 +359,94 @@ impl Bbr {
     }
 }
 
+/// Shortest time a delivery-rate sample covers. Acknowledgements arrive in
+/// bursts (several in one datagram, or queued behind a busy task), so a rate
+/// taken between two ticks a millisecond apart was many times the path's:
+/// a 20 Mbit/s path read as 500 Mbit/s, and a 200 Mbit/s relay advertised
+/// gigabits of capacity (§11.8.1).
+const MIN_SAMPLE_INTERVAL: Duration = Duration::from_millis(25);
+
+/// One delivery-rate sample for [`Bbr::on_delivery`].
+#[derive(Debug, PartialEq)]
+struct DeliverySample {
+    bytes: usize,
+    interval: Duration,
+    app_limited: bool,
+}
+
+/// Turns the shrinking of KCP's send buffer into delivery-rate samples
+/// (§17.5): each acknowledged segment counts with its real payload length
+/// (small packets are not full segments), and a sample covers at least an
+/// RTT (and [`MIN_SAMPLE_INTERVAL`]).
+#[derive(Debug)]
+struct Delivery {
+    /// Payload lengths of the new data segments sent and not yet counted
+    /// as delivered, oldest first.
+    in_flight: VecDeque<usize>,
+    last_wait_snd: usize,
+    epoch_start: Instant,
+    epoch_bytes: usize,
+    epoch_app_limited: bool,
+}
+
+impl Delivery {
+    fn new(now: Instant) -> Self {
+        Delivery {
+            in_flight: VecDeque::new(),
+            last_wait_snd: 0,
+            epoch_start: now,
+            epoch_bytes: 0,
+            epoch_app_limited: false,
+        }
+    }
+
+    /// Called every loop turn with KCP's `wait_snd()`. Returns a sample when
+    /// enough time has passed since the last one, or when the send buffer ran
+    /// empty (then application-limited, over at least `min_interval`).
+    fn on_tick(
+        &mut self,
+        wait_snd: usize,
+        now: Instant,
+        min_interval: Duration,
+        app_limited: bool,
+    ) -> Option<DeliverySample> {
+        if wait_snd < self.last_wait_snd {
+            // KCP acknowledges out of order now and then; the oldest segments
+            // stand in for the acknowledged ones (their sizes are alike).
+            let acked = (self.last_wait_snd - wait_snd).min(self.in_flight.len());
+            self.epoch_bytes += self.in_flight.drain(..acked).sum::<usize>();
+        }
+        self.last_wait_snd = wait_snd;
+        // Never more entries than segments KCP still holds.
+        while self.in_flight.len() > wait_snd {
+            self.in_flight.pop_front();
+        }
+        self.epoch_app_limited |= app_limited;
+        let elapsed = now.duration_since(self.epoch_start);
+        let sample = if self.epoch_bytes > 0 && elapsed >= min_interval {
+            Some(DeliverySample {
+                bytes: self.epoch_bytes,
+                interval: elapsed,
+                app_limited: self.epoch_app_limited,
+            })
+        } else if wait_snd == 0 {
+            // Idle: what was delivered since the last sample is a short burst
+            // whose rate says little about the path. With nothing delivered,
+            // the next sample starts now rather than spanning the idle time.
+            (self.epoch_bytes > 0).then(|| DeliverySample {
+                bytes: self.epoch_bytes,
+                interval: elapsed.max(min_interval),
+                app_limited: true,
+            })
+        } else {
+            return None;
+        };
+        self.epoch_start = now;
+        self.epoch_bytes = 0;
+        self.epoch_app_limited = false;
+        sample
+    }
+}
 /// KCP output sink: collects packets for the session task to FEC-wrap and pace.
 #[derive(Clone, Default)]
 struct OutQueue(Arc<Mutex<VecDeque<Vec<u8>>>>);
@@ -398,8 +486,7 @@ async fn run_session(
     let mut tokens: f64 = 16_000.0;
     let mut last_tick = Instant::now();
     let mut fec_flush_at: Option<Instant> = None;
-    let mut last_wait_snd = 0usize;
-    let mut last_delivery = Instant::now();
+    let mut delivery = Delivery::new(Instant::now());
     let mut stats_sent_at = Instant::now();
     let mut next_new_sn: Option<u32> = None;
     let mut user_buf = vec![0u8; 16 * 1024];
@@ -486,24 +573,16 @@ async fn run_session(
         if flush_now && let Err(e) = kcp.flush() {
             tracing::debug!("kcp flush: {e}");
         }
-        // Delivery-rate sample from bytes leaving KCP's send buffer.
+        // Delivery-rate sample from segments leaving KCP's send buffer.
         let ws = kcp.wait_snd();
-        if ws < last_wait_snd {
-            let delivered = (last_wait_snd - ws) * KCP_MTU;
-            // Neither the window nor the pacer held data back: the sender
-            // had no more to send, so the sample is application-limited.
-            let app_limited = paced.is_empty() && last_wait_snd < bbr.window() as usize;
-            bbr.on_delivery(
-                delivered,
-                now.duration_since(last_delivery),
-                now,
-                app_limited,
-            );
-            last_delivery = now;
-        } else if ws == 0 {
-            last_delivery = now;
+        // Neither the window nor the pacer held data back: the sender had no
+        // more to send, so the sample is application-limited.
+        let app_limited =
+            paced.is_empty() && ws.max(delivery.last_wait_snd) < bbr.window() as usize;
+        let min_interval = bbr.min_rtt.max(MIN_SAMPLE_INTERVAL);
+        if let Some(s) = delivery.on_tick(ws, now, min_interval, app_limited) {
+            bbr.on_delivery(s.bytes, s.interval, now, s.app_limited);
         }
-        last_wait_snd = ws;
         bbr.ceiling = ep.rate_ceiling_bps.load(Ordering::Relaxed) as f64 / 8.0;
         let wnd = bbr.window();
         kcp.set_wndsize(wnd, 1024);
@@ -513,7 +592,7 @@ async fn run_session(
         // FEC-wrap new KCP packets; parity counts toward the paced rate.
         let pkts: Vec<Vec<u8>> = out.0.lock().drain(..).collect();
         for p in pkts {
-            let re = count_retransmits(&p, &mut next_new_sn);
+            let re = scan_output(&p, &mut next_new_sn, &mut delivery.in_flight);
             if re > 0 {
                 stats.retrans.fetch_add(re, Ordering::Relaxed);
             }
@@ -587,11 +666,12 @@ async fn run_session(
 const KCP_SEG_HDR: usize = 24;
 const KCP_CMD_PUSH: u8 = 81;
 
-/// Count the data segments in one KCP output packet that were sent before:
-/// KCP sends new segments in sequence order, so a PUSH whose number is below
-/// the next new one is a retransmission (timeout or fast resend; §12.3
-/// `kcp_retrans`). The `kcp` crate counts only timeouts, and privately.
-fn count_retransmits(pkt: &[u8], next_new_sn: &mut Option<u32>) -> u64 {
+/// Scan one KCP output packet. Returns the data segments in it that were sent
+/// before: KCP sends new segments in sequence order, so a PUSH whose number is
+/// below the next new one is a retransmission (timeout or fast resend; §12.3
+/// `kcp_retrans`). The `kcp` crate counts only timeouts, and privately. The
+/// payload length of each new segment is appended to `new_lens`.
+fn scan_output(pkt: &[u8], next_new_sn: &mut Option<u32>, new_lens: &mut VecDeque<usize>) -> u64 {
     let le = |at: usize| webjet_core::bytes::array::<4>(pkt, at).map(u32::from_le_bytes);
     let mut n = 0;
     let mut at = 0;
@@ -599,7 +679,10 @@ fn count_retransmits(pkt: &[u8], next_new_sn: &mut Option<u32>) -> u64 {
         if cmd == KCP_CMD_PUSH {
             match *next_new_sn {
                 Some(next) if sn.wrapping_sub(next) >= u32::MAX / 2 => n += 1,
-                _ => *next_new_sn = Some(sn.wrapping_add(1)),
+                _ => {
+                    *next_new_sn = Some(sn.wrapping_add(1));
+                    new_lens.push_back(len as usize);
+                }
             }
         }
         at += KCP_SEG_HDR + len as usize;
@@ -773,6 +856,108 @@ mod tests {
         );
     }
 
+    /// Over a 20 Mbit/s path, the bandwidth estimate never goes far above
+    /// 20 Mbit/s during a bulk transfer (it read 500 Mbit/s before): delivery samples cover enough time that a
+    /// burst of acknowledgements in one tick is not taken for a fast path.
+    #[tokio::test]
+    async fn bandwidth_estimate_follows_the_path_rate() {
+        const RATE_BPS: f64 = 20e6;
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        // A proxy serializing a→b datagrams at RATE_BPS with a 50 ms queue.
+        let proxy = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let (b_addr, p) = (ep_b.local_addr().unwrap(), proxy.clone());
+        tokio::spawn(async move {
+            let (mut buf, mut a_addr) = (vec![0u8; 65536], None);
+            let mut free_at = tokio::time::Instant::now();
+            while let Ok((len, from)) = p.recv_from(&mut buf).await {
+                if from == b_addr {
+                    if let Some(a) = a_addr {
+                        let _ = p.send_to(&buf[..len], a).await;
+                    }
+                    continue;
+                }
+                a_addr = Some(from);
+                let now = tokio::time::Instant::now();
+                let done =
+                    free_at.max(now) + Duration::from_secs_f64((len + 28) as f64 * 8.0 / RATE_BPS);
+                if done - now > Duration::from_millis(50) {
+                    continue; // queue full: tail drop
+                }
+                free_at = done;
+                let (p, d) = (p.clone(), buf[..len].to_vec());
+                tokio::spawn(async move {
+                    tokio::time::sleep_until(done).await;
+                    let _ = p.send_to(&d, b_addr).await;
+                });
+            }
+        });
+        let mut c = ep_a.dial(proxy.local_addr().unwrap());
+        let stats = c.stats.clone();
+        let total = 4_000_000usize;
+        let w = tokio::spawn(async move {
+            c.stream.write_all(&vec![3u8; total]).await.unwrap();
+            c
+        });
+        let mut s = tokio::time::timeout(Duration::from_secs(5), async {
+            ep_b.accept_rx.lock().await.recv().await.unwrap()
+        })
+        .await
+        .unwrap();
+        let st = stats.clone();
+        let peak = tokio::spawn(async move {
+            let mut peak = 0u64;
+            for _ in 0..1000 {
+                peak = peak.max(st.bw_estimate_kbps.load(Ordering::Relaxed));
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            peak
+        });
+        let mut got = vec![0u8; total];
+        tokio::time::timeout(Duration::from_secs(30), s.stream.read_exact(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
+        let _c = w.await.unwrap();
+        let peak = peak.await.unwrap();
+        let limit_kbps = (RATE_BPS / 1000.0) as u64;
+        assert!(
+            peak > limit_kbps / 4 && peak < limit_kbps * 2,
+            "peak estimate {peak} kbit/s on a {limit_kbps} kbit/s path"
+        );
+    }
+
+    /// A burst of acknowledgements in one millisecond is not a sample of its
+    /// own; it is averaged over the minimum interval, with real segment sizes.
+    #[test]
+    fn delivery_samples_span_the_minimum_interval() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let min = Duration::from_millis(25);
+        let mut d = Delivery::new(t0);
+        d.in_flight.extend([1200usize; 100]);
+        assert_eq!(d.on_tick(100, ms(0), min, false), None);
+        // 50 segments acknowledged at once after 1 ms: too soon.
+        assert_eq!(d.on_tick(50, ms(1), min, false), None);
+        // 25 more at 30 ms: one sample over all 30 ms.
+        let s = d.on_tick(25, ms(30), min, false).unwrap();
+        assert_eq!(s.bytes, 75 * 1200);
+        assert_eq!(s.interval, Duration::from_millis(30));
+        assert!(!s.app_limited);
+        // The rest, small segments, arrive 2 ms later and the buffer runs
+        // empty: an application-limited sample over the minimum interval.
+        d.in_flight.iter_mut().for_each(|l| *l = 100);
+        let s = d.on_tick(0, ms(32), min, false).unwrap();
+        assert_eq!(s.bytes, 25 * 100);
+        assert_eq!(s.interval, min);
+        assert!(s.app_limited);
+        assert!(d.in_flight.is_empty());
+    }
+
     #[test]
     fn counts_kcp_retransmits() {
         let (a_out, b_out) = (OutQueue::default(), OutQueue::default());
@@ -787,7 +972,7 @@ mod tests {
         for t in (0..3000).step_by(10) {
             a.update(t).unwrap();
             for p in a_out.0.lock().drain(..).collect::<Vec<_>>() {
-                re += count_retransmits(&p, &mut next);
+                re += scan_output(&p, &mut next, &mut VecDeque::new());
                 if !dropped && get_sn(&p) == 3 {
                     dropped = true; // lose one data packet once
                     continue;

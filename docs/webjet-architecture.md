@@ -312,7 +312,7 @@ LinkStateAdvert {
         circuits_pct:  u8         // circuits in use vs. the circuit cap (§16.2)
         capacity_mbps: u32        // configured, or auto-estimated
     }
-    expires_at: Timestamp         // 15 min; refreshed every 5 min (§11.3)
+    expires_at: Timestamp         // 5 min; refreshed every minute (§11.3)
 }
 ```
 
@@ -1054,7 +1054,7 @@ Nodes going online and offline is **not** an operation, and never touches the co
 | Signal | Published by | How "offline" shows up |
 |---|---|---|
 | Hop keepalives | Each hop session | Adjacent peers notice within seconds |
-| LinkStateAdvert | Relays | Neighbors drop a dead relay from their own adverts within seconds (§11.3); its own advert expires after 15 min |
+| LinkStateAdvert | Relays | Neighbors drop a dead relay from their own adverts within seconds (§11.3); its own advert expires after 5 min |
 | AttachmentRecord | DATA nodes | Expires; the node becomes unreachable in routing |
 | EndpointRecord | Every node | Expires (§6.2); stale addresses stop circulating |
 | Metric reports | Every node | Controllers see when a node last reported |
@@ -1083,7 +1083,7 @@ When a destination is offline, sources find no route and answer locally with hos
 
 - **Core:** every `RELAY` node, including `DATA+RELAY` and `CONTROL+RELAY` nodes. Core nodes run the anti-entropy of §10.3 with each other.
 - **Edge:** every node without `RELAY`. An edge node exchanges control-plane state **only with its home relays**, never with other edge nodes.
-- **Home relays:** the relays in the node's AttachmentRecord (§6.8). **2 by default, at most 3**, chosen automatically as the relays with the **lowest link cost** (RTT and loss, §11.2), with hysteresis so the set doesn't flap. The node already keeps hop sessions to them for traffic, so gossip needs no extra connections.
+- **Home relays:** the relays in the node's AttachmentRecord (§6.8). **3**, chosen automatically as the relays with the **lowest measured link cost** (RTT and loss, §11.2), with hysteresis (a current home relay counts 10% cheaper) so the set doesn't flap. Every minute the node dials every relay it isn't connected to, measures the links for 15 s and keeps the best three, so a better relay (one just enrolled, say) becomes a home relay within about a minute. Hops to relays it drops are closed, except while a circuit of its own still goes through them. Between rounds, a lost home relay is replaced by the relay with the best long-term link record. The node already keeps hop sessions to them for traffic, so gossip needs no extra connections.
 - **No relays at all** (a small deployment): every node is core.
 - **Controllers** should hold `RELAY` too (§4.1). A controller without it is an edge node and pushes each new tree head to its home relays immediately.
 
@@ -1097,7 +1097,7 @@ When a destination is offline, sources find no route and answer locally with hos
 | Edge nodes' EndpointRecords and AttachmentRecords | Flooded, so every relay holds all of them | **On demand only**, through lookups and subscriptions (§10.6.2) |
 | Metric reports | Not gossiped (§12.5) | Not gossiped |
 
-Each edge node stores the full tree, the relay graph, and endpoint and attachment records **only for peers it talks to**. Address changes of unrelated nodes never reach it.
+Each edge node stores the full tree, the relay graph, and endpoint and attachment records **only for peers it talks to**. Address changes of unrelated nodes never reach it. The exception is a user looking at the whole network: the agent's `topology` control command (webjet-app's Nodes tab) makes it subscribe at its home relays to every node's records for two minutes, renewed each minute while requests keep coming, so the graph shows every node's links and delays.
 
 #### 10.6.2 Lookups and subscriptions
 
@@ -1185,9 +1185,9 @@ DATA ─┬─ Relay A ── Relay B ── Relay C ─┬─ DATA
 
 - Each RELAY floods its LinkStateAdvert (§6.7); each DATA node publishes its AttachmentRecord (§6.8). Both are signed by the node they describe.
 - **Periodic refresh:**
-  - LinkStateAdverts: every **5 minutes**, expiring after 15. They are pushed to every edge node (§10.6.1), so frequent refreshes of unchanged adverts would dominate idle traffic (§18.3).
-  - AttachmentRecords: every 15–30 s, expiring after 2–3 intervals. They stay within the core and are fetched on demand.
-- **Triggered update:** when a link's cost changes by more than about 20%, or a link goes up or down.
+  - LinkStateAdverts: every **minute**, expiring after 5. They are pushed to every edge node (§10.6.1), so they are most of an idle node's control traffic (§18.3).
+  - AttachmentRecords: every 10 s, expiring after 30 s. They stay within the core and are fetched on demand.
+- **Triggered update:** when a link's RTT changes by more than about 10%, its loss by more than 2 points, or a link goes up or down; checked every 2 s.
 - **Rate limit:** at most one advert per origin every ~2 s.
 - **Deduplicate** by `(origin, seq)` and forward only newer sequence numbers.
 - **Dead relays disappear in seconds, not at expiry.** A relay removes a peer from its `links` as soon as its hop sessions to that peer time out, and sends a triggered update. A link counts only if both ends advertise it (§11.2), so every link of a dead relay vanishes from the graph once its neighbors have noticed.
@@ -1200,7 +1200,7 @@ DATA ─┬─ Relay A ── Relay B ── Relay C ─┬─ DATA
 1. The source builds a graph from all valid LinkStateAdverts and AttachmentRecords and computes the **k best paths** to the destination (Yen's algorithm), with at most **3 relays** per path.
 2. It probes the top candidates end to end.
 3. It uses the path with the best **measured end-to-end** cost. Advertised metrics only choose candidates; measured performance decides. A relay that lies about its links can't fake end-to-end performance.
-4. It keeps **one or two backup paths** open with light probing, for fast failover.
+4. It keeps **one or two backup paths** open with light probing, for fast failover. Every 30 s an active session also opens a **trial circuit** on the best candidate it hasn't tried in the last 5 minutes; once its probes have answered, the worst measured circuit beyond two (never the one in use) is closed. A new or improved relay therefore gets measured, and used when it is better, within a minute or so.
 5. **Hysteresis:** switch paths only if the new one is better by more than 15–20% and stays better for several seconds. This prevents flapping between near-equal paths, which causes packet reordering for tunnelled TCP.
 6. **Spreading:** among candidates within 10% of the best cost, the source picks at random, weighted by spare capacity, rather than always the single best (§11.8.3).
 
@@ -2208,6 +2208,7 @@ KCP's own congestion window is turned off. It backs off on every loss, which col
 - **Everything is paced together:** data, retransmissions and FEC parity share the one rate.
 - **KCP settings:** no-delay mode, 10 ms interval, fast retransmit after 2 duplicate acknowledgements. New data and received packets are flushed at once rather than at the next interval, so neither data nor acknowledgements wait up to 10 ms at each end of a hop.
 - **Application-limited samples.** A delivery-rate sample taken while the sender had less to send than the window allowed may raise the bandwidth estimate but never lowers it, so a quiet period doesn't throttle the next burst.
+- **Delivery samples span at least an RTT** (and 25 ms), and count each acknowledged segment at its real size. Acknowledgements arrive in bursts, so a rate taken between two loop turns a millisecond apart was many times the path's rate (a 20 Mbit/s path read as 500 Mbit/s, and relays advertised gigabits of capacity). A burst delivered just before the sender went idle counts as application-limited.
 
 **Optional ceiling.** A node may have `rate_ceiling_mbps` set, in its node configuration (§6.19) or through a Limits override (§16.4), for example to match a purchased uplink. The pacing rate never exceeds it. Unset by default.
 
@@ -2283,7 +2284,7 @@ Many nodes hold several capabilities at once (§4.1), so the relay and controlle
 | Daily tree change with nothing happening | One leaf (the validity leaf, §6.16) |
 | Core gossip | 15 digests per second per relay (full exchange, §10.3.1); a few hundred bytes per second |
 | LinkStateAdvert | ~1 KB each with 16 relays (one entry per peer: the selected transport and its cost, §9.6) |
-| Relay graph pushed to each edge node | 16 adverts every 5 minutes: about 50 B/s, or 4–5 MB/day. This is most of an idle node's control traffic |
+| Relay graph pushed to each edge node | 16 adverts every minute: about 270 B/s, or 20–25 MB/day. This is most of an idle node's control traffic |
 | AttachmentRecords through the core | ~5 per second |
 | Metric reports | ~100 per minute; tens of thousands of time series. A single Prometheus instance is enough |
 | Rekeying on a gateway with 100 peers | Under 1 handshake per second |
@@ -2291,7 +2292,7 @@ Many nodes hold several capabilities at once (§4.1), so the relay and controlle
 
 **Beyond the design target.** Three things would need rework well before the "should keep working" column is exceeded, and are deliberately left simple:
 - **Relay graph to edge nodes:** grows with relays squared. Past about 64 relays, push it only to nodes with active sessions and shorten link entries.
-- **AttachmentRecords:** flooded through the core every 15–30 s per edge node. Past a few thousand nodes, refresh them less often and have the last relay refuse circuits to nodes that aren't connected.
+- **AttachmentRecords:** flooded through the core every 10 s per edge node. Past a few thousand nodes, refresh them less often and have the last relay refuse circuits to nodes that aren't connected.
 - **Per-route metrics:** series count grows with nodes times routes. Past a few thousand nodes, cap per-route detail on edge nodes and use a store built for high cardinality.
 
 ### 18.4 Clock rules

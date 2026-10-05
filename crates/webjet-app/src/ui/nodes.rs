@@ -71,7 +71,19 @@ struct Line {
     b: (f32, f32),
     color: u32,
     width: f32,
-    dashed: bool,
+    /// 1.0 for links a session sends on (and the selected circuit), less
+    /// for the rest, so the links in use stand out in a crowded graph.
+    opacity: f32,
+}
+
+/// Opacity of links no active circuit uses.
+const IDLE_LINK_OPACITY: f32 = 0.7;
+/// Opacity of the label backgrounds (delays, node names), so links and
+/// nodes behind them stay visible.
+const LABEL_BG_OPACITY: f32 = 0.7;
+
+fn label_bg() -> gpui::Hsla {
+    gpui::Hsla::from(rgb(theme::INPUT)).opacity(LABEL_BG_OPACITY)
 }
 
 fn vertex_color(relay: bool, control: bool) -> u32 {
@@ -120,15 +132,15 @@ fn edges_canvas(
                     b.origin.y + b.size.height * v.1,
                 )
             };
+            // Links in use last, on top of the rest.
+            let mut lines = lines;
+            lines.sort_by(|x, y| x.opacity.total_cmp(&y.opacity));
             for l in lines {
                 let mut pb = PathBuilder::stroke(px(l.width));
-                if l.dashed {
-                    pb = pb.dash_array(&[px(4.), px(4.)]);
-                }
                 pb.move_to(at(l.a));
                 pb.line_to(at(l.b));
                 if let Ok(p) = pb.build() {
-                    window.paint_path(p, rgb(l.color));
+                    window.paint_path(p, gpui::Hsla::from(rgb(l.color)).opacity(l.opacity));
                 }
             }
             if let Some(app) = dragging {
@@ -294,17 +306,29 @@ impl WebjetApp {
     ) -> AnyElement {
         let g = &self.graph;
         let path = self.circuit_path(s, sessions);
-        let on_path = |a: &str, b: &str| {
+        let on = |path: &[String], a: &str, b: &str| {
             path.windows(2)
                 .any(|w| (w[0] == a && w[1] == b) || (w[0] == b && w[1] == a))
         };
+        // The paths of the circuits sessions send on (★ in the list).
+        let active: Vec<Vec<String>> = sessions
+            .map(|ss| {
+                ss.circuits
+                    .local
+                    .iter()
+                    .filter(|c| c.primary)
+                    .map(|c| c.path_ids(s.me()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let sel = self.selected.as_deref().and_then(|id| g.index(id));
         let mut lines = Vec::new();
         let mut labels = Vec::new();
         let show_labels = g.edges.len() <= 40;
         for e in &g.edges {
             let (va, vb) = (&g.vertices[e.a], &g.vertices[e.b]);
-            let highlight = on_path(&va.id, &vb.id);
+            let highlight = on(&path, &va.id, &vb.id);
+            let in_use = active.iter().any(|p| on(p, &va.id, &vb.id));
             let touches = sel.is_some_and(|v| e.a == v || e.b == v);
             let lvl = link_level(e.rtt_ms(), e.loss());
             let color = if highlight {
@@ -320,14 +344,18 @@ impl WebjetApp {
                 color,
                 width: if highlight {
                     4.0
-                } else if e.mine() {
-                    2.0
+                } else if in_use {
+                    2.5
                 } else {
                     1.25
                 },
-                dashed: !e.mine() && e.reports.iter().all(|r| r.kind == "attachment"),
+                opacity: if highlight || in_use {
+                    1.0
+                } else {
+                    IDLE_LINK_OPACITY
+                },
             });
-            if show_labels || highlight || touches {
+            if show_labels || highlight || in_use || touches {
                 let (x, y) = self
                     .viewport
                     .to_view(((va.x + vb.x) / 2.0, (va.y + vb.y) / 2.0));
@@ -387,7 +415,7 @@ impl WebjetApp {
                         div()
                             .px_1()
                             .rounded_sm()
-                            .bg(rgb(theme::INPUT))
+                            .bg(label_bg())
                             .text_xs()
                             .text_color(rgb(theme::MUTED))
                             .child(t),
@@ -455,7 +483,7 @@ impl WebjetApp {
                         div()
                             .px_1()
                             .rounded_sm()
-                            .bg(rgb(theme::INPUT))
+                            .bg(label_bg())
                             .text_xs()
                             .text_color(rgb(if selected || v.me {
                                 theme::TEXT
@@ -519,8 +547,8 @@ impl WebjetApp {
             .child(legend_item(theme::OK, "good link"))
             .child(legend_item(theme::WARN, "slow or lossy"))
             .child(legend_item(theme::BAD, "bad"))
-            .child(legend_note("thick: this agent's hops"))
-            .child(legend_note("dashed: attachments").debug_selector(|| "legend-last".into()));
+            .child(legend_note("bold: links of circuits in use (★)"))
+            .child(legend_note("faded: other links").debug_selector(|| "legend-last".into()));
         let hint = muted(
             "Drag the background to move the picture, drag a node to place it · scroll to move, \
              mouse wheel or ⌘/Ctrl + scroll to zoom",

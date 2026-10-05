@@ -16,6 +16,12 @@ use webjet_proto::{self as wp, Decodable, Encodable};
 const K_PATHS: usize = 4;
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CIRCUITS: usize = 2;
+/// How often an active session opens a trial circuit on the best path it
+/// hasn't tried lately, and how long a tried path stays "tried".
+const TRIAL_EVERY: Duration = Duration::from_secs(30);
+const TRIAL_FORGET: Duration = Duration::from_secs(300);
+/// Probe answers a circuit needs before it can be compared (and dropped).
+const MEASURED_PROBES: u64 = 3;
 
 /// Can we (or could we) reach `peer` without relays?
 fn direct_possible(n: &Node, peer: &Bytes32) -> bool {
@@ -159,6 +165,8 @@ pub async fn run(n: Arc<Node>) {
     let mut tick = tokio::time::interval(PROBE_INTERVAL);
     let mut seq: u64 = 0;
     let mut backup_tried: HashMap<Bytes32, Instant> = HashMap::new();
+    // Paths opened lately, per peer.
+    let mut tried: HashMap<(Bytes32, Vec<Bytes32>), Instant> = HashMap::new();
     loop {
         tick.tick().await;
         seq += 1;
@@ -174,22 +182,28 @@ pub async fn run(n: Arc<Node>) {
             for c in &circs {
                 send_probe(&n, c, seq);
             }
-            // Keep one or two backups (§11.4 step 4); only the source side builds them.
+            // Keep a backup (§11.4 step 4), and every TRIAL_EVERY try the best
+            // path not tried lately; the measurements decide which two stay
+            // (below). Only the source side builds them.
             let mine: Vec<&Arc<LocalCircuit>> = circs.iter().filter(|c| c.is_source).collect();
-            let want_more = s.established() && mine.len() < MAX_CIRCUITS && !circs.is_empty();
+            let trial = s.established() && !circs.is_empty();
             let have_direct = circs.iter().any(|c| c.direct());
             let direct_now = n.best_hop(&s.peer).is_some() && !have_direct;
             let due = backup_tried
                 .get(&s.peer)
-                .map(|t| t.elapsed() > Duration::from_secs(30))
-                .unwrap_or(true);
-            if (want_more || direct_now) && (due || direct_now) {
+                .is_none_or(|t| t.elapsed() > TRIAL_EVERY);
+            if direct_now || (trial && due) {
                 backup_tried.insert(s.peer, Instant::now());
                 let existing: Vec<Vec<Bytes32>> = circs.iter().map(|c| c.hops.clone()).collect();
-                let pick = candidates(&n, &s.peer)
-                    .into_iter()
-                    .find(|p| !existing.contains(&p.hops));
+                let pick = candidates(&n, &s.peer).into_iter().find(|p| {
+                    !existing.contains(&p.hops)
+                        && (p.hops.is_empty() && direct_now
+                            || tried
+                                .get(&(s.peer, p.hops.clone()))
+                                .is_none_or(|t| t.elapsed() > TRIAL_FORGET))
+                });
                 if let Some(p) = pick {
+                    tried.insert((s.peer, p.hops.clone()), Instant::now());
                     let n2 = n.clone();
                     let peer = s.peer;
                     tokio::spawn(async move {
@@ -199,17 +213,19 @@ pub async fn run(n: Arc<Node>) {
                     });
                 }
             }
-            // More than two of our circuits: drop the worst.
+            // More than two of our circuits: drop the worst measured one
+            // (a trial circuit gets its probes first).
             if mine.len() > MAX_CIRCUITS {
                 let primary = s.primary();
-                if let Some(worst) =
-                    mine.iter()
-                        .filter(|c| Some(c.label) != primary)
-                        .max_by(|a, b| {
-                            a.cost()
-                                .partial_cmp(&b.cost())
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
+                if let Some(worst) = mine
+                    .iter()
+                    .filter(|c| Some(c.label) != primary)
+                    .filter(|c| c.probes.lock().samples >= MEASURED_PROBES)
+                    .max_by(|a, b| {
+                        a.cost()
+                            .partial_cmp(&b.cost())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                 {
                     circuit::close_local(&n, worst);
                 }
@@ -245,6 +261,7 @@ pub async fn run(n: Arc<Node>) {
             }
         }
         backup_tried.retain(|_, t| t.elapsed() < Duration::from_secs(600));
+        tried.retain(|_, t| t.elapsed() < TRIAL_FORGET);
         if seq.is_multiple_of(10) {
             circuit::sweep(&n);
         }
