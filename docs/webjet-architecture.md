@@ -1455,6 +1455,41 @@ A LAN's DNS server answers with LAN addresses (`192.168.1.20`), which aren't rea
 - **Warnings:** `node:` references that match no node, and forward servers that no current policy rule lets anyone reach.
 - **Soft mode:** with no controller reachable, nodes keep the last DnsConfig, and magic DNS still follows the tree.
 
+### 11.11 Reverse proxy ports
+
+A Linux data node can listen on TCP or UDP ports for clients outside the overlay and forward each flow to a port of another node, of a set of nodes, or of an address behind a gateway. That node is the rule's **ingress**. Rules are part of the ingress's node configuration (§6.19), `[[proxy]]` entries in `webjetctl local config`:
+
+```toml
+[[proxy]]
+name = "web"              # unique on the node; labels flows and metrics
+protocol = "tcp"          # tcp | udp
+listen_port = 8080
+target = ["tag:web"]      # one address, or selectors (policy syntax, no cidr:)
+target_port = 80
+real_ip = true            # keep the client's address (default)
+```
+
+The controllers check rules when the configuration is set: at most 64 rules, unique names, one rule per protocol and listen port, non-zero ports, a target that is either exactly one unicast address or selectors. Only nodes with the `data` role may have rules.
+
+**Capture (ingress).** The agent adds iptables chains `WEBJET-PROXY` (nat PREROUTING: `DNAT` each listen port to the *proxy address*; filter FORWARD: accept to and from it; mangle FORWARD: clamp the TCP MSS to the overlay MTU). The proxy address is the overlay resolver address of each family (§11.10.1): routed into the tun interface and held by no node. The kernel forwards the client's packet into the tun interface with the client's own address as its source; the agent recognises it (destination = proxy address, foreign source, a listen port), picks a target and rewrites the destination to `target:target_port`. Replies come back the same way and the kernel's conntrack undoes the DNAT. Packets to the listen ports from the ingress host itself are not captured (only PREROUTING).
+
+**Target choice.** An address target goes to the node holding it, or to the gateway serving it (§11.9.3). Selectors pick the valid data nodes (not the ingress) with an address of the client's family; rendezvous hashing over the client's address picks one, so a client stays with its node while that node stays a candidate. Only nodes whose EndpointRecord lists the feature `proxy` (webjetd with this support) are used.
+
+**Client addresses.** With `real_ip` the packet keeps the client's address as its source, so the target's applications see it. The target must agree: `[proxy] accept_real_ip = true` in its webjetd.toml, which makes the agent mark connections that arrive on the tun interface from outside the overlay pool (mangle `WEBJET-REALIP`, connmark `0x574a0000/0xffff0000`), copy the mark to their reply packets (`WEBJET-REALIP-OUT` in OUTPUT and in PREROUTING of other interfaces, for containers), route marked packets through table 22346 (`default dev <tun>`) and loosen `rp_filter` on the tun interface. Once that works the node advertises the feature `proxy-real-ip`. For a target without it, and for any rule with `real_ip = false`, the ingress translates the source to its own overlay address and a port from 61000–65535 (above Linux's ephemeral range), and the target sees the ingress.
+
+An address behind a gateway never gets the client's address: the LAN host would send its replies to its own default router, not back through the gateway, and making that work needs routing changes on the LAN. The ingress translates the source for such targets, and the rule shows a warning (and the `proxy_rule` alarm) while `real_ip` is set. The gateway then masquerades as for any overlay flow (§11.9.4).
+
+**Policy.** A proxied flow is a flow from the ingress: the ingress needs a policy rule allowing it the target and `target_port` (checked when the flow starts, as for its own traffic), and the target checks the same (§14.3), plus that a rule of the ingress points at it with this protocol and port. A target refuses real client addresses unless it accepts them, refuses addresses in the overlay pool or a published prefix as client addresses (no ingress can speak for other nodes), and refuses real client addresses towards a LAN it serves. Flows are re-checked when the tree changes, like other tracked flows.
+
+**Traffic.** Proxied packets travel in end-to-end frames of type `PROXY` (9), not `DATA`, over the ingress's session with the target. Both ends keep proxy flows in their own connection tracking table (the same state machine and timeouts as §14.4; `conntrack_global`, `conntrack_new_per_sec`, `snat_*` limits apply to it separately), and count them apart from overlay traffic: they are not in `tun_rx`/`tun_tx`, `conntrack`, rule hits or the Connections tab's overlay flows. The control call `proxy` (`webjetctl local proxy`) lists the rules with their status and warnings, the flows on each side and the counters; metric reports carry them as `ProxyMetrics` (§12.5).
+
+**Limits.**
+- Linux only, with the tun interface, on both the ingress and real-IP targets. Other platforms keep the rules but don't listen (alarm `proxy_unsupported`).
+- An IPv4 client reaches IPv4 targets only, likewise IPv6; a rule whose target has no address of a family the overlay pool has doesn't serve those clients.
+- The ingress's own host doesn't reach its listen ports (no OUTPUT capture); other overlay nodes don't either (their packets to the ingress's overlay address go through the overlay's policy as usual).
+- Real client addresses go only to nodes. A target with real addresses routes every reply of a connection it marked back into the overlay, whatever its routing table says.
+- Old nodes (without the `proxy` feature) aren't chosen as targets; old controllers drop the `proxy` field of a node configuration they re-encode, so upgrade the controllers first.
+
 ---
 
 ## 12. Traffic Accounting & Metrics
@@ -1558,6 +1593,10 @@ MetricReport {
               circuits_refused? }
     limit_hits: { (limit_name, peer) → count }      // §16.5
     alarms: [{ name, severity, since }]             // currently active alarms (§19.7)
+    proxy: [{ rule, ingress: bool, node,            // reverse proxy traffic (§11.11),
+              flows, active, refused,               // apart from routes/links/policy;
+              to_target_{packets,bytes},            // exported as webjet_proxy_*
+              to_client_{packets,bytes} }]
 }
 signed by: node identity key
 ```

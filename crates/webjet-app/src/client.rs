@@ -83,6 +83,7 @@ impl Client {
                 .sort_by(|a, b| (&a.src, &a.dst).cmp(&(&b.src, &b.dst)));
         }
         let conntrack = opt(self.get("conntrack").await);
+        let proxy = opt(self.get("proxy").await);
         let topology = opt(self.get("topology").await);
         let all = metrics_all && status.controller.as_ref().is_some_and(|c| !c.is_null());
         let metrics = opt(self
@@ -107,6 +108,7 @@ impl Client {
             tree,
             sessions,
             conntrack,
+            proxy,
             topology,
             metrics,
             metrics_all: all,

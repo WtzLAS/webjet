@@ -20,6 +20,7 @@ pub mod metrics;
 pub mod node;
 pub mod paths;
 pub mod platform;
+pub mod proxy;
 pub mod punch;
 pub mod rpc;
 pub mod service;

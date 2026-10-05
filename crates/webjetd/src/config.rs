@@ -26,6 +26,9 @@ pub struct Config {
     pub dns: Dns,
     #[serde(default)]
     pub gateway: Gateway,
+    /// This node as a reverse proxy target (§11.11).
+    #[serde(default)]
+    pub proxy: ProxyCfg,
     /// Removed in 0.4.0 (now node-scope configuration in the tree); kept
     /// only to explain the move when an old file still has it.
     #[serde(default)]
@@ -115,6 +118,17 @@ pub struct Gateway {
 pub struct GatewayRoute {
     pub published: String,
     pub interface: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyCfg {
+    /// Accept reverse proxy flows that keep the client's real address as
+    /// their source, and route the replies back into the overlay (Linux,
+    /// with the tun interface). Off: proxies reach this node from their
+    /// own overlay address instead.
+    #[serde(default)]
+    pub accept_real_ip: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

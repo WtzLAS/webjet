@@ -83,7 +83,12 @@ isn't available.
   are shown above the table. Selecting a flow shows its circuit's path,
   round trip, loss and route traffic, with links to the graph and the peer
   node. With nothing selected, the side panel lists the end-to-end sessions
-  and the circuit each one sends on.
+  and the circuit each one sends on. The *reverse proxy* switch shows the
+  agent's reverse proxy flows instead (§11.11), kept apart from the overlay's:
+  the side (listening here, or this node as a target), rule, client, target,
+  the node at the other end and state. With nothing selected, the side panel
+  lists the node's proxy rules with their status and warnings, whether it
+  accepts real client addresses, and each rule's traffic.
 - **Nodes**: a graph of the network. It has one vertex per node (controllers
   and relays marked) and one edge per pair of nodes that report a link: relay
   links from link-state adverts, edge nodes' attachments to their home relays
@@ -142,6 +147,16 @@ isn't available.
   id, key, record version, what it may do, and its nodes, which link to the
   Nodes tab.
 
+The separators between the panes of a tab can be moved: drag one to give
+either side more room, double-click it to put it back. On the Nodes tab
+that is the line between the graph and the node details, the one between
+the graph and the circuits, and the one between the circuit list and the
+selected circuit; on the other tabs it is the line beside the details
+column (on the Merkle tab also the one beside the operation log, on the
+Dashboard the ones beside the hops and the relay load). A pane
+keeps the size you gave it when the window is resized, giving way only
+when the other side would get too small. Sizes last until the app quits.
+
 ## Tests
 
 ```sh
@@ -167,4 +182,5 @@ The headless render test draws every tab from `tests/fixtures/node-02.json`
 and drives the graph with simulated mouse events (drag a node, click it, pan,
 wheel zoom),
 the agents' answers captured from `scripts/local-net.sh 4`. Capture it again
-after changing what the agent reports.
+after changing what the agent reports. `nodes_tab_fits` checks the Nodes
+tab's layout at several window sizes and drags its three separators.

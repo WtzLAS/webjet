@@ -453,6 +453,61 @@ impl Exposition {
                 ts,
             );
         }
+        // Reverse proxy traffic (§11.11), apart from the overlay's series.
+        for m in rep.proxy.clone().unwrap_or_default() {
+            let rule = m.rule.clone().unwrap_or_default();
+            let side = if m.ingress { "ingress" } else { "target" };
+            let ingress = names.node(&opt_k32(&m.node));
+            let l = [
+                ("node", node.as_str()),
+                ("owner", owner.as_str()),
+                ("rule", rule.as_str()),
+                ("side", side),
+                ("ingress", ingress.as_str()),
+            ];
+            self.counter(
+                "webjet_proxy_flows",
+                "Reverse proxy flows started, by rule and side (ingress or target).",
+                &l,
+                m.flows,
+                ts,
+            );
+            self.gauge(
+                "webjet_proxy_active_flows",
+                "Reverse proxy flows tracked now.",
+                &l,
+                m.active as f64,
+                ts,
+            );
+            self.counter(
+                "webjet_proxy_refused",
+                "New reverse proxy flows refused (policy, limits, no usable target, real address not accepted).",
+                &l,
+                m.refused,
+                ts,
+            );
+            for (dir, packets, bytes) in [
+                ("to_target", m.to_target_packets, m.to_target_bytes),
+                ("to_client", m.to_client_packets, m.to_client_bytes),
+            ] {
+                let mut ld = l.to_vec();
+                ld.push(("direction", dir));
+                self.counter(
+                    "webjet_proxy_packets",
+                    "Reverse proxy packets (inner IP packets), by direction.",
+                    &ld,
+                    packets,
+                    ts,
+                );
+                self.counter(
+                    "webjet_proxy_bytes",
+                    "Reverse proxy bytes (inner IP packets), by direction.",
+                    &ld,
+                    bytes,
+                    ts,
+                );
+            }
+        }
         for a in rep.alarms.clone().unwrap_or_default() {
             let name = a.name.clone().unwrap_or_default();
             let sev = a.severity.clone().unwrap_or_default();
@@ -618,6 +673,18 @@ mod tests {
                 capacity_mbps: 1000,
                 queue_pct: 0,
             })),
+            proxy: Some(vec![wp::ProxyMetrics {
+                rule: Some("web".into()),
+                ingress: true,
+                node: Some(crypto::k32(&[1; 32])),
+                flows: 4,
+                active: 2,
+                to_target_packets: 40,
+                to_target_bytes: 4000,
+                to_client_packets: 30,
+                to_client_bytes: 9000,
+                refused: 1,
+            }]),
             ..Default::default()
         }
     }
@@ -637,6 +704,9 @@ mod tests {
         );
         assert!(t.contains("webjet_load_cpu_ratio{node=\"n1\",owner=\"alice\"} 0.34 "));
         assert!(t.contains("webjet_load_ratio{node=\"n1\",owner=\"alice\"} 0.3 "));
+        // Proxy traffic has its own families.
+        assert!(t.contains("webjet_proxy_bytes_total{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\",direction=\"to_client\"} 9000 "), "{t}");
+        assert!(t.contains("webjet_proxy_active_flows{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\"} 2 "));
         // Each family's metadata appears exactly once, before its samples.
         for line in t.lines().filter(|l| l.starts_with("# TYPE ")) {
             let name = line.split_whitespace().nth(2).unwrap();

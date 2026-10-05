@@ -333,7 +333,11 @@ fn maybe_rekey(n: &Arc<Node>, s: &Arc<Session>) {
 fn flush_queue(n: &Arc<Node>, s: &Arc<Session>) {
     let q: Vec<(u8, Vec<u8>)> = s.inner.lock().queue.drain(..).collect();
     for (ty, p) in q {
-        let ecn = if ty == ftype::DATA { inner_ecn(&p) } else { 0 };
+        let ecn = if ty == ftype::DATA || ty == ftype::PROXY {
+            inner_ecn(&p)
+        } else {
+            0
+        };
         send(n, &s.peer, ty, &p, ecn);
     }
 }
@@ -663,6 +667,15 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
                     webjet_core::packet::set_ecn(&mut p, frames::ecn::CE);
                 }
                 dp.inbound(&c.peer, p);
+            }
+        }
+        ftype::PROXY => {
+            if let Some(dp) = n.dataplane.get() {
+                let mut p = plain;
+                if ecn == frames::ecn::CE && webjet_core::packet::ecn_of(&p) != 0 {
+                    webjet_core::packet::set_ecn(&mut p, frames::ecn::CE);
+                }
+                dp.proxy.from_peer(n, dp, &c.peer, p);
             }
         }
         ftype::PROBE => {

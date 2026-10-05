@@ -2,7 +2,18 @@
 //! node's own report, or on a controller every node's latest report, the
 //! same text Prometheus scrapes.
 
+use super::split::{Axis, Split};
 use super::*;
+
+/// The family list beside the selected family.
+const METRICS: Split = Split {
+    id: "metrics",
+    axis: Axis::Row,
+    sized_first: true,
+    default: 380.0,
+    min: 240.0,
+    rest_min: 300.0,
+};
 
 /// At most this many samples are listed for one family.
 const SAMPLES_SHOWN: usize = 500;
@@ -92,9 +103,8 @@ impl WebjetApp {
             list = list.child(muted("No family matches the filter."));
         }
         let left = panel()
-            .w(px(380.))
-            .flex_shrink_0()
-            .h_full()
+            .flex_1()
+            .min_h(px(0.))
             .child(header_row(&[
                 (240., "family"),
                 (56., "type"),
@@ -171,8 +181,7 @@ impl WebjetApp {
                 }
                 let mut p = panel()
                     .flex_1()
-                    .min_w(px(0.))
-                    .h_full()
+                    .min_h(px(0.))
                     .child(
                         div()
                             .flex()
@@ -217,15 +226,7 @@ impl WebjetApp {
             .gap_2()
             .size_full()
             .child(top)
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(left)
-                    .child(right),
-            )
+            .child(self.split(METRICS, left, right, cx).flex_1().min_h(px(0.)))
             .into_any_element()
     }
 }

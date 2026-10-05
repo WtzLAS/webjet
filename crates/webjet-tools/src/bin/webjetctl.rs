@@ -146,6 +146,10 @@ enum LocalCmd {
     Sessions,
     /// Tracked flows (connection tracking) and the circuit each one takes.
     Conntrack,
+    /// Reverse proxy ports: this node's rules with their status and
+    /// warnings, and its proxy flows as listener and as target (kept apart
+    /// from `conntrack`).
+    Proxy,
     /// The network graph as this node sees it: nodes, relay links,
     /// attachments and this node's hops.
     Topology,
@@ -1030,6 +1034,7 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
         }
         LocalCmd::Sessions => print(cli, &call(cli, json!({"cmd": "sessions"})).await?),
         LocalCmd::Conntrack => print(cli, &call(cli, json!({"cmd": "conntrack"})).await?),
+        LocalCmd::Proxy => print(cli, &call(cli, json!({"cmd": "proxy"})).await?),
         LocalCmd::Topology => print(cli, &call(cli, json!({"cmd": "topology"})).await?),
         LocalCmd::Ping { target, count } => {
             let v = call(

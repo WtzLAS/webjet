@@ -56,6 +56,35 @@ pub struct ConfigFile {
     pub transport: Option<TransportSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<LimitsSection>,
+    /// Reverse proxy ports (node scope only, §11.11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<Vec<ProxyFile>>,
+}
+
+/// `[[proxy]]`: listen on a TCP or UDP port of this node and forward each
+/// flow to a port of another node, of the data nodes some selectors pick,
+/// or of an address behind a gateway.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyFile {
+    pub name: String,
+    /// `tcp` or `udp`.
+    pub protocol: String,
+    pub listen_port: u16,
+    /// One address, or selectors (`tag:web`, `node:web-01`, `role:data`).
+    pub target: Vec<String>,
+    pub target_port: u16,
+    /// Keep the client's address as the source (default true).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub real_ip: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -199,6 +228,11 @@ impl ConfigFile {
     /// priorities and limits and add seeds and DNS records/zones.
     pub fn check_scope(&self, scope: Scope) -> Result<()> {
         if scope == Scope::Network {
+            if self.proxy.is_some() {
+                bail!(
+                    "[[proxy]] rules belong to a node (`webjetctl local config [--node NAME]`), not the network"
+                );
+            }
             return Ok(());
         }
         let mut bad = Vec::new();
@@ -233,7 +267,7 @@ impl ConfigFile {
             return Ok(());
         }
         bail!(
-            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, limits.value, seeds, dns.record and dns.forward",
+            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, limits.value, seeds, dns.record, dns.forward and proxy",
             bad.join(", ")
         )
     }
@@ -346,6 +380,7 @@ impl ConfigFile {
             seeds: Some(seeds(&self.seeds.clone().unwrap_or_default())?),
             dns_records: Some(records(&dns.records)?),
             dns_forward: Some(forwards(&dns.forward)?),
+            proxy: Some(proxy_rules(&self.proxy.clone().unwrap_or_default())?),
         })
     }
 
@@ -359,6 +394,7 @@ impl ConfigFile {
             seeds: self.seeds.clone().or_else(|| current.seeds.clone()),
             transport: self.transport.clone().or_else(|| current.transport.clone()),
             limits: self.limits.clone().or_else(|| current.limits.clone()),
+            proxy: self.proxy.clone().or_else(|| current.proxy.clone()),
         }
     }
 
@@ -370,6 +406,7 @@ impl ConfigFile {
             ("seeds", self.seeds.is_some()),
             ("transport", self.transport.is_some()),
             ("limits", self.limits.is_some()),
+            ("proxy", self.proxy.is_some()),
         ]
         .into_iter()
         .filter_map(|(k, set)| set.then_some(k))
@@ -845,7 +882,41 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         seeds: Some(seeds_out(&sd.and_then(|s| s.entries).unwrap_or_default())),
         transport: Some(transport),
         limits: Some(limits),
+        proxy: None,
     })
+}
+
+/// `[[proxy]]` entries on the wire, checked like the controllers check them.
+pub fn proxy_rules(v: &[ProxyFile]) -> Result<Vec<wp::ProxyRule>> {
+    let out = v
+        .iter()
+        .map(|p| {
+            Ok(wp::ProxyRule {
+                name: Some(p.name.clone()),
+                protocol: webjet_core::proxy::parse_proto(&p.protocol)
+                    .with_context(|| format!("proxy {}", p.name))?,
+                listen_port: p.listen_port,
+                target: Some(p.target.clone()),
+                target_port: p.target_port,
+                real_ip: p.real_ip,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    webjet_core::proxy::rules(&out)?;
+    Ok(out)
+}
+
+fn proxy_out(v: &[wp::ProxyRule]) -> Vec<ProxyFile> {
+    v.iter()
+        .map(|p| ProxyFile {
+            name: p.name.clone().unwrap_or_default(),
+            protocol: webjet_core::proxy::proto_name(p.protocol).into(),
+            listen_port: p.listen_port,
+            target: p.target.clone().unwrap_or_default(),
+            target_port: p.target_port,
+            real_ip: p.real_ip,
+        })
+        .collect()
 }
 
 /// A node's own configuration (only what it sets).
@@ -860,7 +931,9 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
     let value = limit_map(&c.limits.clone().unwrap_or_default());
     let records = records_out(&c.dns_records.clone().unwrap_or_default());
     let forward = forwards_out(&c.dns_forward.clone().unwrap_or_default());
+    let proxy = proxy_out(&c.proxy.clone().unwrap_or_default());
     ConfigFile {
+        proxy: (!proxy.is_empty()).then_some(proxy),
         version: Some(c.version),
         policy: None,
         dns: (!records.is_empty() || !forward.is_empty()).then(|| DnsSection {
@@ -957,7 +1030,9 @@ pub fn render_node(name: &str, c: Option<&wp::NodeConfig>) -> Result<String> {
         "# Configuration of node {name} (webjetctl local config)."
     );
     s.push_str("# Overrides the network configuration for this node: transport.priority,\n");
-    s.push_str("# limits.value; adds seeds (tried first), dns.record and dns.forward.\n");
+    s.push_str("# limits.value; adds seeds (tried first), dns.record and dns.forward;\n");
+    s.push_str("# [[proxy]] makes the node a reverse proxy (Linux data nodes; see\n");
+    s.push_str("# `webjetctl local proxy` for the rules' status).\n");
     s.push_str("# `webjetctl local config show --effective` shows what is in force.\n");
     if c.is_none() {
         s.push_str("# Nothing set: the node uses the network configuration.\n");
@@ -1016,6 +1091,7 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
             value,
             ..Default::default()
         }),
+        proxy: None,
     })
 }
 

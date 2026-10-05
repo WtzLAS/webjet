@@ -17,6 +17,9 @@ pub mod ftype {
     /// Application RPC to/from controllers (PSK fetch, ops, metrics, Raft),
     /// carried inside the session like any other payload (§7.1, §12.5).
     pub const RPC: u8 = 8;
+    /// Reverse proxy traffic (§11.11): an inner IP packet, like DATA, kept
+    /// apart so neither end mixes it with overlay traffic.
+    pub const PROXY: u8 = 9;
 }
 
 /// type(1) + key_id(4) + counter(8)

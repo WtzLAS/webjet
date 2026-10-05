@@ -1,6 +1,7 @@
 //! Nodes: the network graph (every node, an edge per pair of nodes with a
 //! link), the circuits of this agent, and the selected node's details.
 
+use super::split::{Axis, Split};
 use super::*;
 use crate::graph::{Edge, Viewport};
 use crate::model::{Action, Circuit, Node, Sessions};
@@ -33,6 +34,36 @@ pub(super) struct Drag {
 
 /// Pixels a press may wander and still count as a click.
 const CLICK_SLOP: f32 = 3.0;
+
+/// The graph and its circuits beside the node details.
+const NODES: Split = Split {
+    id: "nodes",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 420.0,
+    min: 280.0,
+    rest_min: 420.0,
+};
+
+/// The graph above this agent's circuits.
+const GRAPH_CIRCUITS: Split = Split {
+    id: "graph-circuits",
+    axis: Axis::Column,
+    sized_first: false,
+    default: 250.0,
+    min: 120.0,
+    rest_min: 240.0,
+};
+
+/// The circuit list beside the selected circuit.
+const CIRCUITS: Split = Split {
+    id: "circuits",
+    axis: Axis::Row,
+    sized_first: true,
+    default: 440.0,
+    min: 200.0,
+    rest_min: 240.0,
+};
 
 /// One edge as the canvas draws it.
 struct Line {
@@ -231,22 +262,16 @@ impl WebjetApp {
 
     pub(super) fn render_nodes(&mut self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         let sessions = s.sessions.as_ref().ok();
-        let left = div()
+        let graph = self.render_graph(s, sessions, cx);
+        let circuits = self.render_circuits(s, sessions, cx);
+        let left = self
+            .split(GRAPH_CIRCUITS, graph, circuits, cx)
             .debug_selector(|| "nodes-left".into())
-            .flex()
-            .flex_col()
-            .gap_3()
             .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .child(self.render_graph(s, sessions, cx))
-            .child(self.render_circuits(s, sessions, cx));
-        div()
-            .flex()
-            .gap_3()
+            .min_h(px(0.));
+        let side = self.render_node_side(s, cx);
+        self.split(NODES, left, side, cx)
             .size_full()
-            .child(left)
-            .child(self.render_node_side(s, cx))
             .into_any_element()
     }
 
@@ -315,7 +340,7 @@ impl WebjetApp {
             .id("graph-area")
             .relative()
             .flex_1()
-            .min_h(px(260.))
+            .min_h(px(100.))
             .rounded_md()
             .bg(rgb(theme::INPUT))
             .overflow_hidden()
@@ -582,7 +607,7 @@ impl WebjetApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let me = s.status.name.clone().unwrap_or_else(|| "this node".into());
-        let mut p = panel().h(px(250.)).flex_shrink_0();
+        let mut p = panel().flex_1().min_h(px(0.));
         let Some(ss) = sessions else {
             return p
                 .child(heading("Circuits"))
@@ -605,11 +630,7 @@ impl WebjetApp {
                     .text_xs(),
                 ),
         );
-        // 440 wide when there's room; in a narrow window it gives way (down
-        // to 300) so the details beside it keep theirs.
-        let mut list = side_scroll("circuit-list", 440.)
-            .flex_shrink()
-            .min_w(px(300.))
+        let mut list = scroll("circuit-list")
             .gap_1()
             .debug_selector(|| "circuit-list".into());
         if ss.circuits.local.is_empty() {
@@ -676,7 +697,6 @@ impl WebjetApp {
             .and_then(|l| ss.circuits.local.iter().find(|c| c.label == l));
         let mut detail = scroll("circuit-detail")
             .gap_1()
-            .min_w(px(240.))
             .debug_selector(|| "circuit-detail".into());
         match chosen {
             None => {
@@ -768,16 +788,11 @@ impl WebjetApp {
                 }
             }
         }
-        p.child(
-            div()
-                .flex()
-                .gap_3()
-                .flex_1()
-                .min_h(px(0.))
-                .child(list)
-                .child(detail),
-        )
-        .into_any_element()
+        let row = self
+            .split(CIRCUITS, list, detail, cx)
+            .flex_1()
+            .min_h(px(0.));
+        p.child(row).into_any_element()
     }
 
     /// The finder, then the selected node's details and links.
@@ -831,7 +846,7 @@ impl WebjetApp {
                 .child(muted("Select a node in the graph or the list."))
                 .into_any_element(),
         };
-        side_scroll("node-side", 420.)
+        scroll("node-side")
             .debug_selector(|| "node-side".into())
             .gap_3()
             .child(finder)

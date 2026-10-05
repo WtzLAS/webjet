@@ -795,6 +795,23 @@ pub fn lookup(n: &Arc<Node>, peer: &Bytes32) {
 
 // ---------------------------------------------------------------- publishing our own records
 
+/// What this node supports, for its EndpointRecord.
+fn features(n: &Node) -> Vec<String> {
+    let mut f = vec![
+        "kcp".to_string(),
+        "anytls".into(),
+        crate::proxy::FEATURE.into(),
+    ];
+    if n.dataplane.get().is_some_and(|d| {
+        d.proxy
+            .real_ip_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }) {
+        f.push(crate::proxy::FEATURE_REAL_IP.into());
+    }
+    f
+}
+
 pub fn publish_endpoint(n: &Arc<Node>, force: bool) {
     let addrs = crate::transport::my_addrs(n);
     let now = now_ms();
@@ -821,7 +838,7 @@ pub fn publish_endpoint(n: &Arc<Node>, force: bool) {
         addrs: Some(addrs.clone()),
         nat: crate::transport::nat_type(n),
         software: Some(format!("webjetd/{}", env!("CARGO_PKG_VERSION"))),
-        features: Some(vec!["kcp".into(), "anytls".into()]),
+        features: Some(features(n)),
         serving: Some(serving),
         gateway_load: None,
         seq: n.next_seq(),

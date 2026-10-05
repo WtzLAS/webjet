@@ -3,6 +3,7 @@
 //! inclusion proof; and the controllers' operation log — what was done,
 //! who signed it, which leaves it wrote (admins only).
 
+use super::split::{self, Axis, Split};
 use super::*;
 use crate::merkle::{Leaf, LogPage, LogRecord, Signer, kind_name, utc};
 use gpui::uniform_list;
@@ -11,6 +12,26 @@ use webjet_core::merkle::kind;
 
 /// Entries asked for per page of the log.
 const LOG_PAGE: u32 = 100;
+
+/// The leaves beside the selected leaf's or operation's details.
+const MERKLE_DETAIL: Split = Split {
+    id: "merkle-detail",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 380.0,
+    min: 240.0,
+    rest_min: 260.0,
+};
+
+/// The leaves and details beside the operation log.
+const MERKLE_OPS: Split = Split {
+    id: "merkle-ops",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 420.0,
+    min: 280.0,
+    rest_min: 260.0 + split::HANDLE + 240.0,
+};
 
 fn short_hex(b: &Bytes32) -> String {
     hex::encode(&b[..8])
@@ -125,14 +146,16 @@ impl WebjetApp {
             .size_full()
             .child(summary)
             .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(leaves)
-                    .child(detail)
-                    .child(ops),
+                self.split(
+                    MERKLE_OPS,
+                    self.split(MERKLE_DETAIL, leaves, detail, cx)
+                        .flex_1()
+                        .min_h(px(0.)),
+                    ops,
+                    cx,
+                )
+                .flex_1()
+                .min_h(px(0.)),
             )
             .into_any_element()
     }
@@ -393,8 +416,7 @@ impl WebjetApp {
         .min_h(px(0.));
         let mut p = panel()
             .flex_1()
-            .min_w(px(0.))
-            .h_full()
+            .min_h(px(0.))
             .child(
                 div()
                     .flex()
@@ -437,9 +459,7 @@ impl WebjetApp {
                 ))
                 .into_any_element()
         };
-        side_scroll("merkle-detail", 380.)
-            .child(body)
-            .into_any_element()
+        scroll("merkle-detail").child(body).into_any_element()
     }
 
     fn log_record(&self, index: u64) -> Option<&LogRecord> {
@@ -688,7 +708,7 @@ impl WebjetApp {
 
     /// The operation log, newest first.
     fn render_ops(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let mut p = panel().w(px(420.)).flex_shrink_0().h_full();
+        let mut p = panel().flex_1().min_h(px(0.));
         let page = match &self.log {
             Some(Ok(page)) => page.clone(),
             Some(Err(e)) => {

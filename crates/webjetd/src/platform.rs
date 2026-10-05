@@ -6,6 +6,7 @@
 //! | routes | `ip route` | `route` | `netsh interface ipvX ... route` (active store) |
 //! | split DNS | systemd-resolved (`resolvectl`) | `/etc/resolver/<domain>` | NRPT rules (comment `webjet`) |
 //! | gateway NAT | iptables MASQUERADE | — | — (gateways run on Linux) |
+//! | reverse proxy | iptables DNAT, connmark + policy routing | — | — (Linux only) |
 //!
 //! Everything the agent adds is removed again by [`cleanup`] (at shutdown and
 //! on uninstall).
@@ -270,6 +271,299 @@ pub fn setup_gateway_nat(pool: &[IpNet], tun: &str, lan_if: &str) -> bool {
     ok
 }
 
+// ---------------------------------------------------------------- reverse proxy (§11.11)
+
+/// The ingress's chains (in the nat, filter and mangle tables).
+pub const PROXY_CHAIN: &str = "WEBJET-PROXY";
+/// The target's chains for real client addresses (mangle table).
+pub const REAL_IP_IN: &str = "WEBJET-REALIP";
+pub const REAL_IP_OUT: &str = "WEBJET-REALIP-OUT";
+/// Connection mark and routing table for replies to real client addresses.
+pub const REAL_IP_MARK: &str = "0x574a0000/0xffff0000";
+pub const REAL_IP_TABLE: &str = "22346";
+
+fn ipt(v6: bool) -> &'static str {
+    if v6 { "ip6tables" } else { "iptables" }
+}
+
+fn args(a: &[&str]) -> Vec<String> {
+    a.iter().map(|s| s.to_string()).collect()
+}
+
+/// Run `bin -t table <op> chain spec`, true when it succeeded.
+fn ipt_run(bin: &str, table: &str, op: &str, chain: &str, spec: &[String]) -> bool {
+    let mut a: Vec<&str> = vec!["-w", "-t", table, op, chain];
+    a.extend(spec.iter().map(String::as_str));
+    run(bin, &a)
+}
+
+/// Create (or empty) `chain` and make sure `from` jumps to it first.
+fn ipt_chain(bin: &str, table: &str, chain: &str, from: &str, jump: &[String]) -> bool {
+    ipt_run(bin, table, "-N", chain, &[]);
+    let ok = ipt_run(bin, table, "-F", chain, &[]);
+    let mut spec = jump.to_vec();
+    spec.extend(args(&["-j", chain]));
+    ok && (ipt_run(bin, table, "-C", from, &spec) || {
+        let mut a = vec!["1".to_string()];
+        a.extend(spec);
+        ipt_run(bin, table, "-I", from, &a)
+    })
+}
+
+/// Remove `chain` and every jump from `from` to it.
+fn ipt_drop_chain(bin: &str, table: &str, chain: &str, from: &str, jump: &[String]) {
+    let mut spec = jump.to_vec();
+    spec.extend(args(&["-j", chain]));
+    for _ in 0..8 {
+        if !ipt_run(bin, table, "-D", from, &spec) {
+            break;
+        }
+    }
+    ipt_run(bin, table, "-F", chain, &[]);
+    ipt_run(bin, table, "-X", chain, &[]);
+}
+
+fn nat_jump(tun: &str) -> Vec<String> {
+    args(&["-m", "addrtype", "--dst-type", "LOCAL", "!", "-i", tun])
+}
+
+/// The rules the ingress puts into its chains, per table: DNAT each listen
+/// port to `addr` (the proxy address, routed into the tun interface), let
+/// those flows through FORWARD, clamp the TCP MSS to the overlay MTU.
+pub fn proxy_ingress_rules(
+    tun: &str,
+    addr: &IpAddr,
+    listens: &[(&str, u16)],
+) -> Vec<(&'static str, Vec<String>)> {
+    let a = addr.to_string();
+    let mut v = Vec::new();
+    for (proto, port) in listens {
+        v.push((
+            "nat",
+            args(&[
+                "-p",
+                proto,
+                "--dport",
+                &port.to_string(),
+                "-j",
+                "DNAT",
+                "--to-destination",
+                &a,
+            ]),
+        ));
+    }
+    v.push(("filter", args(&["-o", tun, "-d", &a, "-j", "ACCEPT"])));
+    v.push(("filter", args(&["-i", tun, "-s", &a, "-j", "ACCEPT"])));
+    v.push((
+        "mangle",
+        args(&[
+            "-o",
+            tun,
+            "-p",
+            "tcp",
+            "--tcp-flags",
+            "SYN,RST",
+            "SYN",
+            "-j",
+            "TCPMSS",
+            "--clamp-mss-to-pmtu",
+        ]),
+    ));
+    v
+}
+
+/// Capture the listen ports into the tun interface (ingress, Linux only).
+/// `addrs`: the proxy address of each address family. An empty `listens`
+/// removes everything.
+pub fn proxy_ingress(tun: &str, addrs: &[IpAddr], listens: &[(&str, u16)]) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let mut ok = true;
+    for v6 in [false, true] {
+        let bin = ipt(v6);
+        let addr = addrs.iter().find(|a| a.is_ipv6() == v6);
+        let Some(addr) = addr.filter(|_| !listens.is_empty()) else {
+            proxy_ingress_clear_family(tun, v6);
+            continue;
+        };
+        let _ = std::fs::write(
+            if v6 {
+                "/proc/sys/net/ipv6/conf/all/forwarding"
+            } else {
+                "/proc/sys/net/ipv4/ip_forward"
+            },
+            "1",
+        );
+        ok &= ipt_chain(bin, "nat", PROXY_CHAIN, "PREROUTING", &nat_jump(tun));
+        ok &= ipt_chain(bin, "filter", PROXY_CHAIN, "FORWARD", &[]);
+        ok &= ipt_chain(bin, "mangle", PROXY_CHAIN, "FORWARD", &[]);
+        for (table, spec) in proxy_ingress_rules(tun, addr, listens) {
+            ok &= ipt_run(bin, table, "-A", PROXY_CHAIN, &spec);
+        }
+    }
+    if !ok {
+        tracing::warn!("reverse proxy: iptables setup failed (iptables missing?)");
+    }
+    ok
+}
+
+fn proxy_ingress_clear_family(tun: &str, v6: bool) {
+    let bin = ipt(v6);
+    ipt_drop_chain(bin, "nat", PROXY_CHAIN, "PREROUTING", &nat_jump(tun));
+    ipt_drop_chain(bin, "filter", PROXY_CHAIN, "FORWARD", &[]);
+    ipt_drop_chain(bin, "mangle", PROXY_CHAIN, "FORWARD", &[]);
+}
+
+/// Accept flows with real client addresses (target, Linux only): mark
+/// connections that come in on the tun interface from outside the overlay
+/// `pool`, and route packets of marked connections back into the tun
+/// interface (the replies), whatever the main routing table says.
+pub fn proxy_real_ip(tun: &str, pool: &[IpNet]) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let mut ok = true;
+    for v6 in [false, true] {
+        let nets: Vec<&IpNet> = pool.iter().filter(|p| p.addr().is_ipv6() == v6).collect();
+        if nets.is_empty() {
+            continue;
+        }
+        let bin = ipt(v6);
+        ok &= ipt_chain(bin, "mangle", REAL_IP_IN, "PREROUTING", &args(&["-i", tun]));
+        // Replies from this host (OUTPUT) and from containers or other
+        // hosts it forwards for (PREROUTING on other interfaces).
+        ok &= ipt_chain(bin, "mangle", REAL_IP_OUT, "OUTPUT", &[]);
+        ok &= ipt_chain(
+            bin,
+            "mangle",
+            REAL_IP_OUT,
+            "PREROUTING",
+            &args(&["!", "-i", tun]),
+        );
+        for n in &nets {
+            ok &= ipt_run(
+                bin,
+                "mangle",
+                "-A",
+                REAL_IP_IN,
+                &args(&["-s", &n.to_string(), "-j", "RETURN"]),
+            );
+        }
+        ok &= ipt_run(
+            bin,
+            "mangle",
+            "-A",
+            REAL_IP_IN,
+            &args(&["-j", "CONNMARK", "--set-xmark", REAL_IP_MARK]),
+        );
+        ok &= ipt_run(
+            bin,
+            "mangle",
+            "-A",
+            REAL_IP_OUT,
+            &args(&[
+                "-m",
+                "connmark",
+                "--mark",
+                REAL_IP_MARK,
+                "-j",
+                "MARK",
+                "--set-xmark",
+                REAL_IP_MARK,
+            ]),
+        );
+        let fam = if v6 { "-6" } else { "-4" };
+        let rules = std::process::Command::new("ip")
+            .args([fam, "rule", "show"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        if !rules.contains(&format!("lookup {REAL_IP_TABLE}")) {
+            ok &= run(
+                "ip",
+                &[
+                    fam,
+                    "rule",
+                    "add",
+                    "fwmark",
+                    REAL_IP_MARK,
+                    "lookup",
+                    REAL_IP_TABLE,
+                    "priority",
+                    REAL_IP_TABLE,
+                ],
+            );
+        }
+        ok &= run(
+            "ip",
+            &[
+                fam,
+                "route",
+                "replace",
+                "default",
+                "dev",
+                tun,
+                "table",
+                REAL_IP_TABLE,
+            ],
+        );
+        if !v6 {
+            // Loose reverse-path filtering: the client's address routes out
+            // of another interface.
+            let _ = std::fs::write(format!("/proc/sys/net/ipv4/conf/{tun}/rp_filter"), "2");
+        }
+    }
+    if ok {
+        tracing::info!("reverse proxy: accepting real client addresses on {tun}");
+    } else {
+        tracing::warn!("reverse proxy: real client address setup failed (iptables/ip missing?)");
+    }
+    ok
+}
+
+/// Remove the reverse proxy's iptables chains and routing rule.
+pub fn proxy_clear(tun: &str) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    for v6 in [false, true] {
+        proxy_ingress_clear_family(tun, v6);
+        let bin = ipt(v6);
+        ipt_drop_chain(bin, "mangle", REAL_IP_IN, "PREROUTING", &args(&["-i", tun]));
+        let out_jumps = [("OUTPUT", vec![]), ("PREROUTING", args(&["!", "-i", tun]))];
+        for (from, jump) in &out_jumps {
+            let mut spec = jump.clone();
+            spec.extend(args(&["-j", REAL_IP_OUT]));
+            for _ in 0..8 {
+                if !ipt_run(bin, "mangle", "-D", from, &spec) {
+                    break;
+                }
+            }
+        }
+        ipt_run(bin, "mangle", "-F", REAL_IP_OUT, &[]);
+        ipt_run(bin, "mangle", "-X", REAL_IP_OUT, &[]);
+        let fam = if v6 { "-6" } else { "-4" };
+        for _ in 0..4 {
+            if !run(
+                "ip",
+                &[
+                    fam,
+                    "rule",
+                    "del",
+                    "fwmark",
+                    REAL_IP_MARK,
+                    "lookup",
+                    REAL_IP_TABLE,
+                ],
+            ) {
+                break;
+            }
+        }
+        run("ip", &[fam, "route", "flush", "table", REAL_IP_TABLE]);
+    }
+}
+
 // ---------------------------------------------------------------- interfaces
 
 fn is_overlay_if(name: &str) -> bool {
@@ -371,6 +665,27 @@ mod tests {
         assert!(s.contains("Add-DnsClientNrptRule -Namespace '.internal' -NameServers @('10.7.255.53') -Comment 'webjet'"));
         assert!(s.contains("-Namespace '.corp.example'"));
         assert_eq!(ps_quote("a'b"), "'a''b'");
+    }
+
+    #[test]
+    fn proxy_ingress_rules_capture_each_port() {
+        let r = proxy_ingress_rules(
+            "webjet0",
+            &"10.7.255.53".parse().unwrap(),
+            &[("tcp", 8080), ("udp", 5353)],
+        );
+        let line = |i: usize| format!("{} {}", r[i].0, r[i].1.join(" "));
+        assert_eq!(
+            line(0),
+            "nat -p tcp --dport 8080 -j DNAT --to-destination 10.7.255.53"
+        );
+        assert_eq!(
+            line(1),
+            "nat -p udp --dport 5353 -j DNAT --to-destination 10.7.255.53"
+        );
+        assert_eq!(line(2), "filter -o webjet0 -d 10.7.255.53 -j ACCEPT");
+        assert_eq!(line(3), "filter -i webjet0 -s 10.7.255.53 -j ACCEPT");
+        assert!(line(4).starts_with("mangle -o webjet0 -p tcp") && line(4).contains("TCPMSS"));
     }
 
     #[test]

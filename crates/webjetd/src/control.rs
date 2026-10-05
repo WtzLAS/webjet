@@ -144,6 +144,7 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             Ok(json!({"sessions": v, "circuits": crate::circuit::summary(n)}))
         }
         "conntrack" => Ok(crate::dataplane::flows(n)),
+        "proxy" => Ok(crate::proxy::status(n)),
         "topology" => Ok(crate::gossip::topology(n)),
         "nodes" => {
             let view = admin_view(n);

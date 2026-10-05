@@ -1,8 +1,29 @@
 //! Dashboard: how the network is doing, at a glance.
 
+use super::split::{Axis, Split};
 use super::*;
 use crate::model::Action;
 use gpui::{Bounds, PathBuilder, Pixels, canvas, point};
+
+/// Throughput beside the hops.
+const DASH_TRAFFIC: Split = Split {
+    id: "dash-traffic",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 420.0,
+    min: 280.0,
+    rest_min: 300.0,
+};
+
+/// The network's facts beside relay load and alarms.
+const DASH_NETWORK: Split = Split {
+    id: "dash-network",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 420.0,
+    min: 280.0,
+    rest_min: 300.0,
+};
 
 /// A headline number with a caption.
 fn stat(title: &str, value: String, sub: String, color: u32) -> gpui::Div {
@@ -215,7 +236,7 @@ impl WebjetApp {
                 .cmp(&link_level(a.rtt_ms, a.loss))
                 .then(b.rtt_ms.total_cmp(&a.rtt_ms))
         });
-        let mut links = panel().w(px(420.)).child(heading("Hops"));
+        let mut links = panel().flex_1().child(heading("Hops"));
         if peers.is_empty() {
             links = links.child(muted("No hop sessions."));
         }
@@ -325,7 +346,7 @@ impl WebjetApp {
         }
 
         // ---- relay load (from LinkStateAdverts)
-        let mut load = panel().w(px(420.)).child(heading("Relay load"));
+        let mut load = panel().child(heading("Relay load"));
         let relays: Vec<_> = self.graph.vertices.iter().filter(|v| v.relay).collect();
         if relays.is_empty() {
             load = load.child(muted("No relay has advertised its load."));
@@ -374,7 +395,7 @@ impl WebjetApp {
         }
 
         // ---- alarms
-        let mut alarms = panel().w(px(420.)).child(heading("Alarms on this agent"));
+        let mut alarms = panel().child(heading("Alarms on this agent"));
         if st.alarms.is_empty() {
             alarms = alarms.child(div().text_color(rgb(theme::OK)).child("none"));
         }
@@ -396,14 +417,13 @@ impl WebjetApp {
             .gap_3()
             .child(banner)
             .child(stats)
-            .child(div().flex().gap_3().child(traffic).child(links))
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .child(net)
-                    .child(div().flex().flex_col().gap_3().child(load).child(alarms)),
-            )
+            .child(self.split(DASH_TRAFFIC, traffic, links, cx))
+            .child(self.split(
+                DASH_NETWORK,
+                net,
+                div().flex().flex_col().gap_3().child(load).child(alarms),
+                cx,
+            ))
             .into_any_element()
     }
 }

@@ -314,6 +314,107 @@
    "tx_bytes": 4138
   }
  ],
+ "proxy": {
+  "accept_real_ip": true,
+  "addresses": [
+   "10.7.255.254"
+  ],
+  "counters": [
+   {
+    "active": 1,
+    "flows": 12,
+    "node": "node-02",
+    "refused": 1,
+    "rule": "web",
+    "side": "ingress",
+    "to_client_bytes": 690112,
+    "to_client_packets": 512,
+    "to_target_bytes": 40211,
+    "to_target_packets": 340
+   },
+   {
+    "active": 1,
+    "flows": 3,
+    "node": "node-04",
+    "refused": 0,
+    "rule": "dns",
+    "side": "target",
+    "to_client_bytes": 900,
+    "to_client_packets": 6,
+    "to_target_bytes": 420,
+    "to_target_packets": 6
+   }
+  ],
+  "flows": [
+   {
+    "client": "203.0.113.7:51234",
+    "expires_s": 3599,
+    "gateway": false,
+    "idle_s": 1,
+    "listen_port": 8080,
+    "node": "node-02",
+    "peer": "node-04",
+    "peer_id": "e7ecbdb919f0a73b7dd0fc433048c6d79c67cb3a851b60ec40bffce13c344a58",
+    "proto": "tcp",
+    "replied": true,
+    "rule": "web",
+    "side": "ingress",
+    "source": null,
+    "state": "tcp established",
+    "target": "10.7.0.4:80"
+   },
+   {
+    "client": "10.7.0.4:61002",
+    "expires_s": 117,
+    "gateway": false,
+    "idle_s": 3,
+    "listen_port": null,
+    "node": "node-04",
+    "peer": "node-04",
+    "peer_id": "e7ecbdb919f0a73b7dd0fc433048c6d79c67cb3a851b60ec40bffce13c344a58",
+    "proto": "udp",
+    "replied": true,
+    "rule": "dns",
+    "side": "target",
+    "source": null,
+    "state": "udp",
+    "target": "10.7.0.2:53"
+   }
+  ],
+  "live": 2,
+  "real_ip_ready": true,
+  "rules": [
+   {
+    "listen_port": 8080,
+    "name": "web",
+    "protocol": "tcp",
+    "real_ip": true,
+    "status": "listening on tcp port 8080 (IPv4 clients)",
+    "target": [
+     "tag:web"
+    ],
+    "target_port": 80,
+    "warnings": []
+   },
+   {
+    "listen_port": 9100,
+    "name": "printer",
+    "protocol": "tcp",
+    "real_ip": true,
+    "status": "listening on tcp port 9100 (IPv4 clients)",
+    "target": [
+     "192.168.50.10"
+    ],
+    "target_port": 9100,
+    "warnings": [
+     "real_ip can't work for 192.168.50.10: it is behind a gateway, so its replies would bypass the overlay. The gateway translates the source and the host sees the gateway's address; set real_ip = false"
+    ]
+   }
+  ],
+  "running": true,
+  "total": 2,
+  "truncated": false
+ },
  "sessions": {
   "circuits": {
    "local": [

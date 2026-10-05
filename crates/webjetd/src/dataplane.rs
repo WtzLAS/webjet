@@ -36,6 +36,8 @@ pub struct Dataplane {
     gw_choice: Mutex<HashMap<IpNet, Bytes32>>,
     nat_done: Mutex<Vec<String>>,
     pings: Mutex<HashMap<u16, mpsc::UnboundedSender<u16>>>,
+    /// Reverse proxy ports and flows (§11.11), apart from the overlay's.
+    pub proxy: crate::proxy::Proxy,
 }
 
 impl Dataplane {
@@ -55,7 +57,30 @@ impl Dataplane {
         self.node.upgrade()
     }
 
-    fn write_tun(&self, p: Vec<u8>) {
+    pub(crate) fn has_tun(&self) -> bool {
+        self.tun_tx.is_some()
+    }
+
+    /// The grant this node serves as a gateway that covers `ip`.
+    pub(crate) fn serving_grant(&self, ip: &IpAddr) -> Option<Grant> {
+        self.serving
+            .read()
+            .iter()
+            .map(|(g, _)| *g)
+            .find(|g| g.published.contains(ip))
+    }
+
+    /// This node's overlay address of a family.
+    pub(crate) fn my_ip(&self, v6: bool) -> Option<IpAddr> {
+        self.my_ips
+            .read()
+            .iter()
+            .map(|n| n.addr())
+            .find(|a| a.is_ipv6() == v6)
+    }
+
+    pub(crate) fn write_tun(&self, p: Vec<u8>) {
+        // Replies to our own pings (control channel `ping`) stop here.
         if let Some(pp) = packet::parse(&p)
             && pp.icmp == Some(packet::IcmpKind::Echo { request: false })
             && p.len() >= pp.l4_offset + 8
@@ -70,6 +95,12 @@ impl Dataplane {
         if let Some(n) = self.node() {
             n.metrics.tun_tx.fetch_add(1, Ordering::Relaxed);
         }
+        self.write_tun_raw(p);
+    }
+
+    /// Write to the tun interface without counting it as overlay traffic
+    /// (reverse proxy packets have their own counters).
+    pub(crate) fn write_tun_raw(&self, p: Vec<u8>) {
         match &self.tun_tx {
             Some(tx) => {
                 let _ = tx.try_send(p);
@@ -94,7 +125,7 @@ impl Dataplane {
         }
     }
 
-    fn icmp(&self, orig: &[u8], why: Unreach) {
+    pub(crate) fn icmp(&self, orig: &[u8], why: Unreach) {
         if !self.icmp_bucket.lock().take() {
             return;
         }
@@ -150,7 +181,7 @@ impl Dataplane {
         self.icmp(orig, Unreach::Host);
     }
 
-    fn is_mine(&self, ip: &IpAddr) -> bool {
+    pub(crate) fn is_mine(&self, ip: &IpAddr) -> bool {
         self.my_ips.read().iter().any(|n| n.contains(ip))
     }
 
@@ -159,13 +190,24 @@ impl Dataplane {
     /// A packet the local host sent into the overlay.
     pub fn outbound(&self, mut p: Vec<u8>) {
         let Some(n) = self.node() else { return };
-        n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
         let Some(parsed) = packet::parse(&p) else {
+            n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
             return;
         };
         let (src, dst) = (parsed.flow.src, parsed.flow.dst);
+        // Reverse proxy traffic (§11.11) is kept out of the overlay's
+        // counters and connection tracking: a client's packet the kernel
+        // captured, or a reply to a proxy flow to this node.
+        if self.proxy.is_capture(self, &parsed) {
+            self.proxy.from_client(&n, self, p, parsed);
+            return;
+        }
+        if self.is_mine(&src) && self.proxy.from_local(&n, &p, &parsed) {
+            return;
+        }
         // The local resolver (§11.10.1).
         if self.resolver.read().contains(&dst) {
+            n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
             let n2 = n.clone();
             tokio::spawn(async move {
                 if let Some(reply) = crate::dns::handle(&n2, &p).await
@@ -197,6 +239,10 @@ impl Dataplane {
             let Some(after) = packet::parse(&p) else {
                 return;
             };
+            if self.proxy.from_local(&n, &p, &after) {
+                return;
+            }
+            n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
             let v = self
                 .conntrack
                 .lock()
@@ -207,6 +253,7 @@ impl Dataplane {
             crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p));
             return;
         }
+        n.metrics.tun_rx.fetch_add(1, Ordering::Relaxed);
         // Where does it go? A node, or a gateway serving a published prefix (§9.5, §11.9.3).
         let (peer, dest_is_node) = match self.route(&n, &dst) {
             Some(x) => x,
@@ -274,7 +321,7 @@ impl Dataplane {
     }
 
     /// The node or serving gateway for a destination address.
-    fn route(&self, n: &Arc<Node>, dst: &IpAddr) -> Option<(Bytes32, bool)> {
+    pub(crate) fn route(&self, n: &Arc<Node>, dst: &IpAddr) -> Option<(Bytes32, bool)> {
         let view_node = n.store.read().view().node_by_ip(dst);
         if let Some(id) = view_node {
             return Some((id, true));
@@ -498,6 +545,7 @@ impl Dataplane {
         if self.tun_tx.is_none() {
             return;
         }
+        self.proxy.shutdown(self);
         for r in self.routes.lock().drain(..) {
             crate::platform::del_route(&r, &self.dev_name);
         }
@@ -634,6 +682,7 @@ impl Dataplane {
         if dropped > 0 {
             tracing::info!("policy change closed {dropped} tracked flows");
         }
+        self.proxy.refresh(&n, self);
     }
 }
 
@@ -734,6 +783,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         gw_choice: Mutex::new(HashMap::new()),
         nat_done: Mutex::new(Vec::new()),
         pings: Mutex::new(HashMap::new()),
+        proxy: crate::proxy::Proxy::new(),
     });
     if let Some(dev) = dev_handle {
         let dp2 = dp.clone();
@@ -762,6 +812,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
                 }
                 _ = tick.tick() => {
                     dp2.conntrack.lock().expire(Instant::now());
+                    dp2.proxy.table.lock().expire(Instant::now());
                     // Re-check LAN interfaces for serving changes.
                     dp2.applied_gen.store(u64::MAX, Ordering::SeqCst);
                 }
@@ -789,11 +840,25 @@ fn proto_name(p: u8) -> String {
     }
 }
 
+/// A conntrack state for people.
+pub fn state_name(s: webjet_core::conntrack::State) -> &'static str {
+    use webjet_core::conntrack::State;
+    match s {
+        State::TcpOpening => "tcp opening",
+        State::TcpEstablished => "tcp established",
+        State::TcpClosing => "tcp closing",
+        State::UdpOneWay => "udp one-way",
+        State::UdpBoth => "udp",
+        State::IcmpEcho => "icmp echo",
+        State::Other => "other",
+    }
+}
+
 /// The tracked flows (§14.4) with the circuit each peer's traffic currently
 /// takes, for the control channel (`conntrack`). Most recently active first.
 pub fn flows(n: &Node) -> serde_json::Value {
     use serde_json::json;
-    use webjet_core::conntrack::State;
+
     let Some(dp) = n.dataplane.get() else {
         return json!({"running": false, "total": 0, "flows": [], "limits": {}});
     };
@@ -842,15 +907,7 @@ pub fn flows(n: &Node) -> serde_json::Value {
                 }))
             })
             .clone();
-        let state = match e.state {
-            State::TcpOpening => "tcp opening",
-            State::TcpEstablished => "tcp established",
-            State::TcpClosing => "tcp closing",
-            State::UdpOneWay => "udp one-way",
-            State::UdpBoth => "udp",
-            State::IcmpEcho => "icmp echo",
-            State::Other => "other",
-        };
+        let state = state_name(e.state);
         let idle = now.duration_since(e.last);
         out.push(json!({
             "peer": n.name_of(&k.peer),

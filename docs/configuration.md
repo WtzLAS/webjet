@@ -148,6 +148,7 @@ subset of the same keys:
 | `limits.value.<name>` | Replaces the network's value and overrides. |
 | `[[seeds]]` | Tried before the network's seeds. |
 | `[[dns.record]]`, `[[dns.forward]]` | Answered or forwarded by this node's resolver only, before the network's. Checked like the network's (in the suffix or a forwarded zone, no shadowing of magic DNS names). |
+| `[[proxy]]` | Reverse proxy ports this node listens on (Linux data nodes; see below). Node scope only. |
 
 Policy, the DNS suffix and resolver, transport overrides, camouflage and
 padding are network-wide only; `apply` refuses them at node scope.
@@ -167,6 +168,48 @@ admin; the change is signed with your account key (`SetNodeConfig`) and
 stored in the tree, so it survives reinstalls and can be made remotely. The
 version rules are the same as at network scope. Removing every value clears
 the node's configuration; revoking the node removes it.
+
+### Reverse proxy ports
+
+A Linux data node can listen on a TCP or UDP port for clients outside the
+overlay and forward each flow to a port of another node, of the data nodes
+some selectors pick, or of an address behind a gateway (architecture
+§11.11):
+
+```toml
+[[proxy]]
+name = "web"              # unique on the node
+protocol = "tcp"          # tcp | udp
+listen_port = 8080
+target = ["10.7.0.11"]    # one address ...
+target_port = 80
+
+[[proxy]]
+name = "dns"
+protocol = "udp"
+listen_port = 53
+target = ["tag:dns", "node:ns-02"]   # ... or selectors: one node per client
+target_port = 53
+real_ip = false           # targets see this node's address
+```
+
+- **real_ip** (default `true`) keeps the client's address as the source.
+  The target must accept that with `[proxy] accept_real_ip = true` in its
+  webjetd.toml; targets that don't, and addresses behind a gateway, see the
+  ingress's overlay address instead (with a warning on the rule).
+- The policy must allow the ingress the target and `target_port`, as for
+  its own traffic.
+- The ingress needs Linux, iptables and the tun interface; it doesn't
+  capture traffic its own host sends to the port.
+- `webjetctl local proxy` shows each rule's status and warnings, the proxy
+  flows and their counters; the webjet-app shows them under Connections →
+  reverse proxy. They are kept apart from the overlay's flows and metrics
+  (`webjet_proxy_*`).
+
+```sh
+webjetctl local config --node edge-01 edit      # add [[proxy]] entries
+webjetctl local proxy                           # on edge-01: status, flows
+```
 
 ### Precedence
 
@@ -290,6 +333,19 @@ interface = "eth1"              # the LAN interface behind it
 
 For mapped grants (`192.168.1.0/24=10.2.2.0/24`), `published` is the mapped
 prefix.
+
+### `[proxy]`
+
+This node as a reverse proxy target (§11.11).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `accept_real_ip` | `false` | Accept proxied flows that keep the client's real address, and route their replies back into the overlay (Linux with the tun interface; connmark `0x574a0000/0xffff0000`, routing table 22346). |
+
+```toml
+[proxy]
+accept_real_ip = true
+```
 
 ### `[key]`
 

@@ -388,6 +388,10 @@ impl Conntrack {
         }
     }
 
+    pub fn get(&self, k: &Key) -> Option<&Entry> {
+        self.entries.get(k)
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = (&Key, &Entry)> {
         self.entries.iter()
     }

@@ -39459,6 +39459,8 @@ mod root {
             pub dns_records: ::core::option::Option<::planus::alloc::vec::Vec<self::DnsRecord>>,
             /// The field `dns_forward` in the table `NodeConfig`
             pub dns_forward: ::core::option::Option<::planus::alloc::vec::Vec<self::ForwardZone>>,
+            /// The field `proxy` in the table `NodeConfig`
+            pub proxy: ::core::option::Option<::planus::alloc::vec::Vec<self::ProxyRule>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -39472,6 +39474,7 @@ mod root {
                     seeds: ::core::default::Default::default(),
                     dns_records: ::core::default::Default::default(),
                     dns_forward: ::core::default::Default::default(),
+                    proxy: ::core::default::Default::default(),
                 }
             }
         }
@@ -39503,6 +39506,9 @@ mod root {
                 field_dns_forward: impl ::planus::WriteAsOptional<
                     ::planus::Offset<[::planus::Offset<self::ForwardZone>]>,
                 >,
+                field_proxy: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::ProxyRule>]>,
+                >,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_version = field_version.prepare(builder, &0);
@@ -39511,8 +39517,9 @@ mod root {
                 let prepared_seeds = field_seeds.prepare(builder);
                 let prepared_dns_records = field_dns_records.prepare(builder);
                 let prepared_dns_forward = field_dns_forward.prepare(builder);
+                let prepared_proxy = field_proxy.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<18> =
+                let mut table_writer: ::planus::table_writer::TableWriter<20> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -39538,6 +39545,10 @@ mod root {
                 if prepared_dns_forward.is_some() {
                     table_writer
                         .write_entry::<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>(6);
+                }
+                if prepared_proxy.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>(7);
                 }
 
                 unsafe {
@@ -39568,6 +39579,9 @@ mod root {
                             prepared_dns_forward
                         {
                             object_writer.write::<_, _, 4>(&prepared_dns_forward);
+                        }
+                        if let ::core::option::Option::Some(prepared_proxy) = prepared_proxy {
+                            object_writer.write::<_, _, 4>(&prepared_proxy);
                         }
                     });
                 }
@@ -39608,6 +39622,7 @@ mod root {
                     &self.seeds,
                     &self.dns_records,
                     &self.dns_forward,
+                    &self.proxy,
                 )
             }
         }
@@ -39772,6 +39787,28 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5, T6> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
+            /// Setter for the [`proxy` field](NodeConfig#structfield.proxy).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn proxy<T7>(self, value: T7) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
+            where
+                T7: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::ProxyRule>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6) = self.0;
+                NodeConfigBuilder((v0, v1, v2, v3, v4, v5, v6, value))
+            }
+
+            /// Sets the [`proxy` field](NodeConfig#structfield.proxy) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn proxy_as_null(self) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, ())> {
+                self.proxy(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NodeConfig].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig>
@@ -39792,8 +39829,9 @@ mod root {
                 T4: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>,
                 T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
+                T7: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>,
             > ::planus::WriteAs<::planus::Offset<NodeConfig>>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
         {
             type Prepared = ::planus::Offset<NodeConfig>;
 
@@ -39813,8 +39851,9 @@ mod root {
                 T4: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>,
                 T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
+                T7: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>,
             > ::planus::WriteAsOptional<::planus::Offset<NodeConfig>>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
         {
             type Prepared = ::planus::Offset<NodeConfig>;
 
@@ -39837,13 +39876,14 @@ mod root {
                 T4: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::SeedEntry>]>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::DnsRecord>]>>,
                 T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
+                T7: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>,
             > ::planus::WriteAsOffset<NodeConfig>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
-                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
-                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6)
+                let (v0, v1, v2, v3, v4, v5, v6, v7) = &self.0;
+                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7)
             }
         }
 
@@ -39923,6 +39963,18 @@ mod root {
             > {
                 self.0.access(6, "NodeConfig", "dns_forward")
             }
+
+            /// Getter for the [`proxy` field](NodeConfig#structfield.proxy).
+            #[inline]
+            pub fn proxy(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::ProxyRuleRef<'a>>>,
+                >,
+            > {
+                self.0.access(7, "NodeConfig", "proxy")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for NodeConfigRef<'a> {
@@ -39952,6 +40004,9 @@ mod root {
                     self.dns_forward().transpose()
                 {
                     f.field("dns_forward", &field_dns_forward);
+                }
+                if let ::core::option::Option::Some(field_proxy) = self.proxy().transpose() {
+                    f.field("proxy", &field_proxy);
                 }
                 f.finish()
             }
@@ -39993,6 +40048,11 @@ mod root {
                         value.dns_forward()?
                     {
                         ::core::option::Option::Some(dns_forward.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    proxy: if let ::core::option::Option::Some(proxy) = value.proxy()? {
+                        ::core::option::Option::Some(proxy.to_vec_result()?)
                     } else {
                         ::core::option::Option::None
                     },
@@ -40073,10 +40133,530 @@ mod root {
             }
         }
 
+        /// The table `ProxyRule` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `ProxyRule` in the file `schema/webjet.fbs:233`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct ProxyRule {
+            /// The field `name` in the table `ProxyRule`
+            pub name: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `protocol` in the table `ProxyRule`
+            pub protocol: u8,
+            /// The field `listen_port` in the table `ProxyRule`
+            pub listen_port: u16,
+            /// The field `target` in the table `ProxyRule`
+            pub target:
+                ::core::option::Option<::planus::alloc::vec::Vec<::planus::alloc::string::String>>,
+            /// The field `target_port` in the table `ProxyRule`
+            pub target_port: u16,
+            /// The field `real_ip` in the table `ProxyRule`
+            pub real_ip: bool,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for ProxyRule {
+            fn default() -> Self {
+                Self {
+                    name: ::core::default::Default::default(),
+                    protocol: 0,
+                    listen_port: 0,
+                    target: ::core::default::Default::default(),
+                    target_port: 0,
+                    real_ip: true,
+                }
+            }
+        }
+
+        impl ProxyRule {
+            /// Creates a [ProxyRuleBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> ProxyRuleBuilder<()> {
+                ProxyRuleBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_name: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_protocol: impl ::planus::WriteAsDefault<u8, u8>,
+                field_listen_port: impl ::planus::WriteAsDefault<u16, u16>,
+                field_target: impl ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                field_target_port: impl ::planus::WriteAsDefault<u16, u16>,
+                field_real_ip: impl ::planus::WriteAsDefault<bool, bool>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_name = field_name.prepare(builder);
+                let prepared_protocol = field_protocol.prepare(builder, &0);
+                let prepared_listen_port = field_listen_port.prepare(builder, &0);
+                let prepared_target = field_target.prepare(builder);
+                let prepared_target_port = field_target_port.prepare(builder, &0);
+                let prepared_real_ip = field_real_ip.prepare(builder, &true);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<16> =
+                    ::core::default::Default::default();
+                if prepared_name.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(0);
+                }
+                if prepared_target.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[::planus::Offset<str>]>>(3);
+                }
+                if prepared_listen_port.is_some() {
+                    table_writer.write_entry::<u16>(2);
+                }
+                if prepared_target_port.is_some() {
+                    table_writer.write_entry::<u16>(4);
+                }
+                if prepared_protocol.is_some() {
+                    table_writer.write_entry::<u8>(1);
+                }
+                if prepared_real_ip.is_some() {
+                    table_writer.write_entry::<bool>(5);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_name) = prepared_name {
+                            object_writer.write::<_, _, 4>(&prepared_name);
+                        }
+                        if let ::core::option::Option::Some(prepared_target) = prepared_target {
+                            object_writer.write::<_, _, 4>(&prepared_target);
+                        }
+                        if let ::core::option::Option::Some(prepared_listen_port) =
+                            prepared_listen_port
+                        {
+                            object_writer.write::<_, _, 2>(&prepared_listen_port);
+                        }
+                        if let ::core::option::Option::Some(prepared_target_port) =
+                            prepared_target_port
+                        {
+                            object_writer.write::<_, _, 2>(&prepared_target_port);
+                        }
+                        if let ::core::option::Option::Some(prepared_protocol) = prepared_protocol {
+                            object_writer.write::<_, _, 1>(&prepared_protocol);
+                        }
+                        if let ::core::option::Option::Some(prepared_real_ip) = prepared_real_ip {
+                            object_writer.write::<_, _, 1>(&prepared_real_ip);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<ProxyRule>> for ProxyRule {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyRule> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<ProxyRule>> for ProxyRule {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ProxyRule>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<ProxyRule> for ProxyRule {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyRule> {
+                ProxyRule::create(
+                    builder,
+                    &self.name,
+                    self.protocol,
+                    self.listen_port,
+                    &self.target,
+                    self.target_port,
+                    self.real_ip,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [ProxyRule] type.
+        ///
+        /// Can be created using the [ProxyRule::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct ProxyRuleBuilder<State>(State);
+
+        impl ProxyRuleBuilder<()> {
+            /// Setter for the [`name` field](ProxyRule#structfield.name).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn name<T0>(self, value: T0) -> ProxyRuleBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                ProxyRuleBuilder((value,))
+            }
+
+            /// Sets the [`name` field](ProxyRule#structfield.name) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn name_as_null(self) -> ProxyRuleBuilder<((),)> {
+                self.name(())
+            }
+        }
+
+        impl<T0> ProxyRuleBuilder<(T0,)> {
+            /// Setter for the [`protocol` field](ProxyRule#structfield.protocol).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol<T1>(self, value: T1) -> ProxyRuleBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u8, u8>,
+            {
+                let (v0,) = self.0;
+                ProxyRuleBuilder((v0, value))
+            }
+
+            /// Sets the [`protocol` field](ProxyRule#structfield.protocol) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn protocol_as_default(self) -> ProxyRuleBuilder<(T0, ::planus::DefaultValue)> {
+                self.protocol(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> ProxyRuleBuilder<(T0, T1)> {
+            /// Setter for the [`listen_port` field](ProxyRule#structfield.listen_port).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn listen_port<T2>(self, value: T2) -> ProxyRuleBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsDefault<u16, u16>,
+            {
+                let (v0, v1) = self.0;
+                ProxyRuleBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`listen_port` field](ProxyRule#structfield.listen_port) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn listen_port_as_default(
+                self,
+            ) -> ProxyRuleBuilder<(T0, T1, ::planus::DefaultValue)> {
+                self.listen_port(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2> ProxyRuleBuilder<(T0, T1, T2)> {
+            /// Setter for the [`target` field](ProxyRule#structfield.target).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn target<T3>(self, value: T3) -> ProxyRuleBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+            {
+                let (v0, v1, v2) = self.0;
+                ProxyRuleBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`target` field](ProxyRule#structfield.target) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn target_as_null(self) -> ProxyRuleBuilder<(T0, T1, T2, ())> {
+                self.target(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> ProxyRuleBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`target_port` field](ProxyRule#structfield.target_port).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn target_port<T4>(self, value: T4) -> ProxyRuleBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsDefault<u16, u16>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                ProxyRuleBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`target_port` field](ProxyRule#structfield.target_port) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn target_port_as_default(
+                self,
+            ) -> ProxyRuleBuilder<(T0, T1, T2, T3, ::planus::DefaultValue)> {
+                self.target_port(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> ProxyRuleBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`real_ip` field](ProxyRule#structfield.real_ip).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn real_ip<T5>(self, value: T5) -> ProxyRuleBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsDefault<bool, bool>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                ProxyRuleBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`real_ip` field](ProxyRule#structfield.real_ip) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn real_ip_as_default(
+                self,
+            ) -> ProxyRuleBuilder<(T0, T1, T2, T3, T4, ::planus::DefaultValue)> {
+                self.real_ip(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> ProxyRuleBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [ProxyRule].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyRule>
+            where
+                Self: ::planus::WriteAsOffset<ProxyRule>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<u8, u8>,
+                T2: ::planus::WriteAsDefault<u16, u16>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                T4: ::planus::WriteAsDefault<u16, u16>,
+                T5: ::planus::WriteAsDefault<bool, bool>,
+            > ::planus::WriteAs<::planus::Offset<ProxyRule>>
+            for ProxyRuleBuilder<(T0, T1, T2, T3, T4, T5)>
+        {
+            type Prepared = ::planus::Offset<ProxyRule>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyRule> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<u8, u8>,
+                T2: ::planus::WriteAsDefault<u16, u16>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                T4: ::planus::WriteAsDefault<u16, u16>,
+                T5: ::planus::WriteAsDefault<bool, bool>,
+            > ::planus::WriteAsOptional<::planus::Offset<ProxyRule>>
+            for ProxyRuleBuilder<(T0, T1, T2, T3, T4, T5)>
+        {
+            type Prepared = ::planus::Offset<ProxyRule>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ProxyRule>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<u8, u8>,
+                T2: ::planus::WriteAsDefault<u16, u16>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                T4: ::planus::WriteAsDefault<u16, u16>,
+                T5: ::planus::WriteAsDefault<bool, bool>,
+            > ::planus::WriteAsOffset<ProxyRule> for ProxyRuleBuilder<(T0, T1, T2, T3, T4, T5)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyRule> {
+                let (v0, v1, v2, v3, v4, v5) = &self.0;
+                ProxyRule::create(builder, v0, v1, v2, v3, v4, v5)
+            }
+        }
+
+        /// Reference to a deserialized [ProxyRule].
+        #[derive(Copy, Clone)]
+        pub struct ProxyRuleRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> ProxyRuleRef<'a> {
+            /// Getter for the [`name` field](ProxyRule#structfield.name).
+            #[inline]
+            pub fn name(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(0, "ProxyRule", "name")
+            }
+
+            /// Getter for the [`protocol` field](ProxyRule#structfield.protocol).
+            #[inline]
+            pub fn protocol(&self) -> ::planus::Result<u8> {
+                ::core::result::Result::Ok(self.0.access(1, "ProxyRule", "protocol")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`listen_port` field](ProxyRule#structfield.listen_port).
+            #[inline]
+            pub fn listen_port(&self) -> ::planus::Result<u16> {
+                ::core::result::Result::Ok(
+                    self.0.access(2, "ProxyRule", "listen_port")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`target` field](ProxyRule#structfield.target).
+            #[inline]
+            pub fn target(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<&'a ::core::primitive::str>>,
+                >,
+            > {
+                self.0.access(3, "ProxyRule", "target")
+            }
+
+            /// Getter for the [`target_port` field](ProxyRule#structfield.target_port).
+            #[inline]
+            pub fn target_port(&self) -> ::planus::Result<u16> {
+                ::core::result::Result::Ok(
+                    self.0.access(4, "ProxyRule", "target_port")?.unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`real_ip` field](ProxyRule#structfield.real_ip).
+            #[inline]
+            pub fn real_ip(&self) -> ::planus::Result<bool> {
+                ::core::result::Result::Ok(
+                    self.0.access(5, "ProxyRule", "real_ip")?.unwrap_or(true),
+                )
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for ProxyRuleRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("ProxyRuleRef");
+                if let ::core::option::Option::Some(field_name) = self.name().transpose() {
+                    f.field("name", &field_name);
+                }
+                f.field("protocol", &self.protocol());
+                f.field("listen_port", &self.listen_port());
+                if let ::core::option::Option::Some(field_target) = self.target().transpose() {
+                    f.field("target", &field_target);
+                }
+                f.field("target_port", &self.target_port());
+                f.field("real_ip", &self.real_ip());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<ProxyRuleRef<'a>> for ProxyRule {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: ProxyRuleRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    name: value.name()?.map(::core::convert::Into::into),
+                    protocol: ::core::convert::TryInto::try_into(value.protocol()?)?,
+                    listen_port: ::core::convert::TryInto::try_into(value.listen_port()?)?,
+                    target: if let ::core::option::Option::Some(target) = value.target()? {
+                        ::core::option::Option::Some(target.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    target_port: ::core::convert::TryInto::try_into(value.target_port()?)?,
+                    real_ip: ::core::convert::TryInto::try_into(value.real_ip()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for ProxyRuleRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for ProxyRuleRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[ProxyRuleRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<ProxyRule>> for ProxyRule {
+            type Value = ::planus::Offset<ProxyRule>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<ProxyRule>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for ProxyRuleRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[ProxyRuleRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `SignedTreeHead` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:230`
+        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:244`
         #[derive(
             Clone,
             Debug,
@@ -40602,7 +41182,7 @@ mod root {
         /// The table `SigningKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:239`
+        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:253`
         #[derive(
             Clone,
             Debug,
@@ -41081,7 +41661,7 @@ mod root {
         /// The table `SigningKeyTombstone` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:247`
+        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:261`
         #[derive(
             Clone,
             Debug,
@@ -41479,7 +42059,7 @@ mod root {
         /// The table `EmergencyKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:254`
+        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:268`
         #[derive(
             Clone,
             Debug,
@@ -41762,7 +42342,7 @@ mod root {
         /// The table `TypeSchema` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchema` in the file `schema/webjet.fbs:258`
+        /// * Table `TypeSchema` in the file `schema/webjet.fbs:272`
         #[derive(
             Clone,
             Debug,
@@ -42066,7 +42646,7 @@ mod root {
         /// The table `TypeSchemas` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:259`
+        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:273`
         #[derive(
             Clone,
             Debug,
@@ -42384,7 +42964,7 @@ mod root {
         /// The table `StateVersion` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `StateVersion` in the file `schema/webjet.fbs:261`
+        /// * Table `StateVersion` in the file `schema/webjet.fbs:275`
         #[derive(
             Clone,
             Debug,
@@ -42944,7 +43524,7 @@ mod root {
         /// The table `Genesis` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Genesis` in the file `schema/webjet.fbs:271`
+        /// * Table `Genesis` in the file `schema/webjet.fbs:285`
         #[derive(
             Clone,
             Debug,
@@ -43417,7 +43997,7 @@ mod root {
         /// The table `LogRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRequest` in the file `schema/webjet.fbs:283`
+        /// * Table `LogRequest` in the file `schema/webjet.fbs:297`
         #[derive(
             Clone,
             Debug,
@@ -43831,7 +44411,7 @@ mod root {
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:292`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:306`
         #[derive(
             Clone,
             Debug,
@@ -44241,7 +44821,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:299`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:313`
         #[derive(
             Clone,
             Debug,
@@ -45083,7 +45663,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:313`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:327`
         #[derive(
             Clone,
             Debug,
@@ -45538,7 +46118,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:321`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:335`
         #[derive(
             Clone,
             Debug,
@@ -45997,7 +46577,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:329`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:343`
         #[derive(
             Clone,
             Debug,
@@ -46545,7 +47125,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:338`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:352`
         #[derive(
             Clone,
             Debug,
@@ -46981,7 +47561,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:345`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:359`
         #[derive(
             Clone,
             Debug,
@@ -47485,7 +48065,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:353`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:367`
         #[derive(
             Clone,
             Debug,
@@ -47995,7 +48575,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:364`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:378`
         #[derive(
             Clone,
             Debug,
@@ -48357,7 +48937,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:372`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:386`
         #[derive(
             Copy,
             Clone,
@@ -48530,7 +49110,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:374`
+        /// * Table `Counter` in the file `schema/webjet.fbs:388`
         #[derive(
             Clone,
             Debug,
@@ -48839,7 +49419,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:376`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:390`
         #[derive(
             Clone,
             Debug,
@@ -49138,7 +49718,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:378`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:392`
         #[derive(
             Clone,
             Debug,
@@ -49536,7 +50116,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:385`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:399`
         #[derive(
             Clone,
             Debug,
@@ -50402,7 +50982,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:400`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:414`
         #[derive(
             Clone,
             Debug,
@@ -51427,7 +52007,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:417`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:431`
         #[derive(
             Clone,
             Debug,
@@ -51783,7 +52363,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:419`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:433`
         #[derive(
             Clone,
             Debug,
@@ -52138,7 +52718,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:421`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:435`
         #[derive(
             Clone,
             Debug,
@@ -52177,6 +52757,8 @@ mod root {
             pub alarms: ::core::option::Option<::planus::alloc::vec::Vec<self::Alarm>>,
             /// The field `load` in the table `MetricReport`
             pub load: ::core::option::Option<::planus::alloc::boxed::Box<self::RelayLoad>>,
+            /// The field `proxy` in the table `MetricReport`
+            pub proxy: ::core::option::Option<::planus::alloc::vec::Vec<self::ProxyMetrics>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -52196,6 +52778,7 @@ mod root {
                     limit_hits: ::core::default::Default::default(),
                     alarms: ::core::default::Default::default(),
                     load: ::core::default::Default::default(),
+                    proxy: ::core::default::Default::default(),
                 }
             }
         }
@@ -52235,6 +52818,9 @@ mod root {
                     ::planus::Offset<[::planus::Offset<self::Alarm>]>,
                 >,
                 field_load: impl ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
+                field_proxy: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::ProxyMetrics>]>,
+                >,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_boot_id = field_boot_id.prepare(builder);
@@ -52249,8 +52835,9 @@ mod root {
                 let prepared_limit_hits = field_limit_hits.prepare(builder);
                 let prepared_alarms = field_alarms.prepare(builder);
                 let prepared_load = field_load.prepare(builder);
+                let prepared_proxy = field_proxy.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<30> =
+                let mut table_writer: ::planus::table_writer::TableWriter<32> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -52296,6 +52883,12 @@ mod root {
                 }
                 if prepared_load.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::RelayLoad>>(12);
+                }
+                if prepared_proxy.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::ProxyMetrics>]>>(
+                            13,
+                        );
                 }
 
                 unsafe {
@@ -52348,6 +52941,9 @@ mod root {
                         if let ::core::option::Option::Some(prepared_load) = prepared_load {
                             object_writer.write::<_, _, 4>(&prepared_load);
                         }
+                        if let ::core::option::Option::Some(prepared_proxy) = prepared_proxy {
+                            object_writer.write::<_, _, 4>(&prepared_proxy);
+                        }
                     });
                 }
                 builder.current_offset()
@@ -52393,6 +52989,7 @@ mod root {
                     &self.limit_hits,
                     &self.alarms,
                     &self.load,
+                    &self.proxy,
                 )
             }
         }
@@ -52713,6 +53310,36 @@ mod root {
         impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>
             MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)>
         {
+            /// Setter for the [`proxy` field](MetricReport#structfield.proxy).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn proxy<T13>(
+                self,
+                value: T13,
+            ) -> MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
+            where
+                T13: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::ProxyMetrics>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) = self.0;
+                MetricReportBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, value))
+            }
+
+            /// Sets the [`proxy` field](MetricReport#structfield.proxy) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn proxy_as_null(
+                self,
+            ) -> MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, ())>
+            {
+                self.proxy(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>
+            MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [MetricReport].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<MetricReport>
@@ -52737,8 +53364,9 @@ mod root {
                 T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::Counter>]>>,
                 T11: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::Alarm>]>>,
                 T12: ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
+                T13: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyMetrics>]>>,
             > ::planus::WriteAs<::planus::Offset<MetricReport>>
-            for MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)>
+            for MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
         {
             type Prepared = ::planus::Offset<MetricReport>;
 
@@ -52762,8 +53390,9 @@ mod root {
                 T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::Counter>]>>,
                 T11: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::Alarm>]>>,
                 T12: ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
+                T13: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyMetrics>]>>,
             > ::planus::WriteAsOptional<::planus::Offset<MetricReport>>
-            for MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)>
+            for MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
         {
             type Prepared = ::planus::Offset<MetricReport>;
 
@@ -52790,14 +53419,15 @@ mod root {
                 T10: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::Counter>]>>,
                 T11: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::Alarm>]>>,
                 T12: ::planus::WriteAsOptional<::planus::Offset<self::RelayLoad>>,
+                T13: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyMetrics>]>>,
             > ::planus::WriteAsOffset<MetricReport>
-            for MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)>
+            for MetricReportBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<MetricReport> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) = &self.0;
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13) = &self.0;
                 MetricReport::create(
-                    builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12,
+                    builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13,
                 )
             }
         }
@@ -52928,6 +53558,18 @@ mod root {
             pub fn load(&self) -> ::planus::Result<::core::option::Option<self::RelayLoadRef<'a>>> {
                 self.0.access(12, "MetricReport", "load")
             }
+
+            /// Getter for the [`proxy` field](MetricReport#structfield.proxy).
+            #[inline]
+            pub fn proxy(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::ProxyMetricsRef<'a>>>,
+                >,
+            > {
+                self.0.access(13, "MetricReport", "proxy")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for MetricReportRef<'a> {
@@ -52970,6 +53612,9 @@ mod root {
                 }
                 if let ::core::option::Option::Some(field_load) = self.load().transpose() {
                     f.field("load", &field_load);
+                }
+                if let ::core::option::Option::Some(field_proxy) = self.proxy().transpose() {
+                    f.field("proxy", &field_proxy);
                 }
                 f.finish()
             }
@@ -53025,6 +53670,11 @@ mod root {
                         ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
                             ::core::convert::TryInto::try_into(load)?,
                         ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    proxy: if let ::core::option::Option::Some(proxy) = value.proxy()? {
+                        ::core::option::Option::Some(proxy.to_vec_result()?)
                     } else {
                         ::core::option::Option::None
                     },
@@ -53105,10 +53755,744 @@ mod root {
             }
         }
 
+        /// The table `ProxyMetrics` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:454`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct ProxyMetrics {
+            /// The field `rule` in the table `ProxyMetrics`
+            pub rule: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `ingress` in the table `ProxyMetrics`
+            pub ingress: bool,
+            /// The field `node` in the table `ProxyMetrics`
+            pub node: ::core::option::Option<self::Key32>,
+            /// The field `flows` in the table `ProxyMetrics`
+            pub flows: u64,
+            /// The field `active` in the table `ProxyMetrics`
+            pub active: u64,
+            /// The field `to_target_packets` in the table `ProxyMetrics`
+            pub to_target_packets: u64,
+            /// The field `to_target_bytes` in the table `ProxyMetrics`
+            pub to_target_bytes: u64,
+            /// The field `to_client_packets` in the table `ProxyMetrics`
+            pub to_client_packets: u64,
+            /// The field `to_client_bytes` in the table `ProxyMetrics`
+            pub to_client_bytes: u64,
+            /// The field `refused` in the table `ProxyMetrics`
+            pub refused: u64,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for ProxyMetrics {
+            fn default() -> Self {
+                Self {
+                    rule: ::core::default::Default::default(),
+                    ingress: false,
+                    node: ::core::default::Default::default(),
+                    flows: 0,
+                    active: 0,
+                    to_target_packets: 0,
+                    to_target_bytes: 0,
+                    to_client_packets: 0,
+                    to_client_bytes: 0,
+                    refused: 0,
+                }
+            }
+        }
+
+        impl ProxyMetrics {
+            /// Creates a [ProxyMetricsBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> ProxyMetricsBuilder<()> {
+                ProxyMetricsBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_rule: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_ingress: impl ::planus::WriteAsDefault<bool, bool>,
+                field_node: impl ::planus::WriteAsOptional<self::Key32>,
+                field_flows: impl ::planus::WriteAsDefault<u64, u64>,
+                field_active: impl ::planus::WriteAsDefault<u64, u64>,
+                field_to_target_packets: impl ::planus::WriteAsDefault<u64, u64>,
+                field_to_target_bytes: impl ::planus::WriteAsDefault<u64, u64>,
+                field_to_client_packets: impl ::planus::WriteAsDefault<u64, u64>,
+                field_to_client_bytes: impl ::planus::WriteAsDefault<u64, u64>,
+                field_refused: impl ::planus::WriteAsDefault<u64, u64>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_rule = field_rule.prepare(builder);
+                let prepared_ingress = field_ingress.prepare(builder, &false);
+                let prepared_node = field_node.prepare(builder);
+                let prepared_flows = field_flows.prepare(builder, &0);
+                let prepared_active = field_active.prepare(builder, &0);
+                let prepared_to_target_packets = field_to_target_packets.prepare(builder, &0);
+                let prepared_to_target_bytes = field_to_target_bytes.prepare(builder, &0);
+                let prepared_to_client_packets = field_to_client_packets.prepare(builder, &0);
+                let prepared_to_client_bytes = field_to_client_bytes.prepare(builder, &0);
+                let prepared_refused = field_refused.prepare(builder, &0);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<24> =
+                    ::core::default::Default::default();
+                if prepared_node.is_some() {
+                    table_writer.write_entry::<self::Key32>(2);
+                }
+                if prepared_flows.is_some() {
+                    table_writer.write_entry::<u64>(3);
+                }
+                if prepared_active.is_some() {
+                    table_writer.write_entry::<u64>(4);
+                }
+                if prepared_to_target_packets.is_some() {
+                    table_writer.write_entry::<u64>(5);
+                }
+                if prepared_to_target_bytes.is_some() {
+                    table_writer.write_entry::<u64>(6);
+                }
+                if prepared_to_client_packets.is_some() {
+                    table_writer.write_entry::<u64>(7);
+                }
+                if prepared_to_client_bytes.is_some() {
+                    table_writer.write_entry::<u64>(8);
+                }
+                if prepared_refused.is_some() {
+                    table_writer.write_entry::<u64>(9);
+                }
+                if prepared_rule.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(0);
+                }
+                if prepared_ingress.is_some() {
+                    table_writer.write_entry::<bool>(1);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_node) = prepared_node {
+                            object_writer.write::<_, _, 32>(&prepared_node);
+                        }
+                        if let ::core::option::Option::Some(prepared_flows) = prepared_flows {
+                            object_writer.write::<_, _, 8>(&prepared_flows);
+                        }
+                        if let ::core::option::Option::Some(prepared_active) = prepared_active {
+                            object_writer.write::<_, _, 8>(&prepared_active);
+                        }
+                        if let ::core::option::Option::Some(prepared_to_target_packets) =
+                            prepared_to_target_packets
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_to_target_packets);
+                        }
+                        if let ::core::option::Option::Some(prepared_to_target_bytes) =
+                            prepared_to_target_bytes
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_to_target_bytes);
+                        }
+                        if let ::core::option::Option::Some(prepared_to_client_packets) =
+                            prepared_to_client_packets
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_to_client_packets);
+                        }
+                        if let ::core::option::Option::Some(prepared_to_client_bytes) =
+                            prepared_to_client_bytes
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_to_client_bytes);
+                        }
+                        if let ::core::option::Option::Some(prepared_refused) = prepared_refused {
+                            object_writer.write::<_, _, 8>(&prepared_refused);
+                        }
+                        if let ::core::option::Option::Some(prepared_rule) = prepared_rule {
+                            object_writer.write::<_, _, 4>(&prepared_rule);
+                        }
+                        if let ::core::option::Option::Some(prepared_ingress) = prepared_ingress {
+                            object_writer.write::<_, _, 1>(&prepared_ingress);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<ProxyMetrics>> for ProxyMetrics {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyMetrics> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<ProxyMetrics>> for ProxyMetrics {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ProxyMetrics>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<ProxyMetrics> for ProxyMetrics {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyMetrics> {
+                ProxyMetrics::create(
+                    builder,
+                    &self.rule,
+                    self.ingress,
+                    self.node,
+                    self.flows,
+                    self.active,
+                    self.to_target_packets,
+                    self.to_target_bytes,
+                    self.to_client_packets,
+                    self.to_client_bytes,
+                    self.refused,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [ProxyMetrics] type.
+        ///
+        /// Can be created using the [ProxyMetrics::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct ProxyMetricsBuilder<State>(State);
+
+        impl ProxyMetricsBuilder<()> {
+            /// Setter for the [`rule` field](ProxyMetrics#structfield.rule).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn rule<T0>(self, value: T0) -> ProxyMetricsBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                ProxyMetricsBuilder((value,))
+            }
+
+            /// Sets the [`rule` field](ProxyMetrics#structfield.rule) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn rule_as_null(self) -> ProxyMetricsBuilder<((),)> {
+                self.rule(())
+            }
+        }
+
+        impl<T0> ProxyMetricsBuilder<(T0,)> {
+            /// Setter for the [`ingress` field](ProxyMetrics#structfield.ingress).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn ingress<T1>(self, value: T1) -> ProxyMetricsBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<bool, bool>,
+            {
+                let (v0,) = self.0;
+                ProxyMetricsBuilder((v0, value))
+            }
+
+            /// Sets the [`ingress` field](ProxyMetrics#structfield.ingress) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn ingress_as_default(self) -> ProxyMetricsBuilder<(T0, ::planus::DefaultValue)> {
+                self.ingress(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> ProxyMetricsBuilder<(T0, T1)> {
+            /// Setter for the [`node` field](ProxyMetrics#structfield.node).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node<T2>(self, value: T2) -> ProxyMetricsBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0, v1) = self.0;
+                ProxyMetricsBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`node` field](ProxyMetrics#structfield.node) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_as_null(self) -> ProxyMetricsBuilder<(T0, T1, ())> {
+                self.node(())
+            }
+        }
+
+        impl<T0, T1, T2> ProxyMetricsBuilder<(T0, T1, T2)> {
+            /// Setter for the [`flows` field](ProxyMetrics#structfield.flows).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn flows<T3>(self, value: T3) -> ProxyMetricsBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`flows` field](ProxyMetrics#structfield.flows) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn flows_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, ::planus::DefaultValue)> {
+                self.flows(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3> ProxyMetricsBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`active` field](ProxyMetrics#structfield.active).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn active<T4>(self, value: T4) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`active` field](ProxyMetrics#structfield.active) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn active_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, ::planus::DefaultValue)> {
+                self.active(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> ProxyMetricsBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`to_target_packets` field](ProxyMetrics#structfield.to_target_packets).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_target_packets<T5>(
+                self,
+                value: T5,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`to_target_packets` field](ProxyMetrics#structfield.to_target_packets) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_target_packets_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, ::planus::DefaultValue)> {
+                self.to_target_packets(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`to_target_bytes` field](ProxyMetrics#structfield.to_target_bytes).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_target_bytes<T6>(
+                self,
+                value: T6,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`to_target_bytes` field](ProxyMetrics#structfield.to_target_bytes) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_target_bytes_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, ::planus::DefaultValue)> {
+                self.to_target_bytes(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
+            /// Setter for the [`to_client_packets` field](ProxyMetrics#structfield.to_client_packets).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_client_packets<T7>(
+                self,
+                value: T7,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
+            where
+                T7: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, v3, v4, v5, v6, value))
+            }
+
+            /// Sets the [`to_client_packets` field](ProxyMetrics#structfield.to_client_packets) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_client_packets_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, ::planus::DefaultValue)>
+            {
+                self.to_client_packets(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)> {
+            /// Setter for the [`to_client_bytes` field](ProxyMetrics#structfield.to_client_bytes).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_client_bytes<T8>(
+                self,
+                value: T8,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+            where
+                T8: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, v3, v4, v5, v6, v7, value))
+            }
+
+            /// Sets the [`to_client_bytes` field](ProxyMetrics#structfield.to_client_bytes) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn to_client_bytes_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, ::planus::DefaultValue)>
+            {
+                self.to_client_bytes(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)> {
+            /// Setter for the [`refused` field](ProxyMetrics#structfield.refused).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn refused<T9>(
+                self,
+                value: T9,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+            where
+                T9: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self.0;
+                ProxyMetricsBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, value))
+            }
+
+            /// Sets the [`refused` field](ProxyMetrics#structfield.refused) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn refused_as_default(
+                self,
+            ) -> ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, ::planus::DefaultValue)>
+            {
+                self.refused(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>
+            ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [ProxyMetrics].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyMetrics>
+            where
+                Self: ::planus::WriteAsOffset<ProxyMetrics>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<bool, bool>,
+                T2: ::planus::WriteAsOptional<self::Key32>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u64, u64>,
+                T7: ::planus::WriteAsDefault<u64, u64>,
+                T8: ::planus::WriteAsDefault<u64, u64>,
+                T9: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAs<::planus::Offset<ProxyMetrics>>
+            for ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
+            type Prepared = ::planus::Offset<ProxyMetrics>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyMetrics> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<bool, bool>,
+                T2: ::planus::WriteAsOptional<self::Key32>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u64, u64>,
+                T7: ::planus::WriteAsDefault<u64, u64>,
+                T8: ::planus::WriteAsDefault<u64, u64>,
+                T9: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOptional<::planus::Offset<ProxyMetrics>>
+            for ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
+            type Prepared = ::planus::Offset<ProxyMetrics>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ProxyMetrics>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsDefault<bool, bool>,
+                T2: ::planus::WriteAsOptional<self::Key32>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u64, u64>,
+                T7: ::planus::WriteAsDefault<u64, u64>,
+                T8: ::planus::WriteAsDefault<u64, u64>,
+                T9: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOffset<ProxyMetrics>
+            for ProxyMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<ProxyMetrics> {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = &self.0;
+                ProxyMetrics::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
+            }
+        }
+
+        /// Reference to a deserialized [ProxyMetrics].
+        #[derive(Copy, Clone)]
+        pub struct ProxyMetricsRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> ProxyMetricsRef<'a> {
+            /// Getter for the [`rule` field](ProxyMetrics#structfield.rule).
+            #[inline]
+            pub fn rule(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(0, "ProxyMetrics", "rule")
+            }
+
+            /// Getter for the [`ingress` field](ProxyMetrics#structfield.ingress).
+            #[inline]
+            pub fn ingress(&self) -> ::planus::Result<bool> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(1, "ProxyMetrics", "ingress")?
+                        .unwrap_or(false),
+                )
+            }
+
+            /// Getter for the [`node` field](ProxyMetrics#structfield.node).
+            #[inline]
+            pub fn node(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(2, "ProxyMetrics", "node")
+            }
+
+            /// Getter for the [`flows` field](ProxyMetrics#structfield.flows).
+            #[inline]
+            pub fn flows(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(3, "ProxyMetrics", "flows")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`active` field](ProxyMetrics#structfield.active).
+            #[inline]
+            pub fn active(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(4, "ProxyMetrics", "active")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`to_target_packets` field](ProxyMetrics#structfield.to_target_packets).
+            #[inline]
+            pub fn to_target_packets(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(5, "ProxyMetrics", "to_target_packets")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`to_target_bytes` field](ProxyMetrics#structfield.to_target_bytes).
+            #[inline]
+            pub fn to_target_bytes(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(6, "ProxyMetrics", "to_target_bytes")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`to_client_packets` field](ProxyMetrics#structfield.to_client_packets).
+            #[inline]
+            pub fn to_client_packets(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(7, "ProxyMetrics", "to_client_packets")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`to_client_bytes` field](ProxyMetrics#structfield.to_client_bytes).
+            #[inline]
+            pub fn to_client_bytes(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(8, "ProxyMetrics", "to_client_bytes")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`refused` field](ProxyMetrics#structfield.refused).
+            #[inline]
+            pub fn refused(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0.access(9, "ProxyMetrics", "refused")?.unwrap_or(0),
+                )
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for ProxyMetricsRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("ProxyMetricsRef");
+                if let ::core::option::Option::Some(field_rule) = self.rule().transpose() {
+                    f.field("rule", &field_rule);
+                }
+                f.field("ingress", &self.ingress());
+                if let ::core::option::Option::Some(field_node) = self.node().transpose() {
+                    f.field("node", &field_node);
+                }
+                f.field("flows", &self.flows());
+                f.field("active", &self.active());
+                f.field("to_target_packets", &self.to_target_packets());
+                f.field("to_target_bytes", &self.to_target_bytes());
+                f.field("to_client_packets", &self.to_client_packets());
+                f.field("to_client_bytes", &self.to_client_bytes());
+                f.field("refused", &self.refused());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<ProxyMetricsRef<'a>> for ProxyMetrics {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: ProxyMetricsRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    rule: value.rule()?.map(::core::convert::Into::into),
+                    ingress: ::core::convert::TryInto::try_into(value.ingress()?)?,
+                    node: value.node()?.map(::core::convert::Into::into),
+                    flows: ::core::convert::TryInto::try_into(value.flows()?)?,
+                    active: ::core::convert::TryInto::try_into(value.active()?)?,
+                    to_target_packets: ::core::convert::TryInto::try_into(
+                        value.to_target_packets()?,
+                    )?,
+                    to_target_bytes: ::core::convert::TryInto::try_into(value.to_target_bytes()?)?,
+                    to_client_packets: ::core::convert::TryInto::try_into(
+                        value.to_client_packets()?,
+                    )?,
+                    to_client_bytes: ::core::convert::TryInto::try_into(value.to_client_bytes()?)?,
+                    refused: ::core::convert::TryInto::try_into(value.refused()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for ProxyMetricsRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for ProxyMetricsRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[ProxyMetricsRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<ProxyMetrics>> for ProxyMetrics {
+            type Value = ::planus::Offset<ProxyMetrics>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<ProxyMetrics>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for ProxyMetricsRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[ProxyMetricsRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:439`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:469`
         #[derive(
             Clone,
             Debug,
@@ -53957,7 +55341,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:453`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:483`
         #[derive(
             Clone,
             Debug,
@@ -54273,7 +55657,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:455`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:485`
         #[derive(
             Clone,
             Debug,
@@ -55084,7 +56468,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:469`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:499`
         #[derive(
             Clone,
             Debug,
@@ -55401,7 +56785,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:471`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:501`
         #[derive(
             Clone,
             Debug,
@@ -55826,7 +57210,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:478`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:508`
         #[derive(
             Clone,
             Debug,
@@ -56092,7 +57476,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:479`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:509`
         #[derive(
             Clone,
             Debug,
@@ -56377,7 +57761,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:482`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:512`
         #[derive(
             Clone,
             Debug,
@@ -56649,7 +58033,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:483`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:513`
         #[derive(
             Clone,
             Debug,
@@ -56919,7 +58303,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:484`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:514`
         #[derive(
             Clone,
             Debug,
@@ -57187,7 +58571,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:485`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:515`
         #[derive(
             Clone,
             Debug,
@@ -57459,7 +58843,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:486`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:516`
         #[derive(
             Clone,
             Debug,
@@ -57735,7 +59119,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:487`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:517`
         #[derive(
             Clone,
             Debug,
@@ -58072,7 +59456,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:488`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:518`
         #[derive(
             Clone,
             Debug,
@@ -58363,7 +59747,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:489`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:519`
         #[derive(
             Clone,
             Debug,
@@ -58638,7 +60022,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:491`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:521`
         #[derive(
             Copy,
             Clone,
@@ -58816,7 +60200,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:492`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:522`
         #[derive(
             Clone,
             Debug,
@@ -59152,7 +60536,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:494`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:524`
         #[derive(
             Clone,
             Debug,
@@ -59414,7 +60798,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:496`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:526`
         #[derive(
             Clone,
             Debug,
@@ -60438,7 +61822,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:516`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:546`
         #[derive(
             Clone,
             Debug,
@@ -60843,7 +62227,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:525`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:555`
         #[derive(
             Clone,
             Debug,
@@ -61107,7 +62491,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:526`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:556`
         #[derive(
             Clone,
             Debug,
@@ -61390,7 +62774,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:527`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:557`
         #[derive(
             Clone,
             Debug,
@@ -61679,7 +63063,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:528`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:558`
         #[derive(
             Clone,
             Debug,
@@ -62075,7 +63459,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:529`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:559`
         #[derive(
             Clone,
             Debug,
@@ -62358,7 +63742,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:530`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:560`
         #[derive(
             Clone,
             Debug,
@@ -62647,7 +64031,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:531`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:561`
         #[derive(
             Clone,
             Debug,
@@ -62938,7 +64322,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:532`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:562`
         #[derive(
             Clone,
             Debug,
@@ -63200,7 +64584,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:533`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:563`
         #[derive(
             Clone,
             Debug,
@@ -63467,7 +64851,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:534`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:564`
         #[derive(
             Clone,
             Debug,
@@ -63811,7 +65195,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:536`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:566`
         #[derive(
             Clone,
             Debug,
@@ -64517,7 +65901,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:550`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:580`
         #[derive(
             Clone,
             Debug,
@@ -64831,7 +66215,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:555`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:585`
         #[derive(
             Clone,
             Debug,
@@ -65187,7 +66571,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:561`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:591`
         #[derive(
             Clone,
             Debug,

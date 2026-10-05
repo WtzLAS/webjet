@@ -9,11 +9,12 @@ mod field;
 mod merkle;
 mod metrics;
 mod nodes;
+mod split;
 
 use crate::client::{self, Client, SignedIn};
 use crate::graph::{Graph, Viewport};
 use crate::merkle::{LogPage, Merkle, Names};
-use crate::model::{self, Flow, Level, Snapshot, Traffic};
+use crate::model::{self, Flow, Level, ProxyFlow, Snapshot, Traffic};
 use crate::openmetrics::{self, Family};
 use field::Field;
 use gpui::{
@@ -141,6 +142,11 @@ pub struct WebjetApp {
     /// The flows shown, after the filter (shared with the virtual list).
     flows_shown: Rc<Vec<Flow>>,
     flow_selected: Option<String>,
+    /// Reverse proxy flows instead of the overlay's.
+    show_proxy: bool,
+    proxy_filter: Entity<Field>,
+    proxy_shown: Rc<Vec<ProxyFlow>>,
+    proxy_selected: Option<String>,
     // Metrics tab
     families: Rc<Vec<Family>>,
     metric_filter: Entity<Field>,
@@ -148,6 +154,8 @@ pub struct WebjetApp {
     metrics_all: bool,
     // Accounts tab
     account: Option<String>,
+    /// Sizes of the panes beside the movable separators.
+    splits: split::Splits,
 }
 
 impl WebjetApp {
@@ -210,11 +218,17 @@ impl WebjetApp {
             }),
             flows_shown: Rc::new(Vec::new()),
             flow_selected: None,
+            show_proxy: false,
+            proxy_filter: cx
+                .new(|cx| Field::new(cx, "filter: rule, client, target, node, state", false)),
+            proxy_shown: Rc::new(Vec::new()),
+            proxy_selected: None,
             families: Rc::new(Vec::new()),
             metric_filter: cx.new(|cx| Field::new(cx, "filter: name, help, label value", false)),
             family: None,
             metrics_all: false,
             account: None,
+            splits: split::Splits::default(),
         };
         // Refresh now and then periodically while the window exists.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -523,13 +537,6 @@ fn scroll(id: &str) -> gpui::Stateful<gpui::Div> {
         .overflow_y_scroll()
 }
 
-/// A scrolling column of a fixed width beside other content in a row.
-/// `scroll`'s `flex_1` would give it a zero basis and let it grow like its
-/// neighbours, ignoring the width.
-fn side_scroll(id: &str, width: f32) -> gpui::Stateful<gpui::Div> {
-    scroll(id).flex_none().flex_basis(px(width)).w(px(width))
-}
-
 /// The color for a link's quality: round-trip time and loss.
 fn link_level(rtt_ms: f64, loss: f64) -> Level {
     if loss >= 0.05 || rtt_ms >= 300.0 {
@@ -821,7 +828,7 @@ mod tests {
 
     use super::*;
     use crate::model::{Account, Conntrack, Session, Sessions, Status, Topology, Tree};
-    use gpui::{TestAppContext, point, size};
+    use gpui::{Pixels, Point, TestAppContext, point, size};
     use serde_json::Value;
     use webjet_core::crypto::{self, KeyPair};
 
@@ -837,6 +844,7 @@ mod tests {
             tree: serde_json::from_value::<Tree>(get("tree")).unwrap(),
             sessions: Ok(serde_json::from_value::<Sessions>(get("sessions")).unwrap()),
             conntrack: Ok(serde_json::from_value::<Conntrack>(get("conntrack")).unwrap()),
+            proxy: Ok(serde_json::from_value::<model::Proxy>(get("proxy")).unwrap()),
             topology: Ok(serde_json::from_value::<Topology>(get("topology")).unwrap()),
             metrics: Ok(v["metrics"].as_str().unwrap().to_string()),
             metrics_all: false,
@@ -932,7 +940,15 @@ mod tests {
             app.flow_selected = Some(connections::flow_key(&flow));
         });
         draw(cx);
+        // The reverse proxy view, bare and with a flow selected.
+        let pflow = snap.proxy.as_ref().unwrap().flows[0].clone();
+        view.update(cx, |app, _| app.show_proxy = true);
+        draw(cx);
+        view.update(cx, |app, _| app.proxy_selected = Some(pflow.key()));
+        draw(cx);
         view.update(cx, |app, _| {
+            assert_eq!(app.proxy_shown.len(), 2, "the proxy flows are listed apart");
+            app.show_proxy = false;
             app.tab = Tab::Metrics;
             app.family = app.families.first().map(|f| f.name.clone());
         });
@@ -1195,5 +1211,63 @@ mod tests {
                 "{w}: circuit details {detail:?} get room"
             );
         }
+
+        // Drag the separator beside the node details 100 px to the left: the
+        // details get 100 px more, the graph column 100 px less.
+        let b = |cx: &mut gpui::VisualTestContext, s: &'static str| {
+            cx.debug_bounds(s).unwrap_or_else(|| panic!("{s} drawn"))
+        };
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        let drag = |cx: &mut gpui::VisualTestContext, handle: &'static str, by: Point<Pixels>| {
+            let at = b(cx, handle).center();
+            cx.simulate_mouse_down(at, gpui::MouseButton::Left, Default::default());
+            // The first move starts GPUI's drag, the next ones move it.
+            for i in 1..=4 {
+                let p = at + point(by.x * (i as f32 / 4.), by.y * (i as f32 / 4.));
+                cx.simulate_mouse_move(p, gpui::MouseButton::Left, Default::default());
+            }
+            cx.simulate_mouse_up(at + by, gpui::MouseButton::Left, Default::default());
+            frame(cx);
+        };
+        cx.simulate_resize(size(px(1280.), px(820.)));
+        frame(cx);
+        let (side0, left0) = (b(cx, "node-side"), b(cx, "nodes-left"));
+        drag(cx, "split-nodes", point(px(-100.), px(0.)));
+        let (side1, left1) = (b(cx, "node-side"), b(cx, "nodes-left"));
+        assert_eq!(side1.size.width, side0.size.width + px(100.), "{side1:?}");
+        assert_eq!(left1.size.width, left0.size.width - px(100.));
+        // The graph above the circuits: dragging up gives the circuits room.
+        let circuits0 = b(cx, "circuit-list");
+        drag(cx, "split-graph-circuits", point(px(0.), px(-80.)));
+        let circuits1 = b(cx, "circuit-list");
+        assert_eq!(circuits1.size.height, circuits0.size.height + px(80.));
+        // The circuit list beside the circuit's details.
+        let list0 = b(cx, "circuit-list");
+        drag(cx, "split-circuits", point(px(-60.), px(0.)));
+        assert_eq!(b(cx, "circuit-list").size.width, list0.size.width - px(60.));
+        // Not past the graph column's minimum, however far it goes.
+        drag(cx, "split-nodes", point(px(-2000.), px(0.)));
+        assert_eq!(b(cx, "nodes-left").size.width, px(420.));
+        // A double click puts a separator back.
+        let at = b(cx, "split-nodes").center();
+        for n in 1..=2 {
+            cx.simulate_event(gpui::MouseDownEvent {
+                button: gpui::MouseButton::Left,
+                position: at,
+                click_count: n,
+                ..Default::default()
+            });
+            cx.simulate_event(gpui::MouseUpEvent {
+                button: gpui::MouseButton::Left,
+                position: at,
+                click_count: n,
+                ..Default::default()
+            });
+        }
+        frame(cx);
+        assert_eq!(b(cx, "node-side").size.width, px(420.));
     }
 }

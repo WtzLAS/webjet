@@ -1,7 +1,18 @@
 //! Accounts: every account of the network, and the selected one's record
 //! and nodes.
 
+use super::split::{Axis, Split};
 use super::*;
+
+/// The account list beside the selected account.
+const ACCOUNTS: Split = Split {
+    id: "accounts",
+    axis: Axis::Row,
+    sized_first: true,
+    default: 440.0,
+    min: 280.0,
+    rest_min: 300.0,
+};
 
 impl WebjetApp {
     pub(super) fn render_accounts(&mut self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
@@ -75,9 +86,8 @@ impl WebjetApp {
             list = list.child(muted("No accounts known yet."));
         }
         let left = panel()
-            .w(px(440.))
-            .flex_shrink_0()
-            .h_full()
+            .flex_1()
+            .min_h(px(0.))
             .child(
                 div()
                     .flex()
@@ -194,15 +204,7 @@ impl WebjetApp {
             .flex_col()
             .gap_2()
             .size_full()
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(left)
-                    .child(right),
-            )
+            .child(self.split(ACCOUNTS, left, right, cx).flex_1().min_h(px(0.)))
             .child(note.text_xs())
             .into_any_element()
     }

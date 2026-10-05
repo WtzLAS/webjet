@@ -320,6 +320,125 @@ pub struct Conntrack {
     pub flows: Vec<Flow>,
 }
 
+/// A reverse proxy rule of this node with its status (`proxy`, §11.11).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ProxyRule {
+    pub name: String,
+    pub protocol: String,
+    pub listen_port: u16,
+    pub target: Vec<String>,
+    pub target_port: u16,
+    pub real_ip: bool,
+    pub status: String,
+    pub warnings: Vec<String>,
+}
+
+impl ProxyRule {
+    pub fn text(&self) -> String {
+        format!(
+            "{} :{} → {} :{}",
+            self.protocol,
+            self.listen_port,
+            self.target.join(", "),
+            self.target_port
+        )
+    }
+}
+
+/// A reverse proxy flow, on the listening node (`ingress`) or a target.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ProxyFlow {
+    pub side: String,
+    pub rule: String,
+    /// The node that listens (owns the rule).
+    pub node: String,
+    /// The other end: the target node (ingress) or the ingress (target).
+    pub peer: String,
+    pub peer_id: String,
+    pub proto: String,
+    /// The client's address and port.
+    pub client: String,
+    /// Ingress: the port the client connected to.
+    pub listen_port: Option<u16>,
+    /// Ingress: the translated source, when the client's address isn't kept.
+    pub source: Option<String>,
+    pub target: String,
+    /// Target: to a LAN host behind this gateway.
+    pub gateway: bool,
+    pub state: String,
+    pub replied: bool,
+    pub idle_s: u64,
+    pub expires_s: u64,
+}
+
+impl ProxyFlow {
+    pub fn ingress(&self) -> bool {
+        self.side == "ingress"
+    }
+
+    pub fn key(&self) -> String {
+        format!(
+            "{}|{}|{}|{}|{}",
+            self.side, self.peer_id, self.proto, self.client, self.target
+        )
+    }
+
+    pub fn matches(&self, filter: &str) -> bool {
+        let f = filter.trim().to_ascii_lowercase();
+        if f.is_empty() {
+            return true;
+        }
+        [
+            &self.side,
+            &self.rule,
+            &self.node,
+            &self.peer,
+            &self.proto,
+            &self.client,
+            &self.target,
+            &self.state,
+            self.source.as_deref().unwrap_or(""),
+        ]
+        .iter()
+        .any(|s| s.to_ascii_lowercase().contains(&f))
+    }
+}
+
+/// Traffic of one rule on one side.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ProxyCounter {
+    pub rule: String,
+    pub side: String,
+    pub node: String,
+    pub flows: u64,
+    pub active: u64,
+    pub to_target_packets: u64,
+    pub to_target_bytes: u64,
+    pub to_client_packets: u64,
+    pub to_client_bytes: u64,
+    pub refused: u64,
+}
+
+/// `proxy`: reverse proxy rules, flows and counters, apart from `conntrack`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Proxy {
+    pub running: bool,
+    pub accept_real_ip: bool,
+    pub real_ip_ready: bool,
+    /// The proxy addresses the listen ports are captured to.
+    pub addresses: Vec<String>,
+    pub rules: Vec<ProxyRule>,
+    pub total: u64,
+    pub live: u64,
+    pub truncated: bool,
+    pub flows: Vec<ProxyFlow>,
+    pub counters: Vec<ProxyCounter>,
+}
+
 /// A relay's load figures from its LinkStateAdvert (§11.8.1).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
@@ -429,6 +548,8 @@ pub struct Snapshot {
     pub tree: Tree,
     pub sessions: Result<Sessions, String>,
     pub conntrack: Result<Conntrack, String>,
+    /// Reverse proxy ports and flows (kept apart from `conntrack`).
+    pub proxy: Result<Proxy, String>,
     pub topology: Result<Topology, String>,
     /// OpenMetrics text: this node's, or every node's on a controller when asked.
     pub metrics: Result<String, String>,
@@ -452,6 +573,7 @@ impl Default for Snapshot {
             tree: Tree::default(),
             sessions: none(),
             conntrack: none(),
+            proxy: none(),
             topology: none(),
             metrics: none(),
             metrics_all: false,

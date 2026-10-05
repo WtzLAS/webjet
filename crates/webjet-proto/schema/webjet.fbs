@@ -223,6 +223,20 @@ table NodeConfig {
     seeds: [SeedEntry];                // tried before the network's seeds
     dns_records: [DnsRecord];          // answered by this node's resolver only
     dns_forward: [ForwardZone];        // forwarded by this node's resolver only
+    proxy: [ProxyRule];                // reverse proxy ports this node listens on
+}
+
+// A reverse proxy rule (§11.11): a Linux data node listens on `listen_port`
+// and forwards each new flow to `target_port` of one target: an address (a
+// node's overlay address or one behind a gateway) or the data nodes the
+// selectors pick (policy selector syntax), load-balanced per client.
+table ProxyRule {
+    name: string;
+    protocol: ubyte;                   // 6 = TCP, 17 = UDP
+    listen_port: uint16;
+    target: [string];                  // one address, or selectors
+    target_port: uint16;
+    real_ip: bool = true;              // keep the client's address as the source
 }
 
 // ---------------------------------------------------------------- controller certificates (§6.4-6.6)
@@ -432,6 +446,22 @@ table MetricReport {
     limit_hits: [Counter];
     alarms: [Alarm];
     load: RelayLoad;          // this node's load figures (§11.8.1)
+    proxy: [ProxyMetrics];    // reverse proxy traffic, kept apart (§11.11)
+}
+
+// One reverse proxy rule's traffic on this node, as the listening node
+// (`ingress`) or as a target. Packets and bytes are inner IP packets.
+table ProxyMetrics {
+    rule: string;
+    ingress: bool;
+    node: Key32;              // the rule's node (for targets: the ingress)
+    flows: uint64;            // flows started
+    active: uint64;           // flows tracked now (gauge)
+    to_target_packets: uint64;
+    to_target_bytes: uint64;
+    to_client_packets: uint64;
+    to_client_bytes: uint64;
+    refused: uint64;          // new flows refused (policy, limits, no target, real IP not accepted)
 }
 
 // ---------------------------------------------------------------- operations (§7.2, §13.3)

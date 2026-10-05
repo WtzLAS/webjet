@@ -242,6 +242,12 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
         ]),
         alarms: Some(alarms),
         load: Some(Box::new(relay_load(n))),
+        proxy: Some(
+            n.dataplane
+                .get()
+                .map(|d| d.proxy.metrics())
+                .unwrap_or_default(),
+        ),
     };
     n.kp.sign_obj(mt::METRIC_REPORT, &rep)
 }

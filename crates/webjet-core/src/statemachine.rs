@@ -983,8 +983,20 @@ impl Machine {
             records: cfg.dns_records.clone(),
             forward: Some(forward),
         })?;
+        let proxy = cfg.proxy.clone().unwrap_or_default();
+        crate::proxy::rules(&proxy).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        if !proxy.is_empty()
+            && !rec
+                .roles
+                .clone()
+                .unwrap_or_default()
+                .contains(&wp::Role::Data)
+        {
+            return rej("proxy rules need the data role on the node");
+        }
         let name = rec.name.unwrap_or_default();
         let empty = [
+            cfg.proxy.as_ref().map(Vec::len),
             cfg.priorities.as_ref().map(Vec::len),
             cfg.limits.as_ref().map(Vec::len),
             cfg.seeds.as_ref().map(Vec::len),
@@ -2804,7 +2816,52 @@ mod tests {
             seeds: None,
             dns_records: None,
             dns_forward: None,
+            proxy: None,
         }
+    }
+
+    #[test]
+    fn node_config_proxy_rules_are_checked() {
+        let mut h = H::new();
+        let a = enroll(&mut h, "a", "10.7.0.5", &KeyPair::generate());
+        let set = |h: &mut H, c: wp::NodeConfig| {
+            h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                config: Some(Box::new(c)),
+            })))
+        };
+        let rule = |name: &str, port: u16| wp::ProxyRule {
+            name: Some(name.into()),
+            protocol: crate::policy::PROTO_TCP,
+            listen_port: port,
+            target: Some(vec!["tag:web".into()]),
+            target_port: 80,
+            real_ip: true,
+        };
+        let mut c = wp::NodeConfig {
+            node_id: Some(crypto::k32(&a)),
+            version: 1,
+            proxy: Some(vec![rule("web", 8080), rule("web2", 8080)]),
+            ..Default::default()
+        };
+        let e = set(&mut h, c.clone()).unwrap_err().to_string();
+        assert!(e.contains("both listen"), "{e}");
+        c.proxy = Some(vec![rule("web", 8080)]);
+        set(&mut h, c.clone()).unwrap();
+        assert_eq!(
+            h.m.view().node_config(&a).and_then(|c| c.proxy.clone()),
+            Some(vec![rule("web", 8080)])
+        );
+        // Only data nodes listen.
+        h.admin_op(AccountOp::UpdateNode(Box::new(wp::UpdateNode {
+            node_id: Some(crypto::k32(&a)),
+            set_roles: true,
+            roles: Some(vec![wp::Role::Relay]),
+            ..Default::default()
+        })))
+        .unwrap();
+        c.version = 2;
+        let e = set(&mut h, c).unwrap_err().to_string();
+        assert!(e.contains("data role"), "{e}");
     }
 
     #[test]
