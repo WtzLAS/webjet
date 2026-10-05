@@ -53,9 +53,10 @@ impl WebjetApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut sw = div().flex().gap_1();
+        let flows = s.conntrack.as_ref().map(|c| c.live).unwrap_or(0);
         let proxied = s.proxy.as_ref().map(|p| p.live).unwrap_or(0);
         let labels = [
-            "overlay flows".to_string(),
+            format!("overlay flows ({flows})"),
             format!("reverse proxy ({proxied})"),
         ];
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();

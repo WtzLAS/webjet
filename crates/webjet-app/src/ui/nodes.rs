@@ -78,6 +78,10 @@ struct Line {
 
 /// Opacity of links no active circuit uses.
 const IDLE_LINK_OPACITY: f32 = 0.7;
+/// Opacity of links outside the selected node's and circuit's.
+const DIMMED_LINK_OPACITY: f32 = 0.35;
+/// Opacity of nodes and delays outside the selected node and circuit.
+const DIMMED_LABEL_OPACITY: f32 = 0.3;
 /// Opacity of the label backgrounds (delays, node names), so links and
 /// nodes behind them stay visible.
 const LABEL_BG_OPACITY: f32 = 0.7;
@@ -105,23 +109,26 @@ fn kind_text(kind: &str) -> &'static str {
     }
 }
 
-/// The edges, drawn through the viewport. The canvas also records the
-/// area's bounds (to turn pointer positions into graph positions) and,
-/// while a drag is on, follows the pointer anywhere in the window.
+/// The edges, drawn through the viewport. The bottom layer's canvas also
+/// records the area's bounds (to turn pointer positions into graph
+/// positions) and, while a drag is on, follows the pointer anywhere in the
+/// window.
 fn edges_canvas(
     lines: Vec<Line>,
     vp: Viewport,
-    bounds: Rc<Cell<[f32; 4]>>,
+    bounds: Option<Rc<Cell<[f32; 4]>>>,
     dragging: Option<Entity<WebjetApp>>,
 ) -> impl IntoElement {
     canvas(
         move |b: Bounds<Pixels>, _, _| {
-            bounds.set([
-                f32::from(b.origin.x),
-                f32::from(b.origin.y),
-                f32::from(b.size.width),
-                f32::from(b.size.height),
-            ]);
+            if let Some(bounds) = bounds {
+                bounds.set([
+                    f32::from(b.origin.x),
+                    f32::from(b.origin.y),
+                    f32::from(b.size.width),
+                    f32::from(b.size.height),
+                ]);
+            }
             lines
         },
         move |b: Bounds<Pixels>, lines, window, _| {
@@ -134,7 +141,11 @@ fn edges_canvas(
             };
             // Links in use last, on top of the rest.
             let mut lines = lines;
-            lines.sort_by(|x, y| x.opacity.total_cmp(&y.opacity));
+            lines.sort_by(|x, y| {
+                x.opacity
+                    .total_cmp(&y.opacity)
+                    .then(x.width.total_cmp(&y.width))
+            });
             for l in lines {
                 let mut pb = PathBuilder::stroke(px(l.width));
                 pb.move_to(at(l.a));
@@ -171,7 +182,143 @@ fn edges_canvas(
     .size_full()
 }
 
+/// A delay label at the middle of an edge, in fractions of the area.
+struct EdgeLabel {
+    x: f32,
+    y: f32,
+    text: String,
+    /// Out of focus while something is selected.
+    dim: bool,
+    /// An edge of the selected node or circuit.
+    focus: bool,
+}
+
+fn edge_label(id: (usize, usize), l: EdgeLabel) -> impl IntoElement {
+    div()
+        .id(SharedString::from(format!("edge-label-{}-{}", id.0, id.1)))
+        .absolute()
+        .left(gpui::relative(l.x))
+        .top(gpui::relative(l.y))
+        .ml(px(-26.))
+        .mt(px(-8.))
+        .w(px(52.))
+        .flex()
+        .justify_center()
+        .when(l.dim, |d| d.opacity(DIMMED_LABEL_OPACITY))
+        .child(
+            div()
+                .px_1()
+                .rounded_sm()
+                .bg(if l.focus {
+                    rgb(theme::INPUT).into()
+                } else {
+                    label_bg()
+                })
+                .text_xs()
+                .text_color(rgb(if l.focus { theme::TEXT } else { theme::MUTED }))
+                .child(l.text),
+        )
+}
+
 impl WebjetApp {
+    /// A node in the graph: its circle and, below, its label.
+    fn vertex(
+        &self,
+        i: usize,
+        v: &crate::graph::Vertex,
+        selected: bool,
+        path: &[String],
+        dim: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let label = v.label();
+        let (w, _, size) = crate::graph::vertex_box(&label, v.infra());
+        let in_path = path.iter().any(|p| p == &v.id);
+        let id = v.id.clone();
+        let (vx, vy) = self.viewport.to_view((v.x, v.y));
+        let dragged = self
+            .drag
+            .as_ref()
+            .is_some_and(|d| d.moved && d.kind == DragKind::Node(v.id.clone()));
+        let ring = if selected {
+            0xffffff
+        } else if in_path {
+            theme::ACCENT
+        } else if v.me {
+            theme::TEXT
+        } else {
+            theme::INPUT
+        };
+        let focus = !dim && (selected || in_path);
+        div()
+            .id(("vertex", i))
+            .absolute()
+            .left(gpui::relative(vx))
+            .top(gpui::relative(vy))
+            .ml(px(-w / 2.0))
+            .mt(px(-size / 2.0))
+            .w(px(w))
+            .flex()
+            .flex_col()
+            .items_center()
+            .when(dim, |d| d.opacity(DIMMED_LABEL_OPACITY))
+            .when(v.outdated && !dim, |d| d.opacity(0.45))
+            .cursor(if dragged {
+                CursorStyle::ClosedHand
+            } else {
+                CursorStyle::PointingHand
+            })
+            .child(
+                div()
+                    .w(px(size))
+                    .h(px(size))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(rgb(ring))
+                    .bg(rgb(vertex_color(v.relay, v.control)))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(rgb(0xffffff))
+                    .child(if v.control {
+                        "C"
+                    } else if v.relay {
+                        "R"
+                    } else {
+                        ""
+                    }),
+            )
+            .child(
+                div()
+                    .debug_selector(move || format!("vertex-label-{i}"))
+                    .px_1()
+                    .rounded_sm()
+                    .whitespace_nowrap()
+                    .bg(if focus {
+                        rgb(theme::INPUT).into()
+                    } else {
+                        label_bg()
+                    })
+                    .text_xs()
+                    .text_color(rgb(if selected || v.me || focus {
+                        theme::TEXT
+                    } else {
+                        theme::MUTED
+                    }))
+                    .child(label),
+            )
+            // Press and release: select; press and move: place it.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    this.start_drag(DragKind::Node(id.clone()), e.position);
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+    }
+
     /// A window position as a fraction of the graph area.
     fn graph_pos(&self, p: Point<Pixels>) -> (f32, f32) {
         let [x, y, w, h] = self.graph_bounds.get();
@@ -268,7 +415,10 @@ impl WebjetApp {
         self.pinned.clear();
         self.viewport = Viewport::default();
         if let Some(s) = &self.snapshot {
-            self.graph = crate::graph::Graph::from_snapshot(s);
+            // From scratch (no previous picture), in the background.
+            let [_, _, w, h] = self.graph_bounds.get();
+            let g = crate::graph::Graph::shape(s, (w, h));
+            self.layout_job = Some((g, crate::graph::Graph::default()));
         }
     }
 
@@ -322,50 +472,65 @@ impl WebjetApp {
             })
             .unwrap_or_default();
         let sel = self.selected.as_deref().and_then(|id| g.index(id));
-        let mut lines = Vec::new();
-        let mut labels = Vec::new();
+        // A selected node and a selected circuit are in focus: their edges
+        // and nodes (and the selected node's neighbors) are drawn above
+        // everything else, which is dimmed.
+        let focusing = sel.is_some() || !path.is_empty();
+        let (focus_v, focus_e) = g.focus(sel, &path);
+        let mut lines = [Vec::new(), Vec::new()];
+        let mut labels: [Vec<EdgeLabel>; 2] = [Vec::new(), Vec::new()];
         let show_labels = g.edges.len() <= 40;
-        for e in &g.edges {
+        for (k, e) in g.edges.iter().enumerate() {
             let (va, vb) = (&g.vertices[e.a], &g.vertices[e.b]);
             let highlight = on(&path, &va.id, &vb.id);
             let in_use = active.iter().any(|p| on(p, &va.id, &vb.id));
-            let touches = sel.is_some_and(|v| e.a == v || e.b == v);
+            let focus = focus_e[k];
             let lvl = link_level(e.rtt_ms(), e.loss());
             let color = if highlight {
                 theme::ACCENT
-            } else if sel.is_some() && !touches {
+            } else if focusing && !focus {
                 theme::BORDER
             } else {
                 theme::level(lvl)
             };
-            lines.push(Line {
+            let layer = usize::from(focus);
+            lines[layer].push(Line {
                 a: (va.x, va.y),
                 b: (vb.x, vb.y),
                 color,
                 width: if highlight {
                     4.0
-                } else if in_use {
+                } else if in_use || focus {
                     2.5
                 } else {
                     1.25
                 },
-                opacity: if highlight || in_use {
+                opacity: if focus || (!focusing && in_use) {
                     1.0
+                } else if focusing {
+                    DIMMED_LINK_OPACITY
                 } else {
                     IDLE_LINK_OPACITY
                 },
             });
-            if show_labels || highlight || in_use || touches {
+            if show_labels || focus || in_use {
                 let (x, y) = self
                     .viewport
                     .to_view(((va.x + vb.x) / 2.0, (va.y + vb.y) / 2.0));
-                labels.push((x, y, rtt_text(e.rtt_ms())));
+                labels[layer].push(EdgeLabel {
+                    x,
+                    y,
+                    text: rtt_text(e.rtt_ms()),
+                    dim: focusing && !focus,
+                    focus,
+                });
             }
         }
         let panning = self.drag.as_ref().is_some_and(|d| d.moved);
         let listen = self.drag.is_some().then(|| cx.entity());
         let mut area = div()
             .id("graph-area")
+            .debug_selector(|| "graph-area-box".into())
             .relative()
             .flex_1()
             .min_h(px(100.))
@@ -392,117 +557,31 @@ impl WebjetApp {
             )
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
                 this.scroll_graph(e, cx);
-            }))
-            .child(edges_canvas(
-                lines,
-                self.viewport,
-                self.graph_bounds.clone(),
-                listen,
-            ));
-        for (i, (x, y, t)) in labels.into_iter().enumerate() {
-            area = area.child(
-                div()
-                    .id(("edge-label", i))
-                    .absolute()
-                    .left(gpui::relative(x))
-                    .top(gpui::relative(y))
-                    .ml(px(-26.))
-                    .mt(px(-8.))
-                    .w(px(52.))
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .px_1()
-                            .rounded_sm()
-                            .bg(label_bg())
-                            .text_xs()
-                            .text_color(rgb(theme::MUTED))
-                            .child(t),
-                    ),
-            );
-        }
-        for (i, v) in g.vertices.iter().enumerate() {
-            let size = if v.infra() { 26.0 } else { 20.0 };
-            let selected = sel == Some(i);
-            let in_path = path.iter().any(|p| p == &v.id);
-            let id = v.id.clone();
-            let (vx, vy) = self.viewport.to_view((v.x, v.y));
-            let dragged = self
-                .drag
-                .as_ref()
-                .is_some_and(|d| d.moved && d.kind == DragKind::Node(v.id.clone()));
-            let ring = if selected {
-                0xffffff
-            } else if in_path {
-                theme::ACCENT
-            } else if v.me {
-                theme::TEXT
-            } else {
-                theme::INPUT
-            };
-            area = area.child(
-                div()
-                    .id(("vertex", i))
-                    .absolute()
-                    .left(gpui::relative(vx))
-                    .top(gpui::relative(vy))
-                    .ml(px(-60.))
-                    .mt(px(-size / 2.0))
-                    .w(px(120.))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .when(v.outdated, |d| d.opacity(0.45))
-                    .cursor(if dragged {
-                        CursorStyle::ClosedHand
-                    } else {
-                        CursorStyle::PointingHand
-                    })
-                    .child(
-                        div()
-                            .w(px(size))
-                            .h(px(size))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(rgb(ring))
-                            .bg(rgb(vertex_color(v.relay, v.control)))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_xs()
-                            .text_color(rgb(0xffffff))
-                            .child(if v.control {
-                                "C"
-                            } else if v.relay {
-                                "R"
-                            } else {
-                                ""
-                            }),
-                    )
-                    .child(
-                        div()
-                            .px_1()
-                            .rounded_sm()
-                            .bg(label_bg())
-                            .text_xs()
-                            .text_color(rgb(if selected || v.me {
-                                theme::TEXT
-                            } else {
-                                theme::MUTED
-                            }))
-                            .child(v.label()),
-                    )
-                    // Press and release: select; press and move: place it.
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                            this.start_drag(DragKind::Node(id.clone()), e.position);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    ),
-            );
+            }));
+        // Two layers, each edges, then delays, then nodes: everything else
+        // below, what is in focus on top.
+        let mut listen = listen;
+        for (layer, (ls, edge_labels)) in lines.into_iter().zip(labels).enumerate() {
+            if layer == 0 {
+                area = area.child(edges_canvas(
+                    ls,
+                    self.viewport,
+                    Some(self.graph_bounds.clone()),
+                    listen.take(),
+                ));
+            } else if !ls.is_empty() {
+                area = area.child(edges_canvas(ls, self.viewport, None, None));
+            }
+            for (k, l) in edge_labels.into_iter().enumerate() {
+                area = area.child(edge_label((layer, k), l));
+            }
+            for (i, v) in g.vertices.iter().enumerate() {
+                if usize::from(focusing && focus_v[i]) != layer {
+                    continue;
+                }
+                let dim = focusing && !focus_v[i];
+                area = area.child(self.vertex(i, v, sel == Some(i), &path, dim, cx));
+            }
         }
         if g.vertices.is_empty() {
             area = area.child(
@@ -546,7 +625,11 @@ impl WebjetApp {
             .child(legend_item(theme::BAD, "bad"))
             .child(legend_note("bold: links of circuits in use (★)"))
             .child(legend_note("dim: outdated software, ignored"))
-            .child(legend_note("faded: other links").debug_selector(|| "legend-last".into()));
+            .child(legend_note("faded: other links"))
+            .child(
+                legend_note("a selected node or circuit is drawn on top, the rest dimmed")
+                    .debug_selector(|| "legend-last".into()),
+            );
         let hint = muted(
             "Drag the background to move the picture, drag a node to place it · scroll to move, \
              mouse wheel or ⌘/Ctrl + scroll to zoom",
@@ -595,6 +678,7 @@ impl WebjetApp {
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.reset_layout();
+                    this.start_layout(cx);
                     cx.notify();
                 })),
             );

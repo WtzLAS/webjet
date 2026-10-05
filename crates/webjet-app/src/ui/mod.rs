@@ -106,6 +106,11 @@ pub struct WebjetApp {
     load_error: Option<String>,
     /// A snapshot is being fetched: the periodic refresh waits for it.
     refreshing: bool,
+    /// A changed graph to lay out (shown meanwhile at the old places) and
+    /// the graph shown before it.
+    layout_job: Option<(Graph, Graph)>,
+    /// Counts layouts started, so only the latest is shown.
+    layout_seq: u64,
     accounts_on_disk: Vec<String>,
     /// The default account in the key directory (`webjetctl network account use`).
     default_account: Option<String>,
@@ -196,6 +201,8 @@ impl WebjetApp {
             snapshot: None,
             load_error: None,
             refreshing: false,
+            layout_job: None,
+            layout_seq: 0,
             accounts_on_disk,
             default_account,
             chosen,
@@ -218,7 +225,12 @@ impl WebjetApp {
             viewport: Viewport::default(),
             pinned: BTreeMap::new(),
             drag: None,
-            graph_bounds: Rc::new(Cell::new([0.0, 0.0, 800.0, 420.0])),
+            graph_bounds: Rc::new(Cell::new([
+                0.0,
+                0.0,
+                crate::graph::DEFAULT_AREA.0,
+                crate::graph::DEFAULT_AREA.1,
+            ])),
             merkle: None,
             names: Names::default(),
             leaf_filter: cx.new(|cx| Field::new(cx, "find: name, kind, signer, hash", false)),
@@ -290,7 +302,33 @@ impl WebjetApp {
                     Ok(s) => app.loaded(s),
                     Err(e) => app.load_error = Some(format!("{e:#}")),
                 }
+                app.start_layout(cx);
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Lay out a changed graph in the background (a large one takes a
+    /// moment) and show it when done, unless a newer one came meanwhile.
+    pub(super) fn start_layout(&mut self, cx: &mut Context<Self>) {
+        let Some((mut g, previous)) = self.layout_job.take() else {
+            return;
+        };
+        self.layout_seq += 1;
+        let seq = self.layout_seq;
+        let job = cx.background_executor().spawn(async move {
+            g.lay_out(Some(&previous));
+            g
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let g = job.await;
+            let _ = this.update(cx, |app, cx| {
+                if app.layout_seq == seq {
+                    app.graph = g;
+                    app.graph.pin(&app.pinned);
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -315,7 +353,16 @@ impl WebjetApp {
         }
         let sum = s.summary();
         self.traffic.push(now_ms(), sum.tx_bytes, sum.rx_bytes);
-        self.graph = Graph::from_snapshot(&s);
+        let [_, _, w, h] = self.graph_bounds.get();
+        let mut g = Graph::shape(&s, (w, h));
+        if self.graph.vertices.is_empty() {
+            // The first picture: lay it out right away.
+            g.lay_out(None);
+        } else if !g.keep(Some(&self.graph)) {
+            // Shown at the old places until the layout is done.
+            self.layout_job = Some((g.clone(), self.graph.clone()));
+        }
+        self.graph = g;
         self.graph.pin(&self.pinned);
         // The tree is large: it lives here, not in the snapshot cloned
         // for every frame.
@@ -472,6 +519,7 @@ fn segmented(id: &str, options: &[&str], chosen: usize) -> Vec<gpui::Stateful<gp
 }
 
 fn label_value(label: &str, value: impl Into<SharedString>) -> gpui::Div {
+    let name = format!("value-{label}");
     div()
         .flex()
         .gap_2()
@@ -483,11 +531,91 @@ fn label_value(label: &str, value: impl Into<SharedString>) -> gpui::Div {
                 .child(label.to_string()),
         )
         .child(
-            div()
+            wrapped(&value.into())
+                .debug_selector(move || name)
+                .flex_1()
                 .min_w(px(0.))
-                .text_color(rgb(theme::TEXT))
-                .child(value.into()),
+                .text_color(rgb(theme::TEXT)),
         )
+}
+
+/// Longest piece of a word shown unbroken by `wrapped`.
+const PIECE: usize = 12;
+
+/// A word cut where it may break: after `-`, `.`, `:`, `/` or `,`, and
+/// pieces still longer than `PIECE` characters every `PIECE` characters.
+fn cut_word(w: &str) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for ch in w.chars() {
+        cur.push(ch);
+        if matches!(ch, '-' | '.' | ':' | '/' | ',') {
+            parts.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        parts.push(cur);
+    }
+    // Join short parts again, so "10.4.0.1/32" stays one piece.
+    let mut joined: Vec<String> = Vec::new();
+    for p in parts {
+        match joined.last_mut() {
+            Some(l) if l.chars().count() + p.chars().count() <= PIECE => l.push_str(&p),
+            _ => joined.push(p),
+        }
+    }
+    joined
+        .into_iter()
+        .flat_map(|p| {
+            let chars: Vec<char> = p.chars().collect();
+            chars
+                .chunks(PIECE)
+                .map(|c| c.iter().collect::<String>())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The pieces `wrapped` lays out, one list per line: each word with the
+/// space after it, long words cut by `cut_word`.
+fn pieces(text: &str) -> Vec<Vec<String>> {
+    text.lines()
+        .map(|line| {
+            let words: Vec<&str> = line.split(' ').filter(|w| !w.is_empty()).collect();
+            let mut out = Vec::new();
+            for (i, w) in words.iter().enumerate() {
+                let mut cut = cut_word(w);
+                if i + 1 < words.len()
+                    && let Some(last) = cut.last_mut()
+                {
+                    last.push(' ');
+                }
+                out.extend(cut);
+            }
+            if out.is_empty() {
+                // An empty line keeps its height.
+                out.push(" ".to_string());
+            }
+            out
+        })
+        .collect()
+}
+
+/// Text that wraps between words, built from unbreakable pieces in a
+/// wrapping flex row. GPUI's own text wrapping can paint a paragraph
+/// wrapped at another width than the one its height was measured for
+/// (taffy measures text more than once and caches), so lines ran into the
+/// row below; pieces that never wrap have one size whatever the width.
+fn wrapped(text: &str) -> gpui::Div {
+    let mut col = div().flex().flex_col();
+    for line in pieces(text) {
+        let mut row = div().flex().flex_wrap();
+        for p in line {
+            row = row.child(div().flex_none().whitespace_nowrap().child(p));
+        }
+        col = col.child(row);
+    }
+    col
 }
 
 fn panel() -> gpui::Div {
@@ -609,6 +737,11 @@ fn now_ms() -> u64 {
 // ---------------------------------------------------------------- screens
 
 impl WebjetApp {
+    /// The Sign in button is enabled: connected, with an account chosen.
+    fn may_sign_in(&self) -> bool {
+        self.snapshot.is_some() && self.chosen.is_some()
+    }
+
     fn render_sign_in(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let mut list = div().flex().flex_col().gap_1();
         if self.accounts_on_disk.is_empty() {
@@ -650,6 +783,14 @@ impl WebjetApp {
             .flex_col()
             .gap_3()
             .w(px(460.))
+            // Enter in the passphrase field (key events bubble up from it)
+            // does what the Sign in button does.
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _, cx| {
+                if e.keystroke.key == "enter" && this.may_sign_in() {
+                    cx.stop_propagation();
+                    this.sign_in(cx);
+                }
+            }))
             .child(div().text_2xl().child("Webjet"))
             .child(div().text_color(rgb(theme::MUTED)).child(format!(
                 "Sign in with an account of this network. Agent: {}",
@@ -663,13 +804,8 @@ impl WebjetApp {
                     .items_center()
                     .child(self.passphrase.clone())
                     .child(
-                        button(
-                            "sign-in",
-                            "Sign in",
-                            connected && self.chosen.is_some(),
-                            theme::ACCENT,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
+                        button("sign-in", "Sign in", self.may_sign_in(), theme::ACCENT)
+                            .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
                     ),
             );
         if !connected {
@@ -893,16 +1029,18 @@ mod tests {
         }
     }
 
-    /// An admin account to sign in with, added to the snapshot.
-    fn admin(s: &mut Snapshot) -> client::SignedIn {
+    /// Key files of an admin account "tester" (passphrase "pw") in a new
+    /// directory, and the account added to the snapshot. Returns the
+    /// directory and the account id.
+    fn admin_keys(s: &mut Snapshot) -> (std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("wj-ui-{}", hex::encode(crypto::random16())));
         std::fs::create_dir_all(&dir).unwrap();
         let kp = KeyPair::generate();
-        let id = crypto::random32();
+        let id = hex::encode(crypto::random32());
         let key = crypto::key_b64(&kp.public());
         let p = webjet_tools::AccountPub {
             name: "tester".into(),
-            account_id: hex::encode(id),
+            account_id: id.clone(),
             key: key.clone(),
         };
         std::fs::write(dir.join("tester.pub"), serde_json::to_vec(&p).unwrap()).unwrap();
@@ -912,17 +1050,69 @@ mod tests {
         )
         .unwrap();
         s.accounts.push(Account {
-            id: hex::encode(id),
+            id: id.clone(),
             name: "tester".into(),
             admin: true,
             valid: true,
-            key: key.clone(),
+            key,
             version: 1,
         });
+        (dir, id)
+    }
+
+    /// An admin account to sign in with, added to the snapshot.
+    fn admin(s: &mut Snapshot) -> client::SignedIn {
+        let (dir, id) = admin_keys(s);
         let account = webjet_tools::Account::unlock(&dir, "tester", "pw").unwrap();
-        let session = Session::new(s, "tester", &hex::encode(id), &key).unwrap();
+        let key = crypto::key_b64(&account.kp.public());
+        let session = Session::new(s, "tester", &id, &key).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         client::SignedIn { account, session }
+    }
+
+    /// Enter in the passphrase field signs in, like the Sign in button.
+    #[gpui::test]
+    fn enter_signs_in(cx: &mut TestAppContext) {
+        let mut snap = fixture();
+        let (dir, _) = admin_keys(&mut snap);
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let keys = dir.clone();
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(rt, "/nonexistent/control.sock".into(), keys, cx)
+        });
+        cx.simulate_resize(size(px(1280.), px(820.)));
+        view.update(cx, |app, _| app.loaded(snap.clone()));
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        let type_pass = |cx: &mut gpui::VisualTestContext, pass: &str| {
+            cx.update(|window, cx| {
+                view.update(cx, |app, cx| {
+                    app.chosen = Some("tester".into());
+                    app.passphrase.update(cx, |f, cx| f.set_text(pass, cx));
+                    app.passphrase.read(cx).focus(window);
+                })
+            });
+            frame(cx);
+        };
+        frame(cx);
+        // A wrong passphrase: refused, as with the button.
+        type_pass(cx, "wrong");
+        cx.simulate_keystrokes("enter");
+        frame(cx);
+        view.update(cx, |app, _| {
+            assert!(app.signed_in.is_none());
+            assert!(app.sign_in_error.is_some(), "the error is shown");
+        });
+        type_pass(cx, "pw");
+        cx.simulate_keystrokes("enter");
+        frame(cx);
+        view.update(cx, |app, cx| {
+            assert!(app.signed_in.is_some(), "{:?}", app.sign_in_error);
+            assert_eq!(app.passphrase.read(cx).text(), "", "the field is cleared");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[gpui::test]
@@ -1310,6 +1500,176 @@ mod tests {
         }
         frame(cx);
         assert_eq!(b(cx, "node-side").size.width, px(420.));
+    }
+
+    /// The graph as drawn: no two node labels overlap, and every node is
+    /// inside the drawing area. The layout's idea of a label's width
+    /// (`graph::vertex_box`) must not be smaller than the drawn one.
+    #[gpui::test]
+    fn graph_labels_do_not_overlap(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        cx.simulate_resize(size(px(1280.), px(820.)));
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        view.update(cx, |app, _| {
+            app.signed_in = Some(si);
+            app.tab = Tab::Nodes;
+        });
+        // Draw once so the graph area has its size, then lay out for it.
+        view.update(cx, |app, cx| {
+            app.loaded(snap.clone());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.update(cx, |app, cx| {
+            app.reset_layout();
+            app.start_layout(cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let (n, labels, widths) = view.update(cx, |app, _| {
+            let g = &app.graph;
+            let w: Vec<f32> = g
+                .vertices
+                .iter()
+                .map(|v| crate::graph::vertex_box(&v.label(), v.infra()).0)
+                .collect();
+            (
+                g.vertices.len(),
+                g.vertices.iter().map(|v| v.label()).collect::<Vec<_>>(),
+                w,
+            )
+        });
+        assert!(n >= 5);
+        let area = cx.debug_bounds("graph-area-box").expect("graph area drawn");
+        let b: Vec<gpui::Bounds<Pixels>> = (0..n)
+            .map(|i| {
+                let name: &'static str = Box::leak(format!("vertex-label-{i}").into_boxed_str());
+                cx.debug_bounds(name)
+                    .unwrap_or_else(|| panic!("{name} drawn"))
+            })
+            .collect();
+        for i in 0..n {
+            assert!(
+                f32::from(b[i].size.width) <= widths[i] + 0.5,
+                "{}: drawn {:?} wider than the layout thinks ({})",
+                labels[i],
+                b[i].size.width,
+                widths[i]
+            );
+            assert!(
+                b[i].left() >= area.left()
+                    && b[i].right() <= area.right()
+                    && b[i].bottom() <= area.bottom(),
+                "{} {:?} inside {area:?}",
+                labels[i],
+                b[i]
+            );
+            for j in (i + 1)..n {
+                assert!(
+                    !b[i].intersects(&b[j]),
+                    "{} {:?} and {} {:?} overlap",
+                    labels[i],
+                    b[i],
+                    labels[j],
+                    b[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn values_wrap_between_words() {
+        assert_eq!(pieces("a b"), [["a ", "b"]]);
+        assert_eq!(
+            pieces("  a   b "),
+            [["a ", "b"]],
+            "runs of spaces count once"
+        );
+        assert_eq!(pieces(""), Vec::<Vec<String>>::new());
+        assert_eq!(pieces("x\n\ny"), [["x"], [" "], ["y"]]);
+        assert_eq!(
+            pieces("0123456789abcdef →"),
+            [["0123456789ab", "cdef ", "→"]],
+            "long words are cut"
+        );
+        assert_eq!(
+            pieces("laserrks-mbp → wolf109909-windowspc 10.4.0.1/32"),
+            [[
+                "laserrks-mbp ",
+                "→ ",
+                "wolf109909-",
+                "windowspc ",
+                "10.4.0.1/32"
+            ]],
+            "long words break after a hyphen, short ones stay whole"
+        );
+    }
+
+    /// The selected circuit's details with long node names in a narrow
+    /// window: every value wraps inside its own row, nothing runs into the
+    /// row below (the bug report's screenshot QQ20261006-064820).
+    #[gpui::test]
+    fn circuit_details_do_not_overlap(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        snap.status.name = Some("laserrks-mbp".into());
+        let label = {
+            let ss = snap.sessions.as_mut().unwrap();
+            let c = ss.circuits.local.iter_mut().find(|c| !c.direct).unwrap();
+            c.peer = "wolf109909-windowspc".into();
+            c.label
+        };
+        view.update(cx, |app, _| {
+            app.loaded(snap.clone());
+            app.signed_in = Some(si);
+            app.tab = Tab::Nodes;
+            app.circuit = Some(label);
+        });
+        let rows = ["Path", "Kind", "Round trip", "Label / route", "Age"];
+        for w in [1000., 1100., 1280., 1435.] {
+            cx.simulate_resize(size(px(w), px(852.)));
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            let detail = cx.debug_bounds("circuit-detail").unwrap();
+            let mut last: Option<gpui::Bounds<Pixels>> = None;
+            for r in rows {
+                let name: &'static str = Box::leak(format!("value-{r}").into_boxed_str());
+                let v = cx
+                    .debug_bounds(name)
+                    .unwrap_or_else(|| panic!("{name} drawn"));
+                assert!(
+                    v.right() <= detail.right(),
+                    "{w}: {r} {v:?} inside {detail:?}"
+                );
+                if let Some(l) = last {
+                    assert!(l.bottom() <= v.top(), "{w}: {r} {v:?} below {l:?}");
+                }
+                last = Some(v);
+            }
+            let path = cx.debug_bounds("value-Path").unwrap();
+            if detail.size.width < px(300.) {
+                assert!(path.size.height > px(40.), "{w}: the long path wraps");
+            }
+        }
     }
 
     /// The Config tab: admins edit the network's and a remote node's

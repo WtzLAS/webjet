@@ -29,7 +29,8 @@ the usual X11/Wayland and Vulkan development packages.
 ## Signing in
 
 The app lists the account keys in the key directory. Pick one and enter its
-passphrase. The account `webjetctl` would sign with is already selected:
+passphrase, then press Enter or *Sign in*. The account `webjetctl` would
+sign with is already selected:
 `WEBJET_ACCOUNT` if set, else the default account
 (`webjetctl network account use <name>`, marked "default" in the list), else
 the only key. The app then checks the account against the network:
@@ -85,8 +86,10 @@ isn't available.
   are shown above the table. Selecting a flow shows its circuit's path,
   round trip, loss and route traffic, with links to the graph and the peer
   node. With nothing selected, the side panel lists the end-to-end sessions
-  and the circuit each one sends on. The *reverse proxy* switch shows the
-  agent's reverse proxy flows instead (§11.11), kept apart from the overlay's:
+  and the circuit each one sends on. The switch above the table, *overlay
+  flows (N)* / *reverse proxy (N)*, shows how many flows each side tracks;
+  *reverse proxy* shows the agent's reverse proxy flows instead (§11.11),
+  kept apart from the overlay's:
   the side (listening here, or this node as a target), rule, client, target,
   the node at the other end and state. With nothing selected, the side panel
   lists the node's proxy rules with their status and warnings, whether it
@@ -113,12 +116,34 @@ isn't available.
   its links (who reported it, transport, round trip, loss, use, address,
   bytes), along with the changes the account may make.
 
+  A selected node (its links and the nodes at their other ends) and a
+  selected circuit (its links and nodes), or both, are drawn above
+  everything else, with solid label backgrounds; all other links, delays and
+  nodes are dimmed, so a crowded graph stays readable.
+
+  The layout (`crates/webjet-app/src/graph.rs`) is made for the size of the
+  drawing area and takes the labels' sizes into account. Each connected
+  part of the network is laid out on its own: stress majorization places
+  nodes so that their distances follow the number of hops between them,
+  from several starting pictures. A cost counts edge crossings, edges
+  running through another node's label, overlapping labels, edges leaving a
+  node at nearly the same angle, and distances off the wanted ones.
+  Simulated annealing (small parts) or a local search of moves and swaps
+  (large ones) lowers it. Overlapping labels are then pushed apart, the
+  parts are packed in rows, largest first, and the whole is scaled to fit.
+  When nodes or links come or go, or the area changes size, the new layout
+  starts from the picture shown, unless that ends up much worse than
+  starting over. Layout runs in the background; until it is done the graph
+  shows the nodes at their old places. The same network always gets the
+  same picture.
+
   The graph moves: drag the background (or scroll with two fingers) to move
   the picture, and use the mouse wheel, ⌘/Ctrl + scroll or the − / + buttons
   to zoom around the pointer. *Fit* goes back to the whole picture. Drag a
   node to place it; a short press without moving selects it. Placed nodes
   stay where you put them across refreshes until *Re-layout*, which also
-  resets the zoom. The circuit area
+  resets the zoom and lays the graph out from scratch for the area's
+  current size. The circuit area
   below lists this agent's circuits, with ★ on the one a session sends on.
   Selecting a circuit draws its path in the graph and shows its hops, state,
   round trip, probes, and its route's traffic and drops. With no circuit
@@ -225,6 +250,14 @@ wheel zoom),
 the agents' answers captured from `scripts/local-net.sh 4`. Capture it again
 after changing what the agent reports. `nodes_tab_fits` checks the Nodes
 tab's layout at several window sizes and drags its three separators.
+`circuit_details_do_not_overlap` checks that a selected circuit's details
+(long node names, narrow pane) wrap inside their own rows, and
+`graph_labels_do_not_overlap` that no two node labels in the drawn graph
+overlap. The layout itself is tested in `graph::tests` (the network from a
+bug report at several area sizes: no overlapping labels, at most a few
+crossings and edges through labels; a 40-node network; continuing from an
+old picture). `WEBJET_LAYOUT_SVG=<dir> cargo test -p webjet-app --lib
+graph::tests` writes the test pictures as SVG files to look at.
 `config_tab_is_for_admins` types into the configuration editor (checked as
 typed, undo), switches to a remote node's configuration with unapplied
 edits, and checks that a demoted account loses the tab.
