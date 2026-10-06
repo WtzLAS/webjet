@@ -1397,6 +1397,31 @@ pub fn edit_doc(
     ConfigFile::parse(&text).context("the result isn't a valid configuration")
 }
 
+/// `edit_doc` on the network configuration in force (`network_from_tree`
+/// without filling). A section left out of a network file stays as it is
+/// when applied, so a section the change emptied (`unset` drops empty
+/// tables and arrays) is kept as an empty one: unsetting the last seed or
+/// the last limit means none, not "leave it as it is".
+pub fn edit_network(
+    cur: &ConfigFile,
+    change: impl FnOnce(&mut toml::Value) -> Result<()>,
+) -> Result<ConfigFile> {
+    fn keep<T: Default>(edited: &mut Option<T>, was: &Option<T>) {
+        if edited.is_none() && was.is_some() {
+            *edited = Some(T::default());
+        }
+    }
+    let mut f = edit_doc(cur, change)?;
+    keep(&mut f.policy, &cur.policy);
+    keep(&mut f.dns, &cur.dns);
+    keep(&mut f.seeds, &cur.seeds);
+    keep(&mut f.transport, &cur.transport);
+    keep(&mut f.limits, &cur.limits);
+    keep(&mut f.proxy, &cur.proxy);
+    keep(&mut f.controllers, &cur.controllers);
+    Ok(f)
+}
+
 // ---------------------------------------------------------------- applying
 
 /// Check a network configuration file the way applying it does: the wire
@@ -1762,6 +1787,32 @@ value = { circuits_global = 9000 }
         assert!(bare.transport.as_ref().unwrap().priority.is_empty());
         assert!(bare.limits.as_ref().unwrap().value.is_empty());
         assert!(bare.dns.as_ref().unwrap().suffix.is_none());
+    }
+
+    #[test]
+    fn unsetting_the_last_key_of_a_network_section_clears_it() {
+        // A one-seed network: `unset seeds.0` used to drop the section,
+        // and applying merged the seed in force straight back.
+        let current = ConfigFile::parse(NETWORK).unwrap();
+        let f = edit_network(&current, |d| unset(d, "seeds.0")).unwrap();
+        assert_eq!(f.over(&current).seeds, Some(vec![]));
+        let f = edit_network(&current, |d| unset(d, "dns")).unwrap();
+        assert_eq!(f.over(&current).dns, Some(DnsSection::default()));
+        // The last key of a nested table, and the other sections untouched.
+        let one =
+            ConfigFile::parse("version = 3\n[limits.value]\ncircuits_global = 1000\n").unwrap();
+        let f = edit_network(&one, |d| unset(d, "limits.value.circuits_global")).unwrap();
+        assert_eq!(f.over(&current).limits, Some(LimitsSection::default()));
+        let f = edit_network(&current, |d| unset(d, "dns.record.0")).unwrap();
+        let merged = f.over(&current);
+        assert_eq!(
+            (merged.seeds, merged.policy),
+            (current.seeds.clone(), current.policy.clone())
+        );
+        assert!(merged.dns.unwrap().records.is_empty());
+        // A section the file never had stays left out.
+        let f = edit_network(&one, |d| set(d, "seeds", parse_value("[]"))).unwrap();
+        assert!(f.policy.is_none());
     }
 
     #[test]

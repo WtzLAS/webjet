@@ -956,18 +956,17 @@ async fn network_config(cli: &Cli, cmd: &ConfigCmd) -> Result<()> {
         ConfigCmd::Set { key, value } => {
             let t = tree(cli).await?;
             let cur = network_from_tree(&t, false)?;
-            let f = config::edit_doc(&cur, |d| config::set(d, key, config::parse_value(value)))?;
+            let f =
+                config::edit_network(&cur, |d| config::set(d, key, config::parse_value(value)))?;
             apply_network(cli, &f, Path::new("."), Some(&format!("{key} = {value}"))).await?;
         }
         ConfigCmd::Unset { key } => {
             let t = tree(cli).await?;
             let cur = network_from_tree(&t, false)?;
-            let mut f = config::edit_doc(&cur, |d| config::unset(d, key))?;
-            // A section left out stays as it is: unsetting the last key of
-            // [controllers] (or all of it) means the built-in values.
-            if f.controllers.is_none() && cur.controllers.is_some() {
-                f.controllers = Some(Default::default());
-            }
+            // A section emptied by this (the last seed, the last key of
+            // [limits.value] or [controllers], ...) is applied empty, not
+            // left as it is.
+            let f = config::edit_network(&cur, |d| config::unset(d, key))?;
             apply_network(cli, &f, Path::new("."), Some(&format!("{key} unset"))).await?;
         }
     }
