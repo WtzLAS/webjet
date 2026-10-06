@@ -164,10 +164,7 @@ impl WebjetApp {
             format!("Applying the {} configuration…", self.config_title()),
         ));
         let client = self.client.clone();
-        let job = self.rt.spawn({
-            let target = target.clone();
-            async move { fetch(&client, &target).await }
-        });
+        let job = self.rt.spawn(async move { fetch(&client, &target).await });
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let fresh = job.await.map_err(anyhow::Error::from).and_then(|r| r);
             let _ = this.update(cx, |app, cx| app.config_submit(fresh, &text, cx));

@@ -244,24 +244,40 @@ impl Storage {
         }
     }
 
+    /// Read the log. A torn final record (a crash mid-append) is cut off the
+    /// file, so entries appended after the restart don't land behind it,
+    /// where the next load would never reach them.
     fn load_log(&self) -> Vec<Entry> {
         match self {
             Storage::Disk(d) => {
-                let Ok(b) = std::fs::read(d.join("log.bin")) else {
+                let path = d.join("log.bin");
+                let Ok(b) = std::fs::read(&path) else {
                     return Vec::new();
                 };
                 let mut out = Vec::new();
                 let mut i = 0;
                 while let Some(len) = webjet_core::bytes::be_u32(&b, i) {
-                    let len = len as usize;
-                    if i + 4 + len > b.len() {
-                        tracing::warn!("raft log: truncated tail ignored");
+                    let Some(end) = (i + 4).checked_add(len as usize).filter(|&e| e <= b.len())
+                    else {
                         break;
-                    }
-                    if let Some(e) = decode_entry(b[i + 4..i + 4 + len].to_vec()) {
+                    };
+                    if let Some(e) = decode_entry(b[i + 4..end].to_vec()) {
                         out.push(e);
                     }
-                    i += 4 + len;
+                    i = end;
+                }
+                if i < b.len() {
+                    tracing::warn!("raft log: torn tail of {} bytes dropped", b.len() - i);
+                    let r = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&path)
+                        .and_then(|f| {
+                            f.set_len(i as u64)?;
+                            f.sync_data()
+                        });
+                    if let Err(e) = r {
+                        tracing::error!("raft log truncate: {e}");
+                    }
                 }
                 out
             }

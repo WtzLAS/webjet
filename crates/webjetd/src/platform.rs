@@ -18,17 +18,14 @@ use std::process::Command;
 /// Marker for system state the agent owns (NRPT comment, resolver files).
 pub const OWNER_TAG: &str = "webjet";
 
+/// Longest a platform command may run: a hung `resolvectl`, `netsh` or
+/// PowerShell would otherwise stall the agent's refresh for good.
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 fn run(cmd: &str, args: &[&str]) -> bool {
-    let mut c = Command::new(cmd);
-    c.args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    match c.output() {
-        Ok(o) if o.status.success() => true,
-        Ok(o) => {
+    match output(cmd, args) {
+        Some(o) if o.status.success() => true,
+        Some(o) => {
             tracing::debug!(
                 "{cmd} {}: {}",
                 args.join(" "),
@@ -36,11 +33,68 @@ fn run(cmd: &str, args: &[&str]) -> bool {
             );
             false
         }
+        None => false,
+    }
+}
+
+/// Run a command to completion with [`COMMAND_TIMEOUT`]; a command that
+/// overruns is killed. None if it couldn't start or was killed.
+fn output(cmd: &str, args: &[&str]) -> Option<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut c = Command::new(cmd);
+    c.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = match c.spawn() {
+        Ok(ch) => ch,
         Err(e) => {
             tracing::debug!("{cmd}: {e}");
-            false
+            return None;
         }
-    }
+    };
+    // Drain both pipes while waiting, or a chatty child blocks on a full one.
+    let drain = |p: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            if let Some(mut p) = p {
+                let _ = p.read_to_end(&mut v);
+            }
+            v
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let deadline = std::time::Instant::now() + COMMAND_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                tracing::warn!("{cmd} {}: timed out", args.join(" "));
+                return None;
+            }
+            Err(e) => {
+                tracing::debug!("{cmd}: {e}");
+                return None;
+            }
+        }
+    };
+    Some(std::process::Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
 }
 
 #[cfg(windows)]
@@ -474,9 +528,7 @@ pub fn proxy_real_ip(tun: &str, pool: &[IpNet]) -> bool {
             ]),
         );
         let fam = if v6 { "-6" } else { "-4" };
-        let rules = std::process::Command::new("ip")
-            .args([fam, "rule", "show"])
-            .output()
+        let rules = output("ip", &[fam, "rule", "show"])
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default();
         if !rules.contains(&format!("lookup {REAL_IP_TABLE}")) {

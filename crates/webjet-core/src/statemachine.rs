@@ -449,7 +449,6 @@ impl Machine {
                     .map_err(|e| ApplyError::Rejected(e.to_string()))?;
                 let admin = genesis_rec
                     .first_admin
-                    .clone()
                     .ok_or_else(|| ApplyError::Rejected("genesis without admin".into()))?;
                 let v = open_expect(&admin, mt::ACCOUNT_RECORD, &[root])
                     .map_err(|e| ApplyError::Rejected(e.to_string()))?;
@@ -715,7 +714,7 @@ impl Machine {
     ) -> std::result::Result<(), ApplyError> {
         let id = opt_k32(&r.node_id);
         let mut rec = self.live_node(&id)?;
-        let name = r.name.clone().unwrap_or_default();
+        let name = r.name.unwrap_or_default();
         if !valid_name(&name) {
             return rej("invalid node name");
         }
@@ -771,12 +770,12 @@ impl Machine {
             rec.tags = Some(check_tags(&u.tags.clone().unwrap_or_default())?);
         }
         if u.set_routes {
-            rec.routes = Some(self.check_routes(&u.routes.clone().unwrap_or_default(), &id)?);
+            rec.routes = Some(self.check_routes(&u.routes.unwrap_or_default(), &id)?);
         }
         rec.version += 1;
         fx.leaves
             .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
-        fx.outcome.description = format!("update node {}", rec.name.clone().unwrap_or_default());
+        fx.outcome.description = format!("update node {}", rec.name.unwrap_or_default());
         fx.outcome.node_id = Some(id);
         Ok(())
     }
@@ -1087,7 +1086,7 @@ impl Machine {
         fx.outcome.node_id = Some(voter);
         fx.outcome.description = format!(
             "new cluster with voter {}{}: {}",
-            rec.name.clone().unwrap_or_else(|| crypto::short(&voter)),
+            rec.name.unwrap_or_else(|| crypto::short(&voter)),
             if f.grant_control {
                 " (control granted)"
             } else {
@@ -1179,7 +1178,7 @@ impl Machine {
         forward.extend(net.forward.clone().unwrap_or_default());
         self.validate_dns(&wp::DnsConfig {
             version: 0,
-            suffix: net.suffix.clone(),
+            suffix: net.suffix,
             resolver_ip: None,
             records: cfg.dns_records.clone(),
             forward: Some(forward),
@@ -1451,7 +1450,7 @@ impl Machine {
                 expires_at: c.expires_at,
                 is_rekey: false,
                 node_id,
-                create: Some(c.clone()),
+                create: Some(c),
             });
             fx.outcome.description = format!("create enrollment for {name}");
         }

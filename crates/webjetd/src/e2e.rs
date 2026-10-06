@@ -25,14 +25,16 @@ const HS_GIVE_UP: Duration = Duration::from_secs(30);
 const PROBE_ECHO_MAX: usize = 128;
 
 struct SendKey {
-    key: SessionKey,
+    /// Shared so frames are sealed outside the session lock.
+    key: Arc<SessionKey>,
     peer_kid: u32,
     counter: u64,
     created: Instant,
 }
 
 struct RecvKey {
-    key: SessionKey,
+    /// Shared so frames are opened outside the session lock.
+    key: Arc<SessionKey>,
     window: ReplayWindow,
     created: Instant,
     retire_at: Option<Instant>,
@@ -65,8 +67,6 @@ struct Inner {
     hyst: webjet_core::routing::Hysteresis,
     hs_times: VecDeque<Instant>,
     last_unknown_hs: Option<Instant>,
-    /// Flows whose packets don't compress (§9.8).
-    lz4_backoff: webjet_core::compress::Backoff,
 }
 
 pub struct Session {
@@ -82,6 +82,9 @@ pub struct Session {
     /// Whether the peer takes LZ4 data frames, and when that was looked up
     /// (its EndpointRecord, re-read every few seconds, not per packet).
     lz4_peer: Mutex<Option<(Instant, bool)>>,
+    /// Flows whose packets don't compress (§9.8). Its own lock, so packets
+    /// are compressed outside the session's.
+    lz4_backoff: Mutex<webjet_core::compress::Backoff>,
 }
 
 impl Session {
@@ -145,6 +148,7 @@ impl Sessions {
             rx_packets: AtomicU64::new(0),
             path_switches: AtomicU64::new(0),
             lz4_peer: Mutex::new(None),
+            lz4_backoff: Mutex::new(Default::default()),
         });
         m.insert(*peer, s.clone());
         Some(s)
@@ -201,50 +205,71 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
     };
     *s.last_used.lock() = Instant::now();
     let lz4 = (ty == ftype::DATA || ty == ftype::PROXY) && lz4_to(n, &s);
-    let mut i = s.inner.lock();
-    let usable = i
-        .send
-        .as_ref()
-        .map(|k| k.created.elapsed() < REJECT_AFTER && k.counter < frames::REKEY_PACKETS)
-        .unwrap_or(false);
-    if usable {
-        let circ = pick_circuit(n, &s, &mut i);
-        let packed = if lz4 && circ.is_some() {
-            compress_packet(n, &mut i.lz4_backoff, payload)
+    // Under the session lock only the bookkeeping: pick the circuit and
+    // reserve a counter. Compressing and sealing happen after it's released,
+    // so a peer's sending and receiving don't wait on each other's crypto.
+    let reserved = {
+        let mut i = s.inner.lock();
+        let usable = i
+            .send
+            .as_ref()
+            .map(|k| k.created.elapsed() < REJECT_AFTER && k.counter < frames::REKEY_PACKETS)
+            .unwrap_or(false);
+        let circ = if usable {
+            pick_circuit(n, &s, &mut i)
         } else {
             None
         };
-        if let (Some(c), Some(k)) = (circ, i.send.as_mut()) {
-            let (ty, payload) = match &packed {
-                Some(z) if ty == ftype::DATA => (ftype::DATA_LZ4, &z[..]),
-                Some(z) => (ftype::PROXY_LZ4, &z[..]),
-                None => (ty, payload),
-            };
-            let ctr = k.counter;
-            k.counter += 1;
-            let Some(f) = k.key.seal(ty, k.peer_kid, ctr, payload) else {
-                return SendResult::Dropped;
-            };
-            let needs_rekey = k.created.elapsed() > REKEY_AFTER;
-            drop(i);
-            if needs_rekey {
-                maybe_rekey(n, &s);
+        match (circ, i.send.as_mut()) {
+            (Some(c), Some(k)) => {
+                let ctr = k.counter;
+                k.counter += 1;
+                Some((
+                    c,
+                    k.key.clone(),
+                    k.peer_kid,
+                    ctr,
+                    k.created.elapsed() > REKEY_AFTER,
+                ))
             }
-            s.tx_packets.fetch_add(1, Ordering::Relaxed);
-            return if c.send(n, &f, ecn) {
-                SendResult::Sent
-            } else {
-                SendResult::Dropped
-            };
+            _ => None,
         }
-    }
-    if i.queue.len() >= crate::metrics::limit(n, "handshake_queue") as usize {
+    };
+    let Some((c, key, peer_kid, ctr, needs_rekey)) = reserved else {
+        // No keys or circuit yet: queue for after the handshake. The limit
+        // is read without the session lock (it reads the tree).
+        let max = crate::metrics::limit(n, "handshake_queue") as usize;
+        let mut i = s.inner.lock();
+        if i.queue.len() >= max {
+            return SendResult::Dropped;
+        }
+        i.queue.push_back((ty, payload.to_vec()));
+        drop(i);
+        ensure(n, &s);
+        return SendResult::Queued;
+    };
+    let packed = if lz4 {
+        compress_packet(n, &mut s.lz4_backoff.lock(), payload)
+    } else {
+        None
+    };
+    let (ty, payload) = match &packed {
+        Some(z) if ty == ftype::DATA => (ftype::DATA_LZ4, &z[..]),
+        Some(z) => (ftype::PROXY_LZ4, &z[..]),
+        None => (ty, payload),
+    };
+    let Some(f) = key.seal(ty, peer_kid, ctr, payload) else {
         return SendResult::Dropped;
+    };
+    if needs_rekey {
+        maybe_rekey(n, &s);
     }
-    i.queue.push_back((ty, payload.to_vec()));
-    drop(i);
-    ensure(n, &s);
-    SendResult::Queued
+    s.tx_packets.fetch_add(1, Ordering::Relaxed);
+    if c.send(n, &f, ecn) {
+        SendResult::Sent
+    } else {
+        SendResult::Dropped
+    }
 }
 
 /// Whether DATA/PROXY to this session's peer may be LZ4-compressed (§9.8):
@@ -495,14 +520,14 @@ fn install(i: &mut Inner, send_key: Bytes32, recv_key: Bytes32, my_kid: u32, pee
     i.recv.insert(
         my_kid,
         RecvKey {
-            key: SessionKey::new(recv_key),
+            key: Arc::new(SessionKey::new(recv_key)),
             window: ReplayWindow::default(),
             created: now,
             retire_at: None,
         },
     );
     i.send = Some(SendKey {
-        key: SessionKey::new(send_key),
+        key: Arc::new(SessionKey::new(send_key)),
         peer_kid,
         counter: 0,
         created: now,
@@ -598,18 +623,59 @@ fn continue_handshake(
     };
     hs.peer_flight = flight;
     hs.circuit = c.label;
-    if let Err(e) = feed_tls(&mut hs.conn, data) {
-        i.hs = None;
-        bail!("e2e handshake with {}: {e}", crypto::short(&s.peer));
+    // Any failure ends the handshake: stale state would keep the session
+    // "handshaking" (no re-key, packets queued) until HS_GIVE_UP.
+    let (keys, to_send) = match advance(hs, s, data) {
+        Ok(x) => x,
+        Err(e) => {
+            i.hs = None;
+            bail!("e2e handshake with {}: {e}", crypto::short(&s.peer));
+        }
+    };
+    let established = keys.is_some();
+    let Some(hs) = i.hs.as_ref() else {
+        bail!("no handshake in progress");
+    };
+    if let Some((send_k, recv_k, my_kid, peer_kid)) = keys {
+        let initiator = hs.initiator;
+        install(&mut i, send_k, recv_k, my_kid, peer_kid);
+        // The responder keeps its state briefly to answer a retransmitted flight 3.
+        if initiator {
+            i.hs = None;
+        } else if let Some(h) = i.hs.as_mut() {
+            h.done = true;
+        }
+        tracing::debug!(peer = %n.name_of(&s.peer), initiator, "e2e session established");
     }
-    let mut keys: Option<(Bytes32, Bytes32, u32, u32)> = None;
+    drop(i);
+    if let Some(f) = to_send {
+        c.send(n, &f, 0);
+    }
+    if established {
+        flush_queue(n, s);
+        crate::paths::on_established(n, &s.peer);
+    }
+    Ok(())
+}
+
+/// Keys found by a handshake step: send key, receive key, our key id and the
+/// peer's.
+type NewKeys = (Bytes32, Bytes32, u32, u32);
+
+/// Feed the peer's flight to TLS; returns the keys once both key ids are
+/// known, and our next flight (if any) to send.
+fn advance(
+    hs: &mut Handshake,
+    s: &Session,
+    data: &[u8],
+) -> Result<(Option<NewKeys>, Option<Vec<u8>>)> {
+    feed_tls(&mut hs.conn, data)?;
+    let mut keys: Option<NewKeys> = None;
     if !hs.conn.is_handshaking() {
         // Bind the identity: exactly the expected key (the verifier already
         // checked; re-check for defence in depth) and the PQ group.
-        let peer = tls::peer_key(&hs.conn);
-        if peer != Some(s.peer_key) {
-            i.hs = None;
-            bail!("e2e peer identity mismatch");
+        if tls::peer_key(&hs.conn) != Some(s.peer_key) {
+            bail!("peer identity mismatch");
         }
         tls::check_pq(&hs.conn)?;
         let app = read_app(&mut hs.conn);
@@ -639,27 +705,7 @@ fn continue_handshake(
         hs.sent_at = Instant::now();
         to_send = Some(f);
     }
-    let established = keys.is_some();
-    if let Some((send_k, recv_k, my_kid, peer_kid)) = keys {
-        let initiator = hs.initiator;
-        install(&mut i, send_k, recv_k, my_kid, peer_kid);
-        // The responder keeps its state briefly to answer a retransmitted flight 3.
-        if initiator {
-            i.hs = None;
-        } else if let Some(h) = i.hs.as_mut() {
-            h.done = true;
-        }
-        tracing::debug!(peer = %n.name_of(&s.peer), initiator, "e2e session established");
-    }
-    drop(i);
-    if let Some(f) = to_send {
-        c.send(n, &f, 0);
-    }
-    if established {
-        flush_queue(n, s);
-        crate::paths::on_established(n, &s.peer);
-    }
-    Ok(())
+    Ok((keys, to_send))
 }
 
 // ---------------------------------------------------------------- receiving
@@ -681,9 +727,12 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
     else {
         return;
     };
-    let plain = {
+    // Decrypt outside the session lock: check the replay window first (cheap
+    // drop of replays), open, then re-check and mark under the lock, so two
+    // copies of a frame racing each other still get in only once.
+    let key = {
         let mut i = s.inner.lock();
-        let Some(k) = i.recv.get_mut(&h.key_id) else {
+        let Some(k) = i.recv.get(&h.key_id) else {
             // A frame under a key we don't have: we restarted, or the peer
             // holds stale keys. Start a fresh handshake so it re-keys (rate
             // limited; the peer answers as responder).
@@ -702,13 +751,21 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
         };
         if k.created.elapsed() > REJECT_AFTER
             || k.retire_at.map(|t| Instant::now() > t).unwrap_or(false)
+            || !k.window.check(h.counter)
         {
             return;
         }
+        k.key.clone()
+    };
+    let Some(plain) = key.open(body) else { return };
+    {
+        let mut i = s.inner.lock();
+        let Some(k) = i.recv.get_mut(&h.key_id) else {
+            return;
+        };
         if !k.window.check(h.counter) {
             return;
         }
-        let Some(p) = k.key.open(body) else { return };
         k.window.mark(h.counter);
         // The responder's handshake state can go once traffic flows.
         if i.hs
@@ -718,8 +775,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
         {
             i.hs = None;
         }
-        p
-    };
+    }
     *s.last_used.lock() = Instant::now();
     s.rx_packets.fetch_add(1, Ordering::Relaxed);
     // Compressed payloads (§9.8) are accepted whatever this node's settings.
@@ -793,7 +849,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
 
 /// Send on a specific circuit (probes go on the circuit they measure).
 pub fn send_on(n: &Arc<Node>, s: &Session, c: &LocalCircuit, ty: u8, payload: &[u8]) -> bool {
-    let f = {
+    let (key, peer_kid, ctr) = {
         let mut i = s.inner.lock();
         let Some(k) = i.send.as_mut() else {
             return false;
@@ -803,8 +859,9 @@ pub fn send_on(n: &Arc<Node>, s: &Session, c: &LocalCircuit, ty: u8, payload: &[
         }
         let ctr = k.counter;
         k.counter += 1;
-        k.key.seal(ty, k.peer_kid, ctr, payload)
+        (k.key.clone(), k.peer_kid, ctr)
     };
+    let f = key.seal(ty, peer_kid, ctr, payload);
     f.is_some_and(|f| c.send(n, &f, 0))
 }
 

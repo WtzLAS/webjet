@@ -456,6 +456,7 @@ mod tests {
             out_label: parking_lot::Mutex::new(Some(2)),
             hops: vec![],
             route_id: rid,
+            acct: Default::default(),
             is_source: true,
             created: Instant::now(),
             probes: parking_lot::Mutex::new(Default::default()),

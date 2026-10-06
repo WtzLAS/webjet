@@ -1196,6 +1196,22 @@ fn disk_storage_roundtrip() {
         .write_all(&[0, 0, 1, 0, 1, 2])
         .unwrap();
     assert_eq!(st.load_log().len(), 2);
+    // Entries appended after a restart over the torn tail survive the next
+    // restart: opening the log drops the torn bytes before appending.
+    let r = Raft::new(
+        nid(1),
+        Storage::disk(dir.clone()).unwrap(),
+        0,
+        0,
+        members(&[1], &[]),
+        Box::new(classify),
+        T,
+        Instant::now(),
+        Some(1),
+    )
+    .unwrap();
+    r.storage.append(&e[2..]);
+    assert_eq!(st.load_log().len(), 5);
     st.save_snapshot(b"snap").unwrap();
     assert_eq!(st.load_snapshot().as_deref(), Some(&b"snap"[..]));
     let _ = std::fs::remove_dir_all(dir);

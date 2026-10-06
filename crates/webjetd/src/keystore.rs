@@ -239,20 +239,6 @@ fn lock_memory(p: *const u8, len: usize) {
     let _ = (p, len);
 }
 
-#[allow(dead_code)]
-fn unlock_memory(p: *const u8, len: usize) {
-    #[cfg(unix)]
-    unsafe {
-        libc::munlock(p as *const libc::c_void, len);
-    }
-    #[cfg(windows)]
-    unsafe {
-        windows_sys::Win32::System::Memory::VirtualUnlock(p as *const core::ffi::c_void, len);
-    }
-    #[cfg(not(any(unix, windows)))]
-    let _ = (p, len);
-}
-
 // ---------------------------------------------------------------- TPM 2.0 (Linux)
 
 /// Sealing through the TPM's storage hierarchy with tpm2-tools: the seed

@@ -56,6 +56,7 @@ pub struct PunchEvent {
 /// KCP MTU: leaves room for FEC (9), the inner header (5+24 on OPEN) and
 /// obfuscation (42+2) inside a 1400-byte datagram.
 pub const KCP_MTU: usize = 1300;
+const _: () = assert!(KCP_MTU + 2 <= crate::fec::MAX_SHARD);
 const DUPLEX: usize = 512 * 1024;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -637,7 +638,7 @@ async fn run_session(
     peer: SocketAddr,
     conv: u32,
     dialer: bool,
-    mut user: DuplexStream,
+    user: DuplexStream,
     mut rx: mpsc::Receiver<Vec<u8>>,
     stats: Arc<KcpStats>,
 ) {
@@ -658,6 +659,14 @@ async fn run_session(
     let mut next_new_sn: Option<u32> = None;
     let mut user_buf = vec![0u8; 16 * 1024];
     let mut user_open = true;
+    // Received bytes on their way to the user. While a slow reader hasn't
+    // taken them, KCP keeps the rest in its receive queue, so the window it
+    // advertises shrinks and the peer slows down; ticks and acknowledgements
+    // go on meanwhile.
+    let (mut rd, mut wr) = tokio::io::split(user);
+    let mut pending: Vec<u8> = Vec::new();
+    let mut pend_off = 0usize;
+    let mut user_gone = false;
     let mut tick = tokio::time::interval(Duration::from_millis(5));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -680,7 +689,7 @@ async fn run_session(
         // per hop (and delayed acknowledgements inflated KCP's RTT).
         let mut flush_now = false;
         tokio::select! {
-            r = user.read(&mut user_buf), if can_take => {
+            r = rd.read(&mut user_buf), if can_take => {
                 match r {
                     Ok(0) | Err(_) => { user_open = false; }
                     Ok(n) => {
@@ -718,12 +727,36 @@ async fn run_session(
                     }
                 }
                 stats.fec_recovered.store(dec.recovered, Ordering::Relaxed);
-                // Deliver received bytes to the user.
-                while let Some(b) = take_ready(&mut kcp) {
-                    if user.write_all(&b).await.is_err() { user_open = false; break; }
+            }
+            r = wr.write(&pending[pend_off..]), if pend_off < pending.len() => {
+                match r {
+                    Ok(0) | Err(_) => {
+                        // The user is gone: drop what it would have read.
+                        user_open = false;
+                        user_gone = true;
+                        pending.clear();
+                        pend_off = 0;
+                    }
+                    Ok(n) => {
+                        pend_off += n;
+                        if pend_off == pending.len() {
+                            pending.clear();
+                            pend_off = 0;
+                        }
+                    }
                 }
             }
             _ = tick.tick() => {}
+        }
+        // Hand received bytes to the user, a bounded amount at a time.
+        if pending.is_empty() {
+            while pending.len() < PENDING_MAX
+                && let Some(b) = take_ready(&mut kcp)
+            {
+                if !user_gone {
+                    pending.extend_from_slice(&b);
+                }
+            }
         }
         let now = Instant::now();
         if let Err(e) = kcp.update(ms(now)) {
@@ -795,7 +828,7 @@ async fn run_session(
         if now.duration_since(last_rx) > IDLE_TIMEOUT || kcp.is_dead_link() {
             break;
         }
-        if !user_open && kcp.wait_snd() == 0 && paced.is_empty() {
+        if !user_open && kcp.wait_snd() == 0 && paced.is_empty() && pending.is_empty() {
             break;
         }
     }
@@ -804,6 +837,9 @@ async fn run_session(
 /// KCP segment header: conv[4] cmd[1] frg[1] wnd[2] ts[4] sn[4] una[4] len[4],
 /// little-endian.
 const KCP_SEG_HDR: usize = 24;
+/// Received bytes taken out of KCP at once for a slow user; the rest waits
+/// in KCP's receive queue, where it shrinks the advertised window.
+const PENDING_MAX: usize = 256 * 1024;
 const KCP_CMD_PUSH: u8 = 81;
 
 /// Scan one KCP output packet. Returns the data segments in it that were sent

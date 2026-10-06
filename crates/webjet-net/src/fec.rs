@@ -11,10 +11,16 @@ use std::collections::{BTreeMap, HashMap};
 
 pub const HDR: usize = 9;
 pub const GROUP_DATA: usize = 8;
+/// Largest shard payload the decoder accepts: a KCP packet (`KCP_MTU`,
+/// 1300 bytes) plus the 2-byte length inside parity, with room to spare.
+pub const MAX_SHARD: usize = 2048;
 pub const MAX_PARITY_RATIO: f64 = 0.30;
 
 pub struct Encoder {
     group: u32,
+    /// Data packets in the current group.
+    count: usize,
+    /// Their copies, kept only when parity is on.
     pending: Vec<Vec<u8>>,
     pub ratio: f64,
     pub parity_bytes: u64,
@@ -55,6 +61,7 @@ impl Encoder {
     pub fn new() -> Self {
         Encoder {
             group: 0,
+            count: 0,
             pending: Vec::new(),
             ratio: 0.0,
             parity_bytes: 0,
@@ -74,13 +81,19 @@ impl Encoder {
     /// Wrap one data packet; returns the shards to send now (the data shard
     /// and, when the group is complete, its parity).
     pub fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
-        let idx = self.pending.len() as u8;
+        let idx = self.count as u8;
         let mut out = Vec::with_capacity(2);
-        let mut s = header(self.group, idx, 0, 0, data.len() as u16).to_vec();
+        let mut s = Vec::with_capacity(HDR + data.len());
+        s.extend_from_slice(&header(self.group, idx, 0, 0, data.len() as u16));
         s.extend_from_slice(data);
         out.push(s);
-        self.pending.push(data.to_vec());
-        if self.pending.len() >= GROUP_DATA {
+        // Keep a copy for parity only while there will be parity: on a clean
+        // link (ratio 0) the copies would just be thrown away.
+        if self.parity_count(GROUP_DATA) > 0 {
+            self.pending.push(data.to_vec());
+        }
+        self.count += 1;
+        if self.count >= GROUP_DATA {
             out.extend(self.flush());
         }
         out
@@ -88,15 +101,17 @@ impl Encoder {
 
     /// Close the current group (on a flush timer), emitting its parity.
     pub fn flush(&mut self) -> Vec<Vec<u8>> {
-        if self.pending.is_empty() {
+        if self.count == 0 {
             return Vec::new();
         }
-        let k = self.pending.len();
+        let k = self.count;
         let m = self.parity_count(k);
         let group = self.group;
         self.group = self.group.wrapping_add(1);
+        self.count = 0;
         let pending = std::mem::take(&mut self.pending);
-        if m == 0 {
+        // No parity, or it was switched on mid-group and copies are missing.
+        if m == 0 || pending.len() != k {
             return Vec::new();
         }
         let width = pending.iter().map(|p| p.len() + 2).max().unwrap_or(2);
@@ -116,7 +131,14 @@ impl Encoder {
         }
         let mut out = Vec::with_capacity(m);
         for (j, p) in shards.into_iter().skip(k).enumerate() {
-            let mut s = header(group, (k + j) as u8, k as u8, m as u8, width as u16).to_vec();
+            let mut s = Vec::with_capacity(HDR + p.len());
+            s.extend_from_slice(&header(
+                group,
+                (k + j) as u8,
+                k as u8,
+                m as u8,
+                width as u16,
+            ));
             s.extend_from_slice(&p);
             self.parity_bytes += s.len() as u64;
             out.push(s);
@@ -125,7 +147,7 @@ impl Encoder {
     }
 
     pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+        self.count > 0
     }
 
     /// Adapt the ratio to the measured loss, aiming at <0.1% residual loss
@@ -256,6 +278,12 @@ impl Decoder {
         let Some(payload) = shard.get(HDR..HDR + len) else {
             return Vec::new();
         };
+        // Our encoder sends at most GROUP_DATA data shards per group, each a
+        // KCP packet (≤ KCP_MTU), and parity a little wider. Anything else
+        // is malformed; storing it would let a peer pin megabytes per group.
+        if len > MAX_SHARD || (k == 0 && usize::from(idx) >= GROUP_DATA) {
+            return Vec::new();
+        }
         self.received += 1;
         // Keep a bounded window of groups.
         if group.wrapping_sub(self.newest) < u32::MAX / 2 {
@@ -481,6 +509,17 @@ mod tests {
         let mut s = header(group, idx, k, m, payload.len() as u16).to_vec();
         s.extend_from_slice(payload);
         s
+    }
+
+    #[test]
+    fn oversized_or_out_of_range_data_shards_are_dropped() {
+        let mut d = Decoder::new();
+        assert_eq!(d.push(&shard(0, 7, 0, 0, &[1; 1300])).len(), 1);
+        assert!(d.push(&shard(0, 8, 0, 0, &[1; 10])).is_empty());
+        assert!(d.push(&shard(0, 255, 0, 0, &[1; 10])).is_empty());
+        assert!(d.push(&shard(1, 0, 0, 0, &[1; MAX_SHARD + 1])).is_empty());
+        assert!(d.push(&shard(1, 9, 8, 1, &[1; MAX_SHARD + 1])).is_empty());
+        assert_eq!(d.received, 1);
     }
 
     #[test]

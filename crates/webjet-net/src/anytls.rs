@@ -12,7 +12,7 @@
 //!   (`REFUSE`).
 
 use crate::gate::{Epochs, GateResult, SharedEpochs, anytls_enroll_password, anytls_password};
-use crate::hop::{BoxIo, Established, exchange_identity};
+use crate::hop::{BoxIo, Established, HANDSHAKE_TIMEOUT, exchange_identity};
 use crate::tls::PeerTrust;
 use anyhow::{Result, anyhow, bail};
 use boring::ssl::{
@@ -207,11 +207,19 @@ pub async fn dial_enroll(
     cam: &Camouflage,
     token_hash: &Bytes32,
 ) -> Result<BoxIo> {
-    let mut tls = client_outer(addr, cam).await?;
-    send_password(&mut tls, &anytls_enroll_password(token_hash)).await?;
-    let mut vh = [0u8; 4];
-    tls.read_exact(&mut vh).await?;
-    Ok(Box::new(tls))
+    let fut = async {
+        let mut tls = client_outer(addr, cam).await?;
+        send_password(&mut tls, &anytls_enroll_password(token_hash)).await?;
+        let mut vh = [0u8; 4];
+        tls.read_exact(&mut vh).await?;
+        if vh[..2] != VERSION_HELLO[..2] {
+            bail!("bad AnyTLS version hello");
+        }
+        Ok(Box::new(tls) as BoxIo)
+    };
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
+        .await
+        .map_err(|_| anyhow!("AnyTLS enrollment to {addr} timed out"))?
 }
 
 pub fn acceptor(cam: &Camouflage, secret: &CamouflageSecret) -> Result<SslAcceptor> {
@@ -294,14 +302,14 @@ pub async fn accept(s: TcpStream, remote: SocketAddr, ctx: &AcceptCtx<'_>) -> Re
     };
     match res {
         Some(PwResult::Psk(gr)) => {
-            let mut lenb = [0u8; 2];
-            tls.read_exact(&mut lenb).await?;
-            let pad = u16::from_be_bytes(lenb) as usize;
-            let mut skip = vec![0u8; pad + 4];
-            tls.read_exact(&mut skip).await?;
-            tls.write_all(&VERSION_HELLO).await?;
-            let ex = exporter(tls.ssl())?;
-            let peer = exchange_identity(&mut tls, &ex, kp, false, None, trust.as_ref()).await?;
+            // An authenticated client still gets no unbounded waits.
+            let peer = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+                finish_hello(&mut tls).await?;
+                let ex = exporter(tls.ssl())?;
+                exchange_identity(&mut tls, &ex, kp, false, None, trust.as_ref()).await
+            })
+            .await
+            .map_err(|_| anyhow!("AnyTLS handshake timeout"))??;
             Ok(AnyAccepted::Hop(Established {
                 io: Box::new(tls),
                 peer_key: peer,
@@ -312,22 +320,32 @@ pub async fn accept(s: TcpStream, remote: SocketAddr, ctx: &AcceptCtx<'_>) -> Re
             }))
         }
         Some(PwResult::Enroll) => {
-            let mut lenb = [0u8; 2];
-            tls.read_exact(&mut lenb).await?;
-            let pad = u16::from_be_bytes(lenb) as usize;
-            let mut skip = vec![0u8; pad + 4];
-            tls.read_exact(&mut skip).await?;
-            tls.write_all(&VERSION_HELLO).await?;
+            tokio::time::timeout(HANDSHAKE_TIMEOUT, finish_hello(&mut tls))
+                .await
+                .map_err(|_| anyhow!("AnyTLS handshake timeout"))??;
             Ok(AnyAccepted::Enroll(Box::new(tls), remote))
         }
         None => {
             if website {
                 serve_website(&mut tls, &first[..got], &secret.site).await;
             }
-            let _ = tls.shutdown().await;
+            // A client that never reads would block close_notify forever.
+            let _ = tokio::time::timeout(Duration::from_secs(2), tls.shutdown()).await;
             Ok(AnyAccepted::Camouflaged)
         }
     }
+}
+
+/// After a valid password: skip the client's padding and version hello
+/// (`send_password`), then answer with ours.
+async fn finish_hello<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S) -> Result<()> {
+    let mut lenb = [0u8; 2];
+    s.read_exact(&mut lenb).await?;
+    let pad = usize::from(u16::from_be_bytes(lenb));
+    let mut skip = vec![0u8; pad + VERSION_HELLO.len()];
+    s.read_exact(&mut skip).await?;
+    s.write_all(&VERSION_HELLO).await?;
+    Ok(())
 }
 
 enum PwResult {

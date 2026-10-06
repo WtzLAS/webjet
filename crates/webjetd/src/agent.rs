@@ -170,10 +170,7 @@ async fn enroll_at(
         .map_err(|_| anyhow!("no answer"))??;
     let resp = wp::EnrollResponse::decode_bytes(&body)?;
     if !resp.ok {
-        bail!(
-            "controller refused: {}",
-            resp.error.clone().unwrap_or_default()
-        );
+        bail!("controller refused: {}", resp.error.unwrap_or_default());
     }
     let _ = ticket;
     Ok(resp)
@@ -531,7 +528,7 @@ fn is_seed(n: &Node) -> bool {
         .flatten()
         .flatten()
         .any(|e| {
-            let r = e.node.clone().unwrap_or_default();
+            let r = e.node.unwrap_or_default();
             let r = r.strip_prefix("node:").unwrap_or(&r).to_string();
             r == my_name || r == my_key
         })

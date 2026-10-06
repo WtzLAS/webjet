@@ -6,7 +6,7 @@
 //! * UDP: every datagram is `nonce[24] || masked_epoch[2] || XChaCha20-Poly1305(k_epoch, nonce, inner || padding)`.
 //!   The first packet of a KCP session carries a timestamp inside the ciphertext (§9.1).
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{Aead, AeadInOut, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use parking_lot::Mutex;
 use rand::Rng;
@@ -199,28 +199,29 @@ impl UdpObfs {
         [h[0], h[1]]
     }
 
-    /// Encrypt `inner` under `epoch`, adding `pad` bytes of random padding
-    /// (inside the ciphertext, after a 2-byte length).
+    /// Encrypt `inner` under `epoch`, adding `pad` bytes of padding (inside
+    /// the ciphertext, after a 2-byte length; encrypted, so zeros look as
+    /// random as anything else). Built and encrypted in one buffer: this
+    /// runs for every KCP datagram.
     pub fn seal(&self, epoch: u16, inner: &[u8], pad: usize) -> Option<Vec<u8>> {
+        let len = u16::try_from(inner.len()).ok()?;
         let ciphers = self.ciphers.read();
         let c = ciphers.get(&epoch)?;
-        let mut nonce = [0u8; 24];
-        UnwrapErr(SysRng).fill_bytes(&mut nonce);
-        let mut pt = Vec::with_capacity(2 + inner.len() + pad);
-        pt.extend_from_slice(&(inner.len() as u16).to_be_bytes());
-        pt.extend_from_slice(inner);
-        let mut padding = vec![0u8; pad];
-        UnwrapErr(SysRng).fill_bytes(&mut padding);
-        pt.extend_from_slice(&padding);
+        // A fresh random 192-bit nonce from the thread's CSPRNG (no system
+        // call per packet).
+        let nonce: [u8; 24] = rand::random();
         let m = self.mask(&nonce);
         let me = [epoch.to_be_bytes()[0] ^ m[0], epoch.to_be_bytes()[1] ^ m[1]];
-        let ct = c
-            .encrypt(&XNonce::from(nonce), Payload { msg: &pt, aad: &me })
-            .ok()?;
-        let mut out = Vec::with_capacity(26 + ct.len());
+        let mut out = Vec::with_capacity(UDP_OVERHEAD + 2 + inner.len() + pad);
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&me);
-        out.extend_from_slice(&ct);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(inner);
+        out.resize(out.len() + pad, 0);
+        let tag = c
+            .encrypt_inout_detached(&XNonce::from(nonce), &me, out[26..].as_mut().into())
+            .ok()?;
+        out.extend_from_slice(&tag);
         Some(out)
     }
 
@@ -235,7 +236,7 @@ impl UdpObfs {
         let res = epochs.classify(epoch)?;
         let ciphers = self.ciphers.read();
         let c = ciphers.get(&epoch)?;
-        let pt = c
+        let mut pt = c
             .decrypt(
                 &XNonce::try_from(nonce).ok()?,
                 Payload {
@@ -244,8 +245,14 @@ impl UdpObfs {
                 },
             )
             .ok()?;
-        let len = u16::from_be_bytes([pt[0], pt[1]]) as usize;
-        let inner = pt.get(2..2 + len)?.to_vec();
+        let len = u16::from_be_bytes([*pt.first()?, *pt.get(1)?]) as usize;
+        if pt.len() < 2 + len {
+            return None;
+        }
+        // Cut the length and padding off in place instead of copying.
+        pt.truncate(2 + len);
+        pt.drain(..2);
+        let inner = pt;
         Some((res, inner))
     }
 }

@@ -643,7 +643,6 @@ impl Node {
         };
         let mut v: Vec<(u8, SocketAddr, Transport)> = r
             .addrs
-            .clone()
             .unwrap_or_default()
             .iter()
             .filter_map(|a| {

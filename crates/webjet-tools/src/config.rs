@@ -905,7 +905,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         },
         resolver_ip: set_resolver,
         records: records_out(&dns.records.clone().unwrap_or_default()),
-        forward: forwards_out(&dns.forward.clone().unwrap_or_default()),
+        forward: forwards_out(&dns.forward.unwrap_or_default()),
     };
     let tr = tr.unwrap_or_default();
     let mut priority: BTreeMap<String, u8> = if fill {
@@ -977,7 +977,6 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         compression,
         overrides: tr
             .overrides
-            .clone()
             .unwrap_or_default()
             .iter()
             .map(|o| PriorityOverrideFile {
@@ -1001,7 +1000,6 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         value,
         overrides: lim
             .overrides
-            .clone()
             .unwrap_or_default()
             .iter()
             .map(|o| LimitOverrideFile {

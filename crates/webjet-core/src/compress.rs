@@ -147,6 +147,8 @@ pub fn check(control: u8, data: u8) -> anyhow::Result<()> {
 thread_local! {
     static ZC: RefCell<Option<zstd::bulk::Compressor<'static>>> = const { RefCell::new(None) };
     static ZD: RefCell<Option<zstd::bulk::Decompressor<'static>>> = const { RefCell::new(None) };
+    /// Scratch output for `lz4_compress`, reused across packets.
+    static LZ4_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// zstd-compress a control message. `None` when it is too short or doesn't
@@ -191,22 +193,37 @@ pub fn lz4_compress(packet: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let len = u16::try_from(packet.len()).ok()?;
-    let mut out = vec![0u8; 2 + lz4_flex::block::get_maximum_output_size(packet.len())];
-    out[..2].copy_from_slice(&len.to_be_bytes());
-    let n = lz4_flex::block::compress_into(packet, &mut out[2..]).ok()?;
-    out.truncate(2 + n);
-    (out.len() + MIN_DATA_GAIN <= packet.len()).then_some(out)
+    // Compress into a reused per-thread buffer and allocate only for a
+    // result worth sending (most attempts on poorly compressing flows fail).
+    LZ4_BUF.with(|b| {
+        let mut b = b.borrow_mut();
+        let need = lz4_flex::block::get_maximum_output_size(packet.len());
+        if b.len() < need {
+            b.resize(need, 0);
+        }
+        let n = lz4_flex::block::compress_into(packet, &mut b[..need]).ok()?;
+        if 2 + n + MIN_DATA_GAIN > packet.len() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(2 + n);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&b[..n]);
+        Some(out)
+    })
 }
 
 /// Decompress a packet made by [`lz4_compress`]. `None` if malformed or if
 /// it would be longer than `cap`.
 pub fn lz4_decompress(data: &[u8], cap: usize) -> Option<Vec<u8>> {
     let len = usize::from(crate::bytes::be_u16(data, 0)?);
-    if len > cap || len == 0 {
+    // LZ4 expands at most ~255:1; a larger claim is bogus and would only
+    // make a tiny frame allocate up to 64 KiB.
+    let body = data.get(2..)?;
+    if len > cap || len == 0 || len > body.len().saturating_mul(255) {
         return None;
     }
     let mut out = vec![0u8; len];
-    let n = lz4_flex::block::decompress_into(data.get(2..)?, &mut out).ok()?;
+    let n = lz4_flex::block::decompress_into(body, &mut out).ok()?;
     (n == len).then_some(out)
 }
 
@@ -258,16 +275,22 @@ pub fn flow_key(p: &[u8]) -> u32 {
         Some(6) => (p.get(8..40), flow_of(p)),
         _ => (None, None),
     };
-    let mut h = blake3::Hasher::new();
-    h.update(addrs.unwrap_or_default());
+    // FNV-1a: this only spreads flows over backoff slots, per packet, so a
+    // cryptographic hash would be wasted work. A flow that collides with
+    // another just shares its backoff.
+    let mut h: u32 = 0x811c_9dc5;
+    let mut eat = |bytes: &[u8]| {
+        for &x in bytes {
+            h = (h ^ u32::from(x)).wrapping_mul(0x0100_0193);
+        }
+    };
+    eat(addrs.unwrap_or_default());
     if let Some((proto, s, d)) = rest {
-        h.update(&[proto]);
-        h.update(&s.to_be_bytes());
-        h.update(&d.to_be_bytes());
+        eat(&[proto]);
+        eat(&s.to_be_bytes());
+        eat(&d.to_be_bytes());
     }
-    let b = h.finalize();
-    let b = b.as_bytes();
-    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+    h
 }
 
 const SLOTS: usize = 64;

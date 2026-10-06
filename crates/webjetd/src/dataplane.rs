@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use webjet_core::conntrack::{Conntrack, InsertError as CtError, Verdict as Ct};
 use webjet_core::crypto::Bytes32;
 use webjet_core::frames::ftype;
-use webjet_core::packet::{self, Bucket, Parsed, Unreach};
+use webjet_core::packet::{self, Bucket, Unreach};
 use webjet_core::policy::{Decision, Dest};
 use webjet_core::types::{Grant, map_prefix};
 
@@ -31,10 +31,17 @@ pub struct Dataplane {
     serving: RwLock<Vec<(Grant, String)>>,
     routes: Mutex<Vec<IpNet>>,
     applied_gen: AtomicU64,
+    /// The tree generation tracked flows were last re-checked against.
+    policy_gen: AtomicU64,
     pub resolver: RwLock<Vec<IpAddr>>,
     /// Sticky gateway choice per published prefix (§11.9.3).
     gw_choice: Mutex<HashMap<IpNet, Bytes32>>,
+    /// `gateways_for` answers by destination, briefly.
+    gw_cache: Mutex<HashMap<IpAddr, GwCached>>,
+    local_nets: Mutex<Option<(Instant, Vec<IpNet>)>>,
     nat_done: Mutex<Vec<String>>,
+    /// System DNS as last configured.
+    dns_applied: Mutex<Option<DnsApplied>>,
     pings: Mutex<HashMap<u16, mpsc::UnboundedSender<u16>>>,
     /// Reverse proxy ports and flows (§11.11), apart from the overlay's.
     pub proxy: crate::proxy::Proxy,
@@ -136,9 +143,8 @@ impl Dataplane {
                 if let Some(reply) = packet::echo_reply(&p)
                     && let Some(n) = self.node()
                 {
-                    let n2 = n.clone();
                     tokio::spawn(async move {
-                        if let Some(dp) = n2.dataplane.get() {
+                        if let Some(dp) = n.dataplane.get() {
                             dp.outbound(reply);
                         }
                     });
@@ -243,10 +249,9 @@ impl Dataplane {
         // The local resolver (§11.10.1).
         if self.resolver.read().contains(&dst) {
             n.metrics.tun_in(p.len());
-            let n2 = n.clone();
             tokio::spawn(async move {
-                if let Some(reply) = crate::dns::handle(&n2, &p).await
-                    && let Some(dp) = n2.dataplane.get()
+                if let Some(reply) = crate::dns::handle(&n, &p).await
+                    && let Some(dp) = n.dataplane.get()
                 {
                     dp.write_tun(reply);
                 }
@@ -270,10 +275,10 @@ impl Dataplane {
                 return;
             };
             if g.mapped() {
-                let Some(ps) = map_prefix(src, &g.lan, &g.published) else {
+                // Addresses only; for ICMP errors the quoted destination too.
+                if !packet::map_addrs(&mut p, true, |a| map_prefix(a, &g.lan, &g.published)) {
                     return;
-                };
-                packet::rewrite(&mut p, Some((ps, parsed.flow.sport)), None);
+                }
             }
             let Some(after) = packet::parse(&p) else {
                 return;
@@ -344,7 +349,7 @@ impl Dataplane {
                     && self
                         .conntrack
                         .lock()
-                        .insert(&peer, &parsed, true, verdict.rule.clone(), false, now)
+                        .insert(&peer, &parsed, true, verdict.rule, false, now)
                         .is_err()
                 {
                     n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
@@ -365,6 +370,46 @@ impl Dataplane {
         if let Some(id) = view_node {
             return Some((id, true));
         }
+        let (prefix, gws) = self.gateways_for(n, dst)?;
+        let mut choice = self.gw_choice.lock();
+        if let Some(c) = choice.get(&prefix)
+            && gws.contains(c)
+        {
+            return Some((*c, false));
+        }
+        let pick = gws
+            .iter()
+            .find(|g| n.e2e.get(g).map(|s| s.established()).unwrap_or(false))
+            .copied()
+            .unwrap_or_else(|| gws[rand::random_range(0..gws.len())]);
+        choice.insert(prefix, pick);
+        Some((pick, false))
+    }
+
+    /// The most specific published prefix containing `dst` and the gateways
+    /// serving it, or None (none, or it clashes with a local network). Every
+    /// packet to a gateway route asks, so answers are cached briefly instead
+    /// of scanning every node's grants and record per packet.
+    fn gateways_for(&self, n: &Arc<Node>, dst: &IpAddr) -> Option<(IpNet, Vec<Bytes32>)> {
+        let now = Instant::now();
+        if let Some((at, v)) = self.gw_cache.lock().get(dst)
+            && now.duration_since(*at) < GW_CACHE_TTL
+        {
+            return v.clone();
+        }
+        let v = self.scan_gateways(n, dst);
+        let mut c = self.gw_cache.lock();
+        if c.len() >= GW_CACHE_MAX {
+            c.retain(|_, (at, _)| now.duration_since(*at) < GW_CACHE_TTL);
+            if c.len() >= GW_CACHE_MAX {
+                c.clear();
+            }
+        }
+        c.insert(*dst, (now, v.clone()));
+        v
+    }
+
+    fn scan_gateways(&self, n: &Arc<Node>, dst: &IpAddr) -> Option<(IpNet, Vec<Bytes32>)> {
         // Published prefixes: gateways that hold the grant and serve it.
         let mut best: Option<(u8, IpNet, Vec<Bytes32>)> = None;
         let mut unknown: Vec<Bytes32> = Vec::new();
@@ -373,29 +418,30 @@ impl Dataplane {
             let v = s.view();
             let recs = n.records.lock();
             for (id, info) in &v.nodes {
-                if !info.valid || *id == n.me {
+                if !info.valid
+                    || *id == n.me
+                    || !info.routes.iter().any(|g| g.published.contains(dst))
+                {
                     continue;
                 }
                 // No record yet (edge nodes learn other nodes' records by
                 // lookup): treat a grant holder as serving until we know.
-                let known = recs.endpoints.contains_key(id);
-                if !known && info.routes.iter().any(|g| g.published.contains(dst)) {
+                let rec = recs.endpoints.get(id);
+                if rec.is_none() {
                     unknown.push(*id);
                 }
-                let serving: Vec<IpNet> = recs
-                    .endpoints
-                    .get(id)
-                    .map(|(r, _)| {
-                        r.serving
-                            .clone()
-                            .unwrap_or_default()
-                            .iter()
+                let serving: Vec<IpNet> = rec
+                    .and_then(|(r, _)| r.serving.as_ref())
+                    .map(|s| {
+                        s.iter()
                             .filter_map(webjet_core::types::cidr_to_net)
                             .collect()
                     })
                     .unwrap_or_default();
                 for g in &info.routes {
-                    if g.published.contains(dst) && (serving.contains(&g.published) || !known) {
+                    if g.published.contains(dst)
+                        && (rec.is_none() || serving.contains(&g.published))
+                    {
                         let pl = g.published.prefix_len();
                         match &mut best {
                             Some((bp, _, ids)) if *bp == pl => ids.push(*id),
@@ -412,7 +458,8 @@ impl Dataplane {
         let (_, prefix, gws) = best?;
         // A published prefix that clashes with a directly connected LAN is
         // skipped (§11.9.3).
-        if crate::platform::local_networks()
+        if self
+            .local_nets(Instant::now())
             .iter()
             .any(|l| webjet_core::types::overlaps(l, &prefix))
         {
@@ -423,19 +470,21 @@ impl Dataplane {
             );
             return None;
         }
-        let mut choice = self.gw_choice.lock();
-        if let Some(c) = choice.get(&prefix)
-            && gws.contains(c)
+        Some((prefix, gws))
+    }
+
+    /// This host's directly connected networks, re-read every few seconds
+    /// (each read lists every interface).
+    fn local_nets(&self, now: Instant) -> Vec<IpNet> {
+        let mut c = self.local_nets.lock();
+        if let Some((at, v)) = &*c
+            && now.duration_since(*at) < LOCAL_NETS_TTL
         {
-            return Some((*c, false));
+            return v.clone();
         }
-        let pick = gws
-            .iter()
-            .find(|g| n.e2e.get(g).map(|s| s.established()).unwrap_or(false))
-            .copied()
-            .unwrap_or_else(|| gws[rand::random_range(0..gws.len())]);
-        choice.insert(prefix, pick);
-        Some((pick, false))
+        let v = crate::platform::local_networks();
+        *c = Some((now, v.clone()));
+        v
     }
 
     // ------------------------------------------------------------ from the overlay
@@ -474,15 +523,12 @@ impl Dataplane {
                 .lock()
                 .endpoints
                 .get(peer)
-                .map(|(r, _)| {
-                    r.serving
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
+                .and_then(|(r, _)| r.serving.as_ref())
+                .is_some_and(|s| {
+                    s.iter()
                         .filter_map(webjet_core::types::cidr_to_net)
                         .any(|x| x.contains(&src))
-                })
-                .unwrap_or(false);
+                });
             let tracked = served
                 && matches!(
                     self.conntrack.lock().classify(peer, &parsed, false, now),
@@ -550,7 +596,7 @@ impl Dataplane {
                     peer,
                     &parsed,
                     false,
-                    verdict.rule.clone(),
+                    verdict.rule,
                     gw.is_some(),
                     now,
                 ) {
@@ -564,14 +610,12 @@ impl Dataplane {
                 }
             }
         }
-        if let Some(g) = gw {
-            // Destination translation for mapped routes; the kernel does SNAT.
-            if g.mapped() {
-                let Some(ld) = map_prefix(dst, &g.published, &g.lan) else {
-                    return;
-                };
-                packet::rewrite(&mut p, None, Some((ld, parsed.flow.dport)));
-            }
+        // Destination translation for mapped routes; the kernel does SNAT.
+        if let Some(g) = gw
+            && g.mapped()
+            && !packet::map_addrs(&mut p, false, |a| map_prefix(a, &g.published, &g.lan))
+        {
+            return;
         }
         self.write_tun(p);
     }
@@ -657,7 +701,7 @@ impl Dataplane {
         }
         // Routes: the overlay pool and every published prefix.
         if self.tun_tx.is_some() {
-            let mut want: Vec<IpNet> = pool.clone();
+            let mut want: Vec<IpNet> = pool;
             let s = n.store.read();
             for info in s.view().nodes.values() {
                 if info.id != n.me && info.valid {
@@ -667,27 +711,44 @@ impl Dataplane {
             drop(s);
             want.sort();
             want.dedup();
-            let mut cur = self.routes.lock();
-            for r in cur.iter() {
-                if !want.contains(r) {
-                    crate::platform::del_route(r, &self.dev_name);
-                }
+            // Run the OS commands without holding the routes lock.
+            let (gone, new): (Vec<IpNet>, Vec<IpNet>) = {
+                let mut cur = self.routes.lock();
+                let gone = cur.iter().filter(|r| !want.contains(r)).copied().collect();
+                let new = want.iter().filter(|r| !cur.contains(r)).copied().collect();
+                *cur = want;
+                (gone, new)
+            };
+            for r in &gone {
+                crate::platform::del_route(r, &self.dev_name);
             }
-            for r in &want {
-                if !cur.contains(r) {
-                    crate::platform::add_route(r, &self.dev_name);
-                }
+            for r in &new {
+                crate::platform::add_route(r, &self.dev_name);
             }
-            *cur = want;
             if n.cfg.dns.configure_system {
                 let mut domains = vec![suffix];
                 domains.extend(zones);
                 domains.sort();
                 domains.dedup();
-                crate::platform::configure_dns(&self.dev_name, &resolver, &domains);
+                // Only when it changed (the 10 s tick also lands here), but
+                // now and then anyway, in case something else reset it.
+                let mut last = self.dns_applied.lock();
+                let stale = last.as_ref().is_none_or(|(r, d, at)| {
+                    *r != resolver || *d != domains || at.elapsed() >= DNS_REAPPLY
+                });
+                if stale {
+                    crate::platform::configure_dns(&self.dev_name, &resolver, &domains);
+                    *last = Some((resolver.clone(), domains, Instant::now()));
+                }
             }
         }
-        // Re-evaluate tracked flows under the new policy (§14.4).
+        // Re-evaluate tracked flows under the new policy (§14.4). Only when
+        // the tree changed, not on the periodic re-check: it walks every
+        // tracked flow while holding the conntrack lock packets need.
+        if self.policy_gen.swap(generation, Ordering::SeqCst) == generation {
+            self.proxy.refresh(&n, self);
+            return;
+        }
         let dropped = {
             let s = n.store.read();
             let vw = s.view();
@@ -727,6 +788,11 @@ impl Dataplane {
 
 #[cfg(test)]
 impl Dataplane {
+    /// Drop cached gateway lookups (records changed under the test).
+    pub fn forget_gateways(&self) {
+        self.gw_cache.lock().clear();
+    }
+
     /// A data plane without a tun interface or tasks, installed in `n`;
     /// what would go to the tun interface arrives on the receiver.
     pub(crate) fn for_test(n: &Arc<Node>) -> (Arc<Dataplane>, mpsc::UnboundedReceiver<Vec<u8>>) {
@@ -744,9 +810,13 @@ impl Dataplane {
             serving: RwLock::new(Vec::new()),
             routes: Mutex::new(Vec::new()),
             applied_gen: AtomicU64::new(u64::MAX),
+            policy_gen: AtomicU64::new(u64::MAX),
             resolver: RwLock::new(Vec::new()),
             gw_choice: Mutex::new(HashMap::new()),
+            gw_cache: Mutex::new(HashMap::new()),
+            local_nets: Mutex::new(None),
             nat_done: Mutex::new(Vec::new()),
+            dns_applied: Mutex::new(None),
             pings: Mutex::new(HashMap::new()),
             proxy: crate::proxy::Proxy::new(),
         });
@@ -854,9 +924,13 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         serving: RwLock::new(Vec::new()),
         routes: Mutex::new(Vec::new()),
         applied_gen: AtomicU64::new(u64::MAX),
+        policy_gen: AtomicU64::new(u64::MAX),
         resolver: RwLock::new(Vec::new()),
         gw_choice: Mutex::new(HashMap::new()),
+        gw_cache: Mutex::new(HashMap::new()),
+        local_nets: Mutex::new(None),
         nat_done: Mutex::new(Vec::new()),
+        dns_applied: Mutex::new(None),
         pings: Mutex::new(HashMap::new()),
         proxy: crate::proxy::Proxy::new(),
     });
@@ -878,7 +952,12 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     let dp2 = dp.clone();
     let mut ev = n.events.subscribe();
     n.tasks.service("dataplane-refresh", async move {
-        dp2.refresh();
+        // Refreshing runs OS commands (routes, DNS, NAT) that block: keep
+        // them off the async workers. One at a time, as this loop awaits each.
+        let refresh = |dp: Arc<Dataplane>| async move {
+            let _ = tokio::task::spawn_blocking(move || dp.refresh()).await;
+        };
+        refresh(dp2.clone()).await;
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             tokio::select! {
@@ -892,17 +971,31 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
                     dp2.applied_gen.store(u64::MAX, Ordering::SeqCst);
                 }
             }
-            dp2.refresh();
+            refresh(dp2.clone()).await;
         }
     });
     Ok(dp)
 }
 
-#[allow(dead_code)]
-fn _parsed(_: &Parsed) {}
-
 /// At most this many flows go into one `conntrack` answer.
 const FLOWS_SHOWN: usize = 2000;
+
+/// Unchanged system DNS settings are re-applied this often (another program
+/// or a network change may have reset them); changes apply at once.
+const DNS_REAPPLY: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Resolvers, domains, and when they were configured.
+type DnsApplied = (Vec<IpAddr>, Vec<String>, Instant);
+
+/// A gateway lookup: when, and the prefix with its gateways.
+type GwCached = (Instant, Option<(IpNet, Vec<Bytes32>)>);
+
+/// Gateway lookups are reused this long: a new or withdrawn gateway record
+/// takes effect within it.
+const GW_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+/// Destinations cached at most (scans of many addresses can't grow it).
+const GW_CACHE_MAX: usize = 4096;
+const LOCAL_NETS_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn proto_name(p: u8) -> String {
     use webjet_core::policy::{PROTO_ICMP, PROTO_ICMPV6, PROTO_TCP, PROTO_UDP};
@@ -1275,12 +1368,15 @@ mod tests {
             .lock()
             .endpoints
             .insert(t.gw.0, (rec(vec![]), Vec::new()));
+        // Gateway lookups are cached for GW_CACHE_TTL; tests don't wait.
+        t.dp.forget_gateways();
         assert_eq!(t.dp.route(&t.n, &lan), None);
         let published = webjet_core::types::net_to_cidr(&"172.31.99.0/24".parse().unwrap());
         t.n.records
             .lock()
             .endpoints
             .insert(t.gw.0, (rec(vec![published]), Vec::new()));
+        t.dp.forget_gateways();
         assert_eq!(t.dp.route(&t.n, &lan), Some((t.gw.0, false)));
         assert_eq!(t.dp.route(&t.n, &"172.31.98.1".parse().unwrap()), None);
     }

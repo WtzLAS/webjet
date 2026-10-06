@@ -34,6 +34,9 @@ pub struct LocalCircuit {
     pub out_label: Mutex<Option<u32>>,
     pub hops: Vec<Bytes32>,
     pub route_id: Bytes32,
+    /// The route's counters (the table's entry for `route_id`), held here so
+    /// sending and receiving needn't take the circuit lock per frame.
+    pub acct: Arc<RouteAcct>,
     pub is_source: bool,
     pub created: Instant,
     pub probes: Mutex<LinkStats>,
@@ -71,9 +74,7 @@ impl LocalCircuit {
         let mut f = Vec::with_capacity(frames::RELAY_HEADER + frame.len());
         f.extend_from_slice(&frames::relay_header(out, DEFAULT_HOP_LIMIT, ecn));
         f.extend_from_slice(frame);
-        if let Some(r) = n.circuits.lock().routes.get(&self.route_id) {
-            r.fwd.add(frame.len());
-        }
+        self.acct.fwd.add(frame.len());
         hop.send_relay(self.flow(), f)
     }
 }
@@ -148,6 +149,8 @@ pub struct Table {
     nonces: HashMap<[u8; 16], Instant>,
     /// Circuit setups per source node in the current second.
     setup_rate: HashMap<Bytes32, (Instant, u32)>,
+    /// Circuits ending here, by end-to-end peer (an index into `entries`).
+    by_peer: HashMap<Bytes32, Vec<Arc<LocalCircuit>>>,
 }
 
 impl Table {
@@ -162,16 +165,27 @@ impl Table {
         }
     }
 
+    /// Open circuits to `peer` (per packet: an index lookup, not a scan).
     pub fn local_circuits(&self, peer: &Bytes32) -> Vec<Arc<LocalCircuit>> {
-        self.entries
-            .values()
-            .filter_map(|e| match &e.kind {
-                Kind::Local(c) if c.peer == *peer && c.out_label.lock().is_some() => {
-                    Some(c.clone())
-                }
-                _ => None,
-            })
+        self.by_peer
+            .get(peer)
+            .into_iter()
+            .flatten()
+            .filter(|c| c.out_label.lock().is_some())
+            .cloned()
             .collect()
+    }
+
+    /// Add a circuit ending here under `(c.next, c.label)`.
+    fn insert_local(&mut self, c: Arc<LocalCircuit>) {
+        self.by_peer.entry(c.peer).or_default().push(c.clone());
+        self.entries.insert(
+            (c.next, c.label),
+            Entry {
+                kind: Kind::Local(c),
+                created: Instant::now(),
+            },
+        );
     }
 
     pub fn transit_count(&self) -> usize {
@@ -208,6 +222,14 @@ impl Table {
 
     fn remove_entry(&mut self, key: &(Bytes32, u32)) -> Option<Entry> {
         let e = self.entries.remove(key)?;
+        if let Kind::Local(c) = &e.kind
+            && let Some(v) = self.by_peer.get_mut(&c.peer)
+        {
+            v.retain(|x| !Arc::ptr_eq(x, c));
+            if v.is_empty() {
+                self.by_peer.remove(&c.peer);
+            }
+        }
         let rid = match &e.kind {
             Kind::Local(c) => Some(c.route_id),
             Kind::Transit(t) if t.forward => Some(t.route_id),
@@ -270,6 +292,7 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
     let c = {
         let mut t = n.circuits.lock();
         let label = t.alloc(&next);
+        let acct = t.route(&route_id, &n.me, &peer, &hops);
         let c = Arc::new(LocalCircuit {
             peer,
             label,
@@ -277,20 +300,14 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
             out_label: Mutex::new(None),
             hops: hops.clone(),
             route_id,
+            acct,
             is_source: true,
             created: Instant::now(),
             probes: Mutex::new(LinkStats::default()),
             e2e_rtt_ms: Mutex::new(None),
             last_rx: Mutex::new(Instant::now()),
         });
-        t.route(&route_id, &n.me, &peer, &hops);
-        t.entries.insert(
-            (next, label),
-            Entry {
-                kind: Kind::Local(c.clone()),
-                created: Instant::now(),
-            },
-        );
+        t.insert_local(c.clone());
         t.pending.insert(
             (next, label),
             PendingOpen {
@@ -328,6 +345,40 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
 }
 
 // ---------------------------------------------------------------- control messages
+
+/// Count a circuit setup from `src` and check it against the limits
+/// (§16.2): setups per second and circuits per source node, plus, for
+/// transit circuits, the global count. Circuits that end here count too, or
+/// any trusted peer could open them without bound.
+fn admit(n: &Arc<Node>, src: &Bytes32, to_me: bool) -> Option<&'static str> {
+    let per_src = limit(n, "circuits_per_source") as usize;
+    let global = limit(n, "circuits_global") as usize;
+    let rate = limit(n, "circuit_setups_per_sec") as u32;
+    let mut t = n.circuits.lock();
+    let now = Instant::now();
+    t.setup_rate
+        .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(1));
+    let r = t.setup_rate.entry(*src).or_insert((now, 0));
+    r.1 += 1;
+    if r.1 > rate {
+        return Some("rate");
+    }
+    let count_src = t
+        .entries
+        .values()
+        .filter(|e| match &e.kind {
+            Kind::Transit(x) => !to_me && x.forward && x.src == *src,
+            Kind::Local(c) => to_me && !c.is_source && c.peer == *src,
+        })
+        .count();
+    if count_src >= per_src {
+        Some("per_source")
+    } else if !to_me && t.transit_count() >= global {
+        Some("global")
+    } else {
+        None
+    }
+}
 
 pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Result<()> {
     let from = hop.peer;
@@ -432,41 +483,72 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
             return fail("next_hop");
         }
     }
-    {
-        let per_src = limit(n, "circuits_per_source") as usize;
-        let global = limit(n, "circuits_global") as usize;
-        let rate = limit(n, "circuit_setups_per_sec") as u32;
-        let mut t = n.circuits.lock();
-        let now = Instant::now();
-        // Setups per second per source node (§16.2).
-        t.setup_rate
-            .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(1));
-        let r = t.setup_rate.entry(src).or_insert((now, 0));
-        r.1 += 1;
-        let over_rate = r.1 > rate;
-        let count_src = t
-            .entries
-            .values()
-            .filter(|e| matches!(&e.kind, Kind::Transit(x) if x.forward && x.src == src))
-            .count();
-        let why = if over_rate {
-            Some("rate")
-        } else if count_src >= per_src {
-            Some("per_source")
-        } else if t.transit_count() >= global {
-            Some("global")
-        } else {
-            None
-        };
-        if let Some(w) = why {
-            drop(t);
-            return fail(w);
-        }
+    if let Some(w) = admit(n, &src, false) {
+        return fail(w);
     }
     if !may_talk(n, &src, &dst) {
         return fail("policy");
     }
-    // Reach the next hop.
+    let ext = Extend {
+        from,
+        next,
+        src,
+        dst,
+        hops,
+        rid: opt_k32(&s.route_id),
+        label: o.label,
+        raw,
+    };
+    // Dialing the next hop takes up to HANDSHAKE_TIMEOUT per address and
+    // transport. This runs inside the previous hop's reader loop, so dial in
+    // a task of its own: waiting here would stall every other circuit on that
+    // link, and its keepalives, meanwhile.
+    if n.best_hop(&next).is_some() {
+        return extend(n, hop, ext).await;
+    }
+    let (n, hop) = (n.clone(), hop.clone());
+    tokio::spawn(async move {
+        if let Err(e) = extend(&n, &hop, ext).await {
+            tracing::debug!(peer = %n.name_of(&hop.peer), "circuit open: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// An admitted transit circuit, waiting for its next hop.
+struct Extend {
+    from: Bytes32,
+    next: Bytes32,
+    src: Bytes32,
+    dst: Bytes32,
+    hops: Vec<Bytes32>,
+    rid: Bytes32,
+    /// The previous hop's label for the circuit.
+    label: u32,
+    raw: Vec<u8>,
+}
+
+/// Reach the next hop (dialing it if needed), install the transit entries
+/// and pass the setup on.
+async fn extend(n: &Arc<Node>, hop: &Arc<Hop>, x: Extend) -> Result<()> {
+    let Extend {
+        from,
+        next,
+        src,
+        dst,
+        hops,
+        rid,
+        label,
+        raw,
+    } = x;
+    let fail = |why: &str| -> Result<()> {
+        n.circuits.lock().refuse(why);
+        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse {
+            label,
+            reason: Some(why.to_string()),
+        })));
+        bail!("circuit refused: {why}")
+    };
     if n.best_hop(&next).is_none()
         && let Err(e) = n.dial_node(next).await
     {
@@ -476,7 +558,6 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
     let Some(next_hop) = n.best_hop(&next) else {
         return fail("next_unreachable");
     };
-    let rid = opt_k32(&s.route_id);
     let out_back = {
         let mut t = n.circuits.lock();
         let in_label = t.alloc(&from);
@@ -505,7 +586,7 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
             Entry {
                 kind: Kind::Transit(Transit {
                     out_neighbor: from,
-                    out_label: Some(o.label),
+                    out_label: Some(label),
                     route_id: rid,
                     src,
                     forward: false,
@@ -518,7 +599,7 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         t.pending.insert(
             (next, back_label),
             PendingOpen {
-                prev: Some((from, o.label, in_label)),
+                prev: Some((from, label, in_label)),
                 waiter: None,
                 at: now,
             },
@@ -557,30 +638,32 @@ fn accept_as_destination(
         })));
         bail!("policy allows nothing with the circuit's source");
     }
+    if let Some(why) = admit(n, &src, true) {
+        n.circuits.lock().refuse(why);
+        hop.send_control(HopMsg::CircuitRefuse(Box::new(wp::CircuitRefuse {
+            label: o.label,
+            reason: Some(why.into()),
+        })));
+        bail!("circuit refused: {why}");
+    }
     let label = {
         let mut t = n.circuits.lock();
         let label = t.alloc(&from);
-        let c = Arc::new(LocalCircuit {
+        let acct = t.route(&rid, &src, &n.me, &hops);
+        t.insert_local(Arc::new(LocalCircuit {
             peer: src,
             label,
             next: from,
             out_label: Mutex::new(Some(o.label)),
             hops,
             route_id: rid,
+            acct,
             is_source: false,
             created: Instant::now(),
             probes: Mutex::new(LinkStats::default()),
             e2e_rtt_ms: Mutex::new(None),
             last_rx: Mutex::new(Instant::now()),
-        });
-        t.route(&rid, &src, &n.me, &c.hops);
-        t.entries.insert(
-            (from, label),
-            Entry {
-                kind: Kind::Local(c),
-                created: Instant::now(),
-            },
-        );
+        }));
         label
     };
     hop.send_control(HopMsg::CircuitAccept(Box::new(wp::CircuitAccept {
@@ -756,13 +839,9 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
     match action {
         Ok(c) => {
             *c.last_rx.lock() = Instant::now();
-            if let Some(r) = n.circuits.lock().routes.get(&c.route_id) {
-                r.rev.add(body.len());
-            }
-            if ecn == frames::ecn::CE
-                && let Some(r) = n.circuits.lock().routes.get(&c.route_id)
-            {
-                r.ecn_marked.fetch_add(1, Ordering::Relaxed);
+            c.acct.rev.add(body.len());
+            if ecn == frames::ecn::CE {
+                c.acct.ecn_marked.fetch_add(1, Ordering::Relaxed);
             }
             crate::e2e::on_frame(n, &c, body, ecn);
         }
@@ -787,9 +866,13 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
                 }
                 return;
             };
-            let mut f = Vec::with_capacity(payload.len());
-            f.extend_from_slice(&frames::relay_header(out_l, hop_limit - 1, ecn));
-            f.extend_from_slice(body);
+            // Same size header: rewrite it in place and pass the frame on.
+            let mut f = payload;
+            f[..frames::RELAY_HEADER].copy_from_slice(&frames::relay_header(
+                out_l,
+                hop_limit - 1,
+                ecn,
+            ));
             let flow = route
                 .as_ref()
                 .map(|r| webjet_core::bytes::prefix_u64(&r.src))

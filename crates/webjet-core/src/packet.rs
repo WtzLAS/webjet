@@ -46,6 +46,20 @@ pub struct Parsed {
     pub ecn: u8,
     /// For ICMP errors: the quoted flow (as sent by the original sender).
     pub inner: Option<Flow>,
+    pub fragment: Fragment,
+}
+
+/// Where a packet stands in IP fragmentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fragment {
+    /// Not fragmented.
+    Whole,
+    /// The first fragment: has the L4 header, but not the whole datagram
+    /// its checksum covers.
+    First,
+    /// A later fragment: no L4 header; `l4_offset` points at payload and
+    /// the ports are 0.
+    Later,
 }
 
 pub mod tcpf {
@@ -79,7 +93,22 @@ pub fn src_dst(p: &[u8]) -> Option<(IpAddr, IpAddr)> {
 /// than the first carry no ports.
 pub fn parse(p: &[u8]) -> Option<Parsed> {
     let (src, dst) = src_dst(p)?;
-    let (proto, off, ecn) = match version(p)? {
+    let later = |proto: u8, l4_offset: usize, ecn: u8| Parsed {
+        flow: Flow {
+            proto,
+            src,
+            dst,
+            sport: 0,
+            dport: 0,
+        },
+        l4_offset,
+        tcp_flags: 0,
+        icmp: None,
+        ecn,
+        inner: None,
+        fragment: Fragment::Later,
+    };
+    let (proto, off, ecn, fragment) = match version(p)? {
         4 => {
             let ihl = ((p[0] & 0x0f) as usize) * 4;
             if ihl < 20 || p.len() < ihl {
@@ -91,27 +120,20 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
             }
             let frag_off = u16::from_be_bytes([p[6], p[7]]) & 0x1fff;
             if frag_off != 0 {
-                return Some(Parsed {
-                    flow: Flow {
-                        proto: p[9],
-                        src,
-                        dst,
-                        sport: 0,
-                        dport: 0,
-                    },
-                    l4_offset: ihl,
-                    tcp_flags: 0,
-                    icmp: None,
-                    ecn: p[1] & 3,
-                    inner: None,
-                });
+                return Some(later(p[9], ihl, p[1] & 3));
             }
-            (p[9], ihl, p[1] & 3)
+            let fragment = if p[6] & 0x20 != 0 {
+                Fragment::First
+            } else {
+                Fragment::Whole
+            };
+            (p[9], ihl, p[1] & 3, fragment)
         }
         6 => {
             let mut nh = p[6];
             let mut off = 40;
             let ecn = ((u16::from_be_bytes([p[0], p[1]]) >> 4) & 3) as u8;
+            let mut fragment = Fragment::Whole;
             loop {
                 match nh {
                     0 | 43 | 60 => {
@@ -126,29 +148,20 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
                             return None;
                         }
                         let frag = u16::from_be_bytes([p[off + 2], p[off + 3]]) >> 3;
+                        let more = p[off + 3] & 1 != 0;
                         nh = p[off];
                         off += 8;
                         if frag != 0 {
-                            return Some(Parsed {
-                                flow: Flow {
-                                    proto: nh,
-                                    src,
-                                    dst,
-                                    sport: 0,
-                                    dport: 0,
-                                },
-                                l4_offset: off,
-                                tcp_flags: 0,
-                                icmp: None,
-                                ecn,
-                                inner: None,
-                            });
+                            return Some(later(nh, off, ecn));
+                        }
+                        if more {
+                            fragment = Fragment::First;
                         }
                     }
                     _ => break,
                 }
             }
-            (nh, off, ecn)
+            (nh, off, ecn, fragment)
         }
         _ => return None,
     };
@@ -166,6 +179,7 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
         icmp: None,
         ecn,
         inner: None,
+        fragment,
     };
     match proto {
         PROTO_TCP if l4.len() >= 20 => {
@@ -288,12 +302,11 @@ pub fn fix_checksums(p: &mut [u8]) {
         p[11] = 0;
         let c = checksum(&p[..ihl]);
         p[10..12].copy_from_slice(&c.to_be_bytes());
-        let frag_off = u16::from_be_bytes([p[6], p[7]]) & 0x1fff;
-        let mf = p[6] & 0x20 != 0;
-        if frag_off != 0 || mf {
-            // L4 checksum covers the whole datagram; can't recompute on a fragment.
-            return;
-        }
+    }
+    if parsed.fragment != Fragment::Whole {
+        // The L4 checksum covers the whole datagram; a fragment can't
+        // recompute it (see `map_addrs` for an incremental update).
+        return;
     }
     let total = if version(p) == Some(4) {
         u16::from_be_bytes([p[2], p[3]]) as usize
@@ -375,15 +388,17 @@ pub fn rewrite(p: &mut [u8], new_src: Option<(IpAddr, u16)>, new_dst: Option<(Ip
     let off = parsed.l4_offset;
     let proto = parsed.flow.proto;
     let is_echo = matches!(parsed.icmp, Some(IcmpKind::Echo { .. }));
+    // A later fragment has no ports: its L4 bytes are payload.
+    let ports = parsed.fragment != Fragment::Later;
     if let Some((a, port)) = new_src {
         set_addr(p, true, a);
-        if proto == PROTO_TCP || proto == PROTO_UDP || is_echo {
+        if ports && (proto == PROTO_TCP || proto == PROTO_UDP || is_echo) {
             set_port(p, off, proto, true, port);
         }
     }
     if let Some((a, port)) = new_dst {
         set_addr(p, false, a);
-        if proto == PROTO_TCP || proto == PROTO_UDP {
+        if ports && (proto == PROTO_TCP || proto == PROTO_UDP) {
             set_port(p, off, proto, false, port);
         }
     }
@@ -405,16 +420,103 @@ pub fn rewrite(p: &mut [u8], new_src: Option<(IpAddr, u16)>, new_dst: Option<(Ip
                     set_port(&mut p[q..], qoff, inner.proto, false, port);
                 }
             }
-            if version(&p[q..]) == Some(4) && p.len() >= q + 20 {
-                let ihl = qoff.min(p.len() - q);
-                p[q + 10] = 0;
-                p[q + 11] = 0;
-                let c = checksum(&p[q..q + ihl]);
-                p[q + 10..q + 12].copy_from_slice(&c.to_be_bytes());
-            }
+            fix_quoted_ip_checksum(p, q);
         }
     }
     fix_checksums(p);
+}
+
+/// Recompute the IPv4 header checksum of the packet an ICMP error quotes
+/// (at `q`); the quote may be cut short.
+fn fix_quoted_ip_checksum(p: &mut [u8], q: usize) {
+    if version(p.get(q..).unwrap_or_default()) == Some(4) && p.len() >= q + 20 {
+        let ihl = (((p[q] & 0x0f) as usize) * 4).min(p.len() - q);
+        p[q + 10] = 0;
+        p[q + 11] = 0;
+        let c = checksum(&p[q..q + ihl]);
+        p[q + 10..q + 12].copy_from_slice(&c.to_be_bytes());
+    }
+}
+
+fn octets(a: IpAddr) -> Vec<u8> {
+    match a {
+        IpAddr::V4(v) => v.octets().to_vec(),
+        IpAddr::V6(v) => v.octets().to_vec(),
+    }
+}
+
+/// Update a checksum for `old` bytes replaced by `new` (RFC 1624:
+/// HC' = ~(~HC + ~m + m')). Both are whole 16-bit words.
+fn adjust_checksum(c: u16, old: &[u8], new: &[u8]) -> u16 {
+    let mut acc = u32::from(!c);
+    for w in old.as_chunks::<2>().0 {
+        acc += u32::from(!u16::from_be_bytes(*w));
+    }
+    fold(sum16(new, acc))
+}
+
+/// Translate one address by a 1:1 prefix mapping (§11.9.2), leaving ports
+/// alone: the outer source (`src`) or destination goes through `f`; for an
+/// ICMP error, the quoted packet's opposite address too (it travelled the
+/// other way), so PMTUD and unreachables survive the mapping. The L4
+/// checksum is updated incrementally, which also works on a first fragment
+/// (whose checksum covers bytes it doesn't carry). Returns false, leaving
+/// the packet as it was, when `f` doesn't map the outer address.
+pub fn map_addrs(p: &mut [u8], src: bool, f: impl Fn(IpAddr) -> Option<IpAddr>) -> bool {
+    let Some(parsed) = parse(p) else { return false };
+    let old = if src {
+        parsed.flow.src
+    } else {
+        parsed.flow.dst
+    };
+    let Some(new) = f(old).filter(|a| a.is_ipv4() == old.is_ipv4()) else {
+        return false;
+    };
+    set_addr(p, src, new);
+    let off = parsed.l4_offset;
+    if parsed.icmp == Some(IcmpKind::Error) {
+        let q = off + 8;
+        if let Some(inner) = p.get(q..).and_then(parse_quoted) {
+            let qa = if src { inner.dst } else { inner.src };
+            if let Some(nq) = f(qa).filter(|a| a.is_ipv4() == qa.is_ipv4()) {
+                set_addr(&mut p[q..], !src, nq);
+                fix_quoted_ip_checksum(p, q);
+            }
+        }
+        // An ICMP error is never fragmented by us; recompute it all.
+        fix_checksums(p);
+        return true;
+    }
+    if version(p) == Some(4) {
+        let ihl = ((p[0] & 0x0f) as usize) * 4;
+        p[10] = 0;
+        p[11] = 0;
+        let c = checksum(&p[..ihl]);
+        p[10..12].copy_from_slice(&c.to_be_bytes());
+    }
+    if parsed.fragment == Fragment::Later {
+        return true;
+    }
+    // Checksums with a pseudo header (ICMPv4 has none).
+    let at = match parsed.flow.proto {
+        PROTO_TCP => off + 16,
+        PROTO_UDP => off + 6,
+        PROTO_ICMPV6 => off + 2,
+        _ => return true,
+    };
+    if p.len() < at + 2 {
+        return true;
+    }
+    let c = u16::from_be_bytes([p[at], p[at + 1]]);
+    if parsed.flow.proto == PROTO_UDP && c == 0 && old.is_ipv4() {
+        return true; // IPv4 UDP without a checksum
+    }
+    let mut c = adjust_checksum(c, &octets(old), &octets(new));
+    if parsed.flow.proto == PROTO_UDP && c == 0 {
+        c = 0xffff;
+    }
+    p[at..at + 2].copy_from_slice(&c.to_be_bytes());
+    true
 }
 
 /// Set the IP header's ECN field (§17.7).
@@ -461,6 +563,9 @@ pub fn icmp_unreachable(orig: &[u8], why: Unreach) -> Option<Vec<u8>> {
     let parsed = parse(orig)?;
     if parsed.icmp == Some(IcmpKind::Error) {
         return None; // never answer an error with an error
+    }
+    if parsed.fragment == Fragment::Later {
+        return None; // only the first fragment (RFC 1122 3.2.2)
     }
     let (src, dst) = (parsed.flow.dst, parsed.flow.src);
     match (src, dst) {
@@ -797,6 +902,77 @@ mod prop {
             prop_assert!(checksums_ok(&back));
         }
 
+        /// A mapped gateway translates addresses only: ports stay, the
+        /// incrementally updated checksums verify, and the mapping undoes.
+        #[test]
+        fn map_addrs_keeps_ports_and_checksums(
+            src in v4(), dst in v4(), sport in any::<u16>(), dport in any::<u16>(),
+            to in v4(), tcp in any::<bool>(), on_src in any::<bool>(),
+            payload in proptest::collection::vec(any::<u8>(), 0..100),
+        ) {
+            let orig = if tcp {
+                tcp4(src, dst, sport, dport, tcpf::SYN)
+            } else {
+                udp4(src, dst, sport, dport, &payload)
+            };
+            let old = IpAddr::from(if on_src { src } else { dst });
+            let mut p = orig.clone();
+            prop_assert!(map_addrs(&mut p, on_src, |a| (a == old).then_some(IpAddr::from(to))));
+            prop_assert!(checksums_ok(&p));
+            let f = parse(&p).unwrap().flow;
+            prop_assert_eq!((f.sport, f.dport), (sport, dport));
+            prop_assert_eq!(if on_src { f.src } else { f.dst }, IpAddr::from(to));
+            prop_assert!(map_addrs(&mut p, on_src, |a| (a == IpAddr::from(to)).then_some(old)));
+            prop_assert_eq!(p, orig);
+        }
+
+        /// An ICMP error coming back through a mapped gateway: the quoted
+        /// packet's addresses follow the mapping and its ports stay.
+        #[test]
+        fn map_addrs_follows_icmp_quotes(
+            client in v4(), lan in v4(), router in v4(), sport in any::<u16>(), dport in any::<u16>(),
+            published in v4(),
+        ) {
+            // Inside the LAN the packet went client → lan host; a router on
+            // the way answers it.
+            let quoted = udp4(client, lan, sport, dport, b"payload");
+            let Some(mut err) = icmp_unreachable(&quoted, Unreach::Host) else {
+                return Ok(());
+            };
+            set_addr(&mut err, true, IpAddr::from(router));
+            fix_checksums(&mut err);
+            let map = |a: IpAddr| (a == IpAddr::from(lan)).then_some(IpAddr::from(published));
+            let router_mapped = |a: IpAddr| {
+                if a == IpAddr::from(router) { Some(IpAddr::from(published)) } else { map(a) }
+            };
+            prop_assert!(map_addrs(&mut err, true, router_mapped));
+            let e = parse(&err).unwrap();
+            prop_assert!(checksums_ok(&err));
+            let inner = e.inner.unwrap();
+            prop_assert_eq!((inner.src, inner.sport), (IpAddr::from(client), sport));
+            prop_assert_eq!(inner.dport, dport);
+        }
+
+        /// A later fragment carries payload where ports would be: address
+        /// rewrites leave it alone, and it gets no ICMP error of its own.
+        #[test]
+        fn later_fragments_keep_their_payload(
+            src in v4(), dst in v4(), to in v4(), payload in proptest::collection::vec(any::<u8>(), 8..100),
+        ) {
+            let mut frag = udp4(src, dst, 1, 2, &payload);
+            frag[6] = 0x00;
+            frag[7] = 0x10; // offset 16 × 8 bytes
+            fix_checksums(&mut frag);
+            let body = frag[20..].to_vec();
+            prop_assert_eq!(parse(&frag).unwrap().fragment, Fragment::Later);
+            prop_assert!(icmp_unreachable(&frag, Unreach::Host).is_none());
+            let mut a = frag.clone();
+            rewrite(&mut a, Some((IpAddr::from(to), 9)), Some((IpAddr::from(to), 9)));
+            prop_assert_eq!(&a[20..], &body[..]);
+            prop_assert!(map_addrs(&mut frag, false, |_| Some(IpAddr::from(to))));
+            prop_assert_eq!(&frag[20..], &body[..]);
+            prop_assert_eq!(checksum(&frag[..20]), 0);
+        }
         #[test]
         fn echo_reply_swaps_and_keeps_id_and_seq(
             src in v4(), dst in v4(), id in any::<u16>(), seq in any::<u16>(),

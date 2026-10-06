@@ -225,7 +225,8 @@ impl Conntrack {
         let Some(state) = Self::initial_state(p) else {
             return Ok(());
         };
-        // New-flow rate per peer.
+        // New-flow rate per peer. Attempts count, refused ones too: each
+        // refusal over the quota scans the table, so it must be bounded.
         let r = self.new_rate.entry(*peer).or_insert((now, 0));
         if now.duration_since(r.0) >= Duration::from_secs(1) {
             *r = (now, 0);
@@ -233,6 +234,7 @@ impl Conntrack {
         if r.1 >= self.new_per_sec {
             return Err(InsertError::RateLimited);
         }
+        r.1 += 1;
         let cnt = self.per_peer.get(peer).copied().unwrap_or(0);
         if cnt >= self.per_peer_quota {
             self.expire_peer(peer, now);
@@ -262,9 +264,6 @@ impl Conntrack {
             if self.entries.len() >= self.global_cap {
                 self.evict_one(now);
             }
-        }
-        if let Some(r) = self.new_rate.get_mut(peer) {
-            r.1 += 1;
         }
         let k = Key {
             peer: *peer,
