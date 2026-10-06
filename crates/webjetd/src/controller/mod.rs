@@ -277,6 +277,13 @@ impl Controller {
             if self.is_halted() {
                 return;
             }
+            // Raft stops itself when its storage fails; the controller stops
+            // with it (every path that changes Raft state ends here).
+            let failed = self.raft.lock().failed().map(str::to_owned);
+            if let Some(why) = failed {
+                self.halt(n, format!("Raft storage failed: {why}"));
+                return;
+            }
             let next = self.applied.load(Ordering::SeqCst) + 1;
             let bytes = {
                 let r = self.raft.lock();

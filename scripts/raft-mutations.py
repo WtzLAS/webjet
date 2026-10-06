@@ -36,8 +36,8 @@ MUTATIONS = {
         "self.commit = a.leader_commit;",
     ),
     "vote not persisted": (
-        "if grant { self.voted_for = Some(from); self.storage.save_meta(self.term, self.voted_for);",
-        "if grant { self.voted_for = Some(from);",
+        "if grant { self.voted_for = Some(from); let r = self.storage.save_meta(self.term, self.voted_for);",
+        "if grant { self.voted_for = Some(from); let r: Result<()> = Ok(());",
     ),
     "quorum off by one": ("self.voters().len() / 2 + 1", "self.voters().len() / 2"),
     "overlapping conf changes allowed": (

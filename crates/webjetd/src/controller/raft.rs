@@ -111,6 +111,8 @@ pub enum ProposeError {
     /// A membership change while another is uncommitted, or before the
     /// leader has committed an entry of its own term.
     ConfChangePending,
+    /// Writing to durable storage failed; this node has stopped.
+    Storage,
 }
 
 impl std::fmt::Display for ProposeError {
@@ -119,6 +121,7 @@ impl std::fmt::Display for ProposeError {
             ProposeError::NotLeader => "not the leader",
             ProposeError::Stale => "entry does not continue the log",
             ProposeError::ConfChangePending => "another membership change is still in progress",
+            ProposeError::Storage => "Raft storage failed; this controller has stopped",
         })
     }
 }
@@ -140,6 +143,17 @@ pub struct MemStore {
     pub vote: Option<Bytes32>,
     pub log: Vec<Vec<u8>>,
     pub snapshot: Option<Vec<u8>>,
+    /// Tests: every write fails (a full or broken disk).
+    pub fail_writes: bool,
+}
+
+impl MemStore {
+    fn check(&self) -> Result<()> {
+        if self.fail_writes {
+            anyhow::bail!("simulated disk failure");
+        }
+        Ok(())
+    }
 }
 
 /// Durable Raft state: term and vote, the log, and the snapshot. On disk:
@@ -179,114 +193,147 @@ impl Storage {
         (Storage::Mem(m.clone()), m)
     }
 
-    fn save_meta(&self, term: u64, vote: Option<Bytes32>) {
+    fn save_meta(&self, term: u64, vote: Option<Bytes32>) -> Result<()> {
         match self {
             Storage::Disk(d) => {
                 let m = Meta {
                     term,
                     voted_for: vote.map(hex::encode),
                 };
-                if let Err(e) = crate::state::save_json(&d.join("meta.json"), &m) {
-                    tracing::error!("raft meta: {e}");
-                }
+                crate::state::save_json(&d.join("meta.json"), &m).context("saving Raft term/vote")
             }
             Storage::Mem(m) => {
                 let mut m = m.lock();
+                m.check()?;
                 m.term = term;
                 m.vote = vote;
+                Ok(())
             }
         }
     }
 
-    fn load_meta(&self) -> (u64, Option<Bytes32>) {
+    /// Term and vote. Only a missing file means a fresh start; a damaged
+    /// one is an error, since guessing could vote twice in one term.
+    fn load_meta(&self) -> Result<(u64, Option<Bytes32>)> {
         match self {
-            Storage::Disk(d) => match crate::state::load_json::<Meta>(&d.join("meta.json")) {
-                Ok(Some(m)) => (m.term, m.voted_for.and_then(|s| crypto::parse_hex32(&s))),
-                _ => (0, None),
-            },
+            Storage::Disk(d) => {
+                let path = d.join("meta.json");
+                let Some(m) = crate::state::load_json::<Meta>(&path)? else {
+                    return Ok((0, None));
+                };
+                let vote = match m.voted_for {
+                    None => None,
+                    Some(s) => Some(
+                        crypto::parse_hex32(&s)
+                            .ok_or_else(|| anyhow::anyhow!("{}: bad voted_for", path.display()))?,
+                    ),
+                };
+                Ok((m.term, vote))
+            }
             Storage::Mem(m) => {
                 let m = m.lock();
-                (m.term, m.vote)
+                Ok((m.term, m.vote))
             }
         }
     }
 
-    fn append(&self, entries: &[Entry]) {
+    fn append(&self, entries: &[Entry]) -> Result<()> {
         match self {
             Storage::Disk(d) => {
                 let buf = encode_entries(entries);
-                let r = std::fs::OpenOptions::new()
+                std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(d.join("log.bin"))
                     .and_then(|mut f| {
                         f.write_all(&buf)?;
                         f.sync_data()
-                    });
-                if let Err(e) = r {
-                    tracing::error!("raft log append: {e}");
-                }
+                    })
+                    .context("appending to the Raft log")
             }
-            Storage::Mem(m) => m.lock().log.extend(entries.iter().map(|e| e.bytes.clone())),
+            Storage::Mem(m) => {
+                let mut m = m.lock();
+                m.check()?;
+                m.log.extend(entries.iter().map(|e| e.bytes.clone()));
+                Ok(())
+            }
         }
     }
 
-    fn rewrite(&self, entries: &[Entry]) {
+    fn rewrite(&self, entries: &[Entry]) -> Result<()> {
         match self {
             Storage::Disk(d) => {
-                if let Err(e) =
-                    crate::state::write_private(&d.join("log.bin"), &encode_entries(entries))
-                {
-                    tracing::error!("raft log rewrite: {e}");
-                }
+                crate::state::write_private(&d.join("log.bin"), &encode_entries(entries))
+                    .context("rewriting the Raft log")
             }
-            Storage::Mem(m) => m.lock().log = entries.iter().map(|e| e.bytes.clone()).collect(),
+            Storage::Mem(m) => {
+                let mut m = m.lock();
+                m.check()?;
+                m.log = entries.iter().map(|e| e.bytes.clone()).collect();
+                Ok(())
+            }
         }
     }
 
-    /// Read the log. A torn final record (a crash mid-append) is cut off the
-    /// file, so entries appended after the restart don't land behind it,
-    /// where the next load would never reach them.
-    fn load_log(&self) -> Vec<Entry> {
+    /// Read the log. A torn tail (a crash mid-append: a short record, or
+    /// records that don't decode with nothing valid after them) is cut off
+    /// the file, so entries appended after the restart don't land behind
+    /// it, where the next load would never reach them. A bad record with
+    /// valid ones after it is damage, not a torn append: an error.
+    fn load_log(&self) -> Result<Vec<Entry>> {
         match self {
             Storage::Disk(d) => {
                 let path = d.join("log.bin");
-                let Ok(b) = std::fs::read(&path) else {
-                    return Vec::new();
+                let b = match std::fs::read(&path) {
+                    Ok(b) => b,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+                    Err(e) => return Err(e).context("reading the Raft log"),
                 };
                 let mut out = Vec::new();
                 let mut i = 0;
+                // Where the first undecodable record starts.
+                let mut bad: Option<usize> = None;
                 while let Some(len) = webjet_core::bytes::be_u32(&b, i) {
                     let Some(end) = (i + 4).checked_add(len as usize).filter(|&e| e <= b.len())
                     else {
                         break;
                     };
-                    if let Some(e) = decode_entry(b[i + 4..end].to_vec()) {
-                        out.push(e);
+                    match decode_entry(b[i + 4..end].to_vec()) {
+                        Some(e) => {
+                            if let Some(at) = bad {
+                                anyhow::bail!(
+                                    "{}: damaged record at byte {at} before valid ones",
+                                    path.display()
+                                );
+                            }
+                            out.push(e);
+                        }
+                        None => {
+                            bad.get_or_insert(i);
+                        }
                     }
                     i = end;
                 }
-                if i < b.len() {
-                    tracing::warn!("raft log: torn tail of {} bytes dropped", b.len() - i);
-                    let r = std::fs::OpenOptions::new()
+                let keep = bad.unwrap_or(i);
+                if keep < b.len() {
+                    tracing::warn!("raft log: torn tail of {} bytes dropped", b.len() - keep);
+                    std::fs::OpenOptions::new()
                         .write(true)
                         .open(&path)
                         .and_then(|f| {
-                            f.set_len(i as u64)?;
+                            f.set_len(keep as u64)?;
                             f.sync_data()
-                        });
-                    if let Err(e) = r {
-                        tracing::error!("raft log truncate: {e}");
-                    }
+                        })
+                        .context("truncating the Raft log")?;
                 }
-                out
+                Ok(out)
             }
-            Storage::Mem(m) => m
+            Storage::Mem(m) => Ok(m
                 .lock()
                 .log
                 .iter()
                 .filter_map(|b| decode_entry(b.clone()))
-                .collect(),
+                .collect()),
         }
     }
 
@@ -294,7 +341,9 @@ impl Storage {
         match self {
             Storage::Disk(d) => crate::state::write_private(&d.join("snapshot.wj"), data),
             Storage::Mem(m) => {
-                m.lock().snapshot = Some(data.to_vec());
+                let mut m = m.lock();
+                m.check()?;
+                m.snapshot = Some(data.to_vec());
                 Ok(())
             }
         }
@@ -305,7 +354,9 @@ impl Storage {
         match self {
             Storage::Disk(d) => crate::state::write_private(&d.join("log.bin"), &[]),
             Storage::Mem(m) => {
-                m.lock().log.clear();
+                let mut m = m.lock();
+                m.check()?;
+                m.log.clear();
                 Ok(())
             }
         }
@@ -321,7 +372,8 @@ impl Storage {
 
 /// The run of entries that continues the snapshot. A later append after a
 /// rewrite can only extend; an index going back means the tail was replaced.
-fn contiguous(log: Vec<Entry>, snap_index: u64) -> Vec<Entry> {
+/// An index jumping forward means entries are missing: the log is damaged.
+fn contiguous(log: Vec<Entry>, snap_index: u64) -> Result<Vec<Entry>> {
     let mut expect = snap_index + 1;
     let mut out: Vec<Entry> = Vec::new();
     for e in log {
@@ -335,9 +387,15 @@ fn contiguous(log: Vec<Entry>, snap_index: u64) -> Vec<Entry> {
             out.truncate((e.index - snap_index - 1) as usize);
             expect = e.index + 1;
             out.push(e);
+        } else {
+            anyhow::bail!(
+                "Raft log has a gap: entry {} follows {}",
+                e.index,
+                expect - 1
+            );
         }
     }
-    out
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- the node
@@ -369,6 +427,11 @@ pub struct Raft {
     rng: StdRng,
     storage: Storage,
     classify: Classifier,
+    /// Set when a write to durable storage failed. From then on this node
+    /// sends nothing and accepts nothing (fail-stop): a vote, an append
+    /// acknowledgement or a commit counted on our own entry could all be
+    /// forgotten by a restart, which breaks Raft's safety.
+    failed: Option<String>,
 }
 
 pub type Out = Vec<(Bytes32, RaftBody)>;
@@ -395,8 +458,8 @@ impl Raft {
         now: Instant,
         seed: Option<u64>,
     ) -> Result<Raft> {
-        let (term, voted_for) = storage.load_meta();
-        let log = contiguous(storage.load_log(), snap_index);
+        let (term, voted_for) = storage.load_meta()?;
+        let log = contiguous(storage.load_log()?, snap_index)?;
         let rng = match seed {
             Some(s) => StdRng::seed_from_u64(s),
             None => rand::make_rng(),
@@ -425,6 +488,7 @@ impl Raft {
             rng,
             storage,
             classify,
+            failed: None,
         };
         for e in log {
             r.push_entry(e);
@@ -459,6 +523,24 @@ impl Raft {
 
     pub fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    /// Why this node stopped, if a write to its storage failed.
+    pub fn failed(&self) -> Option<&str> {
+        self.failed.as_deref()
+    }
+
+    /// Record the result of a storage write: false, and this node stops for
+    /// good (fail-stop), when it failed.
+    fn persisted(&mut self, r: Result<()>) -> bool {
+        match r {
+            Ok(()) => self.failed.is_none(),
+            Err(e) => {
+                tracing::error!("Raft storage failed, this controller stops: {e:#}");
+                self.failed.get_or_insert_with(|| format!("{e:#}"));
+                false
+            }
+        }
     }
 
     // ------------------------------------------------------------ log access
@@ -506,10 +588,10 @@ impl Raft {
         if e.term != term || term <= self.term.max(self.last_term()) {
             anyhow::bail!("an offline entry needs a new term");
         }
+        self.storage.save_meta(term, Some(self.id))?;
+        self.storage.append(std::slice::from_ref(&e))?;
         self.term = term;
         self.voted_for = Some(self.id);
-        self.storage.save_meta(term, Some(self.id));
-        self.storage.append(std::slice::from_ref(&e));
         let idx = e.index;
         self.push_entry(e);
         self.update_role();
@@ -680,7 +762,8 @@ impl Raft {
         if term > self.term {
             self.term = term;
             self.voted_for = None;
-            self.storage.save_meta(self.term, self.voted_for);
+            let r = self.storage.save_meta(self.term, self.voted_for);
+            self.persisted(r);
             self.leader = None;
             self.last_leader_contact = None;
         }
@@ -729,7 +812,9 @@ impl Raft {
             random: None,
             leaves: Some(Vec::new()),
         };
-        self.append_local(noop.encode_bytes(), self.term, next);
+        if !self.append_local(noop.encode_bytes(), self.term, next) {
+            return Vec::new();
+        }
         self.broadcast(true)
     }
 
@@ -763,7 +848,10 @@ impl Raft {
         self.term += 1;
         self.role = Role::Candidate;
         self.voted_for = Some(self.id);
-        self.storage.save_meta(self.term, self.voted_for);
+        let r = self.storage.save_meta(self.term, self.voted_for);
+        if !self.persisted(r) {
+            return Vec::new();
+        }
         self.votes = HashSet::from([self.id]);
         self.leader = None;
         self.reset_deadline();
@@ -785,11 +873,17 @@ impl Raft {
 
     // ------------------------------------------------------------ leader side
 
-    fn append_local(&mut self, bytes: Vec<u8>, term: u64, index: u64) {
+    /// Append our own entry; false (and nothing appended) when it couldn't
+    /// be made durable, since it would then count towards a commit.
+    fn append_local(&mut self, bytes: Vec<u8>, term: u64, index: u64) -> bool {
         let e = Entry { term, index, bytes };
-        self.storage.append(std::slice::from_ref(&e));
+        let r = self.storage.append(std::slice::from_ref(&e));
+        if !self.persisted(r) {
+            return false;
+        }
         self.push_entry(e);
         self.advance_commit();
+        true
     }
 
     /// Leader: append a fully prepared entry (its term and index must
@@ -800,6 +894,9 @@ impl Raft {
         entry: &wp::LogEntry,
     ) -> std::result::Result<(u64, Out), ProposeError> {
         self.now = now;
+        if self.failed.is_some() {
+            return Err(ProposeError::Storage);
+        }
         if self.role != Role::Leader {
             return Err(ProposeError::NotLeader);
         }
@@ -813,7 +910,9 @@ impl Raft {
             return Err(ProposeError::ConfChangePending);
         }
         let idx = entry.index;
-        self.append_local(bytes, self.term, idx);
+        if !self.append_local(bytes, self.term, idx) {
+            return Err(ProposeError::Storage);
+        }
         Ok((idx, self.broadcast(true)))
     }
 
@@ -901,6 +1000,17 @@ impl Raft {
 
     pub fn tick(&mut self, now: Instant) -> Out {
         self.now = now;
+        if self.failed.is_some() {
+            return Vec::new();
+        }
+        let out = self.tick_inner(now);
+        if self.failed.is_some() {
+            return Vec::new();
+        }
+        out
+    }
+
+    fn tick_inner(&mut self, now: Instant) -> Out {
         match self.role {
             Role::Leader => {
                 let next = self.last_index() + 1;
@@ -952,8 +1062,21 @@ impl Raft {
     // ------------------------------------------------------------ messages
 
     /// Handle a Raft message (snapshots go through `offer_snapshot`).
+    /// After a storage failure nothing is answered: a reply could promise
+    /// a vote or entries this node can't keep.
     pub fn handle(&mut self, now: Instant, from: Bytes32, body: RaftBody) -> Out {
         self.now = now;
+        if self.failed.is_some() {
+            return Vec::new();
+        }
+        let out = self.handle_inner(now, from, body);
+        if self.failed.is_some() {
+            return Vec::new();
+        }
+        out
+    }
+
+    fn handle_inner(&mut self, now: Instant, from: Bytes32, body: RaftBody) -> Out {
         let mut out = Vec::new();
         match body {
             RaftBody::RaftVote(v) => {
@@ -994,7 +1117,10 @@ impl Raft {
                     && self.role != Role::Leader;
                 if grant {
                     self.voted_for = Some(from);
-                    self.storage.save_meta(self.term, self.voted_for);
+                    let r = self.storage.save_meta(self.term, self.voted_for);
+                    if !self.persisted(r) {
+                        return out;
+                    }
                     self.reset_deadline();
                 }
                 out.push((
@@ -1162,10 +1288,16 @@ impl Raft {
             appended.push(e.clone());
             self.push_entry(e);
         }
-        if truncated {
-            self.storage.rewrite(&self.log);
+        let r = if truncated {
+            self.storage.rewrite(&self.log)
         } else if !appended.is_empty() {
-            self.storage.append(&appended);
+            self.storage.append(&appended)
+        } else {
+            Ok(())
+        };
+        if !self.persisted(r) {
+            // Not durable: acknowledge nothing (the caller sends nothing).
+            return fail(self.last_index() + 1);
         }
         // Commit never goes backwards, and only up to what this append proved.
         if a.leader_commit > self.commit {
@@ -1191,6 +1323,9 @@ impl Raft {
         last_index: u64,
     ) -> SnapshotOffer {
         self.now = now;
+        if self.failed.is_some() {
+            return SnapshotOffer::Reply(Vec::new());
+        }
         if term < self.term {
             return SnapshotOffer::Reply(vec![(
                 from,
@@ -1233,7 +1368,10 @@ impl Raft {
         self.snap_index = last_index;
         self.snap_term = last_term;
         self.commit = self.commit.max(last_index);
-        self.storage.rewrite(&self.log);
+        let r = self.storage.rewrite(&self.log);
+        if !self.persisted(r) {
+            return Vec::new();
+        }
         self.update_role();
         match self.leader {
             Some(l) => vec![(
@@ -1263,7 +1401,8 @@ impl Raft {
         self.configs.insert(0, (index, base));
         self.snap_index = index;
         self.snap_term = term;
-        self.storage.rewrite(&self.log);
+        let r = self.storage.rewrite(&self.log);
+        self.persisted(r);
     }
 
     pub fn snapshot_msg(&self, data: Vec<u8>) -> RaftBody {

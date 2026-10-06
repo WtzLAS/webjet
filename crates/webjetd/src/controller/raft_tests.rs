@@ -1162,7 +1162,7 @@ fn restart_recovers_term_vote_log_and_config_from_storage() {
 fn disk_storage_roundtrip() {
     let dir = std::env::temp_dir().join(format!("webjet-raft-{}", rand::random::<u64>()));
     let st = Storage::disk(dir.clone()).unwrap();
-    st.save_meta(7, Some(nid(3)));
+    st.save_meta(7, Some(nid(3))).unwrap();
     let e: Vec<Entry> = (1..=5)
         .map(|i| Entry {
             term: 7,
@@ -1170,10 +1170,10 @@ fn disk_storage_roundtrip() {
             bytes: value_entry(7, i, i).encode_bytes(),
         })
         .collect();
-    st.append(&e[..3]);
-    st.append(&e[3..]);
-    assert_eq!(st.load_log().len(), 5);
-    st.rewrite(&e[..2]);
+    st.append(&e[..3]).unwrap();
+    st.append(&e[3..]).unwrap();
+    assert_eq!(st.load_log().unwrap().len(), 5);
+    st.rewrite(&e[..2]).unwrap();
     let r = Raft::new(
         nid(1),
         Storage::disk(dir.clone()).unwrap(),
@@ -1195,7 +1195,7 @@ fn disk_storage_roundtrip() {
         .unwrap()
         .write_all(&[0, 0, 1, 0, 1, 2])
         .unwrap();
-    assert_eq!(st.load_log().len(), 2);
+    assert_eq!(st.load_log().unwrap().len(), 2);
     // Entries appended after a restart over the torn tail survive the next
     // restart: opening the log drops the torn bytes before appending.
     let r = Raft::new(
@@ -1210,11 +1210,179 @@ fn disk_storage_roundtrip() {
         Some(1),
     )
     .unwrap();
-    r.storage.append(&e[2..]);
-    assert_eq!(st.load_log().len(), 5);
+    r.storage.append(&e[2..]).unwrap();
+    assert_eq!(st.load_log().unwrap().len(), 5);
     st.save_snapshot(b"snap").unwrap();
     assert_eq!(st.load_snapshot().as_deref(), Some(&b"snap"[..]));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn damaged_storage_is_an_error_not_a_fresh_start() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().to_path_buf();
+    let open = || {
+        Raft::new(
+            nid(1),
+            Storage::disk(dir.clone()).unwrap(),
+            0,
+            0,
+            members(&[1], &[]),
+            Box::new(classify),
+            T,
+            Instant::now(),
+            Some(1),
+        )
+    };
+    let st = Storage::disk(dir.clone()).unwrap();
+    st.save_meta(3, Some(nid(2))).unwrap();
+    let e: Vec<Entry> = (1..=4)
+        .map(|i| Entry {
+            term: 3,
+            index: i,
+            bytes: value_entry(3, i, i).encode_bytes(),
+        })
+        .collect();
+    st.append(&e[..3]).unwrap();
+    let r = open().unwrap();
+    assert_eq!((r.term, r.voted_for, r.last_index()), (3, Some(nid(2)), 3));
+    let err = |r: Result<Raft>| format!("{:#}", r.err().expect("refused"));
+
+    // A damaged record with valid ones after it isn't a torn append.
+    let log = dir.join("log.bin");
+    let good = std::fs::read(&log).unwrap();
+    let mut bad = good.clone();
+    let len = webjet_core::bytes::be_u32(&bad, 0).unwrap() as usize;
+    bad[4..4 + len].fill(0xff);
+    std::fs::write(&log, &bad).unwrap();
+    assert!(err(open()).contains("damaged record"), "{}", err(open()));
+    assert_eq!(std::fs::read(&log).unwrap(), bad, "left as it was");
+    // The same damage at the end is a torn tail: cut off.
+    let mut torn = good.clone();
+    let start = good.len() - (e[2].bytes.len() + 4);
+    torn[start + 4..].fill(0xff);
+    std::fs::write(&log, &torn).unwrap();
+    assert_eq!(open().unwrap().last_index(), 2);
+    assert_eq!(std::fs::read(&log).unwrap(), good[..start]);
+
+    // Entries missing in the middle.
+    std::fs::write(&log, []).unwrap();
+    st.append(&e[..2]).unwrap();
+    st.append(&e[3..]).unwrap();
+    assert!(err(open()).contains("gap"), "{}", err(open()));
+
+    // An unreadable term/vote file.
+    std::fs::write(&log, []).unwrap();
+    std::fs::write(dir.join("meta.json"), "{\"term\": 3, \"voted").unwrap();
+    assert!(err(open()).contains("meta.json"), "{}", err(open()));
+    std::fs::write(dir.join("meta.json"), r#"{"term":3,"voted_for":"zz"}"#).unwrap();
+    assert!(err(open()).contains("voted_for"), "{}", err(open()));
+    // No file at all is a fresh start.
+    std::fs::remove_file(dir.join("meta.json")).unwrap();
+    assert_eq!(open().unwrap().term, 0);
+}
+
+#[test]
+fn a_follower_whose_storage_fails_answers_nothing() {
+    let (st, mem) = Storage::mem();
+    let mut r = Raft::new(
+        nid(1),
+        st,
+        0,
+        0,
+        members(&[1, 2, 3], &[]),
+        Box::new(classify),
+        T,
+        Instant::now(),
+        Some(1),
+    )
+    .unwrap();
+    let now = Instant::now();
+    mem.lock().fail_writes = true;
+    // The vote can't be recorded, so it isn't granted (or answered).
+    let out = r.handle(
+        now,
+        nid(2),
+        RaftBody::RaftVote(Box::new(wp::RaftVote {
+            term: 1,
+            last_log_index: 0,
+            last_log_term: 0,
+            pre_vote: false,
+        })),
+    );
+    assert!(out.is_empty());
+    assert!(r.failed().is_some());
+    // It stays stopped, also once the disk works again: what it promised
+    // before may be lost, so only a restart (which reloads) may continue.
+    mem.lock().fail_writes = false;
+    let out = r.handle(
+        now,
+        nid(2),
+        RaftBody::RaftAppend(Box::new(wp::RaftAppend {
+            term: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: Some(vec![wp::Blob {
+                data: Some(value_entry(1, 1, 1).encode_bytes()),
+            }]),
+            leader_commit: 1,
+        })),
+    );
+    assert!(out.is_empty());
+    assert!(r.tick(now + T.election_max * 3).is_empty());
+    assert!(mem.lock().log.is_empty());
+    assert_eq!(r.commit, 0);
+}
+
+#[test]
+fn a_leader_whose_storage_fails_commits_nothing() {
+    let (st, mem) = Storage::mem();
+    let mut r = Raft::new(
+        nid(1),
+        st,
+        0,
+        0,
+        members(&[1], &[]),
+        Box::new(classify),
+        T,
+        Instant::now(),
+        Some(1),
+    )
+    .unwrap();
+    let now = Instant::now() + T.election_max * 2;
+    r.tick(now);
+    assert_eq!(r.role, Role::Leader);
+    let (last, commit) = (r.last_index(), r.commit);
+    mem.lock().fail_writes = true;
+    let e = value_entry(r.term, last + 1, 7);
+    assert_eq!(r.propose(now, &e).unwrap_err(), ProposeError::Storage);
+    assert_eq!((r.last_index(), r.commit), (last, commit));
+    assert!(r.failed().is_some());
+    mem.lock().fail_writes = false;
+    assert_eq!(r.propose(now, &e).unwrap_err(), ProposeError::Storage);
+}
+
+#[test]
+fn a_failed_offline_append_reports_the_error() {
+    let (st, mem) = Storage::mem();
+    let mut r = Raft::new(
+        nid(1),
+        st,
+        0,
+        0,
+        members(&[1], &[]),
+        Box::new(classify),
+        T,
+        Instant::now(),
+        Some(1),
+    )
+    .unwrap();
+    mem.lock().fail_writes = true;
+    let e = value_entry(5, 1, 1).encode_bytes();
+    assert!(r.append_offline(5, e.clone()).is_err());
+    assert_eq!((r.term, r.last_index()), (0, 0));
+    mem.lock().fail_writes = false;
+    assert_eq!(r.append_offline(5, e).unwrap(), 1);
 }
 
 #[test]
