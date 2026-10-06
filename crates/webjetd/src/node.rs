@@ -159,6 +159,28 @@ impl Hop {
     }
 }
 
+/// A (peer, transport) dial in progress; the mark is removed on drop, also
+/// when the dialing future is cancelled (dial_node runs under timeouts).
+struct DialSlot<'a> {
+    node: &'a Node,
+    key: (Bytes32, Transport),
+}
+
+impl<'a> DialSlot<'a> {
+    fn take(node: &'a Node, peer: Bytes32, t: Transport) -> Option<Self> {
+        node.dialing.lock().insert((peer, t)).then(|| DialSlot {
+            node,
+            key: (peer, t),
+        })
+    }
+}
+
+impl Drop for DialSlot<'_> {
+    fn drop(&mut self) {
+        self.node.dialing.lock().remove(&self.key);
+    }
+}
+
 /// The trust store behind a lock whose read side is recursive: many helpers
 /// read the store while a caller already holds a read guard, and a plain
 /// fair RwLock would deadlock as soon as a writer queues between the two.
@@ -453,78 +475,95 @@ impl Node {
         if peer == self.me {
             bail!("connected to myself");
         }
-        // One hop per (peer, transport): the lower node id's outbound wins,
-        // unless the peer evidently lost the hop we still have.
-        let lost = {
-            let hops = self.hops.lock();
-            match hops
-                .values()
-                .find(|h| h.peer == peer && h.transport == est.transport && h.alive())
-            {
-                None => None,
-                Some(dup) => match keep_new_hop(
-                    &self.me,
-                    &peer,
-                    outbound,
-                    dup.outbound,
-                    dup.created.elapsed(),
-                ) {
-                    Dup::Refuse => bail!("duplicate hop to {}", crypto::short(&peer)),
-                    Dup::Replace => {
-                        dup.retire();
-                        None
-                    }
-                    Dup::PeerLost => Some(dup.clone()),
-                },
-            }
-        };
-        if let Some(old) = lost {
-            // Its circuits are gone at the other end too. Not a link failure:
-            // retired first, so the link's history records no flap.
-            tracing::info!(peer = %self.name_of(&peer), transport = est.transport.name(), "peer dialed again: replacing the hop it lost");
-            old.retire();
-            self.hop_down(&old);
-            crate::circuit::close_with_neighbor(self, &peer);
-        }
         let (tx, rx) = mpsc::channel::<Out>(8192);
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let hop = Arc::new(Hop {
-            id: HOP_IDS.fetch_add(1, Ordering::Relaxed),
-            peer,
-            peer_key: est.peer_key,
-            transport: est.transport,
-            remote: est.remote,
-            outbound,
-            restricted: est.bootstrap,
-            created: Instant::now(),
-            tx,
-            ctl_tx,
-            closed: AtomicBool::new(false),
-            intentional: AtomicBool::new(false),
-            stats: Mutex::new(LinkStats::with_history(
-                self.link_history
-                    .lock()
-                    .get(&(peer, est.transport))
-                    .cloned()
-                    .map(|mut h| {
-                        h.age(now_ms());
-                        h
-                    })
-                    .unwrap_or_default(),
-            )),
-            last_rx: Mutex::new(Instant::now()),
-            kcp_stats: est.kcp_stats.clone(),
-            meter: est.meter.clone(),
-            tx_bytes: AtomicU64::new(0),
-            rx_bytes: AtomicU64::new(0),
-            dropped: AtomicU64::new(0),
-            clock_offset: Mutex::new(None),
-            observed: Mutex::new(None),
-            peer_digest: Mutex::new(None),
-            keepalive_seq: AtomicU64::new(0),
-            queue_delay_us: AtomicU64::new(0),
-        });
-        self.hops.lock().insert(hop.id, hop.clone());
+        let mut channels = Some((tx, ctl_tx));
+        // One hop per (peer, transport): the lower node id's outbound wins,
+        // unless the peer evidently lost the hop we still have. The check
+        // and the insert happen under one hops guard, so a simultaneous
+        // inbound accept and outbound dial can't both get in.
+        let hop = loop {
+            // Read before taking the hops lock (hop_down writes it after
+            // removing a hop): a replaced hop's history is folded in by the
+            // time the loop comes round again.
+            let history = self
+                .link_history
+                .lock()
+                .get(&(peer, est.transport))
+                .cloned()
+                .map(|mut h| {
+                    h.age(now_ms());
+                    h
+                })
+                .unwrap_or_default();
+            let lost = {
+                let mut hops = self.hops.lock();
+                let dup = hops
+                    .values()
+                    .find(|h| h.peer == peer && h.transport == est.transport && h.alive())
+                    .cloned();
+                let lost = match dup {
+                    None => None,
+                    Some(dup) => match keep_new_hop(
+                        &self.me,
+                        &peer,
+                        outbound,
+                        dup.outbound,
+                        dup.created.elapsed(),
+                    ) {
+                        Dup::Refuse => bail!("duplicate hop to {}", crypto::short(&peer)),
+                        Dup::Replace => {
+                            dup.retire();
+                            None
+                        }
+                        Dup::PeerLost => Some(dup),
+                    },
+                };
+                if lost.is_none() {
+                    let (tx, ctl_tx) = channels
+                        .take()
+                        .ok_or_else(|| anyhow!("hop channels already used"))?;
+                    let hop = Arc::new(Hop {
+                        id: HOP_IDS.fetch_add(1, Ordering::Relaxed),
+                        peer,
+                        peer_key: est.peer_key,
+                        transport: est.transport,
+                        remote: est.remote,
+                        outbound,
+                        restricted: est.bootstrap,
+                        created: Instant::now(),
+                        tx,
+                        ctl_tx,
+                        closed: AtomicBool::new(false),
+                        intentional: AtomicBool::new(false),
+                        stats: Mutex::new(LinkStats::with_history(history)),
+                        last_rx: Mutex::new(Instant::now()),
+                        kcp_stats: est.kcp_stats.clone(),
+                        meter: est.meter.clone(),
+                        tx_bytes: AtomicU64::new(0),
+                        rx_bytes: AtomicU64::new(0),
+                        dropped: AtomicU64::new(0),
+                        clock_offset: Mutex::new(None),
+                        observed: Mutex::new(None),
+                        peer_digest: Mutex::new(None),
+                        keepalive_seq: AtomicU64::new(0),
+                        queue_delay_us: AtomicU64::new(0),
+                    });
+                    hops.insert(hop.id, hop.clone());
+                    break hop;
+                }
+                lost
+            };
+            if let Some(old) = lost {
+                // Its circuits are gone at the other end too. Not a link
+                // failure: retired first, so the link's history records no
+                // flap. Then check again: another hop may have come up.
+                tracing::info!(peer = %self.name_of(&peer), transport = est.transport.name(), "peer dialed again: replacing the hop it lost");
+                old.retire();
+                self.hop_down(&old);
+                crate::circuit::close_with_neighbor(self, &peer);
+            }
+        };
         tracing::info!(peer = %self.name_of(&peer), transport = est.transport.name(), remote = %est.remote, outbound, "hop up");
         let (r, w) = tokio::io::split(est.io);
         let n = self.clone();
@@ -670,14 +709,21 @@ impl Node {
         if addrs.is_empty() {
             bail!("no known address for {}", self.name_of(&peer));
         }
-        let mut last = anyhow!("no transport worked");
+        let mut last: Option<anyhow::Error> = None;
         for (addr, t) in addrs {
-            if !self.dialing.lock().insert((peer, t)) {
+            // Released on drop: callers wrap this in a timeout, and a
+            // cancelled dial must not leave (peer, t) marked forever.
+            let Some(_slot) = DialSlot::take(self, peer, t) else {
+                if last.is_none() {
+                    last = Some(anyhow!(
+                        "a dial to {} via {} is already in progress",
+                        self.name_of(&peer),
+                        t.name()
+                    ));
+                }
                 continue;
-            }
-            let r = self.dial(addr, t, vec![key]).await;
-            self.dialing.lock().remove(&(peer, t));
-            match r {
+            };
+            match self.dial(addr, t, vec![key]).await {
                 Ok(h) => return Ok(h),
                 Err(e) => {
                     tracing::debug!(
@@ -685,11 +731,11 @@ impl Node {
                         self.name_of(&peer),
                         t.name()
                     );
-                    last = e;
+                    last = Some(e);
                 }
             }
         }
-        Err(last)
+        Err(last.unwrap_or_else(|| anyhow!("no transport worked")))
     }
 
     /// Candidate addresses of a node, best transport first.
@@ -1137,5 +1183,35 @@ mod hop_tests {
         // Our own redial never pushes out a hop the rule gives to the peer.
         assert_eq!(keep_new_hop(&high, &low, true, false, old), Dup::Refuse);
         assert_eq!(keep_new_hop(&low, &high, true, false, old), Dup::Replace);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_dial_releases_its_slot() {
+        let mut c = crate::testnode::Cluster::new();
+        let me = c.data_node("me", "10.7.0.2", &[]);
+        let peer = c.data_node("peer", "10.7.0.3", &[]);
+        let (n, _dir) = crate::testnode::node(&mut c, me.0, me.1.clone());
+        let t = Transport::TcpTls;
+        {
+            let slot = DialSlot::take(&n, peer.0, t).expect("free");
+            // A second dial to the same (peer, transport) waits its turn,
+            // and its refusal doesn't release the first one's mark.
+            assert!(DialSlot::take(&n, peer.0, t).is_none());
+            assert!(n.dialing.lock().contains(&(peer.0, t)));
+            drop(slot);
+        }
+        // dial_node runs under a timeout: a dial cancelled mid-handshake
+        // must not leave the pair marked as being dialed for good.
+        let stuck = async {
+            let _slot = DialSlot::take(&n, peer.0, t).expect("free");
+            std::future::pending::<()>().await;
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), stuck)
+                .await
+                .is_err()
+        );
+        assert!(n.dialing.lock().is_empty());
+        assert!(DialSlot::take(&n, peer.0, t).is_some());
     }
 }
