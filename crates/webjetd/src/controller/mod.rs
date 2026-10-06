@@ -100,6 +100,9 @@ struct Waiter {
     tx: oneshot::Sender<std::result::Result<Outcome, String>>,
 }
 
+/// Lock order, where more than one is held: `apply_lock`, then `raft`, then
+/// `machine`, then the node's store. Never take `raft` while holding
+/// `machine`: `propose` and snapshot installs hold both, raft first.
 pub struct Controller {
     node: Weak<Node>,
     pub machine: Mutex<Machine>,
@@ -216,7 +219,7 @@ impl Controller {
             tick.tick().await;
             i += 1;
             let Some(n) = self.node() else { break };
-            if self.halted.lock().is_some() {
+            if self.is_halted() {
                 continue;
             }
             let out = self.raft.lock().tick(Instant::now());
@@ -268,6 +271,12 @@ impl Controller {
     fn apply_committed(&self, n: &Arc<Node>) {
         let _g = self.apply_lock.lock();
         loop {
+            // A halted controller applies nothing more: whatever stopped it
+            // (divergence, membership mismatch, unsupported version) would
+            // only repeat, or apply later entries on a wrong state.
+            if self.is_halted() {
+                return;
+            }
             let next = self.applied.load(Ordering::SeqCst) + 1;
             let bytes = {
                 let r = self.raft.lock();
@@ -289,13 +298,6 @@ impl Controller {
             let res = self.machine.lock().apply(&entry);
             match res {
                 Ok(outcome) => {
-                    self.applied.store(next, Ordering::SeqCst);
-                    self.descriptions
-                        .lock()
-                        .insert(next, outcome.description.clone());
-                    if !outcome.description.is_empty() && outcome.description != "no-op" {
-                        tracing::info!(index = next, signer = ?outcome.signer.map(|s| crypto::short(&s)), "applied: {}", outcome.description);
-                    }
                     if outcome.membership_changed
                         || matches!(entry.payload, Some(EntryPayload::GenesisEntry(_)))
                     {
@@ -307,6 +309,13 @@ impl Controller {
                             self.halt(n, format!("membership mismatch at {next}: Raft {rf:?}, state machine {sm:?}"));
                             return;
                         }
+                    }
+                    self.applied.store(next, Ordering::SeqCst);
+                    self.descriptions
+                        .lock()
+                        .insert(next, outcome.description.clone());
+                    if !outcome.description.is_empty() && outcome.description != "no-op" {
+                        tracing::info!(index = next, signer = ?outcome.signer.map(|s| crypto::short(&s)), "applied: {}", outcome.description);
                     }
                     if outcome.psk_rotated
                         || matches!(entry.payload, Some(EntryPayload::GenesisEntry(_)))
@@ -339,6 +348,10 @@ impl Controller {
                 }
             }
         }
+    }
+
+    pub fn is_halted(&self) -> bool {
+        self.halted.lock().is_some()
     }
 
     fn halt(&self, n: &Arc<Node>, why: String) {
@@ -441,6 +454,10 @@ impl Controller {
     // ------------------------------------------------------------ tree heads (§7.3)
 
     fn maybe_sign_head(&self, n: &Arc<Node>) {
+        // A halted controller's state can't be trusted; it signs nothing.
+        if self.is_halted() {
+            return;
+        }
         let (version, root, genesis) = {
             let mut m = self.machine.lock();
             (m.last_index, m.root(), m.genesis.is_some())
@@ -741,7 +758,7 @@ impl Controller {
         let start = Instant::now();
         // Wait until everything in the log is applied.
         loop {
-            if self.halted.lock().is_some() {
+            if self.is_halted() {
                 bail!("controller halted");
             }
             let (leader, last) = {
@@ -1325,12 +1342,15 @@ impl Controller {
     }
 
     pub fn status(&self) -> serde_json::Value {
+        // Raft before the machine (see the lock order on `Controller`).
+        let raft = self.raft.lock().status();
+        let halted = self.halted.lock().clone();
         let m = self.machine.lock();
         serde_json::json!({
-            "raft": self.raft.lock().status(),
+            "raft": raft,
             "applied": self.applied.load(Ordering::SeqCst),
             "signing_key_id": hex::encode(self.signing_key_id),
-            "halted": self.halted.lock().clone(),
+            "halted": halted,
             "pending_enrollments": m.pending.len(),
             "psk_epoch": m.psk_current,
             "valid_until": m.view().valid_until,
@@ -1703,6 +1723,48 @@ mod tests {
         assert!(s.node_trusted(&web));
         drop(s);
         assert!(n.paths.store().exists(), "persisted");
+    }
+
+    #[tokio::test]
+    async fn a_halted_controller_applies_and_signs_nothing() {
+        let (net, n, c, _d) = first_controller();
+        c.clone().leader_duties().await;
+        let req = crypto::open_envelope(&c.cert_request().unwrap()).unwrap();
+        let cert = net
+            .root
+            .sign_envelope(mt::SIGNING_KEY_CERT, req.body)
+            .encode_bytes();
+        n.store.write().add_cert(&cert).unwrap();
+        c.halt(&n, "test".into());
+        // An entry that commits after the halt isn't applied...
+        let applied = c.applied.load(Ordering::SeqCst);
+        {
+            let mut r = c.raft.lock();
+            let entry = wp::LogEntry {
+                term: r.term,
+                index: r.last_index() + 1,
+                timestamp: now_ms(),
+                payload: Some(EntryPayload::NoopEntry(Box::new(wp::NoopEntry {
+                    term: r.term,
+                }))),
+                random: None,
+                leaves: Some(Vec::new()),
+            };
+            r.propose(Instant::now(), &entry).unwrap();
+            assert!(r.commit > applied);
+        }
+        c.apply_committed(&n);
+        assert_eq!(c.applied.load(Ordering::SeqCst), applied);
+        // ...no head is signed, and nothing more is proposed.
+        c.maybe_sign_head(&n);
+        assert!(n.store.read().head().is_none());
+        let e = c
+            .propose(op_entry(&net, 2, wp::AccountOp::RenameNode(Box::default())))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("halted"), "{e}");
+        // Status still answers (and doesn't deadlock against a proposal).
+        assert_eq!(c.status()["halted"], "test");
     }
 
     #[tokio::test]
