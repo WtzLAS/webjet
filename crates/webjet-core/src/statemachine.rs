@@ -259,7 +259,7 @@ impl Machine {
             leaves: None,
         };
         let fx = self.execute(&entry)?;
-        self.refuse_route_conflicts(entry.payload.as_ref())?;
+        self.check_new_entry(entry.payload.as_ref())?;
         entry.leaves = Some(
             fx.leaves
                 .iter()
@@ -291,7 +291,7 @@ impl Machine {
             leaves: None,
         };
         let fx = self.execute(&entry)?;
-        self.refuse_route_conflicts(entry.payload.as_ref())?;
+        self.check_new_entry(entry.payload.as_ref())?;
         Ok(fx.outcome)
     }
 
@@ -1329,14 +1329,18 @@ impl Machine {
         Ok(out)
     }
 
-    /// Published prefixes are reserved by pending enrollments the way names
-    /// and overlay IPs are: a new enrollment or a node update may not claim
-    /// a prefix overlapping a pending one's grants (identical grants are
-    /// allowed, as between nodes), and a redemption re-checks its grants
-    /// against the nodes as they are now. Only new entries are checked
-    /// (`prepare`, `check`): entries already in the log apply as before, so
-    /// a replica replaying an older log doesn't diverge.
-    fn refuse_route_conflicts(
+    /// Checks only new entries get (`prepare`, `check`): entries already in
+    /// the log apply as before, so a replica replaying an older log doesn't
+    /// diverge and no StateVersion step is needed.
+    ///
+    /// - Published prefixes are reserved by pending enrollments the way
+    ///   names and overlay IPs are: a new enrollment or a node update may
+    ///   not claim a prefix overlapping a pending one's grants (identical
+    ///   grants are allowed, as between nodes), and a redemption re-checks
+    ///   its grants against the nodes as they are now.
+    /// - DNS records may not shadow a magic name, whatever the case
+    ///   (`refuse_shadowing`).
+    fn check_new_entry(
         &self,
         payload: Option<&EntryPayload>,
     ) -> std::result::Result<(), ApplyError> {
@@ -1368,6 +1372,15 @@ impl Machine {
                     AccountOp::UpdateNode(u) if u.set_routes => {
                         (u.routes.unwrap_or_default(), Some(opt_k32(&u.node_id)))
                     }
+                    AccountOp::SetNetworkConfig(c) => {
+                        let dns = c.config.and_then(|c| c.dns).unwrap_or_default();
+                        return self.refuse_shadowing(&dns.records.unwrap_or_default(), dns.suffix);
+                    }
+                    AccountOp::SetNodeConfig(c) => {
+                        let suffix = self.view.dns.as_ref().and_then(|d| d.suffix.clone());
+                        let records = c.config.and_then(|c| c.dns_records).unwrap_or_default();
+                        return self.refuse_shadowing(&records, suffix);
+                    }
                     _ => return Ok(()),
                 }
             }
@@ -1396,6 +1409,37 @@ impl Machine {
                         c.name.as_deref().unwrap_or("?")
                     ));
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// DNS records may not shadow a node's magic name. `validate_dns`
+    /// compared the lowercased record name with the suffix as written, so a
+    /// suffix with capitals or a trailing dot let a record through; names
+    /// are compared case-insensitively and without the dot here. New
+    /// entries only, like the route check.
+    fn refuse_shadowing(
+        &self,
+        records: &[wp::DnsRecord],
+        suffix: Option<String>,
+    ) -> std::result::Result<(), ApplyError> {
+        let canon = |s: &str| s.trim_end_matches('.').to_ascii_lowercase();
+        let suffix = canon(
+            suffix
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("internal"),
+        );
+        for r in records {
+            let name = canon(r.name.as_deref().unwrap_or_default());
+            if self
+                .view
+                .nodes
+                .values()
+                .any(|n| name == format!("{}.{suffix}", n.name.to_ascii_lowercase()))
+            {
+                return rej(format!("record {name} shadows a magic DNS name"));
             }
         }
         Ok(())
@@ -3248,6 +3292,56 @@ mod tests {
                 config: Some(Box::new(c)),
             },
         )))
+    }
+
+    #[test]
+    fn records_never_shadow_a_magic_name_whatever_the_case() {
+        let mut h = H::new();
+        enroll(&mut h, "web", "10.7.0.30", &KeyPair::generate());
+        let record = |name: &str| wp::DnsRecord {
+            name: Some(name.into()),
+            rtype: wp::DnsType::A,
+            value: Some("10.7.0.99".into()),
+            ttl: 60,
+        };
+        let dns = |suffix: &str, name: &str| wp::DnsConfig {
+            suffix: Some(suffix.into()),
+            records: Some(vec![record(name)]),
+            ..Default::default()
+        };
+        let mut version = 0;
+        let mut try_dns = |h: &mut H, d: wp::DnsConfig| {
+            version += 1;
+            let mut c = net_config(version);
+            c.dns = Some(Box::new(d));
+            set_network(h, c)
+        };
+        // The suffix written with capitals, or a trailing dot, used to let
+        // a record for the node's own name through.
+        for (suffix, name) in [
+            ("Corp", "web.corp"),
+            ("corp", "WEB.Corp."),
+            ("corp.", "web.corp"),
+        ] {
+            let e = try_dns(&mut h, dns(suffix, name)).unwrap_err();
+            assert!(e.to_string().contains("shadows"), "{suffix} {name}: {e}");
+        }
+        try_dns(&mut h, dns("Corp", "git.corp")).unwrap();
+        // A node's own records, under the network's suffix in force.
+        let mut nc = wp::NodeConfig {
+            node_id: Some(crypto::k32(&h.m.view().by_name["web"])),
+            version: 1,
+            dns_records: Some(vec![record("Web.CORP")]),
+            ..Default::default()
+        };
+        let set_node = |h: &mut H, nc: &wp::NodeConfig| {
+            h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+                config: Some(Box::new(nc.clone())),
+            })))
+        };
+        assert!(set_node(&mut h, &nc).is_err());
+        nc.dns_records = Some(vec![record("app.corp")]);
+        set_node(&mut h, &nc).unwrap();
     }
 
     #[test]

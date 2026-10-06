@@ -613,7 +613,7 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
         }
         _ => bail!("not a record"),
     };
-    if expires + SKEW_SHORT_RECORD < now {
+    if expires.saturating_add(SKEW_SHORT_RECORD) < now {
         bail!("expired record");
     }
     {
@@ -1177,7 +1177,7 @@ pub fn expire_records(n: &Arc<Node>) {
     let s = n.store.read();
     let v = s.view();
     let ok = |id: &Bytes32, exp: u64| {
-        exp + SKEW_SHORT_RECORD >= now && v.nodes.get(id).is_some_and(|x| x.valid)
+        exp.saturating_add(SKEW_SHORT_RECORD) >= now && v.nodes.get(id).is_some_and(|x| x.valid)
     };
     let mut recs = n.records.lock();
     // Relays' endpoint records are kept as reconnection hints even after expiry (§10.4).
@@ -1201,7 +1201,7 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
     let v = s.view();
     let mut g = Graph::default();
     for (id, (l, _)) in &recs.lsas {
-        if l.expires_at + SKEW_SHORT_RECORD < now
+        if l.expires_at.saturating_add(SKEW_SHORT_RECORD) < now
             || !v.nodes.get(id).is_some_and(|x| x.valid && x.relay)
         {
             continue;
@@ -1231,7 +1231,9 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
         );
     }
     for (id, (a, _)) in &recs.attachments {
-        if a.expires_at + SKEW_SHORT_RECORD < now || !v.nodes.get(id).is_some_and(|x| x.valid) {
+        if a.expires_at.saturating_add(SKEW_SHORT_RECORD) < now
+            || !v.nodes.get(id).is_some_and(|x| x.valid)
+        {
             continue;
         }
         let m = a
@@ -1373,7 +1375,7 @@ pub fn topology(n: &Node) -> serde_json::Value {
     };
     let mut loads = serde_json::Map::new();
     for (id, l) in &lsas {
-        if l.expires_at + SKEW_SHORT_RECORD < now {
+        if l.expires_at.saturating_add(SKEW_SHORT_RECORD) < now {
             continue;
         }
         if let Some(x) = &l.load {
@@ -1391,7 +1393,7 @@ pub fn topology(n: &Node) -> serde_json::Value {
         }
     }
     for (id, a) in &atts {
-        if a.expires_at + SKEW_SHORT_RECORD < now {
+        if a.expires_at.saturating_add(SKEW_SHORT_RECORD) < now {
             continue;
         }
         for e in a.relays.clone().unwrap_or_default() {

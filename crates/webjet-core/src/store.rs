@@ -624,7 +624,7 @@ impl Store {
                 h.state_version
             );
         }
-        if h.issued_at > now_ms() + SKEW_HEAD {
+        if h.issued_at > now_ms().saturating_add(SKEW_HEAD) {
             bail!("tree head issued in the future");
         }
         Ok(h)
@@ -634,7 +634,7 @@ impl Store {
     pub fn offer_head(&mut self, raw: &[u8]) -> Result<HeadOutcome> {
         let h = self.verify_head(raw)?;
         let now = now_ms();
-        if h.expires_at + SKEW_HEAD < now {
+        if h.expires_at.saturating_add(SKEW_HEAD) < now {
             bail!("tree head expired");
         }
         if h.version < self.high_water {
@@ -899,14 +899,14 @@ impl Store {
 
     pub fn head_expired(&self, now: u64) -> bool {
         match &self.head {
-            Some(h) => h.head.expires_at + SKEW_HEAD < now,
+            Some(h) => h.head.expires_at.saturating_add(SKEW_HEAD) < now,
             None => true,
         }
     }
 
     /// Records are trusted only until the validity horizon (§6.16).
     pub fn horizon_passed(&self, now: u64) -> bool {
-        self.view.valid_until == 0 || self.view.valid_until + SKEW_HEAD < now
+        self.view.valid_until == 0 || self.view.valid_until.saturating_add(SKEW_HEAD) < now
     }
 
     /// The node is trusted right now: valid record, no tombstone, owner
