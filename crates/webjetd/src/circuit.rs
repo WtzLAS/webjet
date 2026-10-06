@@ -870,12 +870,18 @@ pub fn on_hop_down(n: &Arc<Node>, hop: &Hop) {
     if n.hops_to(&hop.peer).iter().any(|h| h.id != hop.id) {
         return; // another session to the same neighbor carries the circuits
     }
+    close_with_neighbor(n, &hop.peer);
+}
+
+/// Close every circuit through `neighbor` (it lost them: its hop went down,
+/// or it restarted) and fail circuits waiting to open through it.
+pub fn close_with_neighbor(n: &Arc<Node>, neighbor: &Bytes32) {
     let keys: Vec<(Bytes32, u32)> = n
         .circuits
         .lock()
         .entries
         .keys()
-        .filter(|k| k.0 == hop.peer)
+        .filter(|k| k.0 == *neighbor)
         .copied()
         .collect();
     for k in keys {
@@ -885,7 +891,7 @@ pub fn on_hop_down(n: &Arc<Node>, hop: &Hop) {
     let dead: Vec<(Bytes32, u32)> = t
         .pending
         .keys()
-        .filter(|k| k.0 == hop.peer)
+        .filter(|k| k.0 == *neighbor)
         .copied()
         .collect();
     for k in dead {

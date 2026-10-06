@@ -25,6 +25,50 @@ use webjet_proto::{self as wp, Decodable, Encodable, HopMsg, Transport};
 pub const KEEPALIVE: Duration = Duration::from_secs(2);
 pub const HOP_DEAD: Duration = Duration::from_secs(15);
 
+/// A duplicate hop to the same peer over the same transport: whether the new
+/// one replaces the one we have (`existing_outbound`: we dialed that one).
+///
+/// When both ends dial each other at once, the lower node id's outbound
+/// wins, so both keep the same connection. A dial race always pairs one
+/// inbound with one outbound connection, made within moments of each other.
+/// Any other inbound dial means the peer lost the hop we still have: it
+/// restarted, or its side of the connection died. Over UDP nothing tells us
+/// so, and keeping our dead hop would refuse every new one until
+/// [`HOP_DEAD`] passes. The peer's new connection wins then.
+fn keep_new_hop(
+    me: &Bytes32,
+    peer: &Bytes32,
+    outbound: bool,
+    existing_outbound: bool,
+    existing_age: Duration,
+) -> Dup {
+    let race = outbound != existing_outbound && existing_age <= DIAL_RACE;
+    if !outbound && !race {
+        Dup::PeerLost
+    } else if (me < peer) == outbound {
+        Dup::Replace
+    } else {
+        Dup::Refuse
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Dup {
+    /// Keep the new hop: the rule gives it the connection.
+    Replace,
+    /// Keep the new hop: the peer lost the old one, and with it every
+    /// circuit through it (it restarted, or its side died).
+    PeerLost,
+    /// Keep the hop we have.
+    Refuse,
+}
+
+/// How long after a hop comes up a dial in the other direction is still
+/// taken as a simultaneous dial rather than as the peer having lost the hop.
+/// Racing dials finish within about a round trip of each other; a peer that
+/// restarts sooner than this after we dialed it waits for [`HOP_DEAD`].
+const DIAL_RACE: Duration = Duration::from_secs(2);
+
 static HOP_IDS: AtomicU64 = AtomicU64::new(1);
 
 /// An encoded hop record carrying a control message.
@@ -409,19 +453,38 @@ impl Node {
         if peer == self.me {
             bail!("connected to myself");
         }
-        // One hop per (peer, transport): the lower node id's outbound wins.
-        {
+        // One hop per (peer, transport): the lower node id's outbound wins,
+        // unless the peer evidently lost the hop we still have.
+        let lost = {
             let hops = self.hops.lock();
-            if let Some(dup) = hops
+            match hops
                 .values()
                 .find(|h| h.peer == peer && h.transport == est.transport && h.alive())
             {
-                let keep_new = (self.me < peer) == outbound;
-                if !keep_new {
-                    bail!("duplicate hop to {}", crypto::short(&peer));
-                }
-                dup.retire();
+                None => None,
+                Some(dup) => match keep_new_hop(
+                    &self.me,
+                    &peer,
+                    outbound,
+                    dup.outbound,
+                    dup.created.elapsed(),
+                ) {
+                    Dup::Refuse => bail!("duplicate hop to {}", crypto::short(&peer)),
+                    Dup::Replace => {
+                        dup.retire();
+                        None
+                    }
+                    Dup::PeerLost => Some(dup.clone()),
+                },
             }
+        };
+        if let Some(old) = lost {
+            // Its circuits are gone at the other end too. Not a link failure:
+            // retired first, so the link's history records no flap.
+            tracing::info!(peer = %self.name_of(&peer), transport = est.transport.name(), "peer dialed again: replacing the hop it lost");
+            old.retire();
+            self.hop_down(&old);
+            crate::circuit::close_with_neighbor(self, &peer);
         }
         let (tx, rx) = mpsc::channel::<Out>(8192);
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -1036,5 +1099,40 @@ impl Node {
         });
         self.hops.lock().insert(hop.id, hop.clone());
         (hop, TestHopRx { data, ctl })
+    }
+}
+
+#[cfg(test)]
+mod hop_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_hops_keep_one_connection_and_follow_a_restarted_peer() {
+        let (low, high) = ([1u8; 32], [2u8; 32]);
+        let fresh = Duration::from_millis(10);
+        let old = Duration::from_secs(60);
+        // Both dial at once (one hop each way): both ends keep the lower
+        // id's outbound.
+        assert_eq!(keep_new_hop(&low, &high, true, false, fresh), Dup::Replace);
+        assert_eq!(keep_new_hop(&low, &high, false, true, fresh), Dup::Refuse);
+        assert_eq!(keep_new_hop(&high, &low, false, true, fresh), Dup::Replace);
+        assert_eq!(keep_new_hop(&high, &low, true, false, fresh), Dup::Refuse);
+        // The peer dials although we have had a hop to it for a minute: it
+        // restarted, and its connection replaces ours, whoever dialed.
+        assert_eq!(keep_new_hop(&low, &high, false, true, old), Dup::PeerLost);
+        assert_eq!(keep_new_hop(&high, &low, false, true, old), Dup::PeerLost);
+        // A second inbound hop, however soon: the peer dialed again, so it
+        // gave the first one up (it restarted twice in a few seconds).
+        assert_eq!(
+            keep_new_hop(&low, &high, false, false, fresh),
+            Dup::PeerLost
+        );
+        assert_eq!(
+            keep_new_hop(&high, &low, false, false, fresh),
+            Dup::PeerLost
+        );
+        // Our own redial never pushes out a hop the rule gives to the peer.
+        assert_eq!(keep_new_hop(&high, &low, true, false, old), Dup::Refuse);
+        assert_eq!(keep_new_hop(&low, &high, true, false, old), Dup::Replace);
     }
 }

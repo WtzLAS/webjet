@@ -873,6 +873,8 @@ Each node publishes its priorities in its EndpointRecord (§6.2). For a peer, th
 
 **All eligible transports are kept connected and measured.** A pair holds one hop session per eligible transport, up to three, and measures RTT and loss on each through its keepalives (§11.2).
 
+**One session per transport.** When both nodes dial each other at once, both keep the connection the lower node id dialed. Racing dials finish within about a round trip of each other, so any other incoming connection for a transport that already has a session means the peer lost that session: it restarted, or its side of the connection died. Over UDP nothing tells the other end. The new connection replaces the old one at once, and the circuits through the old one are closed (the peer lost them too), instead of being refused until the old session times out (15 s).
+
 **Choosing by cost.** For each neighbor, a node sends on the eligible transport with the **lowest measured cost** (§11.2):
 - If several transports are within 10% of the best cost, the one with the **highest sum of the two nodes' priorities** is used. Remaining ties go to UDP+KCP+FEC, then TCP+AnyTLS, then TCP+TLS.
 - The usual hysteresis applies: a node switches only when another transport is better by 15–20% for several seconds (§11.4).
