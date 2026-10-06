@@ -310,12 +310,17 @@ impl Table {
     fn forget(&mut self, k: &Key) {
         if let Some(i) = self.info.remove(k) {
             if let Some(c) = i.client {
-                self.by_client.remove(&c);
+                // The captured flow may have been re-tracked under a new key
+                // since (its old entry timed out before the sweep): that
+                // mapping belongs to the new flow.
+                if self.by_client.get(&c) == Some(k) {
+                    self.by_client.remove(&c);
+                }
                 let f = k.flow;
                 self.snat_used
                     .remove(&(f.proto, f.src, f.sport, f.dst, f.dport));
             }
-            if i.role == Role::Target {
+            if i.role == Role::Target && self.by_flow.get(&k.flow) == Some(&k.peer) {
                 self.by_flow.remove(&k.flow);
             }
         }
@@ -365,7 +370,7 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet::{parse, tcpf, tests::tcp4};
+    use crate::packet::{parse, tcpf, tests::tcp4, tests::udp4};
 
     fn wire(name: &str, proto: u8, listen: u16, target: &[&str]) -> wp::ProxyRule {
         wp::ProxyRule {
@@ -499,5 +504,61 @@ mod tests {
         assert_eq!(t.target_peer(&p.flow), Some(ingress));
         assert_eq!(t.reevaluate(|_, _| false), 1);
         assert_eq!(t.target_peer(&p.flow), None);
+    }
+
+    #[test]
+    fn a_flow_tracked_again_keeps_its_new_mapping_when_the_old_one_is_swept() {
+        let mut t = Table::new();
+        t.ct = Conntrack::new(10, 100, 100);
+        let (peer, ingress2) = ([9; 32], [8; 32]);
+        let now = Instant::now();
+        let later = now + std::time::Duration::from_secs(31);
+        let client = parse(&udp4([203, 0, 113, 7], [10, 7, 255, 254], 4000, 53, b"q"))
+            .unwrap()
+            .flow;
+        let ingress = |t: &mut Table, port: u16, at: Instant| {
+            let p = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 2], port, 53, b"q")).unwrap();
+            t.ct.insert(&peer, &p, true, Some("dns".into()), false, at)
+                .unwrap();
+            t.add(
+                &peer,
+                &p,
+                FlowInfo {
+                    role: Role::Ingress,
+                    rule: "dns".into(),
+                    owner: [1; 32],
+                    client: Some(client),
+                },
+            );
+            p.flow
+        };
+        ingress(&mut t, 40000, now);
+        // The one-way UDP flow times out (30 s) before the sweep; the
+        // client's next packet is tracked again with a new source port.
+        assert!(t.ingress_key(&client, later).is_none());
+        let second = ingress(&mut t, 40001, later);
+        // Sweeping the old flow leaves the new mapping alone: the client
+        // isn't moved to yet another port by its next packet.
+        t.expire(later);
+        assert_eq!(t.ingress_key(&client, later).map(|k| k.flow), Some(second));
+        assert_eq!(t.snat_used.len(), 1);
+        // Target side: the same flow, now from another ingress.
+        let p = parse(&udp4([203, 0, 113, 7], [10, 7, 0, 2], 4000, 53, b"q")).unwrap();
+        for (from, at) in [(peer, now), (ingress2, later)] {
+            t.ct.insert(&from, &p, false, Some("dns".into()), false, at)
+                .unwrap();
+            t.add(
+                &from,
+                &p,
+                FlowInfo {
+                    role: Role::Target,
+                    rule: "dns".into(),
+                    owner: from,
+                    client: None,
+                },
+            );
+        }
+        t.expire(later);
+        assert_eq!(t.target_peer(&p.flow), Some(ingress2));
     }
 }
