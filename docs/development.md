@@ -303,7 +303,7 @@ label `ubuntu-latest`), with every job in the builder image
 | Workflow | When | What |
 | --- | --- | --- |
 | `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS) and Windows; `scripts/deny.sh`; `cargo test`; the fuzz targets' smoke test and clippy. `webjet-app` is left out of clippy and tests (GPUI needs X11/Wayland and Vulkan packages). |
-| `fuzz.yml` | nightly (03:17 UTC), manually | Installs nightly Rust and cargo-fuzz, runs `scripts/fuzz.sh` (300 s per target by default); findings are uploaded as an artifact. |
+| `fuzz.yml` | manually only (Run workflow) | Installs nightly Rust and cargo-fuzz, builds the targets, then runs `scripts/fuzz.sh` for 30 minutes in total, split evenly over the targets (input `minutes`); findings are uploaded as an artifact. |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for Linux x86_64, Linux arm64 (cross-compiled) and Windows x86_64 |
 
 The builder image is Debian 11 (glibc 2.31, so the Linux binaries run on

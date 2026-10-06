@@ -1,6 +1,9 @@
 # Coverage-guided fuzzing of every parser (fuzz/, scripts/fuzz.sh) with
-# libFuzzer, nightly and on demand. Needs nightly Rust and cargo-fuzz, which
-# the builder image doesn't have, so they are installed first.
+# libFuzzer. Started by hand only (Actions → fuzz → Run workflow). One run
+# fuzzes for 30 minutes in total, split evenly over the targets; the
+# `minutes` input changes that. Needs nightly Rust and cargo-fuzz, which the
+# builder image doesn't have, so they are installed first (not counted in
+# the 30 minutes).
 #
 # A finding fails the run and uploads fuzz/artifacts/. Reproduce it locally
 # with `cargo +nightly fuzz run <target> <file>`, fix it, and commit the file
@@ -8,13 +11,11 @@
 name: fuzz
 
 on:
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
-      seconds:
-        description: Seconds per target
-        default: "300"
+      minutes:
+        description: Minutes of fuzzing in total, split over all targets
+        default: "30"
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -22,6 +23,8 @@ env:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    # Fuzzing time plus installing the tools and building the targets.
+    timeout-minutes: 90
     container:
       image: forgejo.wolf109909.top/webj8/webjet-builder:2
     steps:
@@ -30,14 +33,26 @@ jobs:
         run: |
           rustup toolchain install nightly --profile minimal
           cargo install --locked cargo-fuzz@0.13.2
+      # Build first, so the fuzzing budget isn't spent compiling.
+      - name: build the fuzz targets
+        working-directory: fuzz
+        run: cargo +nightly fuzz build -O
       - name: fuzz every target
         env:
-          SECONDS_PER_TARGET: ${{ inputs.seconds || '300' }}
+          MINUTES: ${{ inputs.minutes || '30' }}
         run: |
-          case "$SECONDS_PER_TARGET" in
-            ''|*[!0-9]*) echo "seconds must be a number" >&2; exit 2 ;;
+          case "$MINUTES" in
+            ''|*[!0-9]*|0)
+              echo "minutes must be a positive number" >&2
+              exit 2
+              ;;
           esac
-          scripts/fuzz.sh "$SECONDS_PER_TARGET"
+          n=$(cd fuzz && cargo +nightly fuzz list | wc -l)
+          per=$((MINUTES * 60 / n))
+          # 0 would mean "no limit" to libFuzzer.
+          [ "$per" -ge 1 ] || per=1
+          echo "fuzzing $n targets for ${per}s each (${MINUTES} min in total)"
+          scripts/fuzz.sh "$per"
       - name: keep the findings
         if: failure()
         uses: actions/upload-artifact@v3
