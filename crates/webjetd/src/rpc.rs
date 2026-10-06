@@ -5,7 +5,6 @@ use crate::node::Node;
 use anyhow::{Result, anyhow};
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -16,11 +15,48 @@ const REQUEST: u8 = 0;
 const RESPONSE: u8 = 1;
 const ONEWAY: u8 = 2;
 
-static NEXT: AtomicU64 = AtomicU64::new(1);
+/// A call waiting for its answer: who was called and where the answer goes.
+/// Ids are random, so a node can't guess another call's id, and a response
+/// counts only from the node that was called.
+type Pending = HashMap<u64, (Bytes32, oneshot::Sender<RpcBody>)>;
 
-fn pending() -> &'static Mutex<HashMap<u64, oneshot::Sender<RpcBody>>> {
-    static P: OnceLock<Mutex<HashMap<u64, oneshot::Sender<RpcBody>>>> = OnceLock::new();
+fn pending() -> &'static Mutex<Pending> {
+    static P: OnceLock<Mutex<Pending>> = OnceLock::new();
     P.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Removes a call from `pending` when it ends, also when the caller's
+/// future is dropped mid-call.
+struct PendingGuard(u64);
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        pending().lock().remove(&self.0);
+    }
+}
+
+/// Register a call to `peer` under a fresh random id.
+fn register(peer: &Bytes32) -> (PendingGuard, oneshot::Receiver<RpcBody>) {
+    let (tx, rx) = oneshot::channel();
+    let mut p = pending().lock();
+    let mut id: u64 = rand::random();
+    // 0 is what one-way messages carry.
+    while id == 0 || p.contains_key(&id) {
+        id = rand::random();
+    }
+    p.insert(id, (*peer, tx));
+    (PendingGuard(id), rx)
+}
+
+/// Deliver a response from `from`; ignored unless `from` is the node the
+/// call `id` went to.
+fn deliver(from: &Bytes32, id: u64, body: RpcBody) {
+    let mut p = pending().lock();
+    if p.get(&id).is_some_and(|(peer, _)| peer == from)
+        && let Some((_, tx)) = p.remove(&id)
+    {
+        let _ = tx.send(body);
+    }
 }
 
 /// An RPC frame for `peer`: its type (RPC, or RPC_ZSTD when compressed,
@@ -41,10 +77,8 @@ pub async fn call(
     body: RpcBody,
     timeout: Duration,
 ) -> Result<RpcBody> {
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    let (tx, rx) = oneshot::channel();
-    pending().lock().insert(id, tx);
-    let (ty, msg) = encode(n, peer, id, REQUEST, body);
+    let (guard, rx) = register(peer);
+    let (ty, msg) = encode(n, peer, guard.0, REQUEST, body);
     // Retransmit while the session/circuit comes up; responses are idempotent.
     let res = tokio::time::timeout(timeout, async {
         let mut rx = rx;
@@ -57,7 +91,7 @@ pub async fn call(
         }
     })
     .await;
-    pending().lock().remove(&id);
+    drop(guard);
     res.map_err(|_| anyhow!("rpc to {} timed out", n.name_of(peer)))?
 }
 
@@ -76,11 +110,7 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
     };
     let Some(body) = rpc.body else { return };
     match kind {
-        RESPONSE => {
-            if let Some(tx) = pending().lock().remove(&id) {
-                let _ = tx.send(body);
-            }
-        }
+        RESPONSE => deliver(from, id, body),
         REQUEST | ONEWAY => {
             let n = n.clone();
             let from = *from;
@@ -142,4 +172,39 @@ pub async fn call_any(
         }
     }
     Err(last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ack(ok: bool) -> RpcBody {
+        RpcBody::RpcAck(Box::new(wp::RpcAck { ok, error: None }))
+    }
+
+    #[test]
+    fn only_the_called_node_can_answer() {
+        let peer = [1u8; 32];
+        let other = [2u8; 32];
+        let (guard, mut rx) = register(&peer);
+        let id = guard.0;
+        assert_ne!(id, 0);
+        // Another node answering the same id is ignored, and doesn't
+        // consume the call.
+        deliver(&other, id, ack(false));
+        assert!(rx.try_recv().is_err());
+        assert!(pending().lock().contains_key(&id));
+        deliver(&peer, id, ack(true));
+        assert!(matches!(rx.try_recv(), Ok(RpcBody::RpcAck(a)) if a.ok));
+        assert!(!pending().lock().contains_key(&id));
+    }
+
+    #[test]
+    fn a_dropped_call_leaves_nothing_behind() {
+        let (guard, _rx) = register(&[3u8; 32]);
+        let id = guard.0;
+        assert!(pending().lock().contains_key(&id));
+        drop(guard);
+        assert!(!pending().lock().contains_key(&id));
+    }
 }
