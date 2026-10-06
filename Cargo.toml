@@ -18,6 +18,9 @@ ed25519-dalek = { version = "3", features = ["rand_core", "zeroize"] }
 rand = "0.10"
 rand_core = "0.10"
 chacha20poly1305 = "0.11"
+# The data path's AEAD (frames::SessionKey): the same library as rustls's
+# provider, with assembly ChaCha20-Poly1305 (about 2.5x RustCrypto's).
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 aes-gcm = "0.11"
 zeroize = { version = "1", features = ["derive"] }
 subtle = "2.5"
@@ -52,3 +55,11 @@ lz4_flex = { version = "0.14", default-features = false, features = ["safe-encod
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+
+# The kcp crate's sequence-number and timestamp arithmetic (`timediff`,
+# `rcv_nxt + rcv_wnd`) wraps on purpose, as in C KCP, but is written with
+# plain `+`/`-`: with overflow checks (debug builds, tests) a peer's segment
+# with an old or far-away sn/ts panics the session. Release builds don't
+# check; make test builds behave the same (found by the fuzz smoke test).
+[profile.dev.package.kcp]
+overflow-checks = false

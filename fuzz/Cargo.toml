@@ -25,6 +25,7 @@ webjet-core = { path = "../crates/webjet-core" }
 webjet-proto = { path = "../crates/webjet-proto" }
 webjet-net = { path = "../crates/webjet-net", default-features = false }
 webjetd = { path = "../crates/webjetd", default-features = false }
+serde_json = "1"
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 
 [dev-dependencies]
@@ -37,6 +38,13 @@ members = ["."]
 
 [profile.release]
 debug = 1
+
+# Wrapping arithmetic in the kcp crate; see the main Cargo.toml.
+[profile.dev.package.kcp]
+overflow-checks = false
+
+[profile.release.package.kcp]
+overflow-checks = false
 
 [[bin]]
 name = "proto"
@@ -97,6 +105,12 @@ bench = false
 [[bin]]
 name = "dns"
 path = "fuzz_targets/dns.rs"
+required-features = ["libfuzzer"]
+test = false
+
+[[bin]]
+name = "control_request"
+path = "fuzz_targets/control_request.rs"
 required-features = ["libfuzzer"]
 test = false
 doc = false

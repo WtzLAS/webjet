@@ -971,6 +971,85 @@ pub fn build_view(
     offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
 ) -> View {
     let mut v = View::default();
+    view_accounts(&mut v, tree, root, offline_acct_tombs);
+    let ctrl = view_certs(&mut v, certs);
+    // Nodes and singletons.
+    for (_, e) in tree.iter() {
+        let Ok(val) = leaf::decode(e.kind, &e.key, &e.bytes) else {
+            tracing::warn!("undecodable leaf of kind {} in the tree", e.kind);
+            continue;
+        };
+        match val {
+            LeafValue::Node(r) => {
+                let (info, offline_tomb) = node_info(&v, r, offline_node_tombs);
+                if offline_tomb {
+                    v.tombstoned_nodes.insert(info.id);
+                }
+                v.nodes.insert(info.id, info);
+            }
+            LeafValue::NodeTombstone(t) => {
+                v.tombstoned_nodes.insert(crypto::opt_k32(&t.node_id));
+            }
+            LeafValue::Policy(p) => match Policy::from_wire(&p) {
+                Ok(pol) => {
+                    v.network_version = v.network_version.max(p.version);
+                    v.policy_version = p.version;
+                    v.policy = pol;
+                    v.policy_wire = Some(p);
+                }
+                Err(e) => tracing::error!("policy in the tree does not parse: {e}"),
+            },
+            LeafValue::Dns(d) => {
+                v.network_version = v.network_version.max(d.version);
+                v.dns = Some(d);
+            }
+            LeafValue::Seeds(s) => {
+                v.network_version = v.network_version.max(s.version);
+                v.seeds = Some(s);
+            }
+            LeafValue::Limits(l) => {
+                v.network_version = v.network_version.max(l.version);
+                v.limits = Some(l);
+            }
+            LeafValue::Transport(t) => {
+                v.network_version = v.network_version.max(t.version);
+                v.transport = Some(t);
+            }
+            LeafValue::Controllers(c) => {
+                v.network_version = v.network_version.max(c.version);
+                v.controller_settings = Some(c);
+            }
+            LeafValue::NodeConfig(c) => {
+                v.node_configs.insert(crypto::opt_k32(&c.node_id), c);
+            }
+            LeafValue::Validity(val) => v.valid_until = val.valid_until,
+            LeafValue::Account(..) | LeafValue::AccountTombstone(..) | LeafValue::Unknown => {}
+        }
+    }
+    for n in v.nodes.values() {
+        v.by_key.insert(n.key, n.id);
+        v.by_name.insert(n.name.clone(), n.id);
+        if n.valid {
+            for ip in &n.ips {
+                v.ip_routes.push((*ip, n.id));
+            }
+        }
+    }
+    view_controllers(&mut v, ctrl);
+    for n in v.nodes.values_mut() {
+        n.control = v.controllers.contains_key(&n.id);
+    }
+    v
+}
+
+/// Accounts: signature and signer checks (§6.10, §10.2), into `v.accounts`
+/// and `v.tombstoned_accounts`.
+fn view_accounts(
+    v: &mut View,
+    tree: &Tree,
+    root: &Bytes32,
+    offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
+) {
     // Accounts first: signature and signer checks (§6.10, §10.2).
     let mut raw_accounts: Vec<(wp::AccountRecord, crypto::Verified)> = Vec::new();
     for (_, e) in tree.iter() {
@@ -1039,6 +1118,14 @@ pub fn build_view(
             );
         }
     }
+}
+
+/// The valid controller signing-key certificates, into `v.valid_certs`;
+/// returns node → (signing key id, signed by the root).
+fn view_certs(
+    v: &mut View,
+    certs: &BTreeMap<Bytes32, CertEntry>,
+) -> HashMap<Bytes32, Vec<(Bytes32, bool)>> {
     // Valid certs (§6.5): root-signed, or signed by an admin that isn't
     // revoked and still has the key it signed with. Certs aren't ordered by
     // the log, so a cert signed with a revoked or replaced admin key can't be
@@ -1063,103 +1150,57 @@ pub fn build_view(
             None => e.push((kid, c.issuer.is_none())),
         }
     }
-    // Nodes and singletons.
-    for (_, e) in tree.iter() {
-        let Ok(val) = leaf::decode(e.kind, &e.key, &e.bytes) else {
-            tracing::warn!("undecodable leaf of kind {} in the tree", e.kind);
-            continue;
-        };
-        match val {
-            LeafValue::Node(r) => {
-                let id = crypto::opt_k32(&r.node_id);
-                let roles = r.roles.clone().unwrap_or_default();
-                let owner = crypto::opt_k32(&r.owner);
-                let offline_tomb = offline_node_tombs
-                    .get(&id)
-                    .map(|(t, _)| t.version > r.version)
-                    .unwrap_or(false);
-                let owner_ok = v.accounts.get(&owner).map(|a| a.valid).unwrap_or(false);
-                let key = crypto::opt_k32(&r.identity_key);
-                let info = NodeInfo {
-                    id,
-                    key,
-                    name: r.name.clone().unwrap_or_default(),
-                    owner,
-                    ips: r
-                        .overlay_ips
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .filter_map(cidr_to_net)
-                        .collect(),
-                    tags: r.tags.clone().unwrap_or_default(),
-                    routes: r
-                        .routes
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .filter_map(|g| Grant::from_wire(g).ok())
-                        .collect(),
-                    data: roles.contains(&wp::Role::Data),
-                    relay: roles.contains(&wp::Role::Relay),
-                    control: false,
-                    control_role: r.control == Some(true),
-                    valid: !offline_tomb && owner_ok && key != [0u8; 32],
-                    rec: r,
-                };
-                if offline_tomb {
-                    v.tombstoned_nodes.insert(id);
-                }
-                v.nodes.insert(id, info);
-            }
-            LeafValue::NodeTombstone(t) => {
-                v.tombstoned_nodes.insert(crypto::opt_k32(&t.node_id));
-            }
-            LeafValue::Policy(p) => match Policy::from_wire(&p) {
-                Ok(pol) => {
-                    v.network_version = v.network_version.max(p.version);
-                    v.policy_version = p.version;
-                    v.policy = pol;
-                    v.policy_wire = Some(p);
-                }
-                Err(e) => tracing::error!("policy in the tree does not parse: {e}"),
-            },
-            LeafValue::Dns(d) => {
-                v.network_version = v.network_version.max(d.version);
-                v.dns = Some(d);
-            }
-            LeafValue::Seeds(s) => {
-                v.network_version = v.network_version.max(s.version);
-                v.seeds = Some(s);
-            }
-            LeafValue::Limits(l) => {
-                v.network_version = v.network_version.max(l.version);
-                v.limits = Some(l);
-            }
-            LeafValue::Transport(t) => {
-                v.network_version = v.network_version.max(t.version);
-                v.transport = Some(t);
-            }
-            LeafValue::Controllers(c) => {
-                v.network_version = v.network_version.max(c.version);
-                v.controller_settings = Some(c);
-            }
-            LeafValue::NodeConfig(c) => {
-                v.node_configs.insert(crypto::opt_k32(&c.node_id), c);
-            }
-            LeafValue::Validity(val) => v.valid_until = val.valid_until,
-            LeafValue::Account(..) | LeafValue::AccountTombstone(..) | LeafValue::Unknown => {}
-        }
-    }
-    for n in v.nodes.values() {
-        v.by_key.insert(n.key, n.id);
-        v.by_name.insert(n.name.clone(), n.id);
-        if n.valid {
-            for ip in &n.ips {
-                v.ip_routes.push((*ip, n.id));
-            }
-        }
-    }
+    ctrl
+}
+
+/// A node record as the view shows it; `true` when an offline tombstone
+/// newer than the record revokes it.
+fn node_info(
+    v: &View,
+    r: wp::NodeRecord,
+    offline_node_tombs: &BTreeMap<Bytes32, (wp::Tombstone, Vec<u8>)>,
+) -> (NodeInfo, bool) {
+    let id = crypto::opt_k32(&r.node_id);
+    let roles = r.roles.clone().unwrap_or_default();
+    let owner = crypto::opt_k32(&r.owner);
+    let offline_tomb = offline_node_tombs
+        .get(&id)
+        .map(|(t, _)| t.version > r.version)
+        .unwrap_or(false);
+    let owner_ok = v.accounts.get(&owner).map(|a| a.valid).unwrap_or(false);
+    let key = crypto::opt_k32(&r.identity_key);
+    let info = NodeInfo {
+        id,
+        key,
+        name: r.name.clone().unwrap_or_default(),
+        owner,
+        ips: r
+            .overlay_ips
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(cidr_to_net)
+            .collect(),
+        tags: r.tags.clone().unwrap_or_default(),
+        routes: r
+            .routes
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|g| Grant::from_wire(g).ok())
+            .collect(),
+        data: roles.contains(&wp::Role::Data),
+        relay: roles.contains(&wp::Role::Relay),
+        control: false,
+        control_role: r.control == Some(true),
+        valid: !offline_tomb && owner_ok && key != [0u8; 32],
+        rec: r,
+    };
+    (info, offline_tomb)
+}
+
+/// The controllers, into `v.controllers`.
+fn view_controllers(v: &mut View, ctrl: HashMap<Bytes32, Vec<(Bytes32, bool)>>) {
     // CONTROL (§4): a valid node with a valid cert and the `control` role.
     // A record that doesn't mention the role (from before it was one) counts
     // with a root-signed cert, as it always did; an admin's cert needs the
@@ -1180,10 +1221,6 @@ pub fn build_view(
             v.controllers.insert(id, keys);
         }
     }
-    for n in v.nodes.values_mut() {
-        n.control = v.controllers.contains_key(&n.id);
-    }
-    v
 }
 
 /// The default resolver addresses: per address family, the highest host

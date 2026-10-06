@@ -329,6 +329,18 @@ pub fn dns(data: &[u8]) {
     webjetd::dns::fuzzing::query_and_answer(query, response);
 }
 
+/// Control-channel request lines (`webjetd::control::Request`): every
+/// local user may send them. A line that parses must write back as JSON
+/// that parses to the same request.
+pub fn control_request(data: &[u8]) {
+    use webjetd::control::Request;
+    let Ok(req) = serde_json::from_slice::<Request>(data) else {
+        return;
+    };
+    let back: Request = serde_json::from_value(req.to_json()).expect("request round trip");
+    assert_eq!(back, req, "request round trip");
+}
+
 /// A fuzz target: panics on a bug.
 pub type Target = fn(&[u8]);
 
@@ -342,4 +354,5 @@ pub const TARGETS: &[(&str, Target)] = &[
     ("kcp_session", kcp_session),
     ("hop_record", hop_record),
     ("dns", dns),
+    ("control_request", control_request),
 ];

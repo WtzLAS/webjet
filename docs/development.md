@@ -93,6 +93,7 @@ client (§20). It is its own workspace, outside `cargo test --workspace`.
 | `kcp_session` | FEC shards and KCP segments after the gate, as a session processes them (`kcp::fuzzing`) |
 | `hop_record` | Hop record framing (TLS/AnyTLS/KCP hops), `CONTROL_ZSTD` payloads, HopControl |
 | `dns` | The local resolver: client queries and forwarded zones' answers (`dns::fuzzing`) |
+| `control_request` | Control-channel request lines (`control::Request`): parse, and parsed requests round-trip |
 
 Two ways to run them:
 
@@ -116,6 +117,13 @@ test replays every file there. A target fails by panicking, so new targets
 should assert the invariants they can (round trips, size caps), not only
 call the parser. When adding a parser for untrusted input, add a target and
 seeds for it.
+
+The kcp crate's sequence-number and timestamp arithmetic wraps by design
+but uses plain `+`/`-`, so `Cargo.toml` and `fuzz/Cargo.toml` turn off
+overflow checks for that crate alone (`[profile.*.package.kcp]`); with them
+on, a peer's segment with an old or far-away `sn`/`ts` panicked the session
+in debug builds and tests (release builds were never affected). Keep that
+setting while the crate is used.
 
 ## Wire formats
 
@@ -249,19 +257,27 @@ hook from `tasks::install_panic_hook`, installed by `logging::init`).
 
 ## The control channel
 
-Every local user can talk to the agent's control socket (`control.rs`), so
-every command is listed in `control::COMMANDS` with its access class:
-`Read` (shows state; changes nothing), `Signed` (only acts on material whose
+Every local user can talk to the agent's control socket (`control/`), so
+every command is listed in `control::COMMANDS` with its access class: `Read`
+(shows state; changes nothing), `Signed` (only acts on material whose
 account, admin, root or emergency signature is checked) or `Capability`
-(needs a secret, the enrollment token). `handle` refuses commands that
-aren't in the table, and a unit test checks that the table and `handle`
-name the same commands and that only the known state-changing commands are
-not `Read`. A new command needs an entry; a new state-changing one also has
-to be added to that test, together with its signature check. Requests are
-limited to 4 MiB per line and 64 connections at once. `log` and `snapshot`
-take admin-signed requests (`controller::audit`); a snapshot reply holds the
-PSKs and the camouflage key, so `compression::secret_rpc` keeps it
-uncompressed like Raft traffic.
+(needs a secret, the enrollment token). Requests are one typed enum,
+`control::Request` (`control/request.rs`), which webjetd parses and
+webjetctl, webjet-app and `webjetctl local enroll` send through
+`control::client::call`; its wire form is the plain JSON line `{"cmd":
+"...", <arguments>}` (binary arguments base64, node ids hex), so agents and
+clients of other versions still understand each other, and a new argument
+must be optional. `handle` refuses commands that aren't in the table, then
+parses the arguments and hands the `Request` to `control/commands.rs` (one
+function per command). Unit tests check that the table and the enum name the
+same commands, that the enum writes the same JSON as before, and that only
+the known state-changing commands are not `Read`. A new command needs a
+variant and an entry; a new state-changing one also has to be added to that
+test, together with its signature check. Requests are limited to 4 MiB per
+line and 64 connections at once. `log` and `snapshot` take admin-signed
+requests (`controller::audit`); a snapshot reply holds the PSKs and the
+camouflage key, so `compression::secret_rpc` keeps it uncompressed like Raft
+traffic.
 
 The signer (`controller/signer.rs`) listens with `ipc::Access::Private`, or
 `Group` (mode 0660) with `--group-access`, which the systemd unit from
@@ -337,6 +353,26 @@ Notes:
   Windows machine.
 - Shell scripts that create a file and run it in the same step: `chmod +x`
   first, or start them with `sh script.sh`.
+
+## Data path cost
+
+`e2e::tests::data_path_cost` (ignored by default) times one 1200-byte
+packet through an established session on a relayed circuit: `send` (seal,
+circuit and hop choice, relay header, hop record) and `on_frame` (open,
+replay window, data plane). Run it in release before and after touching
+the hot path:
+
+```sh
+cargo test --release -p webjetd --lib e2e::tests::data_path_cost -- --ignored --nocapture
+```
+
+`WEBJET_BENCH_ROUNDS` sets the packet count (default 200 000); with a large
+count, `sample <pid>` (macOS) or `perf record` shows where the time goes.
+On an M-series Mac it measured about 2.8/2.5 µs per packet (send/receive)
+with RustCrypto's ChaCha20-Poly1305 and 1.5/1.3 µs after `frames::SessionKey`
+moved to aws-lc's (the same library rustls uses); the AEAD is now most of
+the remaining cost. The KCP gate (`webjet_net::gate`) still uses RustCrypto's
+XChaCha20-Poly1305, which aws-lc-rs doesn't offer.
 
 ## Docker image
 

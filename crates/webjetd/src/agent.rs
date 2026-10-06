@@ -92,7 +92,13 @@ pub async fn enroll(cfg: &Config, ticket_str: &str) -> Result<()> {
     if paths.node().exists() {
         let nf: Option<NodeFile> = state::load_json(&paths.node())?;
         if nf.map(|n| n.bootstrap).unwrap_or(false) && cfg.control_socket.exists() {
-            let r = crate::control::client::call(&cfg.control_socket, serde_json::json!({"cmd": "redeem_self", "token": state::b64(&ticket.token.clone().unwrap_or_default())})).await?;
+            let r = crate::control::client::call(
+                &cfg.control_socket,
+                &crate::control::Request::RedeemSelf {
+                    token: ticket.token.clone().unwrap_or_default(),
+                },
+            )
+            .await?;
             println!("enrolled this controller: {r}");
             return Ok(());
         }

@@ -7674,6 +7674,7 @@ name = "webjet-core"
 version = "0.7.1"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "base64 0.23.1",
  "blake3",
  "chacha20poly1305",

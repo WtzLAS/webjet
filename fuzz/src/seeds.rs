@@ -188,6 +188,18 @@ pub fn for_target(name: &str) -> Vec<Vec<u8>> {
             let ptr = dns_query(8, "10.1.99.10.in-addr.arpa", 12);
             vec![pair(&q, &a), pair(&ptr, &dns_answer(8, "x", &[]))]
         }
+        "control_request" => [
+            r#"{"cmd":"status"}"#,
+            r#"{"cmd":"node_config","node":"0707070707070707070707070707070707070707070707070707070707070707"}"#,
+            r#"{"cmd":"submit_op","signed":"c2lnbmVk"}"#,
+            r#"{"cmd":"submit_offline","items":["YQ==","Yg=="]}"#,
+            r#"{"cmd":"ping","target":"nas","count":3,"size":56}"#,
+            r#"{"cmd":"metrics","all":true}"#,
+            r#"{"cmd":"cert_request","node":null}"#,
+        ]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect(),
         _ => Vec::new(),
     }
 }

@@ -2618,9 +2618,9 @@ name = "webjet-core"
 version = "0.7.1"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "base64",
  "blake3",
- "chacha20poly1305",
  "ed25519-dalek",
  "hex",
  "ipnet",
@@ -2644,6 +2644,7 @@ dependencies = [
  "futures",
  "libfuzzer-sys",
  "rand",
+ "serde_json",
  "webjet-core",
  "webjet-net",
  "webjet-proto",

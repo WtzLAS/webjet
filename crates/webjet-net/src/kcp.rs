@@ -519,6 +519,119 @@ impl Write for OutQueue {
     }
 }
 
+/// A KCP stream as every session sets it up (§17.2).
+fn new_kcp(conv: u32, out: OutQueue) -> kcp::Kcp<OutQueue> {
+    let mut kcp = kcp::Kcp::new_stream(conv, out);
+    let _ = kcp.set_mtu(KCP_MTU);
+    kcp.set_nodelay(true, 10, 2, true); // no-delay, 10 ms, fast resend after 2 dup acks, no cwnd
+    kcp.set_wndsize(256, 1024);
+    kcp
+}
+
+/// What one datagram (`kind || body`, as `recv_loop` hands it to a session)
+/// carries for the session.
+#[derive(Debug, PartialEq)]
+enum Inbound<'a> {
+    /// An FEC shard (from a SHARD, or an OPEN after its timestamp and nonce).
+    Shard(&'a [u8]),
+    /// The peer's loss feedback: the line loss it saw before FEC recovery.
+    Loss(f64),
+    Ignore,
+}
+
+fn inbound(d: &[u8]) -> Inbound<'_> {
+    let (Some(&kind), Some(body)) = (d.first(), d.get(1..)) else {
+        return Inbound::Ignore;
+    };
+    match kind {
+        K_SHARD => Inbound::Shard(body),
+        K_OPEN if body.len() >= 24 => Inbound::Shard(&body[24..]),
+        K_STATS if body.len() >= 8 => {
+            let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
+            let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
+            if exp > 0.0 {
+                Inbound::Loss(((exp - recv) / exp).clamp(0.0, 1.0))
+            } else {
+                Inbound::Ignore
+            }
+        }
+        _ => Inbound::Ignore,
+    }
+}
+
+/// The next message KCP has ready for the user, if any. A hostile peer
+/// can't make KCP deliver more than it buffered (its receive window), so
+/// the cap only guards against a broken peeksize.
+fn take_ready(kcp: &mut kcp::Kcp<OutQueue>) -> Option<Vec<u8>> {
+    let n = kcp.peeksize().ok().filter(|n| *n <= 64 << 20)?;
+    let mut b = vec![0u8; n];
+    kcp.recv(&mut b).ok()?;
+    Some(b)
+}
+
+/// A STATS datagram (before sealing): what we received of what the peer's
+/// shard groups said it sent (§17.6).
+fn stats_frame(conv: u32, received: u64, expected: u64) -> Vec<u8> {
+    let mut inner = Vec::with_capacity(13);
+    inner.push(K_STATS);
+    inner.extend_from_slice(&conv.to_be_bytes());
+    inner.extend_from_slice(&(received.min(u64::from(u32::MAX)) as u32).to_be_bytes());
+    inner.extend_from_slice(&(expected.min(u64::from(u32::MAX)) as u32).to_be_bytes());
+    inner
+}
+
+/// A shard as a datagram (before sealing): SHARD once the peer answered,
+/// else OPEN with a fresh timestamp and nonce for the listener's gate.
+fn shard_frame(opened: bool, conv: u32, shard: &[u8]) -> Vec<u8> {
+    let mut inner = Vec::with_capacity(shard.len() + 30);
+    if opened {
+        inner.push(K_SHARD);
+        inner.extend_from_slice(&conv.to_be_bytes());
+    } else {
+        inner.push(K_OPEN);
+        inner.extend_from_slice(&conv.to_be_bytes());
+        inner.extend_from_slice(&now_ms().to_be_bytes());
+        inner.extend_from_slice(&rand::random::<[u8; 16]>());
+    }
+    inner.extend_from_slice(shard);
+    inner
+}
+
+/// Token bucket for the paced send rate: refills at the pacing rate, holds
+/// at most 10 ms of it plus a 16 kB burst.
+struct Pacer {
+    tokens: f64,
+    last: Instant,
+}
+
+impl Pacer {
+    const BURST: f64 = 16_000.0;
+
+    fn new(now: Instant) -> Pacer {
+        Pacer {
+            tokens: Self::BURST,
+            last: now,
+        }
+    }
+
+    /// Refill for the time since the last call, at `rate` bytes/s.
+    fn refill(&mut self, now: Instant, rate: f64) {
+        self.tokens = (self.tokens + now.duration_since(self.last).as_secs_f64() * rate)
+            .min(rate * 0.01 + Self::BURST);
+        self.last = now;
+    }
+
+    /// Spend `len` bytes if there are enough tokens.
+    fn take(&mut self, len: usize) -> bool {
+        if self.tokens >= len as f64 {
+            self.tokens -= len as f64;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 async fn run_session(
     ep: Arc<UdpEndpoint>,
     peer: SocketAddr,
@@ -529,10 +642,7 @@ async fn run_session(
     stats: Arc<KcpStats>,
 ) {
     let out = OutQueue::default();
-    let mut kcp = kcp::Kcp::new_stream(conv, out.clone());
-    let _ = kcp.set_mtu(KCP_MTU);
-    kcp.set_nodelay(true, 10, 2, true); // no-delay, 10 ms, fast resend after 2 dup acks, no cwnd
-    kcp.set_wndsize(256, 1024);
+    let mut kcp = new_kcp(conv, out.clone());
     let start = Instant::now();
     let ms = |t: Instant| t.duration_since(start).as_millis() as u32;
     let mut enc = fec::Encoder::new();
@@ -541,8 +651,7 @@ async fn run_session(
     let mut opened = !dialer; // the dialer sends OPENs until it hears back
     let mut last_rx = Instant::now();
     let mut paced: VecDeque<Vec<u8>> = VecDeque::new();
-    let mut tokens: f64 = 16_000.0;
-    let mut last_tick = Instant::now();
+    let mut pacer = Pacer::new(Instant::now());
     let mut fec_flush_at: Option<Instant> = None;
     let mut delivery = Delivery::new(Instant::now());
     let mut stats_sent_at = Instant::now();
@@ -594,31 +703,23 @@ async fn run_session(
                 }
                 for d in batch {
                     stats.wire_rx.fetch_add(d.len() as u64, Ordering::Relaxed);
-                    let (kind, body) = (d[0], &d[1..]);
-                    let shard = match kind {
-                        K_SHARD => body,
-                        K_OPEN if body.len() >= 24 => &body[24..],
-                        K_STATS if body.len() >= 8 => {
-                            let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
-                            let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
-                            if exp > 0.0 {
-                                enc.adapt(((exp - recv) / exp).clamp(0.0, 1.0));
-                                stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
+                    match inbound(&d) {
+                        Inbound::Shard(shard) => {
+                            for pkt in dec.push(shard) {
+                                let _ = kcp.input(&pkt);
+                                flush_now = true;
                             }
-                            continue;
                         }
-                        _ => continue,
-                    };
-                    for pkt in dec.push(shard) {
-                        let _ = kcp.input(&pkt);
-                        flush_now = true;
+                        Inbound::Loss(loss) => {
+                            enc.adapt(loss);
+                            stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
+                        }
+                        Inbound::Ignore => {}
                     }
                 }
                 stats.fec_recovered.store(dec.recovered, Ordering::Relaxed);
                 // Deliver received bytes to the user.
-                while let Ok(n) = kcp.peeksize() {
-                    let mut b = vec![0u8; n];
-                    if kcp.recv(&mut b).is_err() { break; }
+                while let Some(b) = take_ready(&mut kcp) {
                     if user.write_all(&b).await.is_err() { user_open = false; break; }
                 }
             }
@@ -675,11 +776,7 @@ async fn run_session(
             // Line loss before FEC recovery, counted from shard group gaps.
             let (received, expected) = dec.take_loss();
             if expected > 0 {
-                let mut inner = vec![K_STATS];
-                inner.extend_from_slice(&conv.to_be_bytes());
-                inner.extend_from_slice(&(received.min(u64::from(u32::MAX)) as u32).to_be_bytes());
-                inner.extend_from_slice(&(expected.min(u64::from(u32::MAX)) as u32).to_be_bytes());
-                seal_and_send(inner).await;
+                seal_and_send(stats_frame(conv, received, expected)).await;
             }
             stats_sent_at = now;
             if let Some(rtt) = kcp_rtt(&kcp) {
@@ -687,25 +784,10 @@ async fn run_session(
             }
         }
         // Pace.
-        let rate = bbr.pacing_rate(now);
-        tokens = (tokens + now.duration_since(last_tick).as_secs_f64() * rate)
-            .min(rate * 0.01 + 16_000.0);
-        last_tick = now;
-        while paced.front().is_some_and(|s| tokens >= s.len() as f64) {
+        pacer.refill(now, bbr.pacing_rate(now));
+        while paced.front().is_some_and(|s| pacer.take(s.len())) {
             let Some(s) = paced.pop_front() else { break };
-            tokens -= s.len() as f64;
-            let mut inner = Vec::with_capacity(s.len() + 30);
-            if opened {
-                inner.push(K_SHARD);
-                inner.extend_from_slice(&conv.to_be_bytes());
-            } else {
-                inner.push(K_OPEN);
-                inner.extend_from_slice(&conv.to_be_bytes());
-                inner.extend_from_slice(&now_ms().to_be_bytes());
-                inner.extend_from_slice(&rand::random::<[u8; 16]>());
-            }
-            inner.extend_from_slice(&s);
-            seal_and_send(inner).await;
+            seal_and_send(shard_frame(opened, conv, &s)).await;
         }
         if paced.len() > 8192 {
             paced.drain(..paced.len() - 8192);
@@ -774,44 +856,23 @@ pub mod fuzzing {
     /// Returns the bytes delivered to the user.
     pub fn session_input(conv: u32, datagrams: &[&[u8]]) -> Vec<u8> {
         let out = OutQueue::default();
-        let mut kcp = kcp::Kcp::new_stream(conv, out.clone());
-        let _ = kcp.set_mtu(KCP_MTU);
-        kcp.set_nodelay(true, 10, 2, true);
-        kcp.set_wndsize(256, 1024);
+        let mut kcp = new_kcp(conv, out.clone());
         let mut dec = fec::Decoder::new();
         let mut enc = fec::Encoder::new();
         let mut delivered = Vec::new();
         let mut next_new_sn = None;
         let mut new_lens = VecDeque::new();
         for (i, d) in datagrams.iter().enumerate() {
-            let (Some(&kind), Some(body)) = (d.first(), d.get(1..)) else {
-                continue;
-            };
-            let shard = match kind {
-                K_SHARD => body,
-                K_OPEN if body.len() >= 24 => &body[24..],
-                K_STATS if body.len() >= 8 => {
-                    let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
-                    let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
-                    if exp > 0.0 {
-                        enc.adapt(((exp - recv) / exp).clamp(0.0, 1.0));
+            match inbound(d) {
+                Inbound::Shard(shard) => {
+                    for pkt in dec.push(shard) {
+                        let _ = kcp.input(&pkt);
                     }
-                    continue;
                 }
-                _ => continue,
-            };
-            for pkt in dec.push(shard) {
-                let _ = kcp.input(&pkt);
+                Inbound::Loss(loss) => enc.adapt(loss),
+                Inbound::Ignore => continue,
             }
-            while let Ok(n) = kcp.peeksize() {
-                // A hostile peer can't make KCP deliver more than it buffered.
-                if n > 64 << 20 {
-                    break;
-                }
-                let mut b = vec![0u8; n];
-                if kcp.recv(&mut b).is_err() {
-                    break;
-                }
+            while let Some(b) = take_ready(&mut kcp) {
                 delivered.extend_from_slice(&b);
             }
             let _ = kcp.update(10 * i as u32);
@@ -843,6 +904,68 @@ mod tests {
         e.keys.insert(1, [5; 32]);
         e.current = 1;
         Arc::new(parking_lot::RwLock::new(e))
+    }
+
+    #[test]
+    fn inbound_datagrams_are_classified() {
+        let mut open = vec![K_OPEN];
+        open.extend_from_slice(&[0; 24]);
+        open.extend_from_slice(b"shard");
+        assert_eq!(inbound(&open), Inbound::Shard(b"shard"));
+        assert_eq!(inbound(&[K_SHARD, 1, 2]), Inbound::Shard(&[1, 2]));
+        // An OPEN too short for its timestamp and nonce carries nothing.
+        assert_eq!(inbound(&[K_OPEN, 1, 2, 3]), Inbound::Ignore);
+        let frame = stats_frame(7, 90, 100);
+        assert_eq!(frame.len(), 13);
+        // `recv_loop` strips kind and conv, then hands `kind || body` on.
+        let mut d = vec![K_STATS];
+        d.extend_from_slice(&frame[5..]);
+        match inbound(&d) {
+            Inbound::Loss(l) => assert!((l - 0.1).abs() < 1e-9, "{l}"),
+            x => panic!("{x:?}"),
+        }
+        // More received than expected is no loss, nothing expected no report.
+        d[1..5].copy_from_slice(&200u32.to_be_bytes());
+        assert_eq!(inbound(&d), Inbound::Loss(0.0));
+        let empty = stats_frame(7, 0, 0);
+        assert_eq!(
+            inbound(&[&[K_STATS][..], &empty[5..]].concat()),
+            Inbound::Ignore
+        );
+        assert_eq!(inbound(&[]), Inbound::Ignore);
+        assert_eq!(inbound(&[99, 1]), Inbound::Ignore);
+    }
+
+    #[test]
+    fn shard_frames_open_until_the_peer_answers() {
+        let f = shard_frame(false, 9, b"x");
+        assert_eq!(f[0], K_OPEN);
+        assert_eq!(&f[1..5], &9u32.to_be_bytes());
+        assert_eq!(f.len(), 5 + 24 + 1);
+        assert_eq!(
+            inbound(&[&[K_OPEN][..], &f[5..]].concat()),
+            Inbound::Shard(b"x")
+        );
+        assert_eq!(
+            shard_frame(true, 9, b"x"),
+            [&[K_SHARD][..], &9u32.to_be_bytes(), b"x"].concat()
+        );
+    }
+
+    #[test]
+    fn the_pacer_refills_at_the_rate_up_to_its_burst() {
+        let t0 = Instant::now();
+        let mut p = Pacer::new(t0);
+        assert!(p.take(16_000));
+        assert!(!p.take(1));
+        // 1 MB/s for 5 ms: 5 kB.
+        p.refill(t0 + Duration::from_millis(5), 1e6);
+        assert!(p.take(4_999));
+        assert!(!p.take(2));
+        // A long idle period fills only up to 10 ms of rate plus the burst.
+        p.refill(t0 + Duration::from_secs(10), 1e6);
+        assert!(p.take(26_000));
+        assert!(!p.take(1));
     }
 
     #[tokio::test]

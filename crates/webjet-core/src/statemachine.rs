@@ -620,132 +620,20 @@ impl Machine {
                 self.create_enrollment(&c, ts, random, fx)?;
             }
             AccountOp::RenameNode(r) => {
-                let id = opt_k32(&r.node_id);
-                owner_or_admin(&id)?;
-                let mut rec = self.live_node(&id)?;
-                let name = r.name.clone().unwrap_or_default();
-                if !valid_name(&name) {
-                    return rej("invalid node name");
-                }
-                self.check_name_free(&name, Some(&id))?;
-                rec.name = Some(name.clone());
-                rec.version += 1;
-                fx.leaves
-                    .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
-                fx.outcome.description = format!("rename node {} to {name}", crypto::short(&id));
-                fx.outcome.node_id = Some(id);
+                owner_or_admin(&opt_k32(&r.node_id))?;
+                self.rename_node(*r, fx)?;
             }
             AccountOp::UpdateNode(u) => {
                 need_admin()?;
-                let id = opt_k32(&u.node_id);
-                let mut rec = self.live_node(&id)?;
-                if let Some(o) = u.owner
-                    && !o.is_zero()
-                {
-                    let oid = o.to_bytes();
-                    if !self
-                        .view
-                        .accounts
-                        .get(&oid)
-                        .map(|a| a.valid)
-                        .unwrap_or(false)
-                    {
-                        return rej("new owner is not a valid account");
-                    }
-                    rec.owner = Some(o);
-                }
-                if u.set_overlay_ips {
-                    rec.overlay_ips = Some(
-                        self.check_ips(&u.overlay_ips.clone().unwrap_or_default(), Some(&id))?,
-                    );
-                }
-                if u.set_roles {
-                    rec.roles = Some(sort_dedup(u.roles.clone().unwrap_or_default()));
-                }
-                if let Some(ctl) = u.control {
-                    if !ctl && self.members.contains(&id) {
-                        return rej(
-                            "the node is a controller cluster member; remove it from the cluster first",
-                        );
-                    }
-                    rec.control = Some(ctl);
-                }
-                if u.set_tags {
-                    rec.tags = Some(check_tags(&u.tags.clone().unwrap_or_default())?);
-                }
-                if u.set_routes {
-                    rec.routes =
-                        Some(self.check_routes(&u.routes.clone().unwrap_or_default(), &id)?);
-                }
-                rec.version += 1;
-                fx.leaves
-                    .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
-                fx.outcome.description =
-                    format!("update node {}", rec.name.clone().unwrap_or_default());
-                fx.outcome.node_id = Some(id);
+                self.update_node(*u, fx)?;
             }
             AccountOp::TombstoneNode(t) => {
-                let id = opt_k32(&t.node_id);
-                owner_or_admin(&id)?;
-                let rec = self.live_node(&id)?;
-                let tomb = wp::Tombstone {
-                    node_id: Some(crypto::k32(&id)),
-                    version: rec.version + 1,
-                    reason: t.reason.clone(),
-                };
-                fx.leaves
-                    .push((kind::NODE, id, Some(leaf::encode_tombstone(&tomb))));
-                if self.tree.get(kind::NODE_CONFIG, &id).is_some() {
-                    fx.leaves.push((kind::NODE_CONFIG, id, None));
-                }
-                // Drop any pending re-key for it.
-                for (th, p) in &self.pending {
-                    if p.is_rekey && p.node_id == id {
-                        fx.pending_del.push(*th);
-                    }
-                }
-                fx.outcome.description = format!(
-                    "tombstone node {} ({})",
-                    rec.name.unwrap_or_default(),
-                    t.reason.unwrap_or_default()
-                );
-                fx.outcome.node_id = Some(id);
+                owner_or_admin(&opt_k32(&t.node_id))?;
+                self.tombstone_node(*t, fx)?;
             }
             AccountOp::RekeyNode(r) => {
-                let id = opt_k32(&r.node_id);
-                owner_or_admin(&id)?;
-                let mut rec = self.live_node(&id)?;
-                let th = opt_k32(&r.token_hash);
-                if self.pending.contains_key(&th) {
-                    return rej("token already pending");
-                }
-                if r.expires_at <= ts {
-                    return rej("token already expired");
-                }
-                for (t, p) in &self.pending {
-                    if p.is_rekey && p.node_id == id {
-                        fx.pending_del.push(*t);
-                    }
-                }
-                fx.pending_put.push(Pending {
-                    token_hash: th,
-                    expires_at: r.expires_at,
-                    is_rekey: true,
-                    node_id: id,
-                    create: None,
-                });
-                if r.revoke_old_now {
-                    rec.identity_key = Some(crypto::k32(&[0; 32]));
-                    rec.version += 1;
-                    fx.leaves
-                        .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
-                }
-                fx.outcome.description = format!(
-                    "re-key node {} (revoke_old_now={})",
-                    rec.name.unwrap_or_default(),
-                    r.revoke_old_now
-                );
-                fx.outcome.node_id = Some(id);
+                owner_or_admin(&opt_k32(&r.node_id))?;
+                self.rekey_node(*r, ts, fx)?;
             }
             AccountOp::PutAccount(p) => {
                 need_admin()?;
@@ -757,68 +645,13 @@ impl Machine {
             }
             // SetPolicy … SetTransport come from webjetctl before 0.4.0. They
             // stay valid so logs written then replay the same (§15.5).
-            AccountOp::SetPolicy(p) => {
+            op @ (AccountOp::SetPolicy(_)
+            | AccountOp::SetDns(_)
+            | AccountOp::SetSeeds(_)
+            | AccountOp::SetLimits(_)
+            | AccountOp::SetTransport(_)) => {
                 need_admin()?;
-                let pol = p
-                    .policy
-                    .ok_or_else(|| ApplyError::Rejected("missing policy".into()))?;
-                if pol.version <= self.view.policy_version
-                    && self.tree.get(kind::POLICY, &SINGLETON).is_some()
-                {
-                    return rej("policy version must increase");
-                }
-                self.check_policy(&pol)?;
-                fx.leaves
-                    .push((kind::POLICY, SINGLETON, Some(leaf::encode_policy(&pol))));
-                fx.outcome.description = format!("set policy version {}", pol.version);
-            }
-            AccountOp::SetDns(d) => {
-                need_admin()?;
-                let cfg = d
-                    .config
-                    .ok_or_else(|| ApplyError::Rejected("missing DNS config".into()))?;
-                self.check_version(kind::DNS, cfg.version)?;
-                self.validate_dns(&cfg)?;
-                fx.leaves
-                    .push((kind::DNS, SINGLETON, Some(leaf::encode_dns(&cfg))));
-                fx.outcome.description = format!("set DNS config version {}", cfg.version);
-            }
-            AccountOp::SetSeeds(s) => {
-                need_admin()?;
-                let seeds = s
-                    .seeds
-                    .ok_or_else(|| ApplyError::Rejected("missing seeds".into()))?;
-                self.check_version(kind::SEEDS, seeds.version)?;
-                self.check_seeds(&seeds.entries.clone().unwrap_or_default())?;
-                fx.leaves
-                    .push((kind::SEEDS, SINGLETON, Some(leaf::encode_seeds(&seeds))));
-                fx.outcome.description = format!("set seeds version {}", seeds.version);
-            }
-            AccountOp::SetLimits(l) => {
-                need_admin()?;
-                let lim = l
-                    .limits
-                    .ok_or_else(|| ApplyError::Rejected("missing limits".into()))?;
-                self.check_version(kind::LIMITS, lim.version)?;
-                crate::validate::limits(&lim).map_err(|e| ApplyError::Rejected(e.to_string()))?;
-                fx.leaves
-                    .push((kind::LIMITS, SINGLETON, Some(leaf::encode_limits(&lim))));
-                fx.outcome.description = format!("set limits version {}", lim.version);
-            }
-            AccountOp::SetTransport(t) => {
-                need_admin()?;
-                let cfg = t
-                    .config
-                    .ok_or_else(|| ApplyError::Rejected("missing transport config".into()))?;
-                self.check_version(kind::TRANSPORT, cfg.version)?;
-                crate::validate::transport(&cfg)
-                    .map_err(|e| ApplyError::Rejected(e.to_string()))?;
-                fx.leaves.push((
-                    kind::TRANSPORT,
-                    SINGLETON,
-                    Some(leaf::encode_transport(&cfg)),
-                ));
-                fx.outcome.description = format!("set transport config version {}", cfg.version);
+                self.legacy_singleton(op, fx)?;
             }
             AccountOp::SetCamouflageSecret(c) => {
                 need_admin()?;
@@ -870,6 +703,227 @@ impl Machine {
                 fx.outcome.psk_rotated = true;
                 fx.outcome.description = format!("rotate PSK to epoch {}", r.epoch_id);
             }
+        }
+        Ok(())
+    }
+
+    /// `RenameNode`: a new, free name.
+    fn rename_node(
+        &self,
+        r: wp::RenameNode,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let id = opt_k32(&r.node_id);
+        let mut rec = self.live_node(&id)?;
+        let name = r.name.clone().unwrap_or_default();
+        if !valid_name(&name) {
+            return rej("invalid node name");
+        }
+        self.check_name_free(&name, Some(&id))?;
+        rec.name = Some(name.clone());
+        rec.version += 1;
+        fx.leaves
+            .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
+        fx.outcome.description = format!("rename node {} to {name}", crypto::short(&id));
+        fx.outcome.node_id = Some(id);
+        Ok(())
+    }
+
+    /// `UpdateNode` (admins): owner, addresses, roles, tags, routes.
+    fn update_node(
+        &self,
+        u: wp::UpdateNode,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let id = opt_k32(&u.node_id);
+        let mut rec = self.live_node(&id)?;
+        if let Some(o) = u.owner
+            && !o.is_zero()
+        {
+            let oid = o.to_bytes();
+            if !self
+                .view
+                .accounts
+                .get(&oid)
+                .map(|a| a.valid)
+                .unwrap_or(false)
+            {
+                return rej("new owner is not a valid account");
+            }
+            rec.owner = Some(o);
+        }
+        if u.set_overlay_ips {
+            rec.overlay_ips =
+                Some(self.check_ips(&u.overlay_ips.clone().unwrap_or_default(), Some(&id))?);
+        }
+        if u.set_roles {
+            rec.roles = Some(sort_dedup(u.roles.clone().unwrap_or_default()));
+        }
+        if let Some(ctl) = u.control {
+            if !ctl && self.members.contains(&id) {
+                return rej(
+                    "the node is a controller cluster member; remove it from the cluster first",
+                );
+            }
+            rec.control = Some(ctl);
+        }
+        if u.set_tags {
+            rec.tags = Some(check_tags(&u.tags.clone().unwrap_or_default())?);
+        }
+        if u.set_routes {
+            rec.routes = Some(self.check_routes(&u.routes.clone().unwrap_or_default(), &id)?);
+        }
+        rec.version += 1;
+        fx.leaves
+            .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
+        fx.outcome.description = format!("update node {}", rec.name.clone().unwrap_or_default());
+        fx.outcome.node_id = Some(id);
+        Ok(())
+    }
+
+    /// `TombstoneNode`: the node record becomes a tombstone; its config and pending re-keys go.
+    fn tombstone_node(
+        &self,
+        t: wp::TombstoneNode,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let id = opt_k32(&t.node_id);
+        let rec = self.live_node(&id)?;
+        let tomb = wp::Tombstone {
+            node_id: Some(crypto::k32(&id)),
+            version: rec.version + 1,
+            reason: t.reason.clone(),
+        };
+        fx.leaves
+            .push((kind::NODE, id, Some(leaf::encode_tombstone(&tomb))));
+        if self.tree.get(kind::NODE_CONFIG, &id).is_some() {
+            fx.leaves.push((kind::NODE_CONFIG, id, None));
+        }
+        // Drop any pending re-key for it.
+        for (th, p) in &self.pending {
+            if p.is_rekey && p.node_id == id {
+                fx.pending_del.push(*th);
+            }
+        }
+        fx.outcome.description = format!(
+            "tombstone node {} ({})",
+            rec.name.unwrap_or_default(),
+            t.reason.unwrap_or_default()
+        );
+        fx.outcome.node_id = Some(id);
+        Ok(())
+    }
+
+    /// `RekeyNode`: a pending re-key token, optionally revoking the old key now.
+    fn rekey_node(
+        &self,
+        r: wp::RekeyNode,
+        ts: u64,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let id = opt_k32(&r.node_id);
+        let mut rec = self.live_node(&id)?;
+        let th = opt_k32(&r.token_hash);
+        if self.pending.contains_key(&th) {
+            return rej("token already pending");
+        }
+        if r.expires_at <= ts {
+            return rej("token already expired");
+        }
+        for (t, p) in &self.pending {
+            if p.is_rekey && p.node_id == id {
+                fx.pending_del.push(*t);
+            }
+        }
+        fx.pending_put.push(Pending {
+            token_hash: th,
+            expires_at: r.expires_at,
+            is_rekey: true,
+            node_id: id,
+            create: None,
+        });
+        if r.revoke_old_now {
+            rec.identity_key = Some(crypto::k32(&[0; 32]));
+            rec.version += 1;
+            fx.leaves
+                .push((kind::NODE, id, Some(leaf::encode_node(&rec))));
+        }
+        fx.outcome.description = format!(
+            "re-key node {} (revoke_old_now={})",
+            rec.name.unwrap_or_default(),
+            r.revoke_old_now
+        );
+        fx.outcome.node_id = Some(id);
+        Ok(())
+    }
+
+    /// The pre-0.4.0 singleton setters (`SetPolicy` … `SetTransport`), for
+    /// replaying old logs. `op` is one of them.
+    fn legacy_singleton(
+        &self,
+        op: AccountOp,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        match op {
+            AccountOp::SetPolicy(p) => {
+                let pol = p
+                    .policy
+                    .ok_or_else(|| ApplyError::Rejected("missing policy".into()))?;
+                if pol.version <= self.view.policy_version
+                    && self.tree.get(kind::POLICY, &SINGLETON).is_some()
+                {
+                    return rej("policy version must increase");
+                }
+                self.check_policy(&pol)?;
+                fx.leaves
+                    .push((kind::POLICY, SINGLETON, Some(leaf::encode_policy(&pol))));
+                fx.outcome.description = format!("set policy version {}", pol.version);
+            }
+            AccountOp::SetDns(d) => {
+                let cfg = d
+                    .config
+                    .ok_or_else(|| ApplyError::Rejected("missing DNS config".into()))?;
+                self.check_version(kind::DNS, cfg.version)?;
+                self.validate_dns(&cfg)?;
+                fx.leaves
+                    .push((kind::DNS, SINGLETON, Some(leaf::encode_dns(&cfg))));
+                fx.outcome.description = format!("set DNS config version {}", cfg.version);
+            }
+            AccountOp::SetSeeds(s) => {
+                let seeds = s
+                    .seeds
+                    .ok_or_else(|| ApplyError::Rejected("missing seeds".into()))?;
+                self.check_version(kind::SEEDS, seeds.version)?;
+                self.check_seeds(&seeds.entries.clone().unwrap_or_default())?;
+                fx.leaves
+                    .push((kind::SEEDS, SINGLETON, Some(leaf::encode_seeds(&seeds))));
+                fx.outcome.description = format!("set seeds version {}", seeds.version);
+            }
+            AccountOp::SetLimits(l) => {
+                let lim = l
+                    .limits
+                    .ok_or_else(|| ApplyError::Rejected("missing limits".into()))?;
+                self.check_version(kind::LIMITS, lim.version)?;
+                crate::validate::limits(&lim).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+                fx.leaves
+                    .push((kind::LIMITS, SINGLETON, Some(leaf::encode_limits(&lim))));
+                fx.outcome.description = format!("set limits version {}", lim.version);
+            }
+            AccountOp::SetTransport(t) => {
+                let cfg = t
+                    .config
+                    .ok_or_else(|| ApplyError::Rejected("missing transport config".into()))?;
+                self.check_version(kind::TRANSPORT, cfg.version)?;
+                crate::validate::transport(&cfg)
+                    .map_err(|e| ApplyError::Rejected(e.to_string()))?;
+                fx.leaves.push((
+                    kind::TRANSPORT,
+                    SINGLETON,
+                    Some(leaf::encode_transport(&cfg)),
+                ));
+                fx.outcome.description = format!("set transport config version {}", cfg.version);
+            }
+            _ => return rej("not a singleton setter"),
         }
         Ok(())
     }

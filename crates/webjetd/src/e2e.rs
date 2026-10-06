@@ -946,4 +946,116 @@ mod tests {
         assert_eq!(back.probe_seq, u64::MAX);
         assert_eq!(back.route_id, p.route_id);
     }
+
+    /// Per-packet cost of the data path through an established session on
+    /// a relayed circuit: `send` (seal, pick circuit and hop, relay header,
+    /// hop record) and `on_frame` (open, replay check, data plane). Not a
+    /// regression test; run in release when touching the hot path:
+    ///
+    ///   cargo test --release -p webjetd --lib e2e::tests::data_path_cost -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "benchmark"]
+    async fn data_path_cost() {
+        use crate::testnode::{self, Cluster};
+        use webjet_core::testutil::{NodeSpec, packets};
+        let mut c = Cluster::new();
+        let s = c.data_node("src", "10.7.0.2", &[]);
+        let r = c.enroll(NodeSpec {
+            name: "relay",
+            ip: "10.7.0.3",
+            roles: &[wp::Role::Data, wp::Role::Relay],
+            ..Default::default()
+        });
+        let d = c.data_node("dst", "10.7.0.4", &[]);
+        // Some unrelated relays and circuits, as on a busy node.
+        let others: Vec<Bytes32> = (0..20)
+            .map(|i| {
+                c.data_node(&format!("o{i}"), &format!("10.7.1.{}", i + 1), &[])
+                    .0
+            })
+            .collect();
+        c.set_policy(wp::Policy {
+            default_action: wp::Action::Allow,
+            ..Default::default()
+        })
+        .expect("policy");
+        let (n, _dir) = testnode::node(&mut c, s.0, s.1.clone());
+        let (dp, mut tun) = crate::dataplane::Dataplane::for_test(&n);
+        let (hop, mut rx) = n.test_hop(r.0, wp::Transport::TcpTls);
+        let mut keep = Vec::new();
+        for o in &others {
+            keep.push(n.test_hop(*o, wp::Transport::TcpTls));
+        }
+        // Circuits: one to `dst` through the relay, others to other peers.
+        let mut circuits = Vec::new();
+        for (i, peer) in std::iter::once(d.0)
+            .chain(others.iter().copied())
+            .enumerate()
+        {
+            let n2 = n.clone();
+            let relay = r.0;
+            let opening =
+                tokio::spawn(async move { crate::circuit::open(&n2, peer, vec![relay]).await });
+            let o = loop {
+                if let Some(webjet_proto::HopMsg::CircuitOpen(o)) = rx.control().pop() {
+                    break o;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            };
+            crate::circuit::on_accept(
+                &n,
+                &hop,
+                wp::CircuitAccept {
+                    label: o.label,
+                    peer_label: 100 + i as u32,
+                },
+            );
+            circuits.push(opening.await.expect("task").expect("circuit"));
+        }
+        let circ = circuits[0].clone();
+        let sess = n.e2e.get_or_create(&n, &d.0).expect("session");
+        install(&mut sess.inner.lock(), [1; 32], [2; 32], 7, 9);
+        let peer_key = SessionKey::new([2; 32]);
+
+        let payload = packets::udp4([10, 7, 0, 2], [10, 7, 0, 4], 4000, 5000, &[0x5a; 1172]);
+        let reply = packets::udp4([10, 7, 0, 4], [10, 7, 0, 2], 5000, 4000, &[0x5a; 1172]);
+        let rounds: u64 = std::env::var("WEBJET_BENCH_ROUNDS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(200_000);
+
+        let t = Instant::now();
+        for i in 0..rounds {
+            assert!(matches!(
+                send(&n, &d.0, ftype::DATA, &payload, 0),
+                SendResult::Sent
+            ));
+            if i % 512 == 511 {
+                let _ = rx.relay();
+            }
+        }
+        let out_ns = t.elapsed().as_nanos() as f64 / rounds as f64;
+        let _ = rx.relay();
+
+        // Prime conntrack with the outbound flow, then time replies.
+        dp.outbound(payload.clone());
+        let _ = rx.relay();
+        let frames: Vec<Vec<u8>> = (0..rounds)
+            .map(|i| peer_key.seal(ftype::DATA, 7, i, &reply).expect("seal"))
+            .collect();
+        let t = Instant::now();
+        for (i, f) in frames.iter().enumerate() {
+            on_frame(&n, &circ, f, 0);
+            if i % 512 == 511 {
+                while tun.try_recv().is_ok() {}
+            }
+        }
+        let in_ns = t.elapsed().as_nanos() as f64 / rounds as f64;
+        let delivered = sess.rx_packets.load(Ordering::Relaxed);
+        assert_eq!(delivered, rounds);
+        println!(
+            "data path, 1200-byte packets: send {out_ns:.0} ns, receive {in_ns:.0} ns per packet"
+        );
+        drop((keep, circuits));
+    }
 }

@@ -206,30 +206,95 @@ fn pick<'a>(k: &'a Keys, with: &str) -> Result<&'a KeyPair> {
     }
 }
 
+/// The root's certificate for the emergency key (the genesis carries one).
+fn emergency_cert(root: &KeyPair, emergency: &KeyPair) -> Vec<u8> {
+    root.sign_obj(
+        mt::EMERGENCY_KEY_CERT,
+        &wp::EmergencyKeyCert {
+            key: Some(crypto::k32(&emergency.public())),
+        },
+    )
+}
+
+/// `webjetctl root init`: new root and emergency keys.
+fn init(dir: &Path) -> Result<()> {
+    if root_path(dir).exists() {
+        bail!("{} already holds keys", dir.display());
+    }
+    let pass = new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
+    let root = KeyPair::generate();
+    let emergency = KeyPair::generate();
+    write_private(&root_path(dir), &seal(&pass, &root.seed()[..])?)?;
+    write_private(&emergency_path(dir), &seal(&pass, &emergency.seed()[..])?)?;
+    write_public(
+        &dir.join("emergency.cert"),
+        &emergency_cert(&root, &emergency),
+    )?;
+    println!("root key:      {}", crypto::key_b64(&root.public()));
+    println!("emergency key: {}", crypto::key_b64(&emergency.public()));
+    println!("Back both up now: webjetctl root backup --out <media>");
+    Ok(())
+}
+
+/// `webjetctl root restore`: both keys from a backup, under a new passphrase.
+fn restore(dir: &Path, from: &Path) -> Result<()> {
+    let pass = passphrase("WEBJET_BACKUP_PASSPHRASE", "backup passphrase")?;
+    let plain = unseal(&pass, &read(from)?)?;
+    if plain.len() != 64 {
+        bail!("damaged backup");
+    }
+    let newpass = new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
+    write_private(&root_path(dir), &seal(&newpass, &plain[..32])?)?;
+    write_private(&emergency_path(dir), &seal(&newpass, &plain[32..])?)?;
+    let root = keypair_from(&plain[..32])?;
+    let emergency = keypair_from(&plain[32..])?;
+    write_public(
+        &dir.join("emergency.cert"),
+        &emergency_cert(&root, &emergency),
+    )?;
+    println!("restored root key {}", crypto::key_b64(&root.public()));
+    Ok(())
+}
+
+/// `webjetctl root genesis`: the network's genesis, with the first admin.
+fn genesis(dir: &Path, overlay_pool: &[String], admin: &Path, out: &Path) -> Result<()> {
+    let k = load_keys(dir)?;
+    if overlay_pool.is_empty() {
+        bail!("--overlay-pool is required");
+    }
+    let pool: Vec<wp::Cidr> = overlay_pool
+        .iter()
+        .map(|p| Ok(net_to_cidr(&parse_net(p)?)))
+        .collect::<Result<_>>()?;
+    let admin_raw = read(admin)?;
+    let v = crypto::open_expect(&admin_raw, mt::ACCOUNT_RECORD, &[k.root.public()])?;
+    let rec: wp::AccountRecord = v.decode()?;
+    if !rec.admin {
+        bail!("{} is not an admin account", admin.display());
+    }
+    let cert = emergency_cert(&k.root, &k.emergency);
+    let g = wp::Genesis {
+        root_key: Some(crypto::k32(&k.root.public())),
+        emergency_cert: Some(cert),
+        first_admin: Some(admin_raw),
+        overlay_pool: Some(pool),
+        created_at: now_ms(),
+    };
+    let bytes = g.encode_bytes();
+    webjet_core::store::open_genesis(&bytes)?;
+    write_public(out, &bytes)?;
+    println!(
+        "genesis written to {} (root key {})",
+        out.display(),
+        crypto::key_b64(&k.root.public())
+    );
+    Ok(())
+}
+
 /// Run one `webjetctl root` command with the keys in `dir`.
 pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
     match cmd {
-        RootCmd::Init => {
-            if root_path(dir).exists() {
-                bail!("{} already holds keys", dir.display());
-            }
-            let pass =
-                new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
-            let root = KeyPair::generate();
-            let emergency = KeyPair::generate();
-            write_private(&root_path(dir), &seal(&pass, &root.seed()[..])?)?;
-            write_private(&emergency_path(dir), &seal(&pass, &emergency.seed()[..])?)?;
-            let cert = root.sign_obj(
-                mt::EMERGENCY_KEY_CERT,
-                &wp::EmergencyKeyCert {
-                    key: Some(crypto::k32(&emergency.public())),
-                },
-            );
-            write_public(&dir.join("emergency.cert"), &cert)?;
-            println!("root key:      {}", crypto::key_b64(&root.public()));
-            println!("emergency key: {}", crypto::key_b64(&emergency.public()));
-            println!("Back both up now: webjetctl root backup --out <media>");
-        }
+        RootCmd::Init => init(dir)?,
         RootCmd::Backup { out } => {
             let k = load_keys(dir)?;
             let pass = new_passphrase("WEBJET_BACKUP_PASSPHRASE", "passphrase for the backup")?;
@@ -238,27 +303,7 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             write_private(&out, &seal(&pass, &plain)?)?;
             println!("backup written to {}", out.display());
         }
-        RootCmd::Restore { from } => {
-            let pass = passphrase("WEBJET_BACKUP_PASSPHRASE", "backup passphrase")?;
-            let plain = unseal(&pass, &read(&from)?)?;
-            if plain.len() != 64 {
-                bail!("damaged backup");
-            }
-            let newpass =
-                new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
-            write_private(&root_path(dir), &seal(&newpass, &plain[..32])?)?;
-            write_private(&emergency_path(dir), &seal(&newpass, &plain[32..])?)?;
-            let root = keypair_from(&plain[..32])?;
-            let emergency = keypair_from(&plain[32..])?;
-            let cert = root.sign_obj(
-                mt::EMERGENCY_KEY_CERT,
-                &wp::EmergencyKeyCert {
-                    key: Some(crypto::k32(&emergency.public())),
-                },
-            );
-            write_public(&dir.join("emergency.cert"), &cert)?;
-            println!("restored root key {}", crypto::key_b64(&root.public()));
-        }
+        RootCmd::Restore { from } => restore(dir, &from)?,
         RootCmd::Show => {
             let k = load_keys(dir)?;
             println!("root key:      {}", crypto::key_b64(&k.root.public()));
@@ -332,43 +377,7 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
             overlay_pool,
             admin,
             out,
-        } => {
-            let k = load_keys(dir)?;
-            if overlay_pool.is_empty() {
-                bail!("--overlay-pool is required");
-            }
-            let pool: Vec<wp::Cidr> = overlay_pool
-                .iter()
-                .map(|p| Ok(net_to_cidr(&parse_net(p)?)))
-                .collect::<Result<_>>()?;
-            let admin_raw = read(&admin)?;
-            let v = crypto::open_expect(&admin_raw, mt::ACCOUNT_RECORD, &[k.root.public()])?;
-            let rec: wp::AccountRecord = v.decode()?;
-            if !rec.admin {
-                bail!("{} is not an admin account", admin.display());
-            }
-            let cert = k.root.sign_obj(
-                mt::EMERGENCY_KEY_CERT,
-                &wp::EmergencyKeyCert {
-                    key: Some(crypto::k32(&k.emergency.public())),
-                },
-            );
-            let g = wp::Genesis {
-                root_key: Some(crypto::k32(&k.root.public())),
-                emergency_cert: Some(cert),
-                first_admin: Some(admin_raw),
-                overlay_pool: Some(pool),
-                created_at: now_ms(),
-            };
-            let bytes = g.encode_bytes();
-            webjet_core::store::open_genesis(&bytes)?;
-            write_public(&out, &bytes)?;
-            println!(
-                "genesis written to {} (root key {})",
-                out.display(),
-                crypto::key_b64(&k.root.public())
-            );
-        }
+        } => genesis(dir, &overlay_pool, &admin, &out)?,
         RootCmd::Controller {
             cmd: ControllerCmd::Sign { request, out },
         } => {

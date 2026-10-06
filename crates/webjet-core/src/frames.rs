@@ -2,8 +2,7 @@
 //! style, 8192 packets) and the relay frame header (§11.5, §17.7).
 
 use crate::crypto::Bytes32;
-use chacha20poly1305::aead::{AeadInOut, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use aws_lc_rs::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use zeroize::Zeroize;
 
 pub mod ftype {
@@ -37,21 +36,27 @@ pub const OVERHEAD: usize = HEADER + TAG;
 /// Maximum counter before a key must not be used any more (2⁴⁰ packets, §9.4.5).
 pub const REKEY_PACKETS: u64 = 1 << 40;
 
+/// One direction's ChaCha20-Poly1305 key (RFC 8439). aws-lc's assembly
+/// implementation: the data path seals and opens every packet with it.
 pub struct SessionKey {
-    cipher: ChaCha20Poly1305,
+    cipher: LessSafeKey,
 }
 
 impl SessionKey {
     pub fn new(mut k: [u8; 32]) -> Self {
-        let cipher = ChaCha20Poly1305::new(&Key::from(k));
+        // A 32-byte key is always valid for ChaCha20-Poly1305.
+        #[allow(clippy::expect_used)]
+        let key = UnboundKey::new(&CHACHA20_POLY1305, &k).expect("32-byte key");
         k.zeroize();
-        SessionKey { cipher }
+        SessionKey {
+            cipher: LessSafeKey::new(key),
+        }
     }
 
     fn nonce(counter: u64) -> Nonce {
         let mut n = [0u8; 12];
         n[4..].copy_from_slice(&counter.to_be_bytes());
-        Nonce::from(n)
+        Nonce::assume_unique_for_key(n)
     }
 
     /// Seal `payload` into a complete frame. `None` only if the payload is
@@ -61,15 +66,13 @@ impl SessionKey {
         out.push(ty);
         out.extend_from_slice(&key_id.to_be_bytes());
         out.extend_from_slice(&counter.to_be_bytes());
-        let mut body = payload.to_vec();
-        let mut aad = [0u8; HEADER];
-        aad.copy_from_slice(&out);
+        out.extend_from_slice(payload);
+        let (hdr, body) = out.split_at_mut(HEADER);
         let tag = self
             .cipher
-            .encrypt_inout_detached(&Self::nonce(counter), &aad, body.as_mut_slice().into())
+            .seal_in_place_separate_tag(Self::nonce(counter), Aad::from(&*hdr), body)
             .ok()?;
-        out.extend_from_slice(&body);
-        out.extend_from_slice(&tag);
+        out.extend_from_slice(tag.as_ref());
         Some(out)
     }
 
@@ -81,16 +84,13 @@ impl SessionKey {
         }
         let (hdr, rest) = frame.split_at(HEADER);
         let counter = crate::bytes::be_u64(hdr, 5)?;
-        let (ct, tag) = rest.split_at(rest.len() - TAG);
-        let mut body = ct.to_vec();
-        self.cipher
-            .decrypt_inout_detached(
-                &Self::nonce(counter),
-                hdr,
-                body.as_mut_slice().into(),
-                tag.try_into().ok()?,
-            )
-            .ok()?;
+        let mut body = rest.to_vec();
+        let n = self
+            .cipher
+            .open_in_place(Self::nonce(counter), Aad::from(hdr), &mut body)
+            .ok()?
+            .len();
+        body.truncate(n);
         Some(body)
     }
 }
@@ -294,6 +294,42 @@ mod tests {
         let mut bad = f.clone();
         bad[0] = ftype::PROBE; // type is authenticated
         assert!(k.open(&bad).is_none());
+    }
+
+    /// Nodes before the switch to aws-lc sealed frames with RustCrypto's
+    /// ChaCha20-Poly1305: both must produce the same bytes (RFC 8439), so
+    /// old and new nodes still read each other's frames.
+    #[test]
+    fn frames_match_the_rustcrypto_implementation() {
+        use chacha20poly1305::aead::{AeadInOut, KeyInit};
+        let key = [0x42u8; 32];
+        let old = chacha20poly1305::ChaCha20Poly1305::new(&key.into());
+        let k = SessionKey::new(key);
+        for len in [0usize, 1, 63, 64, 65, 1200, 1500] {
+            let payload: Vec<u8> = (0..len).map(|i| i as u8).collect();
+            let ctr = 0x0102_0304_0506 + len as u64;
+            let f = k.seal(ftype::DATA, 77, ctr, &payload).unwrap();
+            let mut body = payload.clone();
+            let mut nonce = [0u8; 12];
+            nonce[4..].copy_from_slice(&ctr.to_be_bytes());
+            let tag = old
+                .encrypt_inout_detached(&nonce.into(), &f[..HEADER], body.as_mut_slice().into())
+                .unwrap();
+            assert_eq!(
+                &f[HEADER..HEADER + len],
+                &body[..],
+                "ciphertext, {len} bytes"
+            );
+            assert_eq!(&f[HEADER + len..], &tag[..], "tag, {len} bytes");
+            assert_eq!(k.open(&f).unwrap(), payload);
+            // Any flipped bit is refused.
+            for at in [0, HEADER, f.len() - 1] {
+                let mut bad = f.clone();
+                bad[at] ^= 1;
+                assert!(k.open(&bad).is_none(), "flipped byte {at}");
+            }
+        }
+        assert!(k.open(&[0u8; OVERHEAD - 1]).is_none());
     }
 
     #[test]

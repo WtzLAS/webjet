@@ -6,10 +6,11 @@
 use crate::merkle::LogPage;
 use crate::model::{Account, Node, Peer, Session, Sessions, Snapshot, Status, Tree};
 use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use webjet_core::crypto;
 use webjet_proto::{self as wp, AccountOp};
+use webjetd::control::Request;
 
 /// Where the agent's control channel is (same defaults as `webjetctl`).
 pub fn default_socket() -> PathBuf {
@@ -47,12 +48,13 @@ impl Client {
         }
     }
 
-    async fn call(&self, req: Value) -> Result<Value> {
-        webjetd::control::client::call(&self.socket, req).await
+    async fn call(&self, req: Request) -> Result<Value> {
+        webjetd::control::client::call(&self.socket, &req).await
     }
 
-    async fn get<T: serde::de::DeserializeOwned>(&self, cmd: &str) -> Result<T> {
-        let v = self.call(json!({"cmd": cmd})).await?;
+    async fn get<T: serde::de::DeserializeOwned>(&self, req: Request) -> Result<T> {
+        let cmd = req.name();
+        let v = self.call(req).await?;
         serde_json::from_value(v).with_context(|| format!("unexpected answer to {cmd}"))
     }
 
@@ -60,19 +62,19 @@ impl Client {
     /// controller, fetch every node's latest metric report instead of this
     /// node's own. `merkle`: also fetch the whole state tree.
     pub async fn snapshot(&self, metrics_all: bool, merkle: bool) -> Result<Snapshot> {
-        let status: Status = self.get("status").await?;
-        let mut nodes: Vec<Node> = self.get("nodes").await?;
+        let status: Status = self.get(Request::Status).await?;
+        let mut nodes: Vec<Node> = self.get(Request::Nodes).await?;
         nodes.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut accounts: Vec<Account> = self.get("accounts").await?;
+        let mut accounts: Vec<Account> = self.get(Request::Accounts).await?;
         accounts.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut peers: Vec<Peer> = self.get("peers").await?;
+        let mut peers: Vec<Peer> = self.get(Request::Peers).await?;
         peers.sort_by(|a, b| a.peer.cmp(&b.peer).then(a.transport.cmp(&b.transport)));
-        let tree: Tree = self.get("tree").await?;
+        let tree: Tree = self.get(Request::Tree).await?;
         // Newer commands: an older agent answers "unknown command".
         fn opt<T>(r: Result<T>) -> Result<T, String> {
             r.map_err(|e| format!("{e:#}"))
         }
-        let mut sessions: Result<Sessions, String> = opt(self.get("sessions").await);
+        let mut sessions: Result<Sessions, String> = opt(self.get(Request::Sessions).await);
         if let Ok(s) = &mut sessions {
             s.sessions.sort_by(|a, b| a.peer.cmp(&b.peer));
             s.circuits.local.sort_by(|a, b| {
@@ -82,21 +84,18 @@ impl Client {
                 .routes
                 .sort_by(|a, b| (&a.src, &a.dst).cmp(&(&b.src, &b.dst)));
         }
-        let conntrack = opt(self.get("conntrack").await);
-        let proxy = opt(self.get("proxy").await);
-        let topology = opt(self.get("topology").await);
+        let conntrack = opt(self.get(Request::Conntrack).await);
+        let proxy = opt(self.get(Request::Proxy).await);
+        let topology = opt(self.get(Request::Topology).await);
         let all = metrics_all && status.controller.as_ref().is_some_and(|c| !c.is_null());
-        let metrics = opt(self
-            .call(json!({"cmd": "metrics", "all": all}))
-            .await
-            .and_then(|v| {
-                v.get("openmetrics")
-                    .and_then(|t| t.as_str())
-                    .map(String::from)
-                    .ok_or_else(|| anyhow!("no metrics in the answer"))
-            }));
+        let metrics = opt(self.call(Request::Metrics { all }).await.and_then(|v| {
+            v.get("openmetrics")
+                .and_then(|t| t.as_str())
+                .map(String::from)
+                .ok_or_else(|| anyhow!("no metrics in the answer"))
+        }));
         let merkle = if merkle {
-            Some(opt(self.get("merkle").await))
+            Some(opt(self.get(Request::Merkle).await))
         } else {
             None
         };
@@ -118,9 +117,7 @@ impl Client {
 
     /// Submit a signed operation; returns the log index it was committed at.
     pub async fn submit(&self, signed: Vec<u8>) -> Result<u64> {
-        let r = self
-            .call(json!({"cmd": "submit_op", "signed": webjet_tools::b64(&signed)}))
-            .await?;
+        let r = self.call(Request::SubmitOp { signed }).await?;
         r.get("index")
             .and_then(|i| i.as_u64())
             .ok_or_else(|| anyhow!("no log index in the answer"))
@@ -129,20 +126,18 @@ impl Client {
     /// A page of the controllers' operation log, for an admin's signed
     /// request (`ops::log_request`).
     pub async fn log(&self, signed: Vec<u8>) -> Result<LogPage> {
-        let v = self
-            .call(json!({"cmd": "log", "request": webjet_tools::b64(&signed)}))
-            .await?;
+        let v = self.call(Request::Log { request: signed }).await?;
         serde_json::from_value(v).context("unexpected answer to log")
     }
 
     /// Data for building enrollment strings.
     pub async fn enroll_info(&self) -> Result<Value> {
-        self.call(json!({"cmd": "enroll_info"})).await
+        self.call(Request::EnrollInfo).await
     }
 
     /// The network configuration in force, ready to edit.
     pub async fn network_config(&self) -> Result<crate::netconfig::Doc> {
-        crate::netconfig::Doc::network(self.call(json!({"cmd": "tree"})).await?)
+        crate::netconfig::Doc::network(self.call(Request::Tree).await?)
     }
 
     /// A node's own configuration (by id, hex) and what is in force for it,
@@ -150,7 +145,9 @@ impl Client {
     /// works for remote nodes too.
     pub async fn node_config(&self, node: &str) -> Result<crate::netconfig::Doc> {
         let r = self
-            .call(json!({"cmd": "node_config", "node": node}))
+            .call(Request::NodeConfig {
+                node: Some(crypto::parse_hex32(node).ok_or_else(|| anyhow!("bad node id {node}"))?),
+            })
             .await?;
         crate::netconfig::Doc::node(&r)
     }

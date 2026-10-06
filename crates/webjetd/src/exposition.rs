@@ -36,6 +36,14 @@ struct Family {
     samples: Vec<String>,
 }
 
+/// The node a report is about, as labels.
+struct Subject {
+    node: String,
+    owner: String,
+    /// The report's `taken_at`, ms.
+    ts: u64,
+}
+
 /// Collects samples by family so each family is written once with its
 /// metadata, as OpenMetrics requires.
 #[derive(Default)]
@@ -148,6 +156,11 @@ impl Exposition {
         let owner = names.owner(&id);
         let ts = rep.taken_at;
         let base = [("node", node.as_str()), ("owner", owner.as_str())];
+        let s = Subject {
+            node: node.clone(),
+            owner: owner.clone(),
+            ts,
+        };
         self.gauge(
             "webjet_node_info",
             "Software and identity of a reporting node.",
@@ -174,6 +187,22 @@ impl Exposition {
             rep.report_seq as f64,
             ts,
         );
+        self.load(rep, &s);
+        if with_routes {
+            self.routes(rep, names, &s);
+        }
+        self.links(rep, names, &s);
+        self.refusals(rep, &s);
+        self.compression(rep, &s);
+        self.tun(rep, &s);
+        self.proxy(rep, names, &s);
+        self.alarms(rep, &s);
+    }
+
+    /// Load and queue gauges.
+    fn load(&mut self, rep: &wp::MetricReport, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
+        let base = [("node", node.as_str()), ("owner", owner.as_str())];
         if let Some(l) = &rep.load {
             self.gauge(
                 "webjet_load_cpu_ratio",
@@ -224,112 +253,119 @@ impl Exposition {
                 ts,
             );
         }
-        if with_routes {
-            for r in rep.routes.clone().unwrap_or_default() {
-                let rid = hex::encode(&opt_k32(&r.route_id)[..8]);
-                let role = match r.role {
-                    wp::RouteRole::Source => "source",
-                    wp::RouteRole::Relay => "relay",
-                    wp::RouteRole::Dest => "dest",
-                };
-                let src = names.node(&opt_k32(&r.src));
-                let dst = names.node(&opt_k32(&r.dst));
-                let rl = |dir: &'static str| -> Vec<(&'static str, String)> {
-                    vec![
-                        ("node", node.clone()),
-                        ("owner", owner.clone()),
-                        ("role", role.into()),
-                        ("route_id", rid.clone()),
-                        ("src", src.clone()),
-                        ("dst", dst.clone()),
-                        ("direction", dir.into()),
-                    ]
-                };
-                for (dir, d) in [("fwd", &r.fwd), ("rev", &r.rev)] {
-                    if let Some(d) = d {
-                        let l = rl(dir);
-                        let lr: Vec<(&str, &str)> =
-                            l.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                        self.counter(
-                            "webjet_route_bytes",
-                            "Bytes carried on a route, by direction.",
-                            &lr,
-                            d.bytes,
-                            ts,
-                        );
-                        self.counter(
-                            "webjet_route_frames",
-                            "Frames carried on a route, by direction.",
-                            &lr,
-                            d.frames,
-                            ts,
-                        );
-                    }
-                }
-                let l = rl("fwd");
-                let lr: Vec<(&str, &str)> = l
-                    .iter()
-                    .filter(|(k, _)| *k != "direction")
-                    .map(|(k, v)| (*k, v.as_str()))
-                    .collect();
-                for c in r.dropped.clone().unwrap_or_default() {
-                    let reason = c.name.clone().unwrap_or_default();
-                    let mut ld = lr.clone();
-                    ld.push(("reason", &reason));
+    }
+
+    /// Per-route series (sources, relays, destinations).
+    fn routes(&mut self, rep: &wp::MetricReport, names: &dyn Names, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
+        for r in rep.routes.clone().unwrap_or_default() {
+            let rid = hex::encode(&opt_k32(&r.route_id)[..8]);
+            let role = match r.role {
+                wp::RouteRole::Source => "source",
+                wp::RouteRole::Relay => "relay",
+                wp::RouteRole::Dest => "dest",
+            };
+            let src = names.node(&opt_k32(&r.src));
+            let dst = names.node(&opt_k32(&r.dst));
+            let rl = |dir: &'static str| -> Vec<(&'static str, String)> {
+                vec![
+                    ("node", node.clone()),
+                    ("owner", owner.clone()),
+                    ("role", role.into()),
+                    ("route_id", rid.clone()),
+                    ("src", src.clone()),
+                    ("dst", dst.clone()),
+                    ("direction", dir.into()),
+                ]
+            };
+            for (dir, d) in [("fwd", &r.fwd), ("rev", &r.rev)] {
+                if let Some(d) = d {
+                    let l = rl(dir);
+                    let lr: Vec<(&str, &str)> = l.iter().map(|(k, v)| (*k, v.as_str())).collect();
                     self.counter(
-                        "webjet_route_dropped",
-                        "Frames dropped on a route, by reason.",
-                        &ld,
-                        c.value,
-                        ts,
-                    );
-                }
-                self.counter(
-                    "webjet_route_ecn_marked",
-                    "Frames marked Congestion Experienced on a route.",
-                    &lr,
-                    r.ecn_marked,
-                    ts,
-                );
-                self.counter(
-                    "webjet_route_circuit_setups",
-                    "Circuit (re)builds for a route; shows flapping.",
-                    &lr,
-                    r.circuit_setups,
-                    ts,
-                );
-                if let Some(e) = &r.e2e {
-                    self.gauge(
-                        "webjet_route_e2e_rtt_ms",
-                        "End-to-end probe RTT (EWMA) of a route.",
+                        "webjet_route_bytes",
+                        "Bytes carried on a route, by direction.",
                         &lr,
-                        e.rtt_ms as f64,
-                        ts,
-                    );
-                    self.gauge(
-                        "webjet_route_e2e_loss_ratio",
-                        "End-to-end probe loss (EWMA) of a route.",
-                        &lr,
-                        e.loss_pct as f64 / 100.0,
-                        ts,
-                    );
-                    self.gauge(
-                        "webjet_route_selected",
-                        "Whether the session sends on this route: 0 idle, 1 primary, 2 backup.",
-                        &lr,
-                        e.selected as f64,
+                        d.bytes,
                         ts,
                     );
                     self.counter(
-                        "webjet_route_path_switches",
-                        "Times the session to this route's destination moved its traffic to another circuit.",
+                        "webjet_route_frames",
+                        "Frames carried on a route, by direction.",
                         &lr,
-                        e.switches,
+                        d.frames,
                         ts,
                     );
                 }
             }
+            let l = rl("fwd");
+            let lr: Vec<(&str, &str)> = l
+                .iter()
+                .filter(|(k, _)| *k != "direction")
+                .map(|(k, v)| (*k, v.as_str()))
+                .collect();
+            for c in r.dropped.clone().unwrap_or_default() {
+                let reason = c.name.clone().unwrap_or_default();
+                let mut ld = lr.clone();
+                ld.push(("reason", &reason));
+                self.counter(
+                    "webjet_route_dropped",
+                    "Frames dropped on a route, by reason.",
+                    &ld,
+                    c.value,
+                    ts,
+                );
+            }
+            self.counter(
+                "webjet_route_ecn_marked",
+                "Frames marked Congestion Experienced on a route.",
+                &lr,
+                r.ecn_marked,
+                ts,
+            );
+            self.counter(
+                "webjet_route_circuit_setups",
+                "Circuit (re)builds for a route; shows flapping.",
+                &lr,
+                r.circuit_setups,
+                ts,
+            );
+            if let Some(e) = &r.e2e {
+                self.gauge(
+                    "webjet_route_e2e_rtt_ms",
+                    "End-to-end probe RTT (EWMA) of a route.",
+                    &lr,
+                    e.rtt_ms as f64,
+                    ts,
+                );
+                self.gauge(
+                    "webjet_route_e2e_loss_ratio",
+                    "End-to-end probe loss (EWMA) of a route.",
+                    &lr,
+                    e.loss_pct as f64 / 100.0,
+                    ts,
+                );
+                self.gauge(
+                    "webjet_route_selected",
+                    "Whether the session sends on this route: 0 idle, 1 primary, 2 backup.",
+                    &lr,
+                    e.selected as f64,
+                    ts,
+                );
+                self.counter(
+                    "webjet_route_path_switches",
+                    "Times the session to this route's destination moved its traffic to another circuit.",
+                    &lr,
+                    e.switches,
+                    ts,
+                );
+            }
         }
+    }
+
+    /// Per-link quality series.
+    fn links(&mut self, rep: &wp::MetricReport, names: &dyn Names, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
         for l in rep.links.clone().unwrap_or_default() {
             let peer = names.node(&opt_k32(&l.peer));
             let t = l.transport.name();
@@ -427,6 +463,11 @@ impl Exposition {
                 ts,
             );
         }
+    }
+
+    /// Policy rule hits, refused circuits and limit hits.
+    fn refusals(&mut self, rep: &wp::MetricReport, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
         for h in rep.rule_hits.clone().unwrap_or_default() {
             let rule = h.rule_id.clone().unwrap_or_default();
             let dec = if h.decision == wp::Action::Allow {
@@ -467,7 +508,11 @@ impl Exposition {
                 ts,
             );
         }
-        // Compression (§9.8), per plane.
+    }
+
+    /// Compression (§9.8), per plane.
+    fn compression(&mut self, rep: &wp::MetricReport, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
         for c in rep.compression.clone().unwrap_or_default() {
             let plane = c.plane.clone().unwrap_or_default();
             let l = [
@@ -518,7 +563,11 @@ impl Exposition {
                 ts,
             );
         }
-        // Overlay traffic through the tun interface, by direction.
+    }
+
+    /// Overlay traffic through the tun interface, by direction.
+    fn tun(&mut self, rep: &wp::MetricReport, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
         if let Some(t) = &rep.tun {
             for (dir, packets, bytes) in [
                 ("rx", t.rx_packets, t.rx_bytes),
@@ -545,7 +594,11 @@ impl Exposition {
                 );
             }
         }
-        // Reverse proxy traffic (§11.11), apart from the overlay's series.
+    }
+
+    /// Reverse proxy traffic (§11.11), apart from the overlay's series.
+    fn proxy(&mut self, rep: &wp::MetricReport, names: &dyn Names, s: &Subject) {
+        let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
         for m in rep.proxy.clone().unwrap_or_default() {
             let rule = m.rule.clone().unwrap_or_default();
             let side = if m.ingress { "ingress" } else { "target" };
@@ -600,6 +653,11 @@ impl Exposition {
                 );
             }
         }
+    }
+
+    /// Active alarms.
+    fn alarms(&mut self, rep: &wp::MetricReport, s: &Subject) {
+        let (node, ts) = (s.node.clone(), s.ts);
         for a in rep.alarms.clone().unwrap_or_default() {
             let name = a.name.clone().unwrap_or_default();
             let sev = a.severity.clone().unwrap_or_default();
