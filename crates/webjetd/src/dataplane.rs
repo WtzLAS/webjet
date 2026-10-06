@@ -29,7 +29,11 @@ pub struct Dataplane {
     my_ips: RwLock<Vec<IpNet>>,
     /// Grants this node serves as a gateway, with the LAN interface.
     serving: RwLock<Vec<(Grant, String)>>,
-    routes: Mutex<Vec<IpNet>>,
+    routes: Mutex<Routes>,
+    /// Held by `refresh` and `shutdown` for their whole run, so the OS
+    /// changes of a refresh (routes, DNS, NAT) never interleave with the
+    /// cleanup; true once shut down, after which refresh applies nothing.
+    system: Mutex<bool>,
     applied_gen: AtomicU64,
     /// The tree generation tracked flows were last re-checked against.
     policy_gen: AtomicU64,
@@ -630,11 +634,16 @@ impl Dataplane {
     /// Undo system changes (routes, split DNS) at shutdown (§20.8). The tun
     /// interface itself disappears with the process.
     pub fn shutdown(&self) {
+        // Waits for a refresh in progress (it runs on a blocking thread
+        // the task abort doesn't stop), and keeps later ones from applying.
+        let mut stopped = self.system.lock();
+        *stopped = true;
         if self.tun_tx.is_none() {
             return;
         }
         self.proxy.shutdown(self);
-        for r in self.routes.lock().drain(..) {
+        let installed = std::mem::take(&mut self.routes.lock().installed);
+        for r in installed {
             crate::platform::del_route(&r, &self.dev_name);
         }
         crate::platform::cleanup(&self.dev_name);
@@ -642,6 +651,11 @@ impl Dataplane {
 
     /// Re-apply routes, gateway serving and policy after the tree changed.
     pub fn refresh(&self) {
+        // One at a time, and never after shutdown (see `system`).
+        let stopped = self.system.lock();
+        if *stopped {
+            return;
+        }
         let Some(n) = self.node() else { return };
         let generation = n.store.read().generation;
         if self.applied_gen.swap(generation, Ordering::SeqCst) == generation {
@@ -716,20 +730,22 @@ impl Dataplane {
             drop(s);
             want.sort();
             want.dedup();
-            // Run the OS commands without holding the routes lock.
-            let (gone, new): (Vec<IpNet>, Vec<IpNet>) = {
-                let mut cur = self.routes.lock();
-                let gone = cur.iter().filter(|r| !want.contains(r)).copied().collect();
-                let new = want.iter().filter(|r| !cur.contains(r)).copied().collect();
-                *cur = want;
-                (gone, new)
-            };
+            // Run the OS commands without holding the routes lock (refresh
+            // and shutdown are serialized by `system`, so nothing else
+            // changes the installed set meanwhile).
+            let (gone, new) = self.routes.lock().diff(&want);
             for r in &gone {
+                // Best effort: a route that can't be removed (already gone
+                // with an interface reset, say) is not retried.
                 crate::platform::del_route(r, &self.dev_name);
             }
-            for r in &new {
-                crate::platform::add_route(r, &self.dev_name);
-            }
+            let added: Vec<(IpNet, bool)> = new
+                .iter()
+                .map(|r| (*r, crate::platform::add_route(r, &self.dev_name)))
+                .collect();
+            self.routes
+                .lock()
+                .applied(&gone, &added, &want, &self.dev_name);
             if n.cfg.dns.configure_system {
                 let mut domains = vec![suffix];
                 domains.extend(zones);
@@ -813,7 +829,8 @@ impl Dataplane {
             icmp_bucket: Mutex::new(Bucket::new(1000.0, 1000.0)),
             my_ips: RwLock::new(Vec::new()),
             serving: RwLock::new(Vec::new()),
-            routes: Mutex::new(Vec::new()),
+            routes: Mutex::new(Routes::default()),
+            system: Mutex::new(false),
             applied_gen: AtomicU64::new(u64::MAX),
             policy_gen: AtomicU64::new(u64::MAX),
             resolver: RwLock::new(Vec::new()),
@@ -926,7 +943,8 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         icmp_bucket: Mutex::new(Bucket::new(10.0, 20.0)),
         my_ips: RwLock::new(my_ips),
         serving: RwLock::new(Vec::new()),
-        routes: Mutex::new(Vec::new()),
+        routes: Mutex::new(Routes::default()),
+        system: Mutex::new(false),
         applied_gen: AtomicU64::new(u64::MAX),
         policy_gen: AtomicU64::new(u64::MAX),
         resolver: RwLock::new(Vec::new()),
@@ -990,6 +1008,52 @@ const DNS_REAPPLY: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Resolvers, domains, and when they were configured.
 type DnsApplied = (Vec<IpAddr>, Vec<String>, Instant);
+
+/// Routes through the tun interface.
+#[derive(Default)]
+struct Routes {
+    /// Added successfully, and removed at shutdown.
+    installed: Vec<IpNet>,
+    /// Wanted, but adding failed: retried on each refresh.
+    failing: std::collections::BTreeSet<IpNet>,
+}
+
+impl Routes {
+    /// Routes to remove (installed, no longer wanted) and to add (wanted,
+    /// not installed: new ones, and those whose adding failed before).
+    fn diff(&self, want: &[IpNet]) -> (Vec<IpNet>, Vec<IpNet>) {
+        let gone = self
+            .installed
+            .iter()
+            .filter(|r| !want.contains(r))
+            .copied()
+            .collect();
+        let new = want
+            .iter()
+            .filter(|r| !self.installed.contains(r))
+            .copied()
+            .collect();
+        (gone, new)
+    }
+
+    /// Record what `diff`'s changes did: a route counts as installed only
+    /// once adding it succeeded. A failure is reported once and retried.
+    fn applied(&mut self, gone: &[IpNet], added: &[(IpNet, bool)], want: &[IpNet], dev: &str) {
+        self.installed.retain(|r| !gone.contains(r));
+        for (r, ok) in added {
+            if *ok {
+                self.installed.push(*r);
+                if self.failing.remove(r) {
+                    tracing::info!("route {r} via {dev} added");
+                }
+            } else if self.failing.insert(*r) {
+                tracing::warn!("could not add route {r} via {dev}; retrying");
+            }
+        }
+        self.failing.retain(|r| want.contains(r));
+        self.installed.sort();
+    }
+}
 
 /// A gateway lookup: when, and the prefix with its gateways.
 type GwCached = (Instant, Option<(IpNet, Vec<Bytes32>)>);
@@ -1441,6 +1505,47 @@ mod tests {
         // LAN hosts may answer the tracked flow but not start one.
         t.dp.outbound(tcp4([192, 168, 50, 10], CLIENT, 80, 40000, tcpf::SYN));
         assert_eq!(t.dp.conntrack.lock().len(), 1, "no new flow");
+    }
+
+    #[test]
+    fn a_route_that_failed_to_install_is_retried() {
+        let net = |s: &str| s.parse::<IpNet>().unwrap();
+        let (pool, lan, other) = (net("10.7.0.0/16"), net("172.31.0.0/24"), net("10.9.0.0/24"));
+        let mut r = Routes::default();
+        let want = vec![pool, lan];
+        let (gone, new) = r.diff(&want);
+        assert!(gone.is_empty());
+        assert_eq!(new, want);
+        // Adding the LAN route failed: it isn't installed, and the next
+        // refresh tries it again (it used to count as applied for good).
+        r.applied(&gone, &[(pool, true), (lan, false)], &want, "wj0");
+        assert_eq!(r.installed, vec![pool]);
+        assert_eq!(r.diff(&want), (vec![], vec![lan]));
+        r.applied(&[], &[(lan, true)], &want, "wj0");
+        assert_eq!(r.installed, vec![pool, lan]);
+        assert!(r.failing.is_empty());
+        assert_eq!(r.diff(&want), (vec![], vec![]));
+        // A failing route no longer wanted is forgotten; a removed one goes.
+        let want = vec![pool];
+        r.applied(&[], &[(other, false)], &[pool, other], "wj0");
+        let (gone, new) = r.diff(&want);
+        assert_eq!((gone.clone(), new), (vec![lan], vec![]));
+        r.applied(&gone, &[], &want, "wj0");
+        assert_eq!(r.installed, vec![pool]);
+        assert!(r.failing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn nothing_is_applied_after_shutdown() {
+        let mut t = setup();
+        t.dp.shutdown();
+        // A refresh still running on its blocking thread when the agent
+        // stopped (or started just after) must not re-apply anything.
+        t.c.set_policy(policy()).unwrap();
+        testnode::sync(&mut t.c, &t.n);
+        let before = t.dp.applied_gen.load(Ordering::SeqCst);
+        t.dp.refresh();
+        assert_eq!(t.dp.applied_gen.load(Ordering::SeqCst), before);
     }
 
     #[test]

@@ -165,20 +165,22 @@ pub fn route_cmd(add: bool, net: &IpNet, dev: &str) -> (&'static str, Vec<String
     }
 }
 
-pub fn add_route(net: &IpNet, dev: &str) {
+/// Route `net` through `dev`; false if the command failed (the caller
+/// reports and retries).
+pub fn add_route(net: &IpNet, dev: &str) -> bool {
     let (cmd, args) = route_cmd(true, net, dev);
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
-    if run(cmd, &a) {
+    let ok = run(cmd, &a);
+    if ok {
         tracing::debug!("route {net} via {dev}");
-    } else {
-        tracing::warn!("could not add route {net} via {dev}");
     }
+    ok
 }
 
-pub fn del_route(net: &IpNet, dev: &str) {
+pub fn del_route(net: &IpNet, dev: &str) -> bool {
     let (cmd, args) = route_cmd(false, net, dev);
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
-    run(cmd, &a);
+    run(cmd, &a)
 }
 
 // ---------------------------------------------------------------- split DNS (§11.10.1)
