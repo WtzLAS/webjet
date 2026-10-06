@@ -713,6 +713,14 @@ fn report(cli: &Cli, text: impl std::fmt::Display, v: Value) {
     }
 }
 
+/// When a token issued now for `hours` expires (ms since the epoch).
+fn expires_at(hours: u64) -> Result<u64> {
+    hours
+        .checked_mul(3_600_000)
+        .and_then(|ms| now_ms().checked_add(ms))
+        .ok_or_else(|| anyhow!("--expires-hours {hours} is too far in the future"))
+}
+
 /// The log entry index a submit reply names.
 fn entry(r: &Value) -> Value {
     r["index"].clone()
@@ -1636,6 +1644,9 @@ async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
                 ip.clone()
             };
             let token = crypto::random32();
+            // Built before submitting: a bad --controller or a missing root
+            // key must not leave a pending enrollment whose token is lost.
+            let t = ticket(cli, &token, controller).await?;
             let th = crypto::token_hash(&token);
             let op = wp::CreateEnrollment {
                 owner: Some(crypto::k32(&owner_id)),
@@ -1646,12 +1657,11 @@ async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
                 tags: Some(tags(tg)?),
                 routes: Some(grants(route)?),
                 token_hash: Some(crypto::k32(&th)),
-                expires_at: now_ms() + expires_hours * 3_600_000,
+                expires_at: expires_at(*expires_hours)?,
                 identity_key: None,
                 node_id: None,
             };
             let r = submit(cli, a.sign(AccountOp::CreateEnrollment(Box::new(op)))?).await?;
-            let t = ticket(cli, &token, controller).await?;
             if cli.json {
                 print(
                     cli,
@@ -1805,14 +1815,16 @@ async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
             let a = load_account(cli).await?;
             let id = node_id(cli, name).await?;
             let token = crypto::random32();
+            // Before submitting: with --revoke-old-now a failure after the
+            // submit would leave the node cut off without its new token.
+            let t = ticket(cli, &token, controller).await?;
             let op = wp::RekeyNode {
                 node_id: Some(crypto::k32(&id)),
                 token_hash: Some(crypto::k32(&crypto::token_hash(&token))),
-                expires_at: now_ms() + expires_hours * 3_600_000,
+                expires_at: expires_at(*expires_hours)?,
                 revoke_old_now: *revoke_old_now,
             };
             let r = submit(cli, a.sign(AccountOp::RekeyNode(Box::new(op)))?).await?;
-            let t = ticket(cli, &token, controller).await?;
             if cli.json {
                 print(
                     cli,
