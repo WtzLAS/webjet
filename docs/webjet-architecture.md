@@ -2209,7 +2209,8 @@ Every hop session has a small managed queue in front of it, on every node:
 - **What counts as a flow:**
   - on the **source node**, the inner packet's addresses and ports, so a bulk transfer can't starve an interactive session
   - on **relays**, where frames are opaque, the source node first and then the circuit. This is the per-source fair share of §16.2.
-- **Short socket buffers.** TCP hops set `TCP_NOTSENT_LOWAT` (16 kB, Linux and macOS). A KCP hop takes more data from the hop only while its send buffer holds less than two windows and its pacer less than one, through a 64 kB pipe. Waiting data thus sits in the managed queue and not in a kernel or KCP buffer, and the queue's CoDel interval follows the hop's raw RTT (§11.2), not one inflated by such a buffer.
+- **Short socket buffers.** TCP hops set `TCP_NOTSENT_LOWAT` (16 kB, Linux and macOS). A KCP hop takes more data from the hop, through a 16 kB pipe, only while KCP holds less than about 5 ms of unsent data at its pacing rate (§17.5). Waiting data thus sits in the managed queue and not in a kernel or KCP buffer, and the queue's CoDel interval follows the hop's raw RTT (§11.2), not one inflated by such a buffer.
+- **CoDel sees the whole wait.** On a KCP hop, the time the oldest unsent byte has waited inside KCP is added to every frame's time in the managed queue. Frames waiting in KCP have already left the queue and been encrypted into the hop stream, so they can't be marked there. Instead, the frames behind them are marked as long as the total wait stays above the target.
 - When CoDel decides a frame must go, it is **marked** if the frame is ECN-capable and **dropped** (`aqm`) otherwise (§17.7).
 
 ### 17.3 Control traffic
@@ -2224,12 +2225,13 @@ The kernel's TCP does the congestion control. The agent requests **BBR** per soc
 
 KCP's own congestion window is turned off. It backs off on every loss, which collapses on lossy long-distance links, the links KCP is meant for. Sending with no control at all is unfair to other traffic, causes its own loss and invites throttling. Instead, each KCP hop session is **paced** by a BBR-style controller:
 
-- **Estimates:** the bottleneck bandwidth (the highest delivery rate seen over recent round trips) and the minimum RTT (over about 10 s), both taken from KCP acknowledgements. The RTT is the raw one of §11.2 (from the socket, acknowledgements sent outside the pacer); with a peer that doesn't send `RAW_ACK`, KCP's own estimate.
+- **Estimates:** the bottleneck bandwidth (the highest delivery rate seen over recent round trips) and the minimum RTT (over about 10 s), both taken from KCP acknowledgements: the bytes each acknowledgement delivers, and the raw RTT of §11.2 (from the socket to the acknowledgement, never for a retransmitted segment).
 - **Pacing:** packets leave at the estimated bandwidth, with BBR's phases: a fast start-up, a drain, steady probing for more bandwidth, and periodic probing for the minimum RTT.
 - **In flight:** capped at about twice the bandwidth-delay product, which also sizes KCP's send window.
 - **Loss is not a congestion signal.** Random line loss doesn't reduce the rate. Only loss that stays well above the link's usual level while probing for bandwidth lowers the estimate.
-- **Everything is paced together:** data, retransmissions and FEC parity share the one rate.
-- **KCP settings:** no-delay mode, 10 ms interval, fast retransmit after 2 duplicate acknowledgements. New data and received packets are flushed at once rather than at the next interval, so neither data nor acknowledgements wait up to 10 ms at each end of a hop.
+- **Everything is paced together:** data, retransmissions and FEC parity share the one rate. The pacer is a token bucket consulted inside KCP's flush: due retransmissions go first, then new data while tokens and the window last. Data that can't go yet stays in KCP's short send queue (above), not in a queue of finished packets in front of the socket.
+- **KCP settings:** stream mode, no-delay, fast retransmit after 2 duplicate acknowledgements (at most 5 times per segment), an RTO of at least 30 ms. New data and received packets are flushed at once rather than at the next interval, so neither data nor acknowledgements wait up to 10 ms at each end of a hop. Acknowledgements are output separately from data, so they can go out at once (`RAW_ACK`, §11.2).
+- **The KCP implementation** is adapted from the `kcp` crate 0.6.0 (MIT) and kept in `webjet-net/src/kcp/proto.rs`. The wire format is unchanged. The changes are the paced flush, the send queue's age, separate acknowledgements, measurements from the protocol itself (raw RTT per segment, delivered bytes, retransmissions), and wrapping arithmetic without panics.
 - **Application-limited samples.** A delivery-rate sample taken while the sender had less to send than the window allowed may raise the bandwidth estimate but never lowers it, so a quiet period doesn't throttle the next burst.
 - **Delivery samples span at least an RTT** (and 25 ms), and count each acknowledged segment at its real size. Acknowledgements arrive in bursts, so a rate taken between two loop turns a millisecond apart was many times the path's rate (a 20 Mbit/s path read as 500 Mbit/s, and relays advertised gigabits of capacity). A burst delivered just before the sender went idle counts as application-limited.
 

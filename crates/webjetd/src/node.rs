@@ -787,6 +787,10 @@ async fn writer(
             q.tune(rtt, rate);
             tune_at = Instant::now();
         }
+        // What waits in a KCP hop below this queue counts for CoDel too.
+        q.below = hop.kcp_stats.as_ref().map_or(Duration::ZERO, |k| {
+            Duration::from_micros(k.backlog_us.load(Ordering::Relaxed))
+        });
         let mut batch = Vec::with_capacity(64 * 1024);
         let now = Instant::now();
         while batch.len() < 64 * 1024 {

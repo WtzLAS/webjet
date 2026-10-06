@@ -39,13 +39,6 @@ members = ["."]
 [profile.release]
 debug = 1
 
-# Wrapping arithmetic in the kcp crate; see the main Cargo.toml.
-[profile.dev.package.kcp]
-overflow-checks = false
-
-[profile.release.package.kcp]
-overflow-checks = false
-
 [[bin]]
 name = "proto"
 path = "fuzz_targets/proto.rs"

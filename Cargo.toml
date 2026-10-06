@@ -42,7 +42,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 parking_lot = "0.12"
 ipnet = "2"
 clap = { version = "4", features = ["derive", "env"] }
-kcp = "0.6"
 reed-solomon-erasure = "6"
 tun-rs = { version = "2.8", features = ["async_tokio"] }
 hickory-proto = "0.26"
@@ -56,10 +55,3 @@ lz4_flex = { version = "0.14", default-features = false, features = ["safe-encod
 unwrap_used = "warn"
 expect_used = "warn"
 
-# The kcp crate's sequence-number and timestamp arithmetic (`timediff`,
-# `rcv_nxt + rcv_wnd`) wraps on purpose, as in C KCP, but is written with
-# plain `+`/`-`: with overflow checks (debug builds, tests) a peer's segment
-# with an old or far-away sn/ts panics the session. Release builds don't
-# check; make test builds behave the same (found by the fuzz smoke test).
-[profile.dev.package.kcp]
-overflow-checks = false

@@ -92,7 +92,7 @@ client (§20). It is its own workspace, outside `cargo test --workspace`.
 | `packet` | IP packets: parsing, NAT rewrite, ECN, ICMP replies, LZ4 round trip |
 | `decompress` | zstd and LZ4 decompression of hostile input: the size cap holds, compressed data round-trips |
 | `gate` | The UDP gate (`UdpObfs::open`) and seal/open round trips |
-| `kcp_session` | FEC shards and KCP segments after the gate, as a session processes them (`kcp::fuzzing`) |
+| `kcp_session` | FEC shards and KCP segments after the gate, as a session processes them, and raw packets into KCP (`kcp::fuzzing`) |
 | `hop_record` | Hop record framing (TLS/AnyTLS/KCP hops), `CONTROL_ZSTD` payloads, HopControl |
 | `dns` | The local resolver: client queries and forwarded zones' answers (`dns::fuzzing`) |
 | `control_request` | Control-channel request lines (`control::Request`): parse, and parsed requests round-trip |
@@ -120,12 +120,12 @@ should assert the invariants they can (round trips, size caps), not only
 call the parser. When adding a parser for untrusted input, add a target and
 seeds for it.
 
-The kcp crate's sequence-number and timestamp arithmetic wraps by design
-but uses plain `+`/`-`, so `Cargo.toml` and `fuzz/Cargo.toml` turn off
-overflow checks for that crate alone (`[profile.*.package.kcp]`); with them
-on, a peer's segment with an old or far-away `sn`/`ts` panicked the session
-in debug builds and tests (release builds were never affected). Keep that
-setting while the crate is used.
+KCP is our own adaptation of the `kcp` crate 0.6.0 (MIT,
+`crates/webjet-net/src/kcp/proto.rs`, architecture §17.5). Its sequence
+numbers and millisecond timestamps wrap by design: use `wrapping_*` and the
+`diff` helper, never plain `+`/`-`, and keep malformed input an `Err`, not a
+panic. The `kcp-wrapping-sn` and `kcp-wrapping-ts` regressions came from
+the crate's plain arithmetic.
 
 ## Wire formats
 

@@ -1242,17 +1242,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kcp"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be8f8058681ab8b7e4959a1ee88a4446f43b7c787f174d9d1b32ba493737a59"
-dependencies = [
- "bytes",
- "log",
- "thiserror",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2660,7 +2649,6 @@ dependencies = [
  "bytes",
  "chacha20poly1305",
  "futures",
- "kcp",
  "libc",
  "parking_lot 0.12.5",
  "rand",

@@ -273,7 +273,7 @@ pub fn kcp_session(data: &[u8]) {
     let conv = webjet_core::bytes::be_u32(head, 0).unwrap_or(1);
     let datagrams = chunks(rest);
     let _ = kcp::fuzzing::session_input(conv, &datagrams);
-    let _ = kcp::fuzzing::scan(rest);
+    kcp::fuzzing::proto_input(rest);
     let mut dec = fec::Decoder::new();
     for d in &datagrams {
         let _ = dec.push(d);

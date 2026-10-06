@@ -102,6 +102,11 @@ pub struct HopQueue {
     pub max_bytes: usize,
     pub interval: Duration,
     pub stats: Stats,
+    /// How long frames wait after leaving this queue before they reach the
+    /// wire (a KCP hop's send backlog). CoDel counts it as part of every
+    /// frame's sojourn, so a backlog below the queue still marks or drops
+    /// (§17.2, §17.7).
+    pub below: Duration,
     control_budget: usize,
 }
 
@@ -121,6 +126,7 @@ impl HopQueue {
             max_bytes,
             interval: INTERVAL,
             stats: Stats::default(),
+            below: Duration::ZERO,
             control_budget: 0,
         }
     }
@@ -188,7 +194,7 @@ impl HopQueue {
             };
             f.bytes -= it.data.len();
             self.bytes -= it.data.len();
-            let sojourn = now.duration_since(it.at);
+            let sojourn = now.duration_since(it.at) + self.below;
             self.stats.last_sojourn = sojourn;
             let empty_after = f.items.is_empty();
             let drop = f
@@ -249,6 +255,54 @@ mod tests {
         // Flow 2 gets served early despite flow 1's backlog.
         let order: Vec<u8> = (0..4).map(|_| q.pop(t).unwrap()[0]).collect();
         assert!(order.contains(&2));
+    }
+
+    /// A backlog below the queue (KCP's) counts toward the sojourn: frames
+    /// that pass through quickly are still marked once the total wait stays
+    /// above the target.
+    #[test]
+    fn the_wait_below_counts() {
+        let mut q = HopQueue::new(1 << 20);
+        q.below = Duration::from_millis(30);
+        let t = Instant::now();
+        let mut marked = 0;
+        // One frame always waiting (1 ms), one in and one out per ms.
+        for i in 0..400u32 {
+            let now = t + Duration::from_millis(u64::from(i));
+            for _ in 0..if i == 0 { 2 } else { 1 } {
+                let mut d = vec![0u8; 100];
+                d[4] = crate::frames::ecn::ECT0;
+                q.push(Item {
+                    flow: 1,
+                    data: d,
+                    at: now,
+                    ecn_offset: Some(4),
+                })
+                .unwrap();
+            }
+            if let Some(f) = q.pop(now) {
+                marked += usize::from(f[4] & 3 == crate::frames::ecn::CE);
+            }
+        }
+        assert!(marked > 0 && q.stats.marked > 0);
+        assert_eq!(q.stats.dropped_aqm, 0, "ECN-capable: marked, not dropped");
+        assert_eq!(q.stats.last_sojourn, Duration::from_millis(31));
+        // Without the wait below, the same queue never acts.
+        let mut q2 = HopQueue::new(1 << 20);
+        for i in 0..400u32 {
+            let now = t + Duration::from_millis(u64::from(i));
+            for _ in 0..if i == 0 { 2 } else { 1 } {
+                q2.push(Item {
+                    flow: 1,
+                    data: vec![2; 100],
+                    at: now,
+                    ecn_offset: Some(4),
+                })
+                .unwrap();
+            }
+            q2.pop(now);
+        }
+        assert_eq!(q2.stats.marked + q2.stats.dropped_aqm, 0);
     }
 
     #[test]
