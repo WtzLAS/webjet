@@ -1409,9 +1409,15 @@ async fn network_account(cli: &Cli, cmd: &AccountCmd) -> Result<()> {
                 .flatten()
                 .find(|x| x["id"].as_str() == Some(&wanted))
                 .ok_or_else(|| anyhow!("no valid account named {name}"))?;
+            // The account's own name: `name` may be its id, an id prefix or
+            // its key, and the record would otherwise be renamed to that.
+            let account_name = cur["name"]
+                .as_str()
+                .ok_or_else(|| anyhow!("account {name} has no name"))?
+                .to_string();
             if cur["admin"].as_bool() == Some(true) {
                 bail!(
-                    "{name} is an admin: only the root gives it a new key (`webjetctl root admin sign --name {name} --key <new>.pub --replaces <old>.pub`)"
+                    "{account_name} is an admin: only the root gives it a new key (`webjetctl root admin sign --name {account_name} --key <new>.pub --replaces <old>.pub`)"
                 );
             }
             let id = cur["id"]
@@ -1422,7 +1428,7 @@ async fn network_account(cli: &Cli, cmd: &AccountCmd) -> Result<()> {
             if p.key()? == a.kp.public() {
                 bail!("that is your own key");
             }
-            p.name = name.clone();
+            p.name = account_name.clone();
             p.account_id = hex::encode(id);
             let rec = account_record(&p, false, Some(a.id))?;
             let signed = a.kp.sign_obj(wp::msg_type::ACCOUNT_RECORD, &rec);
@@ -1439,11 +1445,11 @@ async fn network_account(cli: &Cli, cmd: &AccountCmd) -> Result<()> {
             report(
                 cli,
                 format!(
-                    "account {name} has a new key (entry {}); the old key no longer signs. {} now carries the account's ID",
+                    "account {account_name} has a new key (entry {}); the old key no longer signs. {} now carries the account's ID",
                     r["index"],
                     key.display()
                 ),
-                json!({"account": name, "account_id": hex::encode(id), "key": p.key, "rekeyed": true, "entry": entry(&r)}),
+                json!({"account": account_name, "account_id": hex::encode(id), "key": p.key, "rekeyed": true, "entry": entry(&r)}),
             );
         }
         AccountCmd::Revoke {
