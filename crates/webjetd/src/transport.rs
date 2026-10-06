@@ -47,13 +47,15 @@ pub fn my_priorities(n: &Node) -> Vec<wp::TransportPriority> {
 /// The camouflage settings from the tree, or from the enrollment ticket.
 #[cfg(feature = "anytls")]
 pub fn camouflage(n: &Node) -> Option<webjet_net::anytls::Camouflage> {
-    let s = n.store.read();
-    if let Some(c) = s
+    // Clone out of the store so its lock isn't held while taking node_file's.
+    let tree_cfg = n
+        .store
+        .read()
         .view()
         .transport
         .as_ref()
-        .and_then(|t| t.camouflage.clone())
-    {
+        .and_then(|t| t.camouflage.clone());
+    if let Some(c) = tree_cfg {
         let chain: Vec<Vec<u8>> = c
             .certificate
             .clone()
@@ -74,12 +76,12 @@ pub fn camouflage(n: &Node) -> Option<webjet_net::anytls::Camouflage> {
             });
         }
     }
-    let nf = n.node_file.lock();
-    let domain = nf.camouflage_domain.clone()?;
-    let pin = nf
-        .camouflage_pin
-        .as_deref()
-        .and_then(webjet_core::crypto::parse_hex32)?;
+    let (domain, pin) = {
+        let nf = n.node_file.lock();
+        (nf.camouflage_domain.clone(), nf.camouflage_pin.clone())
+    };
+    let domain = domain?;
+    let pin = pin.as_deref().and_then(webjet_core::crypto::parse_hex32)?;
     Some(webjet_net::anytls::Camouflage {
         domain,
         chain: vec![],

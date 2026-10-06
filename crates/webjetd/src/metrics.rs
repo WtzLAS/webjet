@@ -236,12 +236,12 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             wp::LinkMetrics {
                 peer: Some(crypto::k32(&h.peer)),
                 transport: h.transport,
-                wire_tx: k
-                    .map(|k| k.wire_tx.load(Ordering::Relaxed))
-                    .unwrap_or(h.tx_bytes.load(Ordering::Relaxed)),
-                wire_rx: k
-                    .map(|k| k.wire_rx.load(Ordering::Relaxed))
-                    .unwrap_or(h.rx_bytes.load(Ordering::Relaxed)),
+                wire_tx: k.map_or(h.tx_bytes.load(Ordering::Relaxed), |k| {
+                    k.wire_tx.load(Ordering::Relaxed)
+                }),
+                wire_rx: k.map_or(h.rx_bytes.load(Ordering::Relaxed), |k| {
+                    k.wire_rx.load(Ordering::Relaxed)
+                }),
                 payload_tx: h.tx_bytes.load(Ordering::Relaxed),
                 payload_rx: h.rx_bytes.load(Ordering::Relaxed),
                 fec_parity_tx: k.map(|k| k.fec_parity_tx.load(Ordering::Relaxed)),
@@ -251,11 +251,8 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                 bw_estimate_mbps: k
                     .map(|k| (k.bw_estimate_kbps.load(Ordering::Relaxed) / 1000) as u32),
                 queue_delay_ms: (h.queue_delay_us.load(Ordering::Relaxed) / 1000) as u32,
-                rtt_ms: st.effective().map(|e| e.0.ceil() as u32).unwrap_or(0),
-                loss_pct: st
-                    .effective()
-                    .map(|e| (e.1 * 100.0).round() as u8)
-                    .unwrap_or(0),
+                rtt_ms: st.effective().map_or(0, |e| e.0.ceil() as u32),
+                loss_pct: st.effective().map_or(0, |e| (e.1 * 100.0).round() as u8),
             }
         })
         .collect();

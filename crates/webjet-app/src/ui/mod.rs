@@ -1712,7 +1712,7 @@ mod tests {
             app.tab = Tab::Config;
         });
         frame(cx);
-        show(cx, Doc::network(tree.clone()).unwrap());
+        show(cx, Doc::network(tree).unwrap());
         frame(cx);
         assert!(
             cx.debug_bounds("config-editor").is_some(),

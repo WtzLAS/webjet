@@ -81,9 +81,7 @@ pub struct Layout {
 }
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
-    std::env::var_os(var)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
+    std::env::var_os(var).map_or_else(|| PathBuf::from(default), PathBuf::from)
 }
 
 impl Layout {

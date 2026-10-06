@@ -512,7 +512,7 @@ mod tests {
         };
         let m = std::collections::HashMap::from([
             (([1; 32], Transport::TcpTls), h.clone()),
-            (([2; 32], Transport::KcpFecTls), h.clone()),
+            (([2; 32], Transport::KcpFecTls), h),
         ]);
         save_links(&p, &m).unwrap();
         let back = load_links(&p);

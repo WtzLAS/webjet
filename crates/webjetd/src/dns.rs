@@ -108,8 +108,7 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
         || records.iter().any(|x| {
             x.name
                 .as_deref()
-                .map(|z| in_zone(&name, z.split_once('.').map(|y| y.1).unwrap_or(z)))
-                .unwrap_or(false)
+                .is_some_and(|z| in_zone(&name, z.split_once('.').map_or(z, |y| y.1)))
         });
     if !answered && known_zone && !name_exists(n, &name, &suffix, &records) {
         r.metadata.response_code = ResponseCode::NXDomain;
@@ -120,12 +119,10 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
 }
 
 fn name_exists(n: &Node, name: &str, suffix: &str, records: &[wp::DnsRecord]) -> bool {
-    if records.iter().any(|x| {
-        x.name
-            .as_deref()
-            .map(|y| lower(y) == lower(name))
-            .unwrap_or(false)
-    }) {
+    if records
+        .iter()
+        .any(|x| x.name.as_deref().is_some_and(|y| lower(y) == lower(name)))
+    {
         return true;
     }
     node_by_magic(n, name, suffix).is_some()
@@ -202,12 +199,10 @@ fn resolve(
         return push_addrs(r, &owner, &ips, qtype);
     }
     let mut answered = false;
-    for rec in records.iter().filter(|x| {
-        x.name
-            .as_deref()
-            .map(|y| lower(y) == lower(name))
-            .unwrap_or(false)
-    }) {
+    for rec in records
+        .iter()
+        .filter(|x| x.name.as_deref().is_some_and(|y| lower(y) == lower(name)))
+    {
         let value = rec.value.clone().unwrap_or_default();
         let ttl = if rec.ttl > 0 { rec.ttl } else { TTL };
         match rec.rtype {
@@ -315,9 +310,7 @@ fn grants(f: &wp::ForwardZone) -> Vec<Grant> {
 }
 
 fn reverse_in_rewrite(name: &str, f: &wp::ForwardZone) -> bool {
-    ptr_to_ip(name)
-        .map(|ip| grants(f).iter().any(|g| g.published.contains(&ip)))
-        .unwrap_or(false)
+    ptr_to_ip(name).is_some_and(|ip| grants(f).iter().any(|g| g.published.contains(&ip)))
 }
 
 /// Forward a query to the zone's servers over the overlay (§11.10.4) and
@@ -440,11 +433,15 @@ fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
 /// Build an IPv4/IPv6 UDP packet.
 pub fn udp_packet(src: IpAddr, sport: u16, dst: IpAddr, dport: u16, payload: &[u8]) -> Vec<u8> {
     let ulen = 8 + payload.len();
+    // Larger than an IP packet can be (IPv4 total length includes 20 more).
+    let Some(len16) = u16::try_from(ulen).ok().filter(|l| *l <= u16::MAX - 20) else {
+        return Vec::new();
+    };
     let mut p = match (src, dst) {
         (IpAddr::V4(s), IpAddr::V4(d)) => {
             let mut h = vec![0u8; 20];
             h[0] = 0x45;
-            h[2..4].copy_from_slice(&((20 + ulen) as u16).to_be_bytes());
+            h[2..4].copy_from_slice(&(20 + len16).to_be_bytes());
             h[8] = 64;
             h[9] = PROTO_UDP;
             h[12..16].copy_from_slice(&s.octets());
@@ -454,7 +451,7 @@ pub fn udp_packet(src: IpAddr, sport: u16, dst: IpAddr, dport: u16, payload: &[u
         (IpAddr::V6(s), IpAddr::V6(d)) => {
             let mut h = vec![0u8; 40];
             h[0] = 0x60;
-            h[4..6].copy_from_slice(&(ulen as u16).to_be_bytes());
+            h[4..6].copy_from_slice(&len16.to_be_bytes());
             h[6] = PROTO_UDP;
             h[7] = 64;
             h[8..24].copy_from_slice(&s.octets());
@@ -465,7 +462,7 @@ pub fn udp_packet(src: IpAddr, sport: u16, dst: IpAddr, dport: u16, payload: &[u
     };
     p.extend_from_slice(&sport.to_be_bytes());
     p.extend_from_slice(&dport.to_be_bytes());
-    p.extend_from_slice(&(ulen as u16).to_be_bytes());
+    p.extend_from_slice(&len16.to_be_bytes());
     p.extend_from_slice(&[0, 0]);
     p.extend_from_slice(payload);
     packet::fix_checksums(&mut p);

@@ -1676,7 +1676,7 @@ value = { circuits_global = 9000 }
         // Set: written with the document's version, and read back.
         let f = ConfigFile::parse("version = 0\n[controllers]\nvoters = 3\n").unwrap();
         let w = f.to_network(4, Path::new("/x")).unwrap();
-        let c = w.controllers.clone().unwrap();
+        let c = w.controllers.unwrap();
         assert_eq!((c.version, c.voters, c.auto_membership), (4, Some(3), None));
         let mut t = empty_tree();
         t["controllers"] = serde_json::to_value(&*c).unwrap();

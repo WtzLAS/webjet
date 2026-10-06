@@ -81,10 +81,15 @@ impl Encoder {
     /// Wrap one data packet; returns the shards to send now (the data shard
     /// and, when the group is complete, its parity).
     pub fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
-        let idx = self.count as u8;
+        // `count < GROUP_DATA` (8) always fits; a packet longer than the
+        // 16-bit length field can't be framed, and the decoder would drop it
+        // anyway (> MAX_SHARD), so it is not sent rather than mislabelled.
+        let (Ok(idx), Ok(len)) = (u8::try_from(self.count), u16::try_from(data.len())) else {
+            return Vec::new();
+        };
         let mut out = Vec::with_capacity(2);
         let mut s = Vec::with_capacity(HDR + data.len());
-        s.extend_from_slice(&header(self.group, idx, 0, 0, data.len() as u16));
+        s.extend_from_slice(&header(self.group, idx, 0, 0, len));
         s.extend_from_slice(data);
         out.push(s);
         // Keep a copy for parity only while there will be parity: on a clean
@@ -111,15 +116,23 @@ impl Encoder {
         self.count = 0;
         let pending = std::mem::take(&mut self.pending);
         // No parity, or it was switched on mid-group and copies are missing.
-        if m == 0 || pending.len() != k {
+        // The header fields are 8/16 bits: k ≤ GROUP_DATA, m ≤ 30 % of it and
+        // width ≤ a KCP packet + 2, so this only rejects impossible groups.
+        let width = pending.iter().map(|p| p.len() + 2).max().unwrap_or(2);
+        let (Ok(k8), Ok(m8), Ok(width16)) =
+            (u8::try_from(k), u8::try_from(m), u16::try_from(width))
+        else {
+            return Vec::new();
+        };
+        if m == 0 || pending.len() != k || usize::from(k8) + usize::from(m8) > 256 {
             return Vec::new();
         }
-        let width = pending.iter().map(|p| p.len() + 2).max().unwrap_or(2);
         let mut shards: Vec<Vec<u8>> = pending
             .iter()
             .map(|p| {
                 let mut v = Vec::with_capacity(width);
-                v.extend_from_slice(&(p.len() as u16).to_be_bytes());
+                // p.len() + 2 ≤ width ≤ u16::MAX, checked above.
+                v.extend_from_slice(&u16::try_from(p.len()).unwrap_or(0).to_be_bytes());
                 v.extend_from_slice(p);
                 v.resize(width, 0);
                 v
@@ -131,14 +144,10 @@ impl Encoder {
         }
         let mut out = Vec::with_capacity(m);
         for (j, p) in shards.into_iter().skip(k).enumerate() {
+            // k + j < k + m ≤ 256, checked above.
+            let Ok(idx) = u8::try_from(k + j) else { break };
             let mut s = Vec::with_capacity(HDR + p.len());
-            s.extend_from_slice(&header(
-                group,
-                (k + j) as u8,
-                k as u8,
-                m as u8,
-                width as u16,
-            ));
+            s.extend_from_slice(&header(group, idx, k8, m8, width16));
             s.extend_from_slice(&p);
             self.parity_bytes += s.len() as u64;
             out.push(s);
@@ -333,7 +342,7 @@ impl Decoder {
         if g.done || g.k == 0 {
             return out;
         }
-        let (kk, mm) = (g.k as usize, g.m as usize);
+        let (kk, mm) = (usize::from(g.k), usize::from(g.m));
         if g.data.len() >= kk {
             g.done = true;
             return out;
@@ -341,7 +350,7 @@ impl Decoder {
         if g.data.len() + g.parity.len() < kk {
             return out;
         }
-        let width = g.parity.values().next().map(|p| p.len()).unwrap_or(0);
+        let width = g.parity.values().next().map_or(0, |p| p.len());
         // Every data shard is encoded as `len[2] || data`, padded to the
         // width: a width below 2, or a data shard that doesn't fit, means the
         // shards don't belong together.
@@ -349,18 +358,20 @@ impl Decoder {
             g.done = true;
             return out;
         }
-        let mut slots: Vec<Option<Vec<u8>>> = (0..kk + mm)
+        // k, m ≤ GROUP_DATA (checked on arrival), so k + m fits in a u8, and
+        // stored data shards are ≤ MAX_SHARD bytes, so their length fits a u16.
+        let mut slots: Vec<Option<Vec<u8>>> = (0..g.k + g.m)
             .map(|i| {
-                if i < kk {
-                    g.data.get(&(i as u8)).map(|d| {
+                if i < g.k {
+                    g.data.get(&i).map(|d| {
                         let mut v = Vec::with_capacity(width);
-                        v.extend_from_slice(&(d.len() as u16).to_be_bytes());
+                        v.extend_from_slice(&u16::try_from(d.len()).unwrap_or(0).to_be_bytes());
                         v.extend_from_slice(d);
                         v.resize(width, 0);
                         v
                     })
                 } else {
-                    g.parity.get(&(i as u8)).cloned()
+                    g.parity.get(&i).cloned()
                 }
             })
             .collect();

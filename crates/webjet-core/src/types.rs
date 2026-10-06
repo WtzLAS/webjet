@@ -10,8 +10,7 @@ use webjet_proto as wp;
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 pub const SECOND: u64 = 1000;
@@ -36,7 +35,7 @@ pub fn valid_name(s: &str) -> bool {
 
 /// `tag:` followed by `[a-z0-9-]{1,32}` (§14.1).
 pub fn valid_tag(s: &str) -> bool {
-    s.strip_prefix("tag:").map(valid_name).unwrap_or(false)
+    s.strip_prefix("tag:").is_some_and(valid_name)
 }
 
 pub fn cidr_to_net(c: &wp::Cidr) -> Option<IpNet> {

@@ -795,7 +795,7 @@ async fn run_session(
                 fec_flush_at = Some(now + Duration::from_millis(15));
             }
         }
-        if fec_flush_at.map(|t| now >= t).unwrap_or(false) {
+        if fec_flush_at.is_some_and(|t| now >= t) {
             for s in enc.flush() {
                 paced.push_back(s);
             }

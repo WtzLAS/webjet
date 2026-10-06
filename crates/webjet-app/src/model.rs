@@ -270,8 +270,7 @@ impl Flow {
     pub fn circuit_text(&self) -> String {
         self.circuit
             .as_ref()
-            .map(FlowCircuit::text)
-            .unwrap_or_else(|| "—".into())
+            .map_or_else(|| "—".into(), FlowCircuit::text)
     }
 
     /// Case-insensitive match on peer, addresses, ports, protocol, state,
@@ -756,16 +755,14 @@ impl Snapshot {
             admins: self.accounts.iter().filter(|a| a.valid && a.admin).count(),
             hops: self.peers.len(),
             sessions_established: sessions
-                .map(|s| s.sessions.iter().filter(|x| x.established).count())
-                .unwrap_or(0),
-            sessions_total: sessions.map(|s| s.sessions.len()).unwrap_or(0),
-            circuits: sessions.map(|s| s.circuits.local.len()).unwrap_or(0),
+                .map_or(0, |s| s.sessions.iter().filter(|x| x.established).count()),
+            sessions_total: sessions.map_or(0, |s| s.sessions.len()),
+            circuits: sessions.map_or(0, |s| s.circuits.local.len()),
             circuits_direct: sessions
-                .map(|s| s.circuits.local.iter().filter(|c| c.direct).count())
-                .unwrap_or(0),
-            transit: sessions.map(|s| s.circuits.transit).unwrap_or(0),
-            flows: ct.map(|c| c.live).unwrap_or(0),
-            flows_gateway: ct.map(|c| c.gateway).unwrap_or(0),
+                .map_or(0, |s| s.circuits.local.iter().filter(|c| c.direct).count()),
+            transit: sessions.map_or(0, |s| s.circuits.transit),
+            flows: ct.map_or(0, |c| c.live),
+            flows_gateway: ct.map_or(0, |c| c.gateway),
             tx_bytes: self.peers.iter().map(|p| p.tx_bytes).sum(),
             rx_bytes: self.peers.iter().map(|p| p.rx_bytes).sum(),
             alarms: self.status.alarms.len(),

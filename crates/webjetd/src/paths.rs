@@ -29,16 +29,13 @@ fn direct_possible(n: &Node, peer: &Bytes32) -> bool {
         return true;
     }
     let recs = n.records.lock();
-    recs.endpoints
-        .get(peer)
-        .map(|(r, _)| {
-            r.addrs
-                .clone()
-                .unwrap_or_default()
-                .iter()
-                .any(|a| a.kind == wp::AddrKind::Public && a.priority > 0)
-        })
-        .unwrap_or(false)
+    recs.endpoints.get(peer).is_some_and(|(r, _)| {
+        r.addrs
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .any(|a| a.kind == wp::AddrKind::Public && a.priority > 0)
+    })
 }
 
 /// Candidate paths to `peer`, best first.
@@ -49,8 +46,7 @@ pub fn candidates(n: &Arc<Node>, peer: &Bytes32) -> Vec<Path> {
     v.retain(|p| {
         p.hops
             .first()
-            .map(|h| n.best_hop(h).is_some() || !n.endpoint_addrs(h).is_empty())
-            .unwrap_or(true)
+            .is_none_or(|h| n.best_hop(h).is_some() || !n.endpoint_addrs(h).is_empty())
     });
     if direct_possible(n, peer) && !v.iter().any(|p| p.hops.is_empty()) {
         let cost = n

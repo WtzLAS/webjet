@@ -371,18 +371,23 @@ impl Dataplane {
             return Some((id, true));
         }
         let (prefix, gws) = self.gateways_for(n, dst)?;
-        let mut choice = self.gw_choice.lock();
-        if let Some(c) = choice.get(&prefix)
-            && gws.contains(c)
+        // Keep the sticky choice while it serves the prefix and its session
+        // is up (or no gateway has one). Session lookups happen without the
+        // choice lock held (lock-ordering rule: never nest helper locks).
+        let established = |g: &Bytes32| n.e2e.get(g).is_some_and(|s| s.established());
+        let current = self.gw_choice.lock().get(&prefix).copied();
+        if let Some(c) = current
+            && gws.contains(&c)
+            && (established(&c) || !gws.iter().any(established))
         {
-            return Some((*c, false));
+            return Some((c, false));
         }
         let pick = gws
             .iter()
-            .find(|g| n.e2e.get(g).map(|s| s.established()).unwrap_or(false))
             .copied()
+            .find(|g| established(g))
             .unwrap_or_else(|| gws[rand::random_range(0..gws.len())]);
-        choice.insert(prefix, pick);
+        self.gw_choice.lock().insert(prefix, pick);
         Some((pick, false))
     }
 
@@ -738,7 +743,7 @@ impl Dataplane {
                 });
                 if stale {
                     crate::platform::configure_dns(&self.dev_name, &resolver, &domains);
-                    *last = Some((resolver.clone(), domains, Instant::now()));
+                    *last = Some((resolver, domains, Instant::now()));
                 }
             }
         }
@@ -885,8 +890,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
             let plen = pool
                 .iter()
                 .find(|p| p.contains(&ip.addr()))
-                .map(|p| p.prefix_len())
-                .unwrap_or(ip.prefix_len());
+                .map_or(ip.prefix_len(), |p| p.prefix_len());
             match ip.addr() {
                 IpAddr::V4(a) => b = b.ipv4(a, plen, None),
                 IpAddr::V6(a) => b = b.ipv6(a, plen),
@@ -1251,7 +1255,7 @@ mod tests {
     async fn outbound_without_a_route_is_host_unreachable() {
         let mut t = setup();
         let p = tcp4(ME, [10, 7, 9, 9], 40000, 80, tcpf::SYN);
-        t.dp.outbound(p.clone());
+        t.dp.outbound(p);
         let out = tun_packets(&mut t);
         assert_eq!(out.len(), 1, "an ICMP error back to the host");
         let icmp = packet::parse(&out[0]).unwrap();

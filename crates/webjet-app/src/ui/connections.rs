@@ -53,8 +53,8 @@ impl WebjetApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut sw = div().flex().gap_1();
-        let flows = s.conntrack.as_ref().map(|c| c.live).unwrap_or(0);
-        let proxied = s.proxy.as_ref().map(|p| p.live).unwrap_or(0);
+        let flows = s.conntrack.as_ref().map_or(0, |c| c.live);
+        let proxied = s.proxy.as_ref().map_or(0, |p| p.live);
         let labels = [
             format!("overlay flows ({flows})"),
             format!("reverse proxy ({proxied})"),
@@ -308,7 +308,7 @@ impl WebjetApp {
                 p = p
                     .child(label_value(
                         "Path",
-                        c.map(|c| c.path_text(&me)).unwrap_or_else(|| fc.text()),
+                        c.map_or_else(|| fc.text(), |c| c.path_text(&me)),
                     ))
                     .child(label_value(
                         "Kind",

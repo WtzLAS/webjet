@@ -331,15 +331,11 @@ impl WebjetApp {
     pub(super) fn start_drag(&mut self, kind: DragKind, at: Point<Pixels>) {
         let v = self.graph_pos(at);
         let grab = match &kind {
-            DragKind::Node(id) => self
-                .graph
-                .index(id)
-                .map(|i| {
-                    let g = self.viewport.to_graph(v);
-                    let n = &self.graph.vertices[i];
-                    (n.x - g.0, n.y - g.1)
-                })
-                .unwrap_or((0.0, 0.0)),
+            DragKind::Node(id) => self.graph.index(id).map_or((0.0, 0.0), |i| {
+                let g = self.viewport.to_graph(v);
+                let n = &self.graph.vertices[i];
+                (n.x - g.0, n.y - g.1)
+            }),
             DragKind::Pan => (0.0, 0.0),
         };
         self.drag = Some(Drag {

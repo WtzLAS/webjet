@@ -102,7 +102,7 @@ pub fn for_target(name: &str) -> Vec<Vec<u8>> {
             let data = key
                 .seal(frames::ftype::DATA, 5, 1, b"hello")
                 .unwrap_or_default();
-            let hs = frames::handshake_frame(true, &[1; 16], 0, b"client hello");
+            let hs = frames::handshake_frame(true, &[1; 16], 0, b"client hello").unwrap_or_default();
             let mut relay = frames::relay_header(77, 8, 2).to_vec();
             relay.extend_from_slice(&data);
             vec![

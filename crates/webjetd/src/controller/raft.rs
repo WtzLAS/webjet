@@ -464,11 +464,11 @@ impl Raft {
     // ------------------------------------------------------------ log access
 
     pub fn last_index(&self) -> u64 {
-        self.log.last().map(|e| e.index).unwrap_or(self.snap_index)
+        self.log.last().map_or(self.snap_index, |e| e.index)
     }
 
     pub fn last_term(&self) -> u64 {
-        self.log.last().map(|e| e.term).unwrap_or(self.snap_term)
+        self.log.last().map_or(self.snap_term, |e| e.term)
     }
 
     pub fn term_at(&self, idx: u64) -> Option<u64> {
@@ -539,7 +539,7 @@ impl Raft {
             learners: BTreeSet::new(),
         };
         // There is always at least the base configuration.
-        self.configs.last().map(|c| &c.1).unwrap_or(&NONE)
+        self.configs.last().map_or(&NONE, |c| &c.1)
     }
 
     pub fn voters(&self) -> &BTreeSet<Bytes32> {
@@ -564,7 +564,7 @@ impl Raft {
 
     /// Index of the entry that introduced the current configuration.
     pub fn config_index(&self) -> u64 {
-        self.configs.last().map(|c| c.0).unwrap_or(0)
+        self.configs.last().map_or(0, |c| c.0)
     }
 
     /// A membership change is in the log but not yet committed in this
@@ -618,8 +618,7 @@ impl Raft {
         self.is_voter()
             || self
                 .config_at(self.commit)
-                .map(|c| c.voters.contains(&self.id))
-                .unwrap_or(false)
+                .is_some_and(|c| c.voters.contains(&self.id))
     }
 
     /// Votes received that count in the latest configuration.
@@ -674,8 +673,7 @@ impl Raft {
             || (self.leader.is_some()
                 && self
                     .last_leader_contact
-                    .map(|t| self.now.duration_since(t) < self.timing.election_min)
-                    .unwrap_or(false))
+                    .is_some_and(|t| self.now.duration_since(t) < self.timing.election_min))
     }
 
     fn become_follower(&mut self, term: u64, leader: Option<Bytes32>) {
@@ -862,8 +860,7 @@ impl Raft {
                 || self
                     .last_sent
                     .get(&p)
-                    .map(|t| now.duration_since(*t) >= self.timing.heartbeat)
-                    .unwrap_or(true);
+                    .is_none_or(|t| now.duration_since(*t) >= self.timing.heartbeat);
             if !due {
                 continue;
             }
@@ -921,11 +918,9 @@ impl Raft {
                         .iter()
                         .filter(|v| {
                             **v == self.id
-                                || self
-                                    .last_ack
-                                    .get(*v)
-                                    .map(|t| now.duration_since(*t) < self.timing.election_max)
-                                    .unwrap_or(false)
+                                || self.last_ack.get(*v).is_some_and(|t| {
+                                    now.duration_since(*t) < self.timing.election_max
+                                })
                         })
                         .count();
                     if live < self.quorum() {

@@ -16,9 +16,7 @@ pub fn process_cpu_time() -> Option<Duration> {
 
 /// Logical CPUs available to the process.
 pub fn cpu_count() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 #[cfg(unix)]
@@ -120,8 +118,7 @@ impl LoadSampler {
             && self
                 .samples
                 .front()
-                .map(|s| at.duration_since(s.at) > WINDOW)
-                .unwrap_or(false)
+                .is_some_and(|s| at.duration_since(s.at) > WINDOW)
         {
             self.samples.pop_front();
         }
@@ -135,8 +132,7 @@ impl LoadSampler {
         }
         let decay_due = self
             .last_peak_decay
-            .map(|t| at.duration_since(t) >= Duration::from_secs(3600))
-            .unwrap_or(true);
+            .is_none_or(|t| at.duration_since(t) >= Duration::from_secs(3600));
         if decay_due {
             self.peak_mbps *= 0.99;
             self.last_peak_decay = Some(at);

@@ -581,7 +581,7 @@ pub fn icmp_unreachable(orig: &[u8], why: Unreach) -> Option<Vec<u8>> {
             icmp[2..4].copy_from_slice(&c.to_be_bytes());
             let total = 20 + icmp.len();
             let mut p = vec![0x45, 0, 0, 0, 0, 0, 0, 0, 64, PROTO_ICMP, 0, 0];
-            p[2..4].copy_from_slice(&(total as u16).to_be_bytes());
+            p[2..4].copy_from_slice(&u16::try_from(total).ok()?.to_be_bytes());
             p.extend_from_slice(&s.octets());
             p.extend_from_slice(&d.octets());
             let c = checksum(&p);
@@ -598,7 +598,7 @@ pub fn icmp_unreachable(orig: &[u8], why: Unreach) -> Option<Vec<u8>> {
             let mut icmp = vec![1, code, 0, 0, 0, 0, 0, 0];
             icmp.extend_from_slice(quote);
             let mut p = vec![0x60, 0, 0, 0];
-            p.extend_from_slice(&(icmp.len() as u16).to_be_bytes());
+            p.extend_from_slice(&u16::try_from(icmp.len()).ok()?.to_be_bytes());
             p.push(PROTO_ICMPV6);
             p.push(64);
             p.extend_from_slice(&s.octets());
@@ -653,11 +653,15 @@ pub fn icmp_echo(
     payload: &[u8],
 ) -> Vec<u8> {
     let l4len = 8 + payload.len();
+    // Larger than an IP packet can be (IPv4 total length includes 20 more).
+    let Some(len16) = u16::try_from(l4len).ok().filter(|l| *l <= u16::MAX - 20) else {
+        return Vec::new();
+    };
     let mut p = match (src, dst) {
         (IpAddr::V4(s), IpAddr::V4(d)) => {
             let mut h = vec![0u8; 20];
             h[0] = 0x45;
-            h[2..4].copy_from_slice(&((20 + l4len) as u16).to_be_bytes());
+            h[2..4].copy_from_slice(&(20 + len16).to_be_bytes());
             h[8] = 64;
             h[9] = PROTO_ICMP;
             h[12..16].copy_from_slice(&s.octets());
@@ -668,7 +672,7 @@ pub fn icmp_echo(
         (IpAddr::V6(s), IpAddr::V6(d)) => {
             let mut h = vec![0u8; 40];
             h[0] = 0x60;
-            h[4..6].copy_from_slice(&(l4len as u16).to_be_bytes());
+            h[4..6].copy_from_slice(&len16.to_be_bytes());
             h[6] = PROTO_ICMPV6;
             h[7] = 64;
             h[8..24].copy_from_slice(&s.octets());
@@ -710,6 +714,13 @@ pub fn echo_reply(req: &[u8]) -> Option<Vec<u8>> {
 pub mod tests {
     use super::*;
 
+    #[test]
+    fn oversized_echo_is_not_built() {
+        let (a, b) = (IpAddr::from([10, 0, 0, 1]), IpAddr::from([10, 0, 0, 2]));
+        assert!(icmp_echo(a, b, true, 1, 1, &vec![0; 70_000]).is_empty());
+        assert!(!icmp_echo(a, b, true, 1, 1, &[0; 64]).is_empty());
+    }
+
     pub use crate::testutil::packets::{tcp4, udp4};
 
     fn verify_udp(p: &[u8]) -> bool {
@@ -750,7 +761,7 @@ pub mod tests {
         assert_eq!(checksum(&r[20..]), 0);
         assert!(icmp_unreachable(&r, Unreach::Host).is_none());
         // Translate the error as a gateway would.
-        let mut r2 = r.clone();
+        let mut r2 = r;
         rewrite(
             &mut r2,
             Some(("10.2.2.17".parse().unwrap(), 0)),
@@ -893,7 +904,7 @@ mod prop {
             prop_assert!(checksums_ok(&err));
             // The error travels back through a gateway that had translated
             // the source: its destination becomes the original source.
-            let mut back = err.clone();
+            let mut back = err;
             rewrite(&mut back, None, Some((IpAddr::from(nsrc), nsport)));
             let b = parse(&back).unwrap();
             prop_assert_eq!(b.flow.dst, IpAddr::from(nsrc));

@@ -505,11 +505,7 @@ impl Controller {
                     let s = n.store.read();
                     let mut u: Vec<(u8, Bytes32, Option<Vec<u8>>)> = Vec::new();
                     for (p, e) in m.tree.iter() {
-                        if s.tree()
-                            .get_by_path(p)
-                            .map(|x| x.hash != e.hash)
-                            .unwrap_or(true)
-                        {
+                        if s.tree().get_by_path(p).is_none_or(|x| x.hash != e.hash) {
                             u.push((e.kind, e.key, Some(e.bytes.clone())));
                         }
                     }
@@ -614,8 +610,7 @@ impl Controller {
             .read()
             .view()
             .node(&id)
-            .map(|x| x.name.clone())
-            .unwrap_or_else(|| crypto::short(&id));
+            .map_or_else(|| crypto::short(&id), |x| x.name.clone());
         match self
             .propose(EntryPayload::AutoMembershipEntry(Box::new(
                 wp::AutoMembershipEntry {
@@ -909,8 +904,7 @@ impl Controller {
                         .view()
                         .nodes
                         .get(&from)
-                        .map(|x| x.relay || x.control)
-                        .unwrap_or(false);
+                        .is_some_and(|x| x.relay || x.control);
                 let epochs = m
                     .psk_epochs
                     .iter()
@@ -932,8 +926,7 @@ impl Controller {
                     .view()
                     .nodes
                     .get(&from)
-                    .map(|x| x.relay || x.control)
-                    .unwrap_or(false);
+                    .is_some_and(|x| x.relay || x.control);
                 if !allowed {
                     return ack(
                         false,
@@ -1130,7 +1123,7 @@ impl Controller {
         let start = Instant::now();
         loop {
             self.maybe_sign_head(&n);
-            let v = n.store.read().head().map(|h| h.head.version).unwrap_or(0);
+            let v = n.store.read().head().map_or(0, |h| h.head.version);
             if v >= idx || start.elapsed() > PROPOSE_TIMEOUT {
                 break;
             }
@@ -1294,17 +1287,23 @@ impl Controller {
             return "# EOF\n".into();
         };
         let now = now_ms();
+        // Copy the recent reports out first so the reports lock isn't nested
+        // inside the store lock.
+        let recent: Vec<_> = {
+            let r = self.reports.lock();
+            let mut v: Vec<_> = r
+                .iter()
+                .filter(|(_, sr)| now.saturating_sub(sr.received) < 15 * 60_000)
+                .map(|(id, sr)| (*id, sr.report.clone()))
+                .collect();
+            v.sort_by_key(|a| a.0);
+            v
+        };
         let s = n.store.read();
         let names = crate::exposition::ViewNames(s.view());
         let mut e = crate::exposition::Exposition::default();
-        let r = self.reports.lock();
-        let mut ids: Vec<&Bytes32> = r.keys().collect();
-        ids.sort();
-        for id in ids {
-            let sr = &r[id];
-            if now.saturating_sub(sr.received) < 15 * 60_000 {
-                e.report(&sr.report, &names, true);
-            }
+        for (_, report) in &recent {
+            e.report(report, &names, true);
         }
         e.render()
     }
@@ -1321,7 +1320,7 @@ impl Controller {
             applied_index: self.applied.load(Ordering::SeqCst),
             voters: Some(r.voters().iter().map(crypto::k32).collect()),
             learners: Some(r.learners().iter().map(crypto::k32).collect()),
-            signed_version: s.head().map(|h| h.head.version).unwrap_or(0),
+            signed_version: s.head().map_or(0, |h| h.head.version),
         }
     }
 

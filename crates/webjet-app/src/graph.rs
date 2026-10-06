@@ -69,11 +69,11 @@ impl Edge {
     }
 
     pub fn rtt_ms(&self) -> f64 {
-        self.best().map(|r| r.rtt_ms).unwrap_or(0.0)
+        self.best().map_or(0.0, |r| r.rtt_ms)
     }
 
     pub fn loss(&self) -> f64 {
-        self.best().map(|r| r.loss).unwrap_or(0.0)
+        self.best().map_or(0.0, |r| r.loss)
     }
 
     pub fn other(&self, v: usize) -> usize {
@@ -1806,7 +1806,7 @@ mod tests {
             .fold(0.0, f32::max);
         assert!(moved < 0.2, "nodes moved by {moved}");
         // A link it can't absorb (the lone node joins): still a good picture.
-        let mut e2 = e.clone();
+        let mut e2 = e;
         e2.push((6, 0));
         let third = layout(&warm, &e2, area);
         let (overlaps, crossings, _, _) = quality(&warm, &e2, &third, area);
@@ -1821,7 +1821,7 @@ mod tests {
         let b = Graph::build(&s, (800.0, 420.0), Some(&a));
         assert_eq!(a, b, "same graph, same picture");
         // A new link: the layout continues from the old picture.
-        let mut s2 = s.clone();
+        let mut s2 = s;
         if let Ok(t) = &mut s2.topology {
             t.edges.push(TopoEdge {
                 a: "c".into(),

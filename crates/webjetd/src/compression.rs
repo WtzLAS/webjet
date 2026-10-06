@@ -329,10 +329,7 @@ mod tests {
         assert_eq!(ty, ftype::RPC_ZSTD);
         assert_eq!(compress::zstd_decompress(&c, MAX_RECORD).unwrap(), msg);
         // Secrets are never compressed.
-        assert_eq!(
-            rpc_frame(&n, &PEER, true, msg.clone()),
-            (ftype::RPC, msg.clone())
-        );
+        assert_eq!(rpc_frame(&n, &PEER, true, msg.clone()), (ftype::RPC, msg));
         let short = payload(10);
         assert_eq!(
             rpc_frame(&n, &PEER, false, short.clone()),

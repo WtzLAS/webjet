@@ -127,20 +127,27 @@ pub fn parse_header(frame: &[u8]) -> Option<FrameHeader> {
 /// HANDSHAKE frames: `type || initiator flag || session nonce[16] || flight[2]
 /// || tls_len[2] || TLS bytes || padding`. They are not AEAD-protected; TLS
 /// protects them (§6.9). Frames are padded to size buckets (§9.7.4).
-pub fn handshake_frame(initiator: bool, nonce: &[u8; 16], flight: u16, tls: &[u8]) -> Vec<u8> {
+/// None when the TLS flight doesn't fit the 16-bit length field.
+pub fn handshake_frame(
+    initiator: bool,
+    nonce: &[u8; 16],
+    flight: u16,
+    tls: &[u8],
+) -> Option<Vec<u8>> {
+    let tls_len = u16::try_from(tls.len()).ok()?;
     let mut f = Vec::with_capacity(32 + tls.len());
     f.push(ftype::HANDSHAKE);
     f.push(initiator as u8);
     f.extend_from_slice(nonce);
     f.extend_from_slice(&flight.to_be_bytes());
-    f.extend_from_slice(&(tls.len() as u16).to_be_bytes());
+    f.extend_from_slice(&tls_len.to_be_bytes());
     f.extend_from_slice(tls);
     let bucket = [256usize, 512, 1024, 1500, 2048, 4096, 8192, 16384]
         .into_iter()
         .find(|b| *b >= f.len())
         .unwrap_or(f.len());
     f.resize(bucket, 0);
-    f
+    Some(f)
 }
 
 pub struct Handshake<'a> {
@@ -291,7 +298,7 @@ mod tests {
         let h = parse_header(&f).unwrap();
         assert_eq!((h.ty, h.key_id, h.counter), (ftype::DATA, 42, 9));
         assert_eq!(k.open(&f).unwrap(), b"packet");
-        let mut bad = f.clone();
+        let mut bad = f;
         bad[0] = ftype::PROBE; // type is authenticated
         assert!(k.open(&bad).is_none());
     }
@@ -361,8 +368,14 @@ mod tests {
     }
 
     #[test]
+    fn handshake_frame_refuses_flights_over_the_length_field() {
+        assert!(handshake_frame(true, &[1; 16], 1, &vec![0; usize::from(u16::MAX) + 1]).is_none());
+        assert!(handshake_frame(true, &[1; 16], 1, &vec![0; usize::from(u16::MAX)]).is_some());
+    }
+
+    #[test]
     fn handshake_padding() {
-        let f = handshake_frame(true, &[1; 16], 3, &[9; 300]);
+        let f = handshake_frame(true, &[1; 16], 3, &[9; 300]).unwrap();
         assert_eq!(f.len(), 512);
         let h = parse_handshake(&f).unwrap();
         assert!(h.initiator);
@@ -427,7 +440,7 @@ mod prop {
             flight in any::<u16>(),
             tls in proptest::collection::vec(any::<u8>(), 0..5000),
         ) {
-            let f = handshake_frame(initiator, &nonce, flight, &tls);
+            let f = handshake_frame(initiator, &nonce, flight, &tls).unwrap();
             // Padded to a size bucket.
             prop_assert!(f.len() >= 22 + tls.len());
             prop_assert!([256, 512, 1024, 1500, 2048, 4096, 8192, 16384].contains(&f.len()));

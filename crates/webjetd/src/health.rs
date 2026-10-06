@@ -36,12 +36,7 @@ pub fn check_clock(n: &Arc<Node>) {
         n.hops
             .lock()
             .values()
-            .filter(|h| {
-                v.nodes
-                    .get(&h.peer)
-                    .map(|x| x.relay || x.control)
-                    .unwrap_or(false)
-            })
+            .filter(|h| v.nodes.get(&h.peer).is_some_and(|x| x.relay || x.control))
             .filter_map(|h| *h.clock_offset.lock())
             .collect()
     };
@@ -107,7 +102,7 @@ pub async fn run(n: Arc<Node>) {
             (
                 s.head_expired(now),
                 s.horizon_passed(now),
-                s.view().nodes.get(&n.me).map(|x| x.valid).unwrap_or(false),
+                s.view().nodes.get(&n.me).is_some_and(|x| x.valid),
                 s.view().tombstoned_nodes.contains(&n.me),
             )
         };

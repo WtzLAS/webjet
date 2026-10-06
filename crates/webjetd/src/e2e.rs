@@ -92,8 +92,7 @@ impl Session {
         let i = self.inner.lock();
         i.send
             .as_ref()
-            .map(|s| s.created.elapsed() < REJECT_AFTER)
-            .unwrap_or(false)
+            .is_some_and(|s| s.created.elapsed() < REJECT_AFTER)
     }
 
     pub fn handshaking(&self) -> bool {
@@ -166,7 +165,7 @@ impl Sessions {
     fn in_progress(&self) -> usize {
         let all: Vec<Arc<Session>> = self.map.lock().values().cloned().collect();
         all.iter()
-            .filter(|s| s.inner.try_lock().map(|i| i.hs.is_some()).unwrap_or(true))
+            .filter(|s| s.inner.try_lock().is_none_or(|i| i.hs.is_some()))
             .count()
     }
 }
@@ -178,8 +177,7 @@ impl tls::PeerTrust for E2eTrust {
     fn trusted(&self, key: &Bytes32) -> bool {
         self.0
             .upgrade()
-            .map(|n| n.store.read().trusted_by_key(key).is_some())
-            .unwrap_or(false)
+            .is_some_and(|n| n.store.read().trusted_by_key(key).is_some())
     }
 }
 
@@ -210,11 +208,9 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
     // so a peer's sending and receiving don't wait on each other's crypto.
     let reserved = {
         let mut i = s.inner.lock();
-        let usable = i
-            .send
-            .as_ref()
-            .map(|k| k.created.elapsed() < REJECT_AFTER && k.counter < frames::REKEY_PACKETS)
-            .unwrap_or(false);
+        let usable = i.send.as_ref().is_some_and(|k| {
+            k.created.elapsed() < REJECT_AFTER && k.counter < frames::REKEY_PACKETS
+        });
         let circ = if usable {
             pick_circuit(n, &s, &mut i)
         } else {
@@ -465,7 +461,8 @@ fn start_handshake(n: &Arc<Node>, s: &Arc<Session>, c: &Arc<LocalCircuit>) -> Re
     };
     let out = drain_tls(&mut hs.conn)?;
     hs.my_flight = 1;
-    let f = frames::handshake_frame(true, &hs.nonce, hs.my_flight, &out);
+    let f = frames::handshake_frame(true, &hs.nonce, hs.my_flight, &out)
+        .ok_or_else(|| anyhow!("TLS flight too large"))?;
     hs.last_sent = f.clone();
     s.inner.lock().hs = Some(hs);
     c.send(n, &f, 0);
@@ -700,7 +697,8 @@ fn advance(
     let mut to_send = None;
     if !out.is_empty() {
         hs.my_flight = hs.peer_flight + 1;
-        let f = frames::handshake_frame(hs.initiator, &hs.nonce, hs.my_flight, &out);
+        let f = frames::handshake_frame(hs.initiator, &hs.nonce, hs.my_flight, &out)
+            .ok_or_else(|| anyhow!("TLS flight too large"))?;
         hs.last_sent = f.clone();
         hs.sent_at = Instant::now();
         to_send = Some(f);
@@ -738,8 +736,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
             // limited; the peer answers as responder).
             let due = i
                 .last_unknown_hs
-                .map(|t| t.elapsed() > Duration::from_secs(5))
-                .unwrap_or(true);
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(5));
             if due && i.hs.is_none() {
                 i.last_unknown_hs = Some(Instant::now());
                 drop(i);
@@ -750,7 +747,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
             return;
         };
         if k.created.elapsed() > REJECT_AFTER
-            || k.retire_at.map(|t| Instant::now() > t).unwrap_or(false)
+            || k.retire_at.is_some_and(|t| Instant::now() > t)
             || !k.window.check(h.counter)
         {
             return;
@@ -768,11 +765,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
         }
         k.window.mark(h.counter);
         // The responder's handshake state can go once traffic flows.
-        if i.hs
-            .as_ref()
-            .map(|x| x.done && !x.initiator)
-            .unwrap_or(false)
-        {
+        if i.hs.as_ref().is_some_and(|x| x.done && !x.initiator) {
             i.hs = None;
         }
     }
@@ -889,8 +882,7 @@ pub async fn run(n: Arc<Node>) {
             {
                 let mut i = s.inner.lock();
                 i.recv.retain(|_, k| {
-                    k.created.elapsed() < REJECT_AFTER
-                        && k.retire_at.map(|t| now < t).unwrap_or(true)
+                    k.created.elapsed() < REJECT_AFTER && k.retire_at.is_none_or(|t| now < t)
                 });
                 if let Some(hs) = i.hs.as_mut() {
                     // The initiator keeps retransmitting flight 3 until the
@@ -962,7 +954,7 @@ pub fn close(n: &Arc<Node>, peer: &Bytes32) {
 pub fn summary(s: &Session) -> serde_json::Value {
     let i = s.inner.lock();
     serde_json::json!({
-        "established": i.send.as_ref().map(|k| k.created.elapsed() < REJECT_AFTER).unwrap_or(false),
+        "established": i.send.as_ref().is_some_and(|k| k.created.elapsed() < REJECT_AFTER),
         "key_age_s": i.send.as_ref().map(|k| k.created.elapsed().as_secs()),
         "handshaking": i.hs.is_some(),
         "queued": i.queue.len(),
@@ -1095,7 +1087,7 @@ mod tests {
         let _ = rx.relay();
 
         // Prime conntrack with the outbound flow, then time replies.
-        dp.outbound(payload.clone());
+        dp.outbound(payload);
         let _ = rx.relay();
         let frames: Vec<Vec<u8>> = (0..rounds)
             .map(|i| peer_key.seal(ftype::DATA, 7, i, &reply).expect("seal"))

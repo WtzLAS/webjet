@@ -183,8 +183,7 @@ impl WebjetApp {
                 let by = h
                     .controller
                     .as_deref()
-                    .map(|c| self.names.node(c))
-                    .unwrap_or_else(|| "an unknown controller".into());
+                    .map_or_else(|| "an unknown controller".into(), |c| self.names.node(c));
                 head = head
                     .child(label_value(
                         "Version",
@@ -777,7 +776,7 @@ impl WebjetApp {
         .flex_1()
         .min_h(px(0.));
         let older = page.has_older();
-        let oldest = page.records.first().map(|r| r.index).unwrap_or(0);
+        let oldest = page.records.first().map_or(0, |r| r.index);
         let busy = self.log_busy;
         p = p
             .child(

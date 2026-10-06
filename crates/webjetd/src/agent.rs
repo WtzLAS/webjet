@@ -91,7 +91,7 @@ pub async fn enroll(cfg: &Config, ticket_str: &str) -> Result<()> {
     // A bootstrapping controller enrolls itself through its running agent.
     if paths.node().exists() {
         let nf: Option<NodeFile> = state::load_json(&paths.node())?;
-        if nf.map(|n| n.bootstrap).unwrap_or(false) && cfg.control_socket.exists() {
+        if nf.is_some_and(|n| n.bootstrap) && cfg.control_socket.exists() {
             let r = crate::control::client::call(
                 &cfg.control_socket,
                 &crate::control::Request::RedeemSelf {
@@ -494,8 +494,7 @@ async fn start_dataplane_when_ready(n: Arc<Node>) {
             .view()
             .nodes
             .get(&n.me)
-            .map(|x| x.valid)
-            .unwrap_or(false);
+            .is_some_and(|x| x.valid);
         if ready {
             match crate::dataplane::start(&n).await {
                 Ok(dp) => {
@@ -750,7 +749,7 @@ async fn connections(n: Arc<Node>) {
                 .filter(|c| *c != n.me)
                 .collect();
             (
-                v.nodes.get(&n.me).map(|x| x.relay).unwrap_or(false),
+                v.nodes.get(&n.me).is_some_and(|x| x.relay),
                 n.is_controller(),
                 relays,
                 ctl,
@@ -842,12 +841,7 @@ async fn connections(n: Arc<Node>) {
                 endpoints: recs
                     .endpoints
                     .iter()
-                    .filter(|(id, _)| {
-                        v.nodes
-                            .get(*id)
-                            .map(|x| x.relay || x.control)
-                            .unwrap_or(false)
-                    })
+                    .filter(|(id, _)| v.nodes.get(*id).is_some_and(|x| x.relay || x.control))
                     .map(|(_, (_, raw))| raw.clone())
                     .collect(),
             }

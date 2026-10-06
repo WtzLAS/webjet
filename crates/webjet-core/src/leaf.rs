@@ -275,7 +275,7 @@ mod tests {
         assert!(decode(kind::ACCOUNT, &[5; 32], &raw).is_err());
 
         // A flipped bit breaks the signature.
-        let mut tampered = raw.clone();
+        let mut tampered = raw;
         let n = tampered.len();
         tampered[n - 1] ^= 1;
         assert!(decode(kind::ACCOUNT, &id, &tampered).is_err());

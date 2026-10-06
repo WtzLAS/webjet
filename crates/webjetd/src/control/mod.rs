@@ -181,7 +181,7 @@ pub async fn submit_op(n: &Arc<Node>, raw: Vec<u8>) -> Result<(u64, String)> {
         RpcBody::SubmitResult(r) if r.ok => {
             // Wait for the change to reach us.
             let start = std::time::Instant::now();
-            while n.store.read().head().map(|h| h.head.version).unwrap_or(0) < r.index
+            while n.store.read().head().map_or(0, |h| h.head.version) < r.index
                 && start.elapsed() < Duration::from_secs(15)
             {
                 tokio::time::sleep(Duration::from_millis(100)).await;

@@ -14,16 +14,12 @@ use webjetd::control::Request;
 
 /// Where the agent's control channel is (same defaults as `webjetctl`).
 pub fn default_socket() -> PathBuf {
-    std::env::var_os("WEBJET_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(webjetd::ipc::default_control)
+    std::env::var_os("WEBJET_SOCKET").map_or_else(webjetd::ipc::default_control, PathBuf::from)
 }
 
 /// Where account keys are (same defaults as `webjetctl`).
 pub fn default_keys() -> PathBuf {
-    std::env::var_os("WEBJET_KEYS")
-        .map(PathBuf::from)
-        .unwrap_or_else(webjet_tools::default_key_dir)
+    std::env::var_os("WEBJET_KEYS").map_or_else(webjet_tools::default_key_dir, PathBuf::from)
 }
 
 /// The account the sign-in screen starts with, among the keys in `names`

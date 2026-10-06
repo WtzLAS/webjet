@@ -164,7 +164,7 @@ pub struct LogPage {
 impl LogPage {
     /// Add an older page in front of this one.
     pub fn prepend(&mut self, older: LogPage) {
-        let first = self.records.first().map(|r| r.index).unwrap_or(u64::MAX);
+        let first = self.records.first().map_or(u64::MAX, |r| r.index);
         let mut v: Vec<LogRecord> = older
             .records
             .into_iter()
@@ -418,7 +418,7 @@ fn decode_leaf(k: u8, key: Bytes32, bytes: &[u8], names: &Names) -> Leaf {
             put("Tags", list(r.tags.as_deref().unwrap_or_default()));
             put(
                 "Subnet routes",
-                r.routes.as_ref().map(|v| v.len()).unwrap_or(0).to_string(),
+                r.routes.as_ref().map_or(0, |v| v.len()).to_string(),
             );
         }
         LeafValue::NodeTombstone(t) => {
@@ -462,25 +462,19 @@ fn decode_leaf(k: u8, key: Bytes32, bytes: &[u8], names: &Names) -> Leaf {
         LeafValue::Policy(p) => {
             l.record = "Policy".into();
             put("Default", format!("{:?}", p.default_action).to_lowercase());
-            put(
-                "Rules",
-                p.rules.as_ref().map(|v| v.len()).unwrap_or(0).to_string(),
-            );
-            put(
-                "Tests",
-                p.tests.as_ref().map(|v| v.len()).unwrap_or(0).to_string(),
-            );
+            put("Rules", p.rules.as_ref().map_or(0, |v| v.len()).to_string());
+            put("Tests", p.tests.as_ref().map_or(0, |v| v.len()).to_string());
         }
         LeafValue::Dns(d) => {
             l.record = "DnsConfig".into();
             put("Suffix", d.suffix.clone().unwrap_or_else(|| "—".into()));
             put(
                 "Records",
-                d.records.as_ref().map(|v| v.len()).unwrap_or(0).to_string(),
+                d.records.as_ref().map_or(0, |v| v.len()).to_string(),
             );
             put(
                 "Forward zones",
-                d.forward.as_ref().map(|v| v.len()).unwrap_or(0).to_string(),
+                d.forward.as_ref().map_or(0, |v| v.len()).to_string(),
             );
         }
         LeafValue::Seeds(s) => {
@@ -510,11 +504,7 @@ fn decode_leaf(k: u8, key: Bytes32, bytes: &[u8], names: &Names) -> Leaf {
             );
             put(
                 "Overrides",
-                x.overrides
-                    .as_ref()
-                    .map(|v| v.len())
-                    .unwrap_or(0)
-                    .to_string(),
+                x.overrides.as_ref().map_or(0, |v| v.len()).to_string(),
             );
         }
         LeafValue::Validity(v) => {
@@ -525,13 +515,13 @@ fn decode_leaf(k: u8, key: Bytes32, bytes: &[u8], names: &Names) -> Leaf {
             l.record = "TransportConfig".into();
             put(
                 "Camouflage",
-                t.camouflage
-                    .as_ref()
-                    .map(|c| {
+                t.camouflage.as_ref().map_or_else(
+                    || "—".into(),
+                    |c| {
                         format!("{:?} {}", c.mode, c.domain.clone().unwrap_or_default())
                             .to_lowercase()
-                    })
-                    .unwrap_or_else(|| "—".into()),
+                    },
+                ),
             );
         }
         LeafValue::NodeConfig(c) => {
@@ -540,10 +530,10 @@ fn decode_leaf(k: u8, key: Bytes32, bytes: &[u8], names: &Names) -> Leaf {
                 "Overrides",
                 format!(
                     "{} priorities · {} limits · {} seeds · {} DNS records",
-                    c.priorities.as_ref().map(|v| v.len()).unwrap_or(0),
-                    c.limits.as_ref().map(|v| v.len()).unwrap_or(0),
-                    c.seeds.as_ref().map(|v| v.len()).unwrap_or(0),
-                    c.dns_records.as_ref().map(|v| v.len()).unwrap_or(0),
+                    c.priorities.as_ref().map_or(0, |v| v.len()),
+                    c.limits.as_ref().map_or(0, |v| v.len()),
+                    c.seeds.as_ref().map_or(0, |v| v.len()),
+                    c.dns_records.as_ref().map_or(0, |v| v.len()),
                 ),
             );
         }

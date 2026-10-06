@@ -473,10 +473,7 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         let next_ok = if next == dst {
             st.node_trusted(&next)
         } else {
-            vw.nodes
-                .get(&next)
-                .map(|x| x.valid && x.relay)
-                .unwrap_or(false)
+            vw.nodes.get(&next).is_some_and(|x| x.valid && x.relay)
         };
         if !next_ok {
             drop(st);
@@ -875,8 +872,7 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
             ));
             let flow = route
                 .as_ref()
-                .map(|r| webjet_core::bytes::prefix_u64(&r.src))
-                .unwrap_or(label as u64);
+                .map_or(label as u64, |r| webjet_core::bytes::prefix_u64(&r.src));
             if !h.send_relay(flow, f)
                 && let Some(r) = &route
             {
@@ -944,10 +940,9 @@ pub fn sweep(n: &Arc<Node>) {
             let hit = match &e.kind {
                 Kind::Transit(tr) => {
                     tr.forward
-                        && t.routes
-                            .get(&tr.route_id)
-                            .map(|r| untrusted.contains(&r.src) || untrusted.contains(&r.dst))
-                            .unwrap_or(false)
+                        && t.routes.get(&tr.route_id).is_some_and(|r| {
+                            untrusted.contains(&r.src) || untrusted.contains(&r.dst)
+                        })
                 }
                 Kind::Local(c) => untrusted.contains(&c.peer),
             };

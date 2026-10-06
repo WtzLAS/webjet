@@ -307,7 +307,7 @@ pub fn k32(b: &Bytes32) -> Key32 {
 }
 
 pub fn opt_k32(k: &Option<Key32>) -> Bytes32 {
-    k.map(|k| k.to_bytes()).unwrap_or([0u8; 32])
+    k.map_or([0u8; 32], |k| k.to_bytes())
 }
 
 #[cfg(test)]

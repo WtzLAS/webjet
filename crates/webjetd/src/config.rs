@@ -240,9 +240,7 @@ fn default_control() -> PathBuf {
 }
 
 fn program_data() -> PathBuf {
-    std::env::var_os("ProgramData")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+    std::env::var_os("ProgramData").map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from)
 }
 
 /// Where webjetd.toml lives by default (§19.1).

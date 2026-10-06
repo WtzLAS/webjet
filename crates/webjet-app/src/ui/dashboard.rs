@@ -126,7 +126,7 @@ impl WebjetApp {
                     .child(muted(format!(
                         "as seen from {} · tree v{} · {}",
                         st.name.clone().unwrap_or_else(|| "this agent".into()),
-                        st.tree_version.map(|v| v.to_string()).unwrap_or("—".into()),
+                        st.tree_version.map_or("—".into(), |v| v.to_string()),
                         if s.is_controller() {
                             "controller"
                         } else {
@@ -275,16 +275,14 @@ impl WebjetApp {
                 format!(
                     "version {} · root {}",
                     st.tree_version
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "none yet".into()),
-                    st.tree_root.as_deref().map(model::short).unwrap_or("—")
+                        .map_or_else(|| "none yet".into(), |v| v.to_string()),
+                    st.tree_root.as_deref().map_or("—", model::short)
                 ),
             ))
             .child(label_value(
                 "Head expires",
                 st.head_expires
-                    .map(|t| model::relative(t, now))
-                    .unwrap_or_else(|| "—".into()),
+                    .map_or_else(|| "—".into(), |t| model::relative(t, now)),
             ))
             .child(label_value(
                 "Valid until",
@@ -362,19 +360,15 @@ impl WebjetApp {
             load = load.child(muted("No relay has advertised its load."));
         }
         for v in relays.iter().take(6) {
-            let (pct, cap) = v
-                .load
-                .as_ref()
-                .map(|l| {
-                    (
-                        l.util_pct
-                            .max(l.cpu_pct)
-                            .max(l.circuits_pct)
-                            .max(l.queue_pct) as f32,
-                        l.capacity_mbps,
-                    )
-                })
-                .unwrap_or((0.0, 0));
+            let (pct, cap) = v.load.as_ref().map_or((0.0, 0), |l| {
+                (
+                    l.util_pct
+                        .max(l.cpu_pct)
+                        .max(l.circuits_pct)
+                        .max(l.queue_pct) as f32,
+                    l.capacity_mbps,
+                )
+            });
             let color = if pct >= 85.0 {
                 theme::BAD
             } else if pct >= 60.0 {

@@ -121,8 +121,7 @@ fn chrome_connector(cam: &Camouflage) -> Result<SslConnector> {
         let ok = cert
             .public_key()
             .and_then(|k| k.public_key_to_der())
-            .map(|d| pins.contains(&webjet_core::crypto::hash(&d)))
-            .unwrap_or(false);
+            .is_ok_and(|d| pins.contains(&webjet_core::crypto::hash(&d)));
         if ok {
             Ok(())
         } else {
@@ -158,11 +157,11 @@ fn exporter(ssl: &boring::ssl::SslRef) -> Result<[u8; 32]> {
 }
 
 async fn send_password<S: AsyncWrite + Unpin>(s: &mut S, pw: &Bytes32) -> Result<()> {
-    let pad = 30 + (rand::random::<u8>() % 200) as usize;
-    let mut m = Vec::with_capacity(34 + pad);
+    let pad: u16 = 30 + u16::from(rand::random::<u8>() % 200);
+    let mut m = Vec::with_capacity(34 + usize::from(pad));
     m.extend_from_slice(pw);
-    m.extend_from_slice(&(pad as u16).to_be_bytes());
-    m.extend(std::iter::repeat_with(rand::random::<u8>).take(pad));
+    m.extend_from_slice(&pad.to_be_bytes());
+    m.extend(std::iter::repeat_with(rand::random::<u8>).take(usize::from(pad)));
     m.extend_from_slice(&VERSION_HELLO);
     s.write_all(&m).await?;
     Ok(())
@@ -389,7 +388,7 @@ async fn serve_website<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, already: &[
                 if !head && s.write_all(body).await.is_err() {
                     return;
                 }
-                let end = req.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4).unwrap_or(req.len());
+                let end = req.windows(4).position(|w| w == b"\r\n\r\n").map_or(req.len(), |p| p + 4);
                 req.drain(..end);
                 continue;
             }

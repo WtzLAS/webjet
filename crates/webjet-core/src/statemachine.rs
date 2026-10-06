@@ -422,10 +422,13 @@ impl Machine {
 
     fn execute(&self, e: &wp::LogEntry) -> std::result::Result<Effects, ApplyError> {
         let ts = e.timestamp;
-        let random = e.random.clone().map(|b| *b).unwrap_or(wp::EntryRandom {
-            node_id: None,
-            psk: None,
-        });
+        let random = e.random.clone().map_or(
+            wp::EntryRandom {
+                node_id: None,
+                psk: None,
+            },
+            |b| *b,
+        );
         let payload = e
             .payload
             .as_ref()
@@ -740,13 +743,7 @@ impl Machine {
             && !o.is_zero()
         {
             let oid = o.to_bytes();
-            if !self
-                .view
-                .accounts
-                .get(&oid)
-                .map(|a| a.valid)
-                .unwrap_or(false)
-            {
+            if !self.view.accounts.get(&oid).is_some_and(|a| a.valid) {
                 return rej("new owner is not a valid account");
             }
             rec.owner = Some(o);
@@ -1389,13 +1386,7 @@ impl Machine {
         fx: &mut Effects,
     ) -> std::result::Result<(), ApplyError> {
         let owner = opt_k32(&c.owner);
-        if !self
-            .view
-            .accounts
-            .get(&owner)
-            .map(|a| a.valid)
-            .unwrap_or(false)
-        {
+        if !self.view.accounts.get(&owner).is_some_and(|a| a.valid) {
             return rej("owner must be a valid account");
         }
         let name = c.name.clone().unwrap_or_default();
@@ -1509,8 +1500,7 @@ impl Machine {
                 .view
                 .accounts
                 .get(&opt_k32(&c.owner))
-                .map(|a| a.valid)
-                .unwrap_or(false)
+                .is_some_and(|a| a.valid)
             {
                 return rej("owner account no longer valid");
             }
@@ -2435,10 +2425,7 @@ mod tests {
         let id = st.view().by_name["n1"];
         assert!(st.node_trusted(&id));
         // Rollback is rejected.
-        let old = wp::SignedTreeHead {
-            version: 1,
-            ..head.clone()
-        };
+        let old = wp::SignedTreeHead { version: 1, ..head };
         assert_eq!(
             st.offer_head(&ctl.sign_obj(mt::SIGNED_TREE_HEAD, &old))
                 .unwrap(),
@@ -2447,7 +2434,7 @@ mod tests {
         // Equivocation is detected.
         let eq = wp::SignedTreeHead {
             root: Some(crypto::k32(&[1; 32])),
-            ..head.clone()
+            ..head
         };
         assert_eq!(
             st.offer_head(&ctl.sign_obj(mt::SIGNED_TREE_HEAD, &eq))
@@ -2510,7 +2497,7 @@ mod tests {
         key.sign_obj(mt::SIGNED_TREE_HEAD, &head)
     }
 
-    fn install_tree(h: &mut H, st: &mut Store, head: &[u8]) {
+    fn install_tree(h: &H, st: &mut Store, head: &[u8]) {
         let leaves: Vec<_> =
             h.m.tree
                 .iter()
@@ -2564,7 +2551,7 @@ mod tests {
         );
         assert!(!st.add_cert(&again).unwrap(), "one cert per admin and key");
         let head = head_for(&mut h, &sa);
-        install_tree(&mut h, &mut st, &head);
+        install_tree(&h, &mut st, &head);
         assert!(st.view().is_controller(&ctl));
         assert!(st.view().nodes[&ctl].control);
         // An admin's cert for a node without the control role doesn't make
@@ -2606,7 +2593,7 @@ mod tests {
         })))
         .unwrap();
         let head = head_for(&mut h, &sa);
-        install_tree(&mut h, &mut st, &head);
+        install_tree(&h, &mut st, &head);
         assert!(!st.view().is_controller(&legacy));
         assert!(st.view().is_controller(&ctl));
         // Revoking the admin voids the certs it signed: their heads no

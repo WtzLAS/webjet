@@ -231,8 +231,7 @@ pub fn configure_dns(dev: &str, resolver: &[IpAddr], domains: &[String]) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
                 let ours = std::fs::read_to_string(e.path())
-                    .map(|s| s.contains(&format!("# {OWNER_TAG}")))
-                    .unwrap_or(false);
+                    .is_ok_and(|s| s.contains(&format!("# {OWNER_TAG}")));
                 if ours && !domains.contains(&name) {
                     let _ = std::fs::remove_file(e.path());
                 }
@@ -262,8 +261,7 @@ pub fn cleanup(dev: &str) {
         if let Ok(rd) = std::fs::read_dir("/etc/resolver") {
             for e in rd.flatten() {
                 if std::fs::read_to_string(e.path())
-                    .map(|s| s.contains(&format!("# {OWNER_TAG}")))
-                    .unwrap_or(false)
+                    .is_ok_and(|s| s.contains(&format!("# {OWNER_TAG}")))
                 {
                     let _ = std::fs::remove_file(e.path());
                 }

@@ -680,8 +680,7 @@ impl Names for ViewNames<'_> {
         self.0
             .nodes
             .get(id)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| hex::encode(&id[..6]))
+            .map_or_else(|| hex::encode(&id[..6]), |n| n.name.clone())
     }
     fn owner(&self, id: &Bytes32) -> String {
         self.0

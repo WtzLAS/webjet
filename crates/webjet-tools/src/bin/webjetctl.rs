@@ -216,9 +216,7 @@ fn agent_config(
     config: Option<&Path>,
     data_dir: Option<PathBuf>,
 ) -> Result<webjetd::config::Config> {
-    let path = config
-        .map(Path::to_path_buf)
-        .unwrap_or_else(webjetd::config::default_config_path);
+    let path = config.map_or_else(webjetd::config::default_config_path, Path::to_path_buf);
     if config.is_some() && !path.exists() {
         bail!("configuration file {} not found", path.display());
     }
@@ -685,7 +683,7 @@ fn print_table(rows: &[Vec<String>]) {
     let w: Vec<usize> = (0..cols)
         .map(|c| {
             rows.iter()
-                .map(|r| r.get(c).map(|s| s.len()).unwrap_or(0))
+                .map(|r| r.get(c).map_or(0, |s| s.len()))
                 .max()
                 .unwrap_or(0)
         })
@@ -1156,8 +1154,7 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
                         .find(|n| n["id"].as_str() == Some(&hex::encode(id)))
                         .and_then(|n| n["ips"][0].as_str())
                         .and_then(|ip| ip.split('/').next())
-                        .map(String::from)
-                        .unwrap_or_else(|| target.clone()),
+                        .map_or_else(|| target.clone(), String::from),
                     Err(_) => target.clone(),
                 }
             };

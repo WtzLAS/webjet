@@ -74,8 +74,7 @@ impl Sys {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .is_ok_and(|s| s.success())
     }
 
     pub fn mkdir(&self, p: &Path, private: bool) -> Result<()> {
@@ -217,8 +216,10 @@ pub fn systemd_state(unit: &str) -> String {
         .args(["is-active", unit])
         .stderr(Stdio::null())
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".into())
+        .map_or_else(
+            |_| "unknown".into(),
+            |o| String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        )
 }
 
 /// The `state = …` line of `launchctl print system/<label>`.
@@ -387,11 +388,10 @@ WantedBy=multi-user.target
 /// The launchd daemon. webjetd logs to stdout (tracing) and panics to stderr:
 /// both go to the log file.
 fn launchd_plist(l: &Layout) -> String {
-    let log = l
-        .log
-        .as_deref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "/var/log/webjetd.log".into());
+    let log = l.log.as_deref().map_or_else(
+        || "/var/log/webjetd.log".into(),
+        |p| p.display().to_string(),
+    );
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -724,8 +724,7 @@ pub fn macos_resolver_files() -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             std::fs::read_to_string(p)
-                .map(|s| s.lines().any(|l| l.trim_start().starts_with("# webjet")))
-                .unwrap_or(false)
+                .is_ok_and(|s| s.lines().any(|l| l.trim_start().starts_with("# webjet")))
         })
         .collect()
 }

@@ -1080,7 +1080,7 @@ fn restart_recovers_term_vote_log_and_config_from_storage() {
     let now = Instant::now();
     let mut r = Raft::new(
         nid(2),
-        st.clone(),
+        st,
         0,
         0,
         members(&[1, 2, 3], &[]),
@@ -1124,7 +1124,7 @@ fn restart_recovers_term_vote_log_and_config_from_storage() {
     drop(r);
     let r2 = Raft::new(
         nid(2),
-        Storage::Mem(mem.clone()),
+        Storage::Mem(mem),
         0,
         0,
         members(&[1, 2, 3], &[]),

@@ -97,11 +97,10 @@ WantedBy=multi-user.target {SERVICE}.service
 }
 
 fn launchd_plist(l: &Layout) -> String {
-    let log = l
-        .signer_log
-        .as_deref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "/var/log/webjet-signer.log".into());
+    let log = l.signer_log.as_deref().map_or_else(
+        || "/var/log/webjet-signer.log".into(),
+        |p| p.display().to_string(),
+    );
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

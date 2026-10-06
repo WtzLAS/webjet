@@ -258,8 +258,7 @@ pub mod tpm {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+            .is_ok_and(|s| s.success())
     }
 
     /// Unload transient objects. The kernel resource manager (/dev/tpmrm0)
@@ -519,9 +518,7 @@ pub mod keychain {
         }
 
         pub fn open(path: Option<&Path>) -> Result<SecKeychain> {
-            let p = path
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(SYSTEM));
+            let p = path.map_or_else(|| PathBuf::from(SYSTEM), Path::to_path_buf);
             SecKeychain::open(&p).map_err(|e| anyhow!("open keychain {}: {e}", p.display()))
         }
 

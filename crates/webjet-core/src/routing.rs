@@ -187,7 +187,7 @@ impl Graph {
                 }
                 let nc = c + ec;
                 let key = (m, path.len());
-                if best.get(&key).map(|b| *b <= nc).unwrap_or(false) {
+                if best.get(&key).is_some_and(|b| *b <= nc) {
                     continue;
                 }
                 best.insert(key, nc);
@@ -306,7 +306,7 @@ impl Graph {
                     continue;
                 }
                 let nc = c + ec;
-                if best.get(&m).map(|b| *b <= nc).unwrap_or(false) {
+                if best.get(&m).is_some_and(|b| *b <= nc) {
                     continue;
                 }
                 best.insert(m, nc);
@@ -601,8 +601,7 @@ impl LinkStats {
         while self
             .min_buckets
             .front()
-            .map(|(b, _)| bucket.saturating_sub(*b) >= MIN_BUCKETS as u64)
-            .unwrap_or(false)
+            .is_some_and(|(b, _)| bucket.saturating_sub(*b) >= MIN_BUCKETS as u64)
         {
             self.min_buckets.pop_front();
         }

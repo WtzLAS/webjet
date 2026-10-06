@@ -883,8 +883,7 @@ expect = "deny"
                     let comp = c
                         .inbound
                         .get(&o.node_id)
-                        .map(|s| s.contains(proto, port))
-                        .unwrap_or(false);
+                        .is_some_and(|s| s.contains(proto, port));
                     assert_eq!(direct, comp, "{:?} -> {:?} {proto}/{port}", o.tags, me.tags);
                 }
             }

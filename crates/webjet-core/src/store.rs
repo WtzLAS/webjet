@@ -162,10 +162,7 @@ impl View {
     }
 
     pub fn is_controller(&self, id: &Bytes32) -> bool {
-        self.controllers
-            .get(id)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
+        self.controllers.get(id).is_some_and(|v| !v.is_empty())
     }
 
     /// The local resolver's addresses (§11.10.1): the DnsConfig's
@@ -897,7 +894,7 @@ impl Store {
     /// The node is trusted right now: valid record, no tombstone, owner
     /// valid, validity horizon not passed (§9.2).
     pub fn node_trusted(&self, id: &Bytes32) -> bool {
-        !self.horizon_passed(now_ms()) && self.view.nodes.get(id).map(|n| n.valid).unwrap_or(false)
+        !self.horizon_passed(now_ms()) && self.view.nodes.get(id).is_some_and(|n| n.valid)
     }
 
     /// Resolve an identity key to a trusted node id.
@@ -1165,9 +1162,8 @@ fn node_info(
     let owner = crypto::opt_k32(&r.owner);
     let offline_tomb = offline_node_tombs
         .get(&id)
-        .map(|(t, _)| t.version > r.version)
-        .unwrap_or(false);
-    let owner_ok = v.accounts.get(&owner).map(|a| a.valid).unwrap_or(false);
+        .is_some_and(|(t, _)| t.version > r.version);
+    let owner_ok = v.accounts.get(&owner).is_some_and(|a| a.valid);
     let key = crypto::opt_k32(&r.identity_key);
     let info = NodeInfo {
         id,

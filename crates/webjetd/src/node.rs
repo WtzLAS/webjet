@@ -223,8 +223,7 @@ impl PeerTrust for HopTrust {
         v.by_key
             .get(key)
             .and_then(|id| v.nodes.get(id))
-            .map(|ni| ni.valid && (ni.relay || ni.control))
-            .unwrap_or(false)
+            .is_some_and(|ni| ni.valid && (ni.relay || ni.control))
     }
 }
 
@@ -311,8 +310,7 @@ impl Node {
             .view()
             .nodes
             .get(&self.me)
-            .map(|n| n.relay)
-            .unwrap_or(false)
+            .is_some_and(|n| n.relay)
     }
 
     pub fn is_controller(&self) -> bool {
@@ -396,8 +394,7 @@ impl Node {
             if !v
                 .nodes
                 .get(&id)
-                .map(|n| n.valid && n.key == est.peer_key)
-                .unwrap_or(false)
+                .is_some_and(|n| n.valid && n.key == est.peer_key)
             {
                 bail!("hop peer is not valid");
             }
@@ -508,12 +505,9 @@ impl Node {
                 .values()
                 .filter(|h| {
                     let info = v.nodes.get(&h.peer);
-                    let key_ok = info
-                        .map(|x| x.key == h.peer_key && x.valid)
-                        .unwrap_or(false);
+                    let key_ok = info.is_some_and(|x| x.key == h.peer_key && x.valid);
                     !key_ok
-                        || (!s.node_trusted(&h.peer)
-                            && !info.map(|x| x.relay || x.control).unwrap_or(false))
+                        || (!s.node_trusted(&h.peer) && !info.is_some_and(|x| x.relay || x.control))
                 })
                 .cloned()
                 .collect()
@@ -532,8 +526,7 @@ impl Node {
             .view()
             .nodes
             .get(id)
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| crypto::short(id))
+            .map_or_else(|| crypto::short(id), |n| n.name.clone())
     }
 
     // ------------------------------------------------------------ dialing

@@ -48,8 +48,7 @@ pub fn local_tree_version(paths: &Paths) -> u64 {
     state::load_json::<state::StoreFile>(&paths.store())
         .ok()
         .flatten()
-        .map(|f| f.high_water)
-        .unwrap_or(0)
+        .map_or(0, |f| f.high_water)
 }
 
 fn node_file(paths: &Paths) -> Result<(NodeFile, Bytes32)> {

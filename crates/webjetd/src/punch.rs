@@ -118,8 +118,7 @@ fn nat_of(n: &Node, peer: &Bytes32) -> wp::NatType {
         .lock()
         .endpoints
         .get(peer)
-        .map(|(r, _)| r.nat)
-        .unwrap_or(wp::NatType::Unknown)
+        .map_or(wp::NatType::Unknown, |(r, _)| r.nat)
 }
 
 fn should_try(n: &Node, peer: &Bytes32) -> bool {
@@ -560,10 +559,9 @@ pub async fn run(n: Arc<Node>) {
     let mut ev = n.events.subscribe();
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     let active = |n: &Node, id: &Bytes32| {
-        n.e2e
-            .get(id)
-            .map(|s| s.established() && s.last_used.lock().elapsed() < Duration::from_secs(60))
-            .unwrap_or(false)
+        n.e2e.get(id).is_some_and(|s| {
+            s.established() && s.last_used.lock().elapsed() < Duration::from_secs(60)
+        })
     };
     loop {
         tokio::select! {
