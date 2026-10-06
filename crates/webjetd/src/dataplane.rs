@@ -1215,6 +1215,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn later_fragments_follow_an_allowed_first_fragment() {
+        let mut t = setup();
+        // A datagram to an allowed port, split in two: the later fragment
+        // has no ports (it used to be refused as port 0 / an invalid flow).
+        let mut first = tcp4(CLIENT, ME, 40000, 80, tcpf::SYN);
+        first[4..6].copy_from_slice(&[0x12, 0x34]);
+        first[6] = 0x20;
+        let mut later = tcp4(CLIENT, ME, 1, 2, 0);
+        later[4..6].copy_from_slice(&[0x12, 0x34]);
+        later[7] = 5;
+        t.dp.inbound(&t.client, first.clone());
+        t.dp.inbound(&t.client, later.clone());
+        assert_eq!(tun_packets(&mut t), vec![first, later.clone()]);
+        assert_eq!(t.dp.conntrack.lock().len(), 1);
+        // A later fragment of a datagram that wasn't admitted stays out.
+        later[4..6].copy_from_slice(&[0x56, 0x78]);
+        t.dp.inbound(&t.client, later);
+        assert!(tun_packets(&mut t).is_empty());
+    }
+
+    #[tokio::test]
     async fn inbound_denied_by_policy() {
         let mut t = setup();
         t.dp.inbound(&t.client, tcp4(CLIENT, ME, 40000, 22, tcpf::SYN));

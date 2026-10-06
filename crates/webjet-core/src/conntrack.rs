@@ -4,10 +4,40 @@
 //! idle.
 
 use crate::crypto::Bytes32;
-use crate::packet::{Flow, IcmpKind, Parsed, tcpf};
+use crate::packet::{Flow, Fragment, IcmpKind, Parsed, tcpf};
 use crate::policy::{PROTO_ICMP, PROTO_ICMPV6, PROTO_TCP, PROTO_UDP};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
+
+/// How long a fragmented datagram's later fragments follow its first one
+/// (Linux's reassembly timeout).
+const FRAG_TIMEOUT: Duration = Duration::from_secs(30);
+/// Fragmented datagrams remembered at once.
+const FRAG_CAP: usize = 16_384;
+
+/// One fragmented datagram: the fragment id with the addresses, protocol and
+/// peer it travels with (RFC 791, RFC 8200 §4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct FragKey {
+    peer: Bytes32,
+    proto: u8,
+    src: IpAddr,
+    dst: IpAddr,
+    id: u32,
+}
+
+impl FragKey {
+    fn of(peer: &Bytes32, p: &Parsed) -> Self {
+        FragKey {
+            peer: *peer,
+            proto: p.flow.proto,
+            src: p.flow.src,
+            dst: p.flow.dst,
+            id: p.frag_id,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -90,6 +120,9 @@ pub struct Conntrack {
     gateway_per_peer: HashMap<Bytes32, usize>,
     gateway_total: usize,
     new_rate: HashMap<Bytes32, (Instant, u32)>,
+    /// Datagrams whose first fragment belongs to a tracked or admitted
+    /// flow: their later fragments carry no ports, and follow it.
+    frags: HashMap<FragKey, Instant>,
     pub per_peer_quota: usize,
     pub new_per_sec: u32,
     pub global_cap: usize,
@@ -108,6 +141,7 @@ impl Conntrack {
             gateway_per_peer: HashMap::new(),
             gateway_total: 0,
             new_rate: HashMap::new(),
+            frags: HashMap::new(),
             per_peer_quota,
             new_per_sec,
             global_cap,
@@ -126,6 +160,10 @@ impl Conntrack {
     }
 
     fn initial_state(p: &Parsed) -> Option<State> {
+        if p.fragment == Fragment::Later {
+            // No ports: it can't start (or name) a flow of its own.
+            return None;
+        }
         Some(match p.flow.proto {
             PROTO_TCP => {
                 if p.tcp_flags & tcpf::SYN != 0 && p.tcp_flags & tcpf::ACK == 0 {
@@ -167,6 +205,9 @@ impl Conntrack {
             }
             return Verdict::Invalid;
         }
+        if p.fragment == Fragment::Later {
+            return self.classify_later(peer, p, now);
+        }
         let fwd = Key {
             peer: *peer,
             flow: p.flow,
@@ -198,12 +239,46 @@ impl Conntrack {
                 (State::UdpOneWay, _) if is_reply => State::UdpBoth,
                 (s, _) => s,
             };
+            if p.fragment == Fragment::First {
+                self.remember_fragments(peer, p, now);
+            }
             return Verdict::Tracked;
         }
         match Self::initial_state(p) {
             Some(_) => Verdict::New,
             None => Verdict::Invalid,
         }
+    }
+
+    /// A later fragment follows its datagram's first fragment. Without one
+    /// on record (it was refused, or the fragments arrived out of order) it
+    /// is classified as before: a UDP or other fragment as new (the policy
+    /// sees port 0), a TCP or ICMP one as invalid.
+    fn classify_later(&mut self, peer: &Bytes32, p: &Parsed, now: Instant) -> Verdict {
+        let k = FragKey::of(peer, p);
+        if let Some(seen) = self.frags.get_mut(&k)
+            && now.duration_since(*seen) < FRAG_TIMEOUT
+        {
+            *seen = now;
+            return Verdict::Tracked;
+        }
+        match p.flow.proto {
+            PROTO_TCP | PROTO_ICMP | PROTO_ICMPV6 => Verdict::Invalid,
+            _ => Verdict::New,
+        }
+    }
+
+    fn remember_fragments(&mut self, peer: &Bytes32, p: &Parsed, now: Instant) {
+        if self.frags.len() >= FRAG_CAP {
+            self.frags
+                .retain(|_, t| now.duration_since(*t) < FRAG_TIMEOUT);
+            if self.frags.len() >= FRAG_CAP {
+                // Full of live datagrams: later fragments of this one get
+                // the policy check instead.
+                return;
+            }
+        }
+        self.frags.insert(FragKey::of(peer, p), now);
     }
 
     /// Gateway flows being tracked.
@@ -290,6 +365,9 @@ impl Conntrack {
             *self.gateway_per_peer.entry(*peer).or_insert(0) += 1;
             self.gateway_total += 1;
         }
+        if p.fragment == Fragment::First {
+            self.remember_fragments(peer, p, now);
+        }
         Ok(())
     }
 
@@ -356,6 +434,8 @@ impl Conntrack {
         }
         self.new_rate
             .retain(|_, (t, _)| now.duration_since(*t) < Duration::from_secs(2));
+        self.frags
+            .retain(|_, t| now.duration_since(*t) < FRAG_TIMEOUT);
     }
 
     /// Re-evaluate every tracked flow after a policy change (§14.4); `keep`
@@ -371,6 +451,10 @@ impl Conntrack {
         for k in dead {
             self.remove(&k);
         }
+        if n > 0 {
+            // Datagrams in flight may belong to a flow just refused.
+            self.frags.clear();
+        }
         n
     }
 
@@ -385,6 +469,7 @@ impl Conntrack {
         for k in dead {
             self.remove(&k);
         }
+        self.frags.retain(|k, _| k.peer != *peer);
     }
 
     pub fn get(&self, k: &Key) -> Option<&Entry> {
@@ -426,6 +511,65 @@ mod tests {
             ct.classify(&peer, &synack, true, now + Duration::from_secs(4000)),
             Verdict::Invalid
         );
+    }
+
+    /// IPv4 fragments of one UDP datagram: the first (with ports) and a
+    /// later one (offset 8 × 8 bytes), both with IP id `id`.
+    fn fragments(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, id: u16) -> (Parsed, Parsed) {
+        let mut first = udp4(src, dst, sport, dport, &[7; 56]);
+        first[4..6].copy_from_slice(&id.to_be_bytes());
+        first[6] = 0x20; // more fragments, offset 0
+        let mut later = udp4(src, dst, 1, 2, &[7; 56]);
+        later[4..6].copy_from_slice(&id.to_be_bytes());
+        later[6] = 0;
+        later[7] = 8;
+        let (f, l) = (parse(&first).unwrap(), parse(&later).unwrap());
+        assert_eq!((f.fragment, l.fragment), (Fragment::First, Fragment::Later));
+        assert_eq!((l.flow.sport, l.flow.dport), (0, 0));
+        (f, l)
+    }
+
+    #[test]
+    fn later_fragments_follow_their_first_fragment() {
+        let mut ct = Conntrack::new(10, 100, 100);
+        let (a, b) = ([1; 32], [2; 32]);
+        let now = Instant::now();
+        // A new flow whose first datagram is fragmented (EDNS, say): the
+        // first fragment is admitted on its ports, the rest follow it
+        // without a policy check on "port 0" or an entry of their own.
+        let (first, later) = fragments([10, 7, 0, 1], [10, 7, 0, 2], 5353, 53, 77);
+        assert_eq!(ct.classify(&a, &first, true, now), Verdict::New);
+        ct.insert(&a, &first, true, None, false, now).unwrap();
+        assert_eq!(ct.classify(&a, &later, true, now), Verdict::Tracked);
+        assert_eq!(ct.len(), 1);
+        // The reply, also fragmented, on the tracked flow.
+        let (rfirst, rlater) = fragments([10, 7, 0, 2], [10, 7, 0, 1], 53, 5353, 9);
+        assert_eq!(ct.classify(&a, &rfirst, false, now), Verdict::Tracked);
+        assert_eq!(ct.classify(&a, &rlater, false, now), Verdict::Tracked);
+        // Another datagram id, another peer, or too late: no match. A UDP
+        // fragment then gets the policy check as before; TCP stays invalid.
+        let (_, other) = fragments([10, 7, 0, 1], [10, 7, 0, 2], 5353, 53, 78);
+        assert_eq!(ct.classify(&a, &other, true, now), Verdict::New);
+        assert_eq!(ct.classify(&b, &later, true, now), Verdict::New);
+        let late = now + FRAG_TIMEOUT + Duration::from_secs(1);
+        assert_eq!(ct.classify(&a, &later, true, late), Verdict::New);
+        let mut tcp_later = tcp4([10, 7, 0, 1], [10, 7, 0, 2], 1, 2, tcpf::ACK);
+        tcp_later[7] = 8;
+        let tcp_later = parse(&tcp_later).unwrap();
+        assert_eq!(ct.classify(&a, &tcp_later, true, now), Verdict::Invalid);
+        // A later fragment never becomes a flow of its own.
+        ct.insert(&a, &other, true, None, false, now).unwrap();
+        assert_eq!(ct.len(), 1);
+        // Gone with the peer, and with flows a policy change refused.
+        ct.drop_peer(&a);
+        assert_eq!(ct.classify(&a, &rlater, false, now), Verdict::New);
+        ct.insert(&b, &first, true, None, false, now).unwrap();
+        assert_eq!(ct.classify(&b, &later, true, now), Verdict::Tracked);
+        assert_eq!(ct.reevaluate(|_, _| false), 1);
+        assert_eq!(ct.classify(&b, &later, true, now), Verdict::New);
+        ct.insert(&b, &first, true, None, false, now).unwrap();
+        ct.expire(late);
+        assert!(ct.frags.is_empty());
     }
 
     #[test]

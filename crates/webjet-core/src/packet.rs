@@ -47,6 +47,10 @@ pub struct Parsed {
     /// For ICMP errors: the quoted flow (as sent by the original sender).
     pub inner: Option<Flow>,
     pub fragment: Fragment,
+    /// The datagram's fragment id (IPv4 Identification, IPv6 fragment
+    /// header Identification); 0 when the packet is whole. With source,
+    /// destination and protocol it ties later fragments to the first one.
+    pub frag_id: u32,
 }
 
 /// Where a packet stands in IP fragmentation.
@@ -93,7 +97,7 @@ pub fn src_dst(p: &[u8]) -> Option<(IpAddr, IpAddr)> {
 /// than the first carry no ports.
 pub fn parse(p: &[u8]) -> Option<Parsed> {
     let (src, dst) = src_dst(p)?;
-    let later = |proto: u8, l4_offset: usize, ecn: u8| Parsed {
+    let later = |proto: u8, l4_offset: usize, ecn: u8, frag_id: u32| Parsed {
         flow: Flow {
             proto,
             src,
@@ -107,8 +111,9 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
         ecn,
         inner: None,
         fragment: Fragment::Later,
+        frag_id,
     };
-    let (proto, off, ecn, fragment) = match version(p)? {
+    let (proto, off, ecn, fragment, frag_id) = match version(p)? {
         4 => {
             let ihl = ((p[0] & 0x0f) as usize) * 4;
             if ihl < 20 || p.len() < ihl {
@@ -118,22 +123,24 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
             if total > p.len() || total < ihl {
                 return None;
             }
+            let id = u32::from(u16::from_be_bytes([p[4], p[5]]));
             let frag_off = u16::from_be_bytes([p[6], p[7]]) & 0x1fff;
             if frag_off != 0 {
-                return Some(later(p[9], ihl, p[1] & 3));
+                return Some(later(p[9], ihl, p[1] & 3, id));
             }
-            let fragment = if p[6] & 0x20 != 0 {
-                Fragment::First
+            let (fragment, id) = if p[6] & 0x20 != 0 {
+                (Fragment::First, id)
             } else {
-                Fragment::Whole
+                (Fragment::Whole, 0)
             };
-            (p[9], ihl, p[1] & 3, fragment)
+            (p[9], ihl, p[1] & 3, fragment, id)
         }
         6 => {
             let mut nh = p[6];
             let mut off = 40;
             let ecn = ((u16::from_be_bytes([p[0], p[1]]) >> 4) & 3) as u8;
             let mut fragment = Fragment::Whole;
+            let mut frag_id = 0;
             loop {
                 match nh {
                     0 | 43 | 60 => {
@@ -149,19 +156,21 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
                         }
                         let frag = u16::from_be_bytes([p[off + 2], p[off + 3]]) >> 3;
                         let more = p[off + 3] & 1 != 0;
+                        let id = crate::bytes::be_u32(p, off + 4)?;
                         nh = p[off];
                         off += 8;
                         if frag != 0 {
-                            return Some(later(nh, off, ecn));
+                            return Some(later(nh, off, ecn, id));
                         }
                         if more {
                             fragment = Fragment::First;
+                            frag_id = id;
                         }
                     }
                     _ => break,
                 }
             }
-            (nh, off, ecn, fragment)
+            (nh, off, ecn, fragment, frag_id)
         }
         _ => return None,
     };
@@ -180,6 +189,7 @@ pub fn parse(p: &[u8]) -> Option<Parsed> {
         ecn,
         inner: None,
         fragment,
+        frag_id,
     };
     match proto {
         PROTO_TCP if l4.len() >= 20 => {
@@ -719,6 +729,38 @@ pub mod tests {
         let (a, b) = (IpAddr::from([10, 0, 0, 1]), IpAddr::from([10, 0, 0, 2]));
         assert!(icmp_echo(a, b, true, 1, 1, &vec![0; 70_000]).is_empty());
         assert!(!icmp_echo(a, b, true, 1, 1, &[0; 64]).is_empty());
+    }
+
+    #[test]
+    fn fragments_carry_their_datagram_id() {
+        // IPv4: the 16-bit Identification, only for fragments.
+        let mut p = udp4([10, 0, 0, 1], [10, 0, 0, 2], 1, 2, &[0; 16]);
+        p[4..6].copy_from_slice(&0xbeefu16.to_be_bytes());
+        assert_eq!(parse(&p).unwrap().frag_id, 0);
+        p[6] = 0x20;
+        let first = parse(&p).unwrap();
+        assert_eq!((first.fragment, first.frag_id), (Fragment::First, 0xbeef));
+        p[6] = 0;
+        p[7] = 3;
+        let later = parse(&p).unwrap();
+        assert_eq!((later.fragment, later.frag_id), (Fragment::Later, 0xbeef));
+        // IPv6: the fragment header's 32-bit Identification.
+        let mut v6 = vec![0x60, 0, 0, 0, 0, 24, 44, 64];
+        v6.extend_from_slice(&[0xfd; 16]);
+        v6.extend_from_slice(&[0xfe; 16]);
+        v6.extend_from_slice(&[PROTO_UDP, 0, 0, 1, 0xde, 0xad, 0xbe, 0xef]);
+        v6.extend_from_slice(&[0, 9, 0, 53, 0, 16, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        let first = parse(&v6).unwrap();
+        assert_eq!(
+            (first.fragment, first.frag_id, first.flow.dport),
+            (Fragment::First, 0xdead_beef, 53)
+        );
+        v6[42..44].copy_from_slice(&[0, 0x10]); // offset 2 × 8 bytes, last
+        let later = parse(&v6).unwrap();
+        assert_eq!(
+            (later.fragment, later.frag_id, later.flow.dport),
+            (Fragment::Later, 0xdead_beef, 0)
+        );
     }
 
     pub use crate::testutil::packets::{tcp4, udp4};
