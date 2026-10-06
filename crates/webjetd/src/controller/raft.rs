@@ -284,6 +284,17 @@ impl Storage {
         }
     }
 
+    /// Drop the whole log (a new snapshot replaces it, offline recovery).
+    pub fn clear_log(&self) -> Result<()> {
+        match self {
+            Storage::Disk(d) => crate::state::write_private(&d.join("log.bin"), &[]),
+            Storage::Mem(m) => {
+                m.lock().log.clear();
+                Ok(())
+            }
+        }
+    }
+
     pub fn load_snapshot(&self) -> Option<Vec<u8>> {
         match self {
             Storage::Disk(d) => std::fs::read(d.join("snapshot.wj")).ok(),
@@ -461,6 +472,32 @@ impl Raft {
             return None;
         }
         self.log.get((idx - self.snap_index - 1) as usize)
+    }
+
+    /// Append an entry while the controller is stopped (`webjetctl local
+    /// controller force-new-cluster` / `restore`, ops guide 4.1). It starts
+    /// a new term, `term`, in which this server votes for itself, so no
+    /// earlier leader's entries at that index can win against it.
+    pub fn append_offline(&mut self, term: u64, bytes: Vec<u8>) -> Result<u64> {
+        let e = decode_entry(bytes).context("undecodable entry")?;
+        if e.index != self.last_index() + 1 {
+            anyhow::bail!(
+                "entry {} does not continue the log at {}",
+                e.index,
+                self.last_index()
+            );
+        }
+        if e.term != term || term <= self.term.max(self.last_term()) {
+            anyhow::bail!("an offline entry needs a new term");
+        }
+        self.term = term;
+        self.voted_for = Some(self.id);
+        self.storage.save_meta(term, Some(self.id));
+        self.storage.append(std::slice::from_ref(&e));
+        let idx = e.index;
+        self.push_entry(e);
+        self.update_role();
+        Ok(idx)
     }
 
     fn push_entry(&mut self, e: Entry) {

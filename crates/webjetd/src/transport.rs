@@ -93,6 +93,21 @@ pub fn camouflage(_: &Node) -> Option<()> {
     None
 }
 
+/// When the network's camouflage certificate (the leaf in the tree) expires,
+/// in Unix milliseconds; `None` without one or without AnyTLS support.
+pub fn camouflage_not_after(n: &Node) -> Option<u64> {
+    #[cfg(feature = "anytls")]
+    {
+        let cam = camouflage(n)?;
+        webjet_net::anytls::not_after_ms(cam.chain.first()?).ok()
+    }
+    #[cfg(not(feature = "anytls"))]
+    {
+        let _ = n;
+        None
+    }
+}
+
 /// The enrollment credentials a controller accepts at its gate.
 pub struct ControllerEnrollGate(pub Arc<Node>);
 

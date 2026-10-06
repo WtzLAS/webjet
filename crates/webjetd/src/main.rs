@@ -33,12 +33,26 @@ enum Cmd {
         /// Unix socket, or named pipe on Windows.
         #[arg(long, default_value_os_t = webjetd::ipc::default_signer())]
         socket: PathBuf,
+        /// Let the signer's group connect too (socket mode 0660), for a
+        /// signer that runs as its own user in the agent's group. Unix only.
+        #[arg(long)]
+        group_access: bool,
     },
     /// Run under the Windows service manager (the installed service's entry
     /// point; webjetup registers it).
     #[cfg(windows)]
     #[command(hide = true)]
     Service,
+    /// `webjetd signer` under the Windows service manager (the entry point of
+    /// the `webjet-signer` service webjetup registers).
+    #[cfg(windows)]
+    #[command(hide = true)]
+    SignerService {
+        #[arg(long, default_value = default_signer_key())]
+        key: PathBuf,
+        #[arg(long, default_value_os_t = webjetd::ipc::default_signer())]
+        socket: PathBuf,
+    },
 }
 
 fn default_signer_key() -> &'static str {
@@ -58,7 +72,15 @@ fn main() -> Result<()> {
     match cli.cmd {
         #[cfg(windows)]
         Cmd::Service => return webjetd::service::windows::run_dispatcher(cfg_path),
-        Cmd::Signer { key, socket } => return signer(&key, &socket),
+        #[cfg(windows)]
+        Cmd::SignerService { key, socket } => {
+            return webjetd::service::windows::run_signer_dispatcher(key, socket);
+        }
+        Cmd::Signer {
+            key,
+            socket,
+            group_access,
+        } => return signer(&key, &socket, group_access),
         Cmd::Run => {}
     }
     if cli.config.is_some() && !cfg_path.exists() {
@@ -76,15 +98,20 @@ fn main() -> Result<()> {
 }
 
 /// `webjetd signer`: serve signatures with the key in `key` on `socket`.
-fn signer(key: &std::path::Path, socket: &std::path::Path) -> Result<()> {
+fn signer(key: &std::path::Path, socket: &std::path::Path, group_access: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
     let kp = webjetd::controller::signer::load_or_create_key(key)?;
+    let access = if group_access {
+        webjetd::ipc::Access::Group
+    } else {
+        webjetd::ipc::Access::Private
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    rt.block_on(webjetd::controller::signer::serve(socket, kp))
+    rt.block_on(webjetd::controller::signer::serve(socket, kp, access))
 }

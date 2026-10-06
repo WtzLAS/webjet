@@ -55,6 +55,15 @@ pub fn spki_pin(cert_der: &[u8]) -> Result<Bytes32> {
     Ok(webjet_core::crypto::hash(&spki))
 }
 
+/// When a certificate expires: its `notAfter` in Unix milliseconds.
+pub fn not_after_ms(cert_der: &[u8]) -> Result<u64> {
+    let c = boring::x509::X509::from_der(cert_der)?;
+    let epoch = boring::asn1::Asn1Time::from_unix(0)?;
+    let d = epoch.diff(c.not_after())?;
+    let secs = i64::from(d.days) * 86_400 + i64::from(d.secs);
+    Ok(u64::try_from(secs).unwrap_or(0) * 1000)
+}
+
 /// Generate a self-signed P-256 certificate for `domain` (REFUSE mode, tests).
 pub fn self_signed(domain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     use boring::asn1::Asn1Time;
@@ -397,6 +406,19 @@ mod tests {
         e.keys.insert(7, [7; 32]);
         e.current = 7;
         (cam, sec, Arc::new(parking_lot::RwLock::new(e)))
+    }
+
+    #[test]
+    fn certificate_expiry() {
+        let (cert, _) = self_signed("cdn.example.com").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let exp = not_after_ms(&cert).unwrap();
+        let days = (exp - now) / 86_400_000;
+        assert!((824..=825).contains(&days), "{days}");
+        assert!(not_after_ms(b"not a certificate").is_err());
     }
 
     #[tokio::test]

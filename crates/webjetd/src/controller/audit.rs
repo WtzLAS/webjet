@@ -39,6 +39,29 @@ pub fn check_request(view: &View, raw: &[u8], now: u64) -> Result<wp::LogRequest
     Ok(req)
 }
 
+/// Check a signed `SnapshotRequest` the same way: a valid admin, its current
+/// key, recently. The reply holds every secret the controllers keep (PSKs,
+/// the camouflage key), so only admins get it.
+pub fn check_snapshot_request(view: &View, raw: &[u8], now: u64) -> Result<()> {
+    let v = crypto::open_envelope(raw)?;
+    if v.ty != mt::SNAPSHOT_REQUEST {
+        bail!("not a snapshot request");
+    }
+    let req: wp::SnapshotRequest = v.decode()?;
+    let id = crypto::opt_k32(&req.account_id);
+    let Some(a) = view.accounts.get(&id) else {
+        bail!("unknown account");
+    };
+    if !a.valid || !a.admin {
+        bail!("only admins export the controller state");
+    }
+    open_expect(raw, mt::SNAPSHOT_REQUEST, &[a.key])?;
+    if req.issued_at.abs_diff(now) > REQUEST_SKEW {
+        bail!("the request's time is too far from the controller's clock; check the clocks");
+    }
+    Ok(())
+}
+
 /// The indices a request asks for, oldest first: up to `limit` entries
 /// before `before` (0 = after the newest), within `first..=commit`.
 pub fn window(req: &wp::LogRequest, first: u64, commit: u64) -> std::ops::RangeInclusive<u64> {
@@ -86,6 +109,7 @@ fn payload_name(p: &EntryPayload) -> &'static str {
         EntryPayload::GenesisEntry(_) => "GenesisEntry",
         EntryPayload::MembershipEntry(_) => "MembershipEntry",
         EntryPayload::AutoMembershipEntry(_) => "AutoMembershipEntry",
+        EntryPayload::ForceNewClusterEntry(_) => "ForceNewClusterEntry",
     }
 }
 

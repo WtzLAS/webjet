@@ -1,7 +1,8 @@
 //! webjetup: installs, upgrades and removes Webjet on Linux, macOS and
 //! Windows from the published releases.
 //!
-//!   webjetup install [VERSION]     install or upgrade (default: latest)
+//!   webjetup install [VERSION]     install or upgrade (default: latest);
+//!                                  --signer adds the signer service
 //!   webjetup enroll <STRING>       enroll this node and start the agent
 //!   webjetup status                what's installed and running
 //!   webjetup list                  published releases
@@ -10,6 +11,7 @@
 
 mod layout;
 mod release;
+mod signer;
 mod system;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -57,6 +59,12 @@ enum Cmd {
         /// Don't start the agent (a later `webjetup enroll` starts it).
         #[arg(long)]
         no_start: bool,
+        /// Also install the signer service, which holds a controller's
+        /// signing key in a separate process (`webjetd signer`, §19.2), and
+        /// point webjetd at it. Kept on later upgrades. An existing
+        /// in-process key moves to the signer.
+        #[arg(long)]
+        signer: bool,
     },
     /// Enroll this node with an enrollment string from `webjetctl network node enroll`
     /// and (re)start the agent. Also used to re-key a node.
@@ -118,6 +126,7 @@ fn run(cli: Cli) -> Result<()> {
             enroll,
             force,
             no_start,
+            signer,
         } => {
             system::require_privileges(sys.dry)?;
             let repo = Repo::parse(&cli.repo)?;
@@ -129,6 +138,10 @@ fn run(cli: Cli) -> Result<()> {
                 from.as_deref(),
                 force,
             )?;
+            // The signer starts first: the controller asks it for its key.
+            if signer || signer::configured(&layout) {
+                signer::setup(&sys, &layout, !no_start)?;
+            }
             if let Some(s) = enroll {
                 do_enroll(&sys, &layout, &s, !no_start)?;
             } else {
@@ -446,6 +459,9 @@ fn status(l: &Layout) -> Result<()> {
         }
     );
     println!("service   {}", system::service_state(l));
+    if let Some(st) = signer::state(l) {
+        println!("signer    {st}");
+    }
     if let Some(log) = &l.log {
         println!("log       {}", log.display());
     } else if cfg!(target_os = "linux") {
@@ -505,6 +521,7 @@ fn list(repo: &Repo, l: &Layout, limit: usize) -> Result<()> {
 fn remove(sys: &Sys, l: &Layout) -> Result<()> {
     println!("==> Stopping and removing the service");
     system::remove_service(sys, l)?;
+    signer::remove(sys, l)?;
     println!("==> Removing the programs");
     for f in wanted_files() {
         sys.remove_file(&l.bin_dir.join(&f))?;
@@ -523,6 +540,7 @@ fn nuke(sys: &Sys, l: &Layout) -> Result<()> {
     println!("==> Deleting the node's identity and state");
     // Keys sealed in the System keychain live outside the state directory.
     system::delete_keychain_items(sys, &l.config)?;
+    signer::nuke(sys, l)?;
     if cfg!(target_os = "linux") {
         sys.remove_dir_all(&l.data_dir)?;
         sys.remove_dir_all(&l.config_dir)?;
@@ -573,6 +591,7 @@ mod tests {
             "webjetup",
             "install",
             "0.2.0",
+            "--signer",
             "--enroll",
             "wj1:x",
             "--dry-run",
@@ -580,7 +599,7 @@ mod tests {
         .unwrap();
         assert!(c.dry_run);
         assert!(
-            matches!(c.cmd, Cmd::Install { version: Some(v), enroll: Some(_), .. } if v == "0.2.0")
+            matches!(c.cmd, Cmd::Install { version: Some(v), enroll: Some(_), signer: true, .. } if v == "0.2.0")
         );
         assert!(matches!(
             Cli::try_parse_from(["webjetup", "upgrade"]).unwrap().cmd,

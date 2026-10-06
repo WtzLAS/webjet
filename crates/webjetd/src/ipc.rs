@@ -35,6 +35,10 @@ pub enum Access {
     /// Every local user (Unix mode 0666); everyone on Windows, without the
     /// right to create pipe instances.
     Everyone,
+    /// The owner and the process's group (Unix mode 0660), for a signer that
+    /// runs as its own user in the agent's group (`webjetd signer
+    /// --group-access`); like `Private` on Windows.
+    Group,
 }
 
 /// Default path of the signer's socket (`webjetd signer --socket`).
@@ -66,6 +70,7 @@ impl Listener {
             .with_context(|| format!("bind {}", path.display()))?;
         let mode = match access {
             Access::Private => 0o600,
+            Access::Group => 0o660,
             Access::Everyone => 0o666,
         };
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
@@ -135,7 +140,7 @@ mod win {
 
     fn create(path: &Path, access: Access, first: bool) -> Result<NamedPipeServer> {
         let sddl = match access {
-            Access::Private => PRIVATE_SDDL,
+            Access::Private | Access::Group => PRIVATE_SDDL,
             Access::Everyone => EVERYONE_SDDL,
         };
         let mut sa = crate::winsec::SecurityAttributes::from_sddl(sddl)?;
@@ -209,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn roundtrip() {
-        for access in [Access::Private, Access::Everyone] {
+        for access in [Access::Private, Access::Group, Access::Everyone] {
             roundtrip_with(access).await;
         }
     }
@@ -248,6 +253,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let want = match access {
                 Access::Private => 0o600,
+                Access::Group => 0o660,
                 Access::Everyone => 0o666,
             };
             let m = std::fs::metadata(&path).unwrap();

@@ -165,7 +165,7 @@ Then, on any platform:
 
 | Command | What it does |
 | --- | --- |
-| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS) or the service, PATH and folder ACLs (Windows). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. |
+| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS) or the service, PATH and folder ACLs (Windows). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. On a controller, `--signer` adds the signer service, which holds the signing key in its own process (`webjetd signer`), and points the agent at it; later upgrades keep it. |
 | `webjetup enroll <STRING>` | Enroll this node (or re-key it, operations guide 2.7) and start the agent. |
 | `webjetup status` | Installed version, service state, enrollment, this node's name and addresses. |
 | `webjetup list` | Published releases. |

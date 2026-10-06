@@ -4,6 +4,7 @@
 
 pub mod audit;
 pub mod raft;
+pub mod recovery;
 pub mod signer;
 
 use crate::node::Node;
@@ -65,6 +66,20 @@ pub fn classify_entry(bytes: &[u8]) -> Option<raft::ConfChange> {
                 }
                 _ => None,
             }
+        }
+        EntryPayload::ForceNewClusterEntry(f) => {
+            let voter = opt_k32(&f.voter);
+            Some(ConfChange::Set(Membership {
+                voters: BTreeSet::from([voter]),
+                learners: f
+                    .learners
+                    .clone()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|k| k.to_bytes())
+                    .filter(|k| *k != voter)
+                    .collect(),
+            }))
         }
         EntryPayload::AutoMembershipEntry(a) => {
             let id = opt_k32(&a.node_id);
@@ -382,6 +397,27 @@ impl Controller {
             first_index: first,
             commit_index: commit,
             records: Some(records),
+        }
+    }
+
+    /// This controller's applied state for an admin's signed
+    /// `SnapshotRequest` (ops guide 3.8): what `webjetctl local controller
+    /// restore` installs when no controller survives.
+    pub fn export_snapshot(&self, raw: &[u8]) -> wp::SnapshotReply {
+        let m = self.machine.lock();
+        match audit::check_snapshot_request(m.view(), raw, now_ms()) {
+            Ok(()) if m.genesis.is_some() => wp::SnapshotReply {
+                error: None,
+                snapshot: Some(m.snapshot_bytes()),
+            },
+            Ok(()) => wp::SnapshotReply {
+                error: Some("this controller holds no network yet".into()),
+                snapshot: None,
+            },
+            Err(e) => wp::SnapshotReply {
+                error: Some(format!("{e:#}")),
+                snapshot: None,
+            },
         }
     }
 
@@ -947,6 +983,9 @@ impl Controller {
             }
             RpcBody::GetLog(g) => Some(RpcBody::LogReply(Box::new(
                 self.log(&g.request.unwrap_or_default()),
+            ))),
+            RpcBody::GetSnapshot(g) => Some(RpcBody::SnapshotReply(Box::new(
+                self.export_snapshot(&g.request.unwrap_or_default()),
             ))),
             _ => None,
         }
@@ -1695,6 +1734,51 @@ mod tests {
         let stale = c.log(&req(&net.admin, net.admin_id, now_ms() - 3_600_000));
         assert!(stale.error.unwrap().contains("clock"));
         drop(n);
+    }
+
+    #[tokio::test]
+    async fn snapshots_are_for_admins() {
+        let (net, n, c, _d) = first_controller();
+        let req = |key: &KeyPair, account: Bytes32, issued_at| {
+            key.sign_obj(
+                mt::SNAPSHOT_REQUEST,
+                &wp::SnapshotRequest {
+                    account_id: Some(crypto::k32(&account)),
+                    issued_at,
+                },
+            )
+        };
+        // Before genesis there's nothing to export (and no admin to check).
+        assert!(
+            c.export_snapshot(&req(&net.admin, net.admin_id, now_ms()))
+                .error
+                .is_some()
+        );
+        c.clone().leader_duties().await;
+        let r = c.export_snapshot(&req(&net.admin, net.admin_id, now_ms()));
+        assert_eq!(r.error, None);
+        let m = Machine::restore_bytes(&r.snapshot.unwrap()).unwrap();
+        assert_eq!(m.last_index, c.machine.lock().last_index);
+        assert_eq!(m.members.voters, BTreeSet::from([n.me]));
+        assert!(m.psk(0).is_some(), "the PSKs are in it");
+        let other = KeyPair::generate();
+        assert!(
+            c.export_snapshot(&req(&other, net.admin_id, now_ms()))
+                .snapshot
+                .is_none()
+        );
+        let stale = c.export_snapshot(&req(&net.admin, net.admin_id, now_ms() - 3_600_000));
+        assert!(stale.error.unwrap().contains("clock"));
+        // A log request is no snapshot request.
+        let log = net.admin.sign_obj(
+            mt::LOG_REQUEST,
+            &wp::LogRequest {
+                account_id: Some(crypto::k32(&net.admin_id)),
+                issued_at: now_ms(),
+                ..Default::default()
+            },
+        );
+        assert!(c.export_snapshot(&log).error.is_some());
     }
 
     #[tokio::test]

@@ -25,6 +25,8 @@ tar = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 tempfile = "3"
 toml.workspace = true
+# Setting `[controller] signer_socket` in webjetd.toml, keeping its comments.
+toml_edit = "0.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

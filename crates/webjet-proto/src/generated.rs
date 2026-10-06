@@ -1671,10 +1671,593 @@ mod root {
             }
         }
 
+        /// The table `GetSnapshot` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `GetSnapshot` in the file `schema/wire.fbs:38`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct GetSnapshot {
+            /// The field `request` in the table `GetSnapshot`
+            pub request: ::core::option::Option<::planus::alloc::vec::Vec<u8>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for GetSnapshot {
+            fn default() -> Self {
+                Self {
+                    request: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl GetSnapshot {
+            /// Creates a [GetSnapshotBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> GetSnapshotBuilder<()> {
+                GetSnapshotBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_request: impl ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_request = field_request.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_request.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[u8]>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_request) = prepared_request {
+                            object_writer.write::<_, _, 4>(&prepared_request);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<GetSnapshot>> for GetSnapshot {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetSnapshot> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<GetSnapshot>> for GetSnapshot {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<GetSnapshot>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<GetSnapshot> for GetSnapshot {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetSnapshot> {
+                GetSnapshot::create(builder, &self.request)
+            }
+        }
+
+        /// Builder for serializing an instance of the [GetSnapshot] type.
+        ///
+        /// Can be created using the [GetSnapshot::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct GetSnapshotBuilder<State>(State);
+
+        impl GetSnapshotBuilder<()> {
+            /// Setter for the [`request` field](GetSnapshot#structfield.request).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn request<T0>(self, value: T0) -> GetSnapshotBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            {
+                GetSnapshotBuilder((value,))
+            }
+
+            /// Sets the [`request` field](GetSnapshot#structfield.request) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn request_as_null(self) -> GetSnapshotBuilder<((),)> {
+                self.request(())
+            }
+        }
+
+        impl<T0> GetSnapshotBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [GetSnapshot].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetSnapshot>
+            where
+                Self: ::planus::WriteAsOffset<GetSnapshot>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAs<::planus::Offset<GetSnapshot>> for GetSnapshotBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<GetSnapshot>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetSnapshot> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAsOptional<::planus::Offset<GetSnapshot>> for GetSnapshotBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<GetSnapshot>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<GetSnapshot>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAsOffset<GetSnapshot> for GetSnapshotBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<GetSnapshot> {
+                let (v0,) = &self.0;
+                GetSnapshot::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [GetSnapshot].
+        #[derive(Copy, Clone)]
+        pub struct GetSnapshotRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> GetSnapshotRef<'a> {
+            /// Getter for the [`request` field](GetSnapshot#structfield.request).
+            #[inline]
+            pub fn request(&self) -> ::planus::Result<::core::option::Option<&'a [u8]>> {
+                self.0.access(0, "GetSnapshot", "request")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for GetSnapshotRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("GetSnapshotRef");
+                if let ::core::option::Option::Some(field_request) = self.request().transpose() {
+                    f.field("request", &field_request);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<GetSnapshotRef<'a>> for GetSnapshot {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: GetSnapshotRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    request: value.request()?.map(|v| v.to_vec()),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for GetSnapshotRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for GetSnapshotRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[GetSnapshotRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<GetSnapshot>> for GetSnapshot {
+            type Value = ::planus::Offset<GetSnapshot>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<GetSnapshot>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for GetSnapshotRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[GetSnapshotRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `SnapshotReply` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `SnapshotReply` in the file `schema/wire.fbs:39`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct SnapshotReply {
+            /// The field `error` in the table `SnapshotReply`
+            pub error: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `snapshot` in the table `SnapshotReply`
+            pub snapshot: ::core::option::Option<::planus::alloc::vec::Vec<u8>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for SnapshotReply {
+            fn default() -> Self {
+                Self {
+                    error: ::core::default::Default::default(),
+                    snapshot: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl SnapshotReply {
+            /// Creates a [SnapshotReplyBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> SnapshotReplyBuilder<()> {
+                SnapshotReplyBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_error: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_snapshot: impl ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_error = field_error.prepare(builder);
+                let prepared_snapshot = field_snapshot.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<8> =
+                    ::core::default::Default::default();
+                if prepared_error.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(0);
+                }
+                if prepared_snapshot.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[u8]>>(1);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_error) = prepared_error {
+                            object_writer.write::<_, _, 4>(&prepared_error);
+                        }
+                        if let ::core::option::Option::Some(prepared_snapshot) = prepared_snapshot {
+                            object_writer.write::<_, _, 4>(&prepared_snapshot);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<SnapshotReply>> for SnapshotReply {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SnapshotReply> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<SnapshotReply>> for SnapshotReply {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SnapshotReply>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<SnapshotReply> for SnapshotReply {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SnapshotReply> {
+                SnapshotReply::create(builder, &self.error, &self.snapshot)
+            }
+        }
+
+        /// Builder for serializing an instance of the [SnapshotReply] type.
+        ///
+        /// Can be created using the [SnapshotReply::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct SnapshotReplyBuilder<State>(State);
+
+        impl SnapshotReplyBuilder<()> {
+            /// Setter for the [`error` field](SnapshotReply#structfield.error).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn error<T0>(self, value: T0) -> SnapshotReplyBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                SnapshotReplyBuilder((value,))
+            }
+
+            /// Sets the [`error` field](SnapshotReply#structfield.error) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn error_as_null(self) -> SnapshotReplyBuilder<((),)> {
+                self.error(())
+            }
+        }
+
+        impl<T0> SnapshotReplyBuilder<(T0,)> {
+            /// Setter for the [`snapshot` field](SnapshotReply#structfield.snapshot).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn snapshot<T1>(self, value: T1) -> SnapshotReplyBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            {
+                let (v0,) = self.0;
+                SnapshotReplyBuilder((v0, value))
+            }
+
+            /// Sets the [`snapshot` field](SnapshotReply#structfield.snapshot) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn snapshot_as_null(self) -> SnapshotReplyBuilder<(T0, ())> {
+                self.snapshot(())
+            }
+        }
+
+        impl<T0, T1> SnapshotReplyBuilder<(T0, T1)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [SnapshotReply].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<SnapshotReply>
+            where
+                Self: ::planus::WriteAsOffset<SnapshotReply>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            > ::planus::WriteAs<::planus::Offset<SnapshotReply>>
+            for SnapshotReplyBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<SnapshotReply>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SnapshotReply> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            > ::planus::WriteAsOptional<::planus::Offset<SnapshotReply>>
+            for SnapshotReplyBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<SnapshotReply>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SnapshotReply>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            > ::planus::WriteAsOffset<SnapshotReply> for SnapshotReplyBuilder<(T0, T1)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<SnapshotReply> {
+                let (v0, v1) = &self.0;
+                SnapshotReply::create(builder, v0, v1)
+            }
+        }
+
+        /// Reference to a deserialized [SnapshotReply].
+        #[derive(Copy, Clone)]
+        pub struct SnapshotReplyRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> SnapshotReplyRef<'a> {
+            /// Getter for the [`error` field](SnapshotReply#structfield.error).
+            #[inline]
+            pub fn error(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(0, "SnapshotReply", "error")
+            }
+
+            /// Getter for the [`snapshot` field](SnapshotReply#structfield.snapshot).
+            #[inline]
+            pub fn snapshot(&self) -> ::planus::Result<::core::option::Option<&'a [u8]>> {
+                self.0.access(1, "SnapshotReply", "snapshot")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for SnapshotReplyRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("SnapshotReplyRef");
+                if let ::core::option::Option::Some(field_error) = self.error().transpose() {
+                    f.field("error", &field_error);
+                }
+                if let ::core::option::Option::Some(field_snapshot) = self.snapshot().transpose() {
+                    f.field("snapshot", &field_snapshot);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<SnapshotReplyRef<'a>> for SnapshotReply {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: SnapshotReplyRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    error: value.error()?.map(::core::convert::Into::into),
+                    snapshot: value.snapshot()?.map(|v| v.to_vec()),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for SnapshotReplyRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for SnapshotReplyRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[SnapshotReplyRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<SnapshotReply>> for SnapshotReply {
+            type Value = ::planus::Offset<SnapshotReply>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<SnapshotReply>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for SnapshotReplyRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[SnapshotReplyRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `LogLeaf` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogLeaf` in the file `schema/wire.fbs:38`
+        /// * Table `LogLeaf` in the file `schema/wire.fbs:43`
         #[derive(
             Clone,
             Debug,
@@ -2070,7 +2653,7 @@ mod root {
         /// The table `LogRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRecord` in the file `schema/wire.fbs:39`
+        /// * Table `LogRecord` in the file `schema/wire.fbs:44`
         #[derive(
             Clone,
             Debug,
@@ -2849,7 +3432,7 @@ mod root {
         /// The table `LogReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogReply` in the file `schema/wire.fbs:52`
+        /// * Table `LogReply` in the file `schema/wire.fbs:57`
         #[derive(
             Clone,
             Debug,
@@ -3276,7 +3859,7 @@ mod root {
         /// The table `GetOffline` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetOffline` in the file `schema/wire.fbs:59`
+        /// * Table `GetOffline` in the file `schema/wire.fbs:64`
         #[derive(
             Clone,
             Debug,
@@ -3546,7 +4129,7 @@ mod root {
         /// The table `OfflineItems` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OfflineItems` in the file `schema/wire.fbs:60`
+        /// * Table `OfflineItems` in the file `schema/wire.fbs:65`
         #[derive(
             Clone,
             Debug,
@@ -3823,7 +4406,7 @@ mod root {
         /// The table `GetBuckets` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetBuckets` in the file `schema/wire.fbs:64`
+        /// * Table `GetBuckets` in the file `schema/wire.fbs:69`
         #[derive(
             Clone,
             Debug,
@@ -4089,7 +4672,7 @@ mod root {
         /// The table `Buckets` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Buckets` in the file `schema/wire.fbs:65`
+        /// * Table `Buckets` in the file `schema/wire.fbs:70`
         #[derive(
             Clone,
             Debug,
@@ -4405,7 +4988,7 @@ mod root {
         /// The table `GetBucketIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetBucketIndex` in the file `schema/wire.fbs:66`
+        /// * Table `GetBucketIndex` in the file `schema/wire.fbs:71`
         #[derive(
             Clone,
             Debug,
@@ -4720,7 +5303,7 @@ mod root {
         /// The table `LeafIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafIndex` in the file `schema/wire.fbs:67`
+        /// * Table `LeafIndex` in the file `schema/wire.fbs:72`
         #[derive(
             Clone,
             Debug,
@@ -5034,7 +5617,7 @@ mod root {
         /// The table `BucketIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `BucketIndex` in the file `schema/wire.fbs:68`
+        /// * Table `BucketIndex` in the file `schema/wire.fbs:73`
         #[derive(
             Clone,
             Debug,
@@ -5363,7 +5946,7 @@ mod root {
         /// The table `GetLeaves` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetLeaves` in the file `schema/wire.fbs:69`
+        /// * Table `GetLeaves` in the file `schema/wire.fbs:74`
         #[derive(
             Clone,
             Debug,
@@ -5684,7 +6267,7 @@ mod root {
         /// The table `LeafData` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafData` in the file `schema/wire.fbs:70`
+        /// * Table `LeafData` in the file `schema/wire.fbs:75`
         #[derive(
             Clone,
             Debug,
@@ -6036,7 +6619,7 @@ mod root {
         /// The table `Leaves` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Leaves` in the file `schema/wire.fbs:71`
+        /// * Table `Leaves` in the file `schema/wire.fbs:76`
         #[derive(
             Clone,
             Debug,
@@ -6358,7 +6941,7 @@ mod root {
         /// The table `NotAvailable` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NotAvailable` in the file `schema/wire.fbs:72`
+        /// * Table `NotAvailable` in the file `schema/wire.fbs:77`
         #[derive(
             Clone,
             Debug,
@@ -6625,7 +7208,7 @@ mod root {
         /// The table `Records` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Records` in the file `schema/wire.fbs:76`
+        /// * Table `Records` in the file `schema/wire.fbs:81`
         #[derive(
             Clone,
             Debug,
@@ -6897,7 +7480,7 @@ mod root {
         /// The table `Lookup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Lookup` in the file `schema/wire.fbs:78`
+        /// * Table `Lookup` in the file `schema/wire.fbs:83`
         #[derive(
             Clone,
             Debug,
@@ -7215,7 +7798,7 @@ mod root {
         /// The table `CircuitOpen` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitOpen` in the file `schema/wire.fbs:82`
+        /// * Table `CircuitOpen` in the file `schema/wire.fbs:87`
         #[derive(
             Clone,
             Debug,
@@ -7527,7 +8110,7 @@ mod root {
         /// The table `CircuitAccept` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitAccept` in the file `schema/wire.fbs:83`
+        /// * Table `CircuitAccept` in the file `schema/wire.fbs:88`
         #[derive(
             Clone,
             Debug,
@@ -7839,7 +8422,7 @@ mod root {
         /// The table `CircuitRefuse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitRefuse` in the file `schema/wire.fbs:84`
+        /// * Table `CircuitRefuse` in the file `schema/wire.fbs:89`
         #[derive(
             Clone,
             Debug,
@@ -8154,7 +8737,7 @@ mod root {
         /// The table `CircuitClose` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitClose` in the file `schema/wire.fbs:86`
+        /// * Table `CircuitClose` in the file `schema/wire.fbs:91`
         #[derive(
             Clone,
             Debug,
@@ -8417,7 +9000,7 @@ mod root {
         /// The union `HopMsg` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `HopMsg` in the file `schema/wire.fbs:88`
+        /// * Union `HopMsg` in the file `schema/wire.fbs:93`
         #[derive(
             Clone,
             Debug,
@@ -9511,7 +10094,7 @@ mod root {
         /// The table `HopControl` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `HopControl` in the file `schema/wire.fbs:110`
+        /// * Table `HopControl` in the file `schema/wire.fbs:115`
         #[derive(
             Clone,
             Debug,
@@ -9787,7 +10370,7 @@ mod root {
         /// The table `Probe` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Probe` in the file `schema/wire.fbs:114`
+        /// * Table `Probe` in the file `schema/wire.fbs:119`
         #[derive(
             Clone,
             Debug,
@@ -10139,7 +10722,7 @@ mod root {
         /// The table `PunchOffer` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PunchOffer` in the file `schema/wire.fbs:116`
+        /// * Table `PunchOffer` in the file `schema/wire.fbs:121`
         #[derive(
             Clone,
             Debug,
@@ -10466,7 +11049,7 @@ mod root {
         /// The table `PunchGo` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PunchGo` in the file `schema/wire.fbs:121`
+        /// * Table `PunchGo` in the file `schema/wire.fbs:126`
         #[derive(
             Clone,
             Debug,
@@ -10728,7 +11311,7 @@ mod root {
         /// The table `PskEpoch` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PskEpoch` in the file `schema/wire.fbs:125`
+        /// * Table `PskEpoch` in the file `schema/wire.fbs:130`
         #[derive(
             Clone,
             Debug,
@@ -11035,7 +11618,7 @@ mod root {
         /// The table `GetPsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetPsk` in the file `schema/wire.fbs:126`
+        /// * Table `GetPsk` in the file `schema/wire.fbs:131`
         #[derive(
             Clone,
             Debug,
@@ -11293,7 +11876,7 @@ mod root {
         /// The table `PskInfo` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PskInfo` in the file `schema/wire.fbs:127`
+        /// * Table `PskInfo` in the file `schema/wire.fbs:132`
         #[derive(
             Clone,
             Debug,
@@ -11613,7 +12196,7 @@ mod root {
         /// The table `GetCamouflage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetCamouflage` in the file `schema/wire.fbs:128`
+        /// * Table `GetCamouflage` in the file `schema/wire.fbs:133`
         #[derive(
             Clone,
             Debug,
@@ -11824,7 +12407,7 @@ mod root {
         /// The table `CamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CamouflageSecret` in the file `schema/wire.fbs:129`
+        /// * Table `CamouflageSecret` in the file `schema/wire.fbs:134`
         #[derive(
             Clone,
             Debug,
@@ -12158,7 +12741,7 @@ mod root {
         /// The table `SubmitOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitOp` in the file `schema/wire.fbs:130`
+        /// * Table `SubmitOp` in the file `schema/wire.fbs:135`
         #[derive(
             Clone,
             Debug,
@@ -12420,7 +13003,7 @@ mod root {
         /// The table `SubmitResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitResult` in the file `schema/wire.fbs:131`
+        /// * Table `SubmitResult` in the file `schema/wire.fbs:136`
         #[derive(
             Clone,
             Debug,
@@ -12777,7 +13360,7 @@ mod root {
         /// The table `MetricUpload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricUpload` in the file `schema/wire.fbs:132`
+        /// * Table `MetricUpload` in the file `schema/wire.fbs:137`
         #[derive(
             Clone,
             Debug,
@@ -13044,7 +13627,7 @@ mod root {
         /// The table `RpcAck` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RpcAck` in the file `schema/wire.fbs:133`
+        /// * Table `RpcAck` in the file `schema/wire.fbs:138`
         #[derive(
             Clone,
             Debug,
@@ -13353,7 +13936,7 @@ mod root {
         /// The table `RaftRpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftRpc` in the file `schema/wire.fbs:134`
+        /// * Table `RaftRpc` in the file `schema/wire.fbs:139`
         #[derive(
             Clone,
             Debug,
@@ -13615,7 +14198,7 @@ mod root {
         /// The table `RedeemRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemRequest` in the file `schema/wire.fbs:135`
+        /// * Table `RedeemRequest` in the file `schema/wire.fbs:140`
         #[derive(
             Clone,
             Debug,
@@ -13882,7 +14465,7 @@ mod root {
         /// The table `OfflineSubmit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OfflineSubmit` in the file `schema/wire.fbs:136`
+        /// * Table `OfflineSubmit` in the file `schema/wire.fbs:141`
         #[derive(
             Clone,
             Debug,
@@ -14159,7 +14742,7 @@ mod root {
         /// The table `SubmitRoot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitRoot` in the file `schema/wire.fbs:137`
+        /// * Table `SubmitRoot` in the file `schema/wire.fbs:142`
         #[derive(
             Clone,
             Debug,
@@ -14425,7 +15008,7 @@ mod root {
         /// The table `GetControllerStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetControllerStatus` in the file `schema/wire.fbs:138`
+        /// * Table `GetControllerStatus` in the file `schema/wire.fbs:143`
         #[derive(
             Clone,
             Debug,
@@ -14655,7 +15238,7 @@ mod root {
         /// The table `GetCertRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetCertRequest` in the file `schema/wire.fbs:140`
+        /// * Table `GetCertRequest` in the file `schema/wire.fbs:145`
         #[derive(
             Clone,
             Debug,
@@ -14866,7 +15449,7 @@ mod root {
         /// The table `CertRequestReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CertRequestReply` in the file `schema/wire.fbs:141`
+        /// * Table `CertRequestReply` in the file `schema/wire.fbs:146`
         #[derive(
             Clone,
             Debug,
@@ -15198,7 +15781,7 @@ mod root {
         /// The table `ControllerStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerStatus` in the file `schema/wire.fbs:142`
+        /// * Table `ControllerStatus` in the file `schema/wire.fbs:147`
         #[derive(
             Clone,
             Debug,
@@ -15907,7 +16490,7 @@ mod root {
         /// The union `RpcBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RpcBody` in the file `schema/wire.fbs:154`
+        /// * Union `RpcBody` in the file `schema/wire.fbs:159`
         #[derive(
             Clone,
             Debug,
@@ -15973,6 +16556,12 @@ mod root {
 
             /// The variant of type `LogReply` in the union `RpcBody`
             LogReply(::planus::alloc::boxed::Box<self::LogReply>),
+
+            /// The variant of type `GetSnapshot` in the union `RpcBody`
+            GetSnapshot(::planus::alloc::boxed::Box<self::GetSnapshot>),
+
+            /// The variant of type `SnapshotReply` in the union `RpcBody`
+            SnapshotReply(::planus::alloc::boxed::Box<self::SnapshotReply>),
         }
 
         impl RpcBody {
@@ -16125,6 +16714,22 @@ mod root {
             ) -> ::planus::UnionOffset<Self> {
                 ::planus::UnionOffset::new(18, value.prepare(builder).downcast())
             }
+
+            #[inline]
+            pub fn create_get_snapshot(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::GetSnapshot>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(19, value.prepare(builder).downcast())
+            }
+
+            #[inline]
+            pub fn create_snapshot_reply(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::SnapshotReply>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(20, value.prepare(builder).downcast())
+            }
         }
 
         impl ::planus::WriteAsUnion<RpcBody> for RpcBody {
@@ -16153,6 +16758,8 @@ mod root {
                     }
                     Self::GetLog(value) => Self::create_get_log(builder, value),
                     Self::LogReply(value) => Self::create_log_reply(builder, value),
+                    Self::GetSnapshot(value) => Self::create_get_snapshot(builder, value),
+                    Self::SnapshotReply(value) => Self::create_snapshot_reply(builder, value),
                 }
             }
         }
@@ -16348,6 +16955,24 @@ mod root {
             pub fn log_reply<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<18, T>>
             where
                 T: ::planus::WriteAsOffset<self::LogReply>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`GetSnapshot` variant](RpcBody#variant.GetSnapshot).
+            #[inline]
+            pub fn get_snapshot<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<19, T>>
+            where
+                T: ::planus::WriteAsOffset<self::GetSnapshot>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`SnapshotReply` variant](RpcBody#variant.SnapshotReply).
+            #[inline]
+            pub fn snapshot_reply<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<20, T>>
+            where
+                T: ::planus::WriteAsOffset<self::SnapshotReply>,
             {
                 RpcBodyBuilder(::planus::Initialized(value))
             }
@@ -16760,6 +17385,50 @@ mod root {
                 ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
             }
         }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<19, T>>
+        where
+            T: ::planus::WriteAsOffset<self::GetSnapshot>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(19, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<19, T>>
+        where
+            T: ::planus::WriteAsOffset<self::GetSnapshot>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<20, T>>
+        where
+            T: ::planus::WriteAsOffset<self::SnapshotReply>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(20, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<20, T>>
+        where
+            T: ::planus::WriteAsOffset<self::SnapshotReply>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
 
         /// Reference to a deserialized [RpcBody].
         #[derive(Copy, Clone, Debug)]
@@ -16782,6 +17451,8 @@ mod root {
             CertRequestReply(self::CertRequestReplyRef<'a>),
             GetLog(self::GetLogRef<'a>),
             LogReply(self::LogReplyRef<'a>),
+            GetSnapshot(self::GetSnapshotRef<'a>),
+            SnapshotReply(self::SnapshotReplyRef<'a>),
         }
 
         impl<'a> ::core::convert::TryFrom<RpcBodyRef<'a>> for RpcBody {
@@ -16886,6 +17557,18 @@ mod root {
                             ::core::convert::TryFrom::try_from(value)?,
                         ))
                     }
+
+                    RpcBodyRef::GetSnapshot(value) => {
+                        Self::GetSnapshot(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
+
+                    RpcBodyRef::SnapshotReply(value) => {
+                        Self::SnapshotReply(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
                 })
             }
         }
@@ -16951,6 +17634,12 @@ mod root {
                     18 => ::core::result::Result::Ok(Self::LogReply(
                         ::planus::TableRead::from_buffer(buffer, field_offset)?,
                     )),
+                    19 => ::core::result::Result::Ok(Self::GetSnapshot(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
+                    20 => ::core::result::Result::Ok(Self::SnapshotReply(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
                     _ => {
                         ::core::result::Result::Err(::planus::errors::ErrorKind::UnknownUnionTag {
                             tag,
@@ -16967,7 +17656,7 @@ mod root {
         /// The table `Rpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Rpc` in the file `schema/wire.fbs:175`
+        /// * Table `Rpc` in the file `schema/wire.fbs:182`
         #[derive(
             Clone,
             Debug,
@@ -17237,7 +17926,7 @@ mod root {
         /// The table `RaftVote` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVote` in the file `schema/wire.fbs:179`
+        /// * Table `RaftVote` in the file `schema/wire.fbs:186`
         #[derive(
             Clone,
             Debug,
@@ -17649,7 +18338,7 @@ mod root {
         /// The table `RaftVoteResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:186`
+        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:193`
         #[derive(
             Clone,
             Debug,
@@ -18031,7 +18720,7 @@ mod root {
         /// The table `RaftAppend` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppend` in the file `schema/wire.fbs:188`
+        /// * Table `RaftAppend` in the file `schema/wire.fbs:195`
         #[derive(
             Clone,
             Debug,
@@ -18511,7 +19200,7 @@ mod root {
         /// The table `RaftAppendResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:196`
+        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:203`
         #[derive(
             Clone,
             Debug,
@@ -18952,7 +19641,7 @@ mod root {
         /// The table `RaftSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:203`
+        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:210`
         #[derive(
             Clone,
             Debug,
@@ -19366,7 +20055,7 @@ mod root {
         /// The table `RaftSnapshotResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:210`
+        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:217`
         #[derive(
             Clone,
             Debug,
@@ -19701,7 +20390,7 @@ mod root {
         /// The table `RaftForward` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForward` in the file `schema/wire.fbs:213`
+        /// * Table `RaftForward` in the file `schema/wire.fbs:220`
         #[derive(
             Clone,
             Debug,
@@ -20017,7 +20706,7 @@ mod root {
         /// The table `RaftForwardResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:214`
+        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:221`
         #[derive(
             Clone,
             Debug,
@@ -20454,7 +21143,7 @@ mod root {
         /// The table `RaftTimeoutNow` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:215`
+        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:222`
         #[derive(
             Clone,
             Debug,
@@ -20717,7 +21406,7 @@ mod root {
         /// The union `RaftBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RaftBody` in the file `schema/wire.fbs:217`
+        /// * Union `RaftBody` in the file `schema/wire.fbs:224`
         #[derive(
             Clone,
             Debug,
@@ -21314,7 +22003,7 @@ mod root {
         /// The table `RaftMessage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftMessage` in the file `schema/wire.fbs:229`
+        /// * Table `RaftMessage` in the file `schema/wire.fbs:236`
         #[derive(
             Clone,
             Debug,
@@ -21683,7 +22372,7 @@ mod root {
         /// The table `PendingEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:232`
+        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:239`
         #[derive(
             Clone,
             Debug,
@@ -22178,7 +22867,7 @@ mod root {
         /// The table `OpSeq` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpSeq` in the file `schema/wire.fbs:240`
+        /// * Table `OpSeq` in the file `schema/wire.fbs:247`
         #[derive(
             Clone,
             Debug,
@@ -22491,7 +23180,7 @@ mod root {
         /// The table `MemberSince` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MemberSince` in the file `schema/wire.fbs:242`
+        /// * Table `MemberSince` in the file `schema/wire.fbs:249`
         #[derive(
             Clone,
             Debug,
@@ -22803,7 +23492,7 @@ mod root {
         /// The table `ControllerSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:244`
+        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:251`
         #[derive(
             Clone,
             Debug,
@@ -24206,7 +24895,7 @@ mod root {
         /// The table `EnrollRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollRequest` in the file `schema/wire.fbs:265`
+        /// * Table `EnrollRequest` in the file `schema/wire.fbs:272`
         #[derive(
             Clone,
             Debug,
@@ -24625,7 +25314,7 @@ mod root {
         /// The table `MerkleProof` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MerkleProof` in the file `schema/wire.fbs:272`
+        /// * Table `MerkleProof` in the file `schema/wire.fbs:279`
         #[derive(
             Clone,
             Debug,
@@ -24946,7 +25635,7 @@ mod root {
         /// The table `EnrollResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollResponse` in the file `schema/wire.fbs:274`
+        /// * Table `EnrollResponse` in the file `schema/wire.fbs:281`
         #[derive(
             Clone,
             Debug,
@@ -25901,7 +26590,7 @@ mod root {
         /// The table `EnrollmentTicket` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:291`
+        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:298`
         #[derive(
             Clone,
             Debug,
@@ -45942,10 +46631,351 @@ mod root {
             }
         }
 
+        /// The table `SnapshotRequest` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:330`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct SnapshotRequest {
+            /// The field `account_id` in the table `SnapshotRequest`
+            pub account_id: ::core::option::Option<self::Key32>,
+            /// The field `issued_at` in the table `SnapshotRequest`
+            pub issued_at: u64,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for SnapshotRequest {
+            fn default() -> Self {
+                Self {
+                    account_id: ::core::default::Default::default(),
+                    issued_at: 0,
+                }
+            }
+        }
+
+        impl SnapshotRequest {
+            /// Creates a [SnapshotRequestBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> SnapshotRequestBuilder<()> {
+                SnapshotRequestBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_account_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_issued_at: impl ::planus::WriteAsDefault<u64, u64>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_account_id = field_account_id.prepare(builder);
+                let prepared_issued_at = field_issued_at.prepare(builder, &0);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<8> =
+                    ::core::default::Default::default();
+                if prepared_account_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+                if prepared_issued_at.is_some() {
+                    table_writer.write_entry::<u64>(1);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_account_id) =
+                            prepared_account_id
+                        {
+                            object_writer.write::<_, _, 32>(&prepared_account_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_issued_at) = prepared_issued_at
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_issued_at);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<SnapshotRequest>> for SnapshotRequest {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SnapshotRequest> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<SnapshotRequest>> for SnapshotRequest {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SnapshotRequest>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<SnapshotRequest> for SnapshotRequest {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SnapshotRequest> {
+                SnapshotRequest::create(builder, self.account_id, self.issued_at)
+            }
+        }
+
+        /// Builder for serializing an instance of the [SnapshotRequest] type.
+        ///
+        /// Can be created using the [SnapshotRequest::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct SnapshotRequestBuilder<State>(State);
+
+        impl SnapshotRequestBuilder<()> {
+            /// Setter for the [`account_id` field](SnapshotRequest#structfield.account_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id<T0>(self, value: T0) -> SnapshotRequestBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                SnapshotRequestBuilder((value,))
+            }
+
+            /// Sets the [`account_id` field](SnapshotRequest#structfield.account_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id_as_null(self) -> SnapshotRequestBuilder<((),)> {
+                self.account_id(())
+            }
+        }
+
+        impl<T0> SnapshotRequestBuilder<(T0,)> {
+            /// Setter for the [`issued_at` field](SnapshotRequest#structfield.issued_at).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at<T1>(self, value: T1) -> SnapshotRequestBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0,) = self.0;
+                SnapshotRequestBuilder((v0, value))
+            }
+
+            /// Sets the [`issued_at` field](SnapshotRequest#structfield.issued_at) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at_as_default(
+                self,
+            ) -> SnapshotRequestBuilder<(T0, ::planus::DefaultValue)> {
+                self.issued_at(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1> SnapshotRequestBuilder<(T0, T1)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [SnapshotRequest].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SnapshotRequest>
+            where
+                Self: ::planus::WriteAsOffset<SnapshotRequest>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAs<::planus::Offset<SnapshotRequest>>
+            for SnapshotRequestBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<SnapshotRequest>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SnapshotRequest> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOptional<::planus::Offset<SnapshotRequest>>
+            for SnapshotRequestBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<SnapshotRequest>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<SnapshotRequest>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOffset<SnapshotRequest> for SnapshotRequestBuilder<(T0, T1)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<SnapshotRequest> {
+                let (v0, v1) = &self.0;
+                SnapshotRequest::create(builder, v0, v1)
+            }
+        }
+
+        /// Reference to a deserialized [SnapshotRequest].
+        #[derive(Copy, Clone)]
+        pub struct SnapshotRequestRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> SnapshotRequestRef<'a> {
+            /// Getter for the [`account_id` field](SnapshotRequest#structfield.account_id).
+            #[inline]
+            pub fn account_id(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "SnapshotRequest", "account_id")
+            }
+
+            /// Getter for the [`issued_at` field](SnapshotRequest#structfield.issued_at).
+            #[inline]
+            pub fn issued_at(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(1, "SnapshotRequest", "issued_at")?
+                        .unwrap_or(0),
+                )
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for SnapshotRequestRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("SnapshotRequestRef");
+                if let ::core::option::Option::Some(field_account_id) =
+                    self.account_id().transpose()
+                {
+                    f.field("account_id", &field_account_id);
+                }
+                f.field("issued_at", &self.issued_at());
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<SnapshotRequestRef<'a>> for SnapshotRequest {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: SnapshotRequestRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    account_id: value.account_id()?.map(::core::convert::Into::into),
+                    issued_at: ::core::convert::TryInto::try_into(value.issued_at()?)?,
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for SnapshotRequestRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for SnapshotRequestRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[SnapshotRequestRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<SnapshotRequest>> for SnapshotRequest {
+            type Value = ::planus::Offset<SnapshotRequest>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<SnapshotRequest>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for SnapshotRequestRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[SnapshotRequestRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:331`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:337`
         #[derive(
             Clone,
             Debug,
@@ -46355,7 +47385,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:338`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:344`
         #[derive(
             Clone,
             Debug,
@@ -47264,7 +48294,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:355`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:361`
         #[derive(
             Clone,
             Debug,
@@ -47719,7 +48749,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:363`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:369`
         #[derive(
             Clone,
             Debug,
@@ -48178,7 +49208,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:371`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:377`
         #[derive(
             Clone,
             Debug,
@@ -48779,7 +49809,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:381`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:387`
         #[derive(
             Clone,
             Debug,
@@ -49215,7 +50245,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:388`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:394`
         #[derive(
             Clone,
             Debug,
@@ -49771,7 +50801,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:397`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:403`
         #[derive(
             Clone,
             Debug,
@@ -50281,7 +51311,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:408`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:414`
         #[derive(
             Clone,
             Debug,
@@ -50643,7 +51673,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:416`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:422`
         #[derive(
             Copy,
             Clone,
@@ -50816,7 +51846,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:418`
+        /// * Table `Counter` in the file `schema/webjet.fbs:424`
         #[derive(
             Clone,
             Debug,
@@ -51125,7 +52155,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:420`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:426`
         #[derive(
             Clone,
             Debug,
@@ -51424,7 +52454,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:422`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:428`
         #[derive(
             Clone,
             Debug,
@@ -51822,7 +52852,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:429`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:435`
         #[derive(
             Clone,
             Debug,
@@ -52688,7 +53718,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:444`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:450`
         #[derive(
             Clone,
             Debug,
@@ -53713,7 +54743,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:461`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:467`
         #[derive(
             Clone,
             Debug,
@@ -54069,7 +55099,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:463`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:469`
         #[derive(
             Clone,
             Debug,
@@ -54424,7 +55454,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:465`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:471`
         #[derive(
             Clone,
             Debug,
@@ -55756,7 +56786,7 @@ mod root {
         /// The table `TunMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TunMetrics` in the file `schema/webjet.fbs:488`
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:494`
         #[derive(
             Clone,
             Debug,
@@ -56169,7 +57199,7 @@ mod root {
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:500`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:506`
         #[derive(
             Clone,
             Debug,
@@ -56889,7 +57919,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:514`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:520`
         #[derive(
             Clone,
             Debug,
@@ -57623,7 +58653,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:529`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:535`
         #[derive(
             Clone,
             Debug,
@@ -58472,7 +59502,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:543`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:549`
         #[derive(
             Clone,
             Debug,
@@ -58788,7 +59818,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:545`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:551`
         #[derive(
             Clone,
             Debug,
@@ -59599,7 +60629,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:559`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:565`
         #[derive(
             Clone,
             Debug,
@@ -59916,7 +60946,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:561`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:567`
         #[derive(
             Clone,
             Debug,
@@ -60341,7 +61371,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:568`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:574`
         #[derive(
             Clone,
             Debug,
@@ -60607,7 +61637,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:569`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:575`
         #[derive(
             Clone,
             Debug,
@@ -60892,7 +61922,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:572`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:578`
         #[derive(
             Clone,
             Debug,
@@ -61164,7 +62194,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:573`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:579`
         #[derive(
             Clone,
             Debug,
@@ -61434,7 +62464,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:574`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:580`
         #[derive(
             Clone,
             Debug,
@@ -61702,7 +62732,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:575`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:581`
         #[derive(
             Clone,
             Debug,
@@ -61974,7 +63004,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:576`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:582`
         #[derive(
             Clone,
             Debug,
@@ -62250,7 +63280,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:577`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:583`
         #[derive(
             Clone,
             Debug,
@@ -62587,7 +63617,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:578`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:584`
         #[derive(
             Clone,
             Debug,
@@ -62878,7 +63908,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:579`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:585`
         #[derive(
             Clone,
             Debug,
@@ -63153,7 +64183,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:581`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:587`
         #[derive(
             Copy,
             Clone,
@@ -63331,7 +64361,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:582`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:588`
         #[derive(
             Clone,
             Debug,
@@ -63667,7 +64697,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:584`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:590`
         #[derive(
             Clone,
             Debug,
@@ -63929,7 +64959,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:586`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:592`
         #[derive(
             Clone,
             Debug,
@@ -64953,7 +65983,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:606`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:612`
         #[derive(
             Clone,
             Debug,
@@ -65358,7 +66388,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:615`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:621`
         #[derive(
             Clone,
             Debug,
@@ -65622,7 +66652,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:616`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:622`
         #[derive(
             Clone,
             Debug,
@@ -65905,7 +66935,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:617`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:623`
         #[derive(
             Clone,
             Debug,
@@ -66194,7 +67224,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:618`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:624`
         #[derive(
             Clone,
             Debug,
@@ -66590,7 +67620,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:619`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:625`
         #[derive(
             Clone,
             Debug,
@@ -66873,7 +67903,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:620`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:626`
         #[derive(
             Clone,
             Debug,
@@ -67162,7 +68192,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:621`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:627`
         #[derive(
             Clone,
             Debug,
@@ -67453,7 +68483,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:622`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:628`
         #[derive(
             Clone,
             Debug,
@@ -67715,7 +68745,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:623`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:629`
         #[derive(
             Clone,
             Debug,
@@ -67982,7 +69012,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:624`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:630`
         #[derive(
             Clone,
             Debug,
@@ -68326,7 +69356,7 @@ mod root {
         /// The table `AutoMembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:626`
+        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:632`
         #[derive(
             Clone,
             Debug,
@@ -68664,10 +69694,452 @@ mod root {
             }
         }
 
+        /// The table `ForceNewClusterEntry` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:636`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct ForceNewClusterEntry {
+            /// The field `voter` in the table `ForceNewClusterEntry`
+            pub voter: ::core::option::Option<self::Key32>,
+            /// The field `learners` in the table `ForceNewClusterEntry`
+            pub learners: ::core::option::Option<::planus::alloc::vec::Vec<self::Key32>>,
+            /// The field `grant_control` in the table `ForceNewClusterEntry`
+            pub grant_control: bool,
+            /// The field `reason` in the table `ForceNewClusterEntry`
+            pub reason: ::core::option::Option<::planus::alloc::string::String>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for ForceNewClusterEntry {
+            fn default() -> Self {
+                Self {
+                    voter: ::core::default::Default::default(),
+                    learners: ::core::default::Default::default(),
+                    grant_control: false,
+                    reason: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl ForceNewClusterEntry {
+            /// Creates a [ForceNewClusterEntryBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> ForceNewClusterEntryBuilder<()> {
+                ForceNewClusterEntryBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_voter: impl ::planus::WriteAsOptional<self::Key32>,
+                field_learners: impl ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
+                field_grant_control: impl ::planus::WriteAsDefault<bool, bool>,
+                field_reason: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_voter = field_voter.prepare(builder);
+                let prepared_learners = field_learners.prepare(builder);
+                let prepared_grant_control = field_grant_control.prepare(builder, &false);
+                let prepared_reason = field_reason.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_voter.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+                if prepared_learners.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[self::Key32]>>(1);
+                }
+                if prepared_reason.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(3);
+                }
+                if prepared_grant_control.is_some() {
+                    table_writer.write_entry::<bool>(2);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_voter) = prepared_voter {
+                            object_writer.write::<_, _, 32>(&prepared_voter);
+                        }
+                        if let ::core::option::Option::Some(prepared_learners) = prepared_learners {
+                            object_writer.write::<_, _, 4>(&prepared_learners);
+                        }
+                        if let ::core::option::Option::Some(prepared_reason) = prepared_reason {
+                            object_writer.write::<_, _, 4>(&prepared_reason);
+                        }
+                        if let ::core::option::Option::Some(prepared_grant_control) =
+                            prepared_grant_control
+                        {
+                            object_writer.write::<_, _, 1>(&prepared_grant_control);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<ForceNewClusterEntry>> for ForceNewClusterEntry {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ForceNewClusterEntry> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<ForceNewClusterEntry>> for ForceNewClusterEntry {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ForceNewClusterEntry>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<ForceNewClusterEntry> for ForceNewClusterEntry {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ForceNewClusterEntry> {
+                ForceNewClusterEntry::create(
+                    builder,
+                    self.voter,
+                    &self.learners,
+                    self.grant_control,
+                    &self.reason,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [ForceNewClusterEntry] type.
+        ///
+        /// Can be created using the [ForceNewClusterEntry::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct ForceNewClusterEntryBuilder<State>(State);
+
+        impl ForceNewClusterEntryBuilder<()> {
+            /// Setter for the [`voter` field](ForceNewClusterEntry#structfield.voter).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn voter<T0>(self, value: T0) -> ForceNewClusterEntryBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                ForceNewClusterEntryBuilder((value,))
+            }
+
+            /// Sets the [`voter` field](ForceNewClusterEntry#structfield.voter) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn voter_as_null(self) -> ForceNewClusterEntryBuilder<((),)> {
+                self.voter(())
+            }
+        }
+
+        impl<T0> ForceNewClusterEntryBuilder<(T0,)> {
+            /// Setter for the [`learners` field](ForceNewClusterEntry#structfield.learners).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn learners<T1>(self, value: T1) -> ForceNewClusterEntryBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
+            {
+                let (v0,) = self.0;
+                ForceNewClusterEntryBuilder((v0, value))
+            }
+
+            /// Sets the [`learners` field](ForceNewClusterEntry#structfield.learners) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn learners_as_null(self) -> ForceNewClusterEntryBuilder<(T0, ())> {
+                self.learners(())
+            }
+        }
+
+        impl<T0, T1> ForceNewClusterEntryBuilder<(T0, T1)> {
+            /// Setter for the [`grant_control` field](ForceNewClusterEntry#structfield.grant_control).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn grant_control<T2>(self, value: T2) -> ForceNewClusterEntryBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsDefault<bool, bool>,
+            {
+                let (v0, v1) = self.0;
+                ForceNewClusterEntryBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`grant_control` field](ForceNewClusterEntry#structfield.grant_control) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn grant_control_as_default(
+                self,
+            ) -> ForceNewClusterEntryBuilder<(T0, T1, ::planus::DefaultValue)> {
+                self.grant_control(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2> ForceNewClusterEntryBuilder<(T0, T1, T2)> {
+            /// Setter for the [`reason` field](ForceNewClusterEntry#structfield.reason).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn reason<T3>(self, value: T3) -> ForceNewClusterEntryBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1, v2) = self.0;
+                ForceNewClusterEntryBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`reason` field](ForceNewClusterEntry#structfield.reason) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn reason_as_null(self) -> ForceNewClusterEntryBuilder<(T0, T1, T2, ())> {
+                self.reason(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> ForceNewClusterEntryBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [ForceNewClusterEntry].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ForceNewClusterEntry>
+            where
+                Self: ::planus::WriteAsOffset<ForceNewClusterEntry>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
+                T2: ::planus::WriteAsDefault<bool, bool>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAs<::planus::Offset<ForceNewClusterEntry>>
+            for ForceNewClusterEntryBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<ForceNewClusterEntry>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ForceNewClusterEntry> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
+                T2: ::planus::WriteAsDefault<bool, bool>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAsOptional<::planus::Offset<ForceNewClusterEntry>>
+            for ForceNewClusterEntryBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<ForceNewClusterEntry>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<ForceNewClusterEntry>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<[self::Key32]>>,
+                T2: ::planus::WriteAsDefault<bool, bool>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAsOffset<ForceNewClusterEntry>
+            for ForceNewClusterEntryBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<ForceNewClusterEntry> {
+                let (v0, v1, v2, v3) = &self.0;
+                ForceNewClusterEntry::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [ForceNewClusterEntry].
+        #[derive(Copy, Clone)]
+        pub struct ForceNewClusterEntryRef<'a>(
+            #[allow(dead_code)] ::planus::table_reader::Table<'a>,
+        );
+
+        impl<'a> ForceNewClusterEntryRef<'a> {
+            /// Getter for the [`voter` field](ForceNewClusterEntry#structfield.voter).
+            #[inline]
+            pub fn voter(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "ForceNewClusterEntry", "voter")
+            }
+
+            /// Getter for the [`learners` field](ForceNewClusterEntry#structfield.learners).
+            #[inline]
+            pub fn learners(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<::planus::Vector<'a, self::Key32Ref<'a>>>>
+            {
+                self.0.access(1, "ForceNewClusterEntry", "learners")
+            }
+
+            /// Getter for the [`grant_control` field](ForceNewClusterEntry#structfield.grant_control).
+            #[inline]
+            pub fn grant_control(&self) -> ::planus::Result<bool> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(2, "ForceNewClusterEntry", "grant_control")?
+                        .unwrap_or(false),
+                )
+            }
+
+            /// Getter for the [`reason` field](ForceNewClusterEntry#structfield.reason).
+            #[inline]
+            pub fn reason(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(3, "ForceNewClusterEntry", "reason")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for ForceNewClusterEntryRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("ForceNewClusterEntryRef");
+                if let ::core::option::Option::Some(field_voter) = self.voter().transpose() {
+                    f.field("voter", &field_voter);
+                }
+                if let ::core::option::Option::Some(field_learners) = self.learners().transpose() {
+                    f.field("learners", &field_learners);
+                }
+                f.field("grant_control", &self.grant_control());
+                if let ::core::option::Option::Some(field_reason) = self.reason().transpose() {
+                    f.field("reason", &field_reason);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<ForceNewClusterEntryRef<'a>> for ForceNewClusterEntry {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: ForceNewClusterEntryRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    voter: value.voter()?.map(::core::convert::Into::into),
+                    learners: if let ::core::option::Option::Some(learners) = value.learners()? {
+                        ::core::option::Option::Some(learners.to_vec()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    grant_control: ::core::convert::TryInto::try_into(value.grant_control()?)?,
+                    reason: value.reason()?.map(::core::convert::Into::into),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for ForceNewClusterEntryRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for ForceNewClusterEntryRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[ForceNewClusterEntryRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<ForceNewClusterEntry>> for ForceNewClusterEntry {
+            type Value = ::planus::Offset<ForceNewClusterEntry>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<ForceNewClusterEntry>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for ForceNewClusterEntryRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[ForceNewClusterEntryRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:628`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:643`
         #[derive(
             Clone,
             Debug,
@@ -68712,6 +70184,9 @@ mod root {
 
             /// The variant of type `AutoMembershipEntry` in the union `EntryPayload`
             AutoMembershipEntry(::planus::alloc::boxed::Box<self::AutoMembershipEntry>),
+
+            /// The variant of type `ForceNewClusterEntry` in the union `EntryPayload`
+            ForceNewClusterEntry(::planus::alloc::boxed::Box<self::ForceNewClusterEntry>),
         }
 
         impl EntryPayload {
@@ -68808,6 +70283,14 @@ mod root {
             ) -> ::planus::UnionOffset<Self> {
                 ::planus::UnionOffset::new(11, value.prepare(builder).downcast())
             }
+
+            #[inline]
+            pub fn create_force_new_cluster_entry(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::ForceNewClusterEntry>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(12, value.prepare(builder).downcast())
+            }
         }
 
         impl ::planus::WriteAsUnion<EntryPayload> for EntryPayload {
@@ -68838,6 +70321,9 @@ mod root {
                     Self::MembershipEntry(value) => Self::create_membership_entry(builder, value),
                     Self::AutoMembershipEntry(value) => {
                         Self::create_auto_membership_entry(builder, value)
+                    }
+                    Self::ForceNewClusterEntry(value) => {
+                        Self::create_force_new_cluster_entry(builder, value)
                     }
                 }
             }
@@ -68983,6 +70469,18 @@ mod root {
             ) -> EntryPayloadBuilder<::planus::Initialized<11, T>>
             where
                 T: ::planus::WriteAsOffset<self::AutoMembershipEntry>,
+            {
+                EntryPayloadBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`ForceNewClusterEntry` variant](EntryPayload#variant.ForceNewClusterEntry).
+            #[inline]
+            pub fn force_new_cluster_entry<T>(
+                self,
+                value: T,
+            ) -> EntryPayloadBuilder<::planus::Initialized<12, T>>
+            where
+                T: ::planus::WriteAsOffset<self::ForceNewClusterEntry>,
             {
                 EntryPayloadBuilder(::planus::Initialized(value))
             }
@@ -69288,6 +70786,32 @@ mod root {
                 ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
             }
         }
+        impl<T> ::planus::WriteAsUnion<EntryPayload> for EntryPayloadBuilder<::planus::Initialized<12, T>>
+        where
+            T: ::planus::WriteAsOffset<self::ForceNewClusterEntry>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::UnionOffset<EntryPayload> {
+                ::planus::UnionOffset::new(12, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<EntryPayload>
+            for EntryPayloadBuilder<::planus::Initialized<12, T>>
+        where
+            T: ::planus::WriteAsOffset<self::ForceNewClusterEntry>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<EntryPayload>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
 
         /// Reference to a deserialized [EntryPayload].
         #[derive(Copy, Clone, Debug)]
@@ -69303,6 +70827,7 @@ mod root {
             GenesisEntry(self::GenesisEntryRef<'a>),
             MembershipEntry(self::MembershipEntryRef<'a>),
             AutoMembershipEntry(self::AutoMembershipEntryRef<'a>),
+            ForceNewClusterEntry(self::ForceNewClusterEntryRef<'a>),
         }
 
         impl<'a> ::core::convert::TryFrom<EntryPayloadRef<'a>> for EntryPayload {
@@ -69375,6 +70900,12 @@ mod root {
                             ::core::convert::TryFrom::try_from(value)?,
                         ))
                     }
+
+                    EntryPayloadRef::ForceNewClusterEntry(value) => {
+                        Self::ForceNewClusterEntry(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
                 })
             }
         }
@@ -69419,6 +70950,9 @@ mod root {
                     11 => ::core::result::Result::Ok(Self::AutoMembershipEntry(
                         ::planus::TableRead::from_buffer(buffer, field_offset)?,
                     )),
+                    12 => ::core::result::Result::Ok(Self::ForceNewClusterEntry(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
                     _ => {
                         ::core::result::Result::Err(::planus::errors::ErrorKind::UnknownUnionTag {
                             tag,
@@ -69435,7 +70969,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:643`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:659`
         #[derive(
             Clone,
             Debug,
@@ -69749,7 +71283,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:648`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:664`
         #[derive(
             Clone,
             Debug,
@@ -70105,7 +71639,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:654`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:670`
         #[derive(
             Clone,
             Debug,

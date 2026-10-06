@@ -7,7 +7,7 @@
 
 use crate::node::Node;
 use crate::state::{b64, unb64};
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,6 +63,8 @@ pub const COMMANDS: &[(&str, Access)] = &[
     ("merkle", Access::Read),
     // The request itself is admin-signed (controller::audit::check_request).
     ("log", Access::Signed),
+    // Admin-signed too (controller::audit::check_snapshot_request).
+    ("snapshot", Access::Signed),
 ];
 
 pub fn access(cmd: &str) -> Option<Access> {
@@ -510,6 +512,36 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
             }
             Ok(log_json(&reply))
         }
+        "snapshot" => {
+            let raw = unb64(str_arg(&req, "request")?)?;
+            let reply = match n.controller.get() {
+                Some(c) => c.export_snapshot(&raw),
+                None => {
+                    let body =
+                        RpcBody::GetSnapshot(Box::new(wp::GetSnapshot { request: Some(raw) }));
+                    match crate::rpc::call_any(n, body, Duration::from_secs(30))
+                        .await?
+                        .1
+                    {
+                        RpcBody::SnapshotReply(r) => *r,
+                        RpcBody::RpcAck(a) => bail!(a.error.unwrap_or_default()),
+                        _ => bail!("unexpected reply"),
+                    }
+                }
+            };
+            if let Some(e) = reply.error {
+                bail!(e);
+            }
+            let snap = reply.snapshot.unwrap_or_default();
+            let m = webjet_core::statemachine::Machine::restore_bytes(&snap)
+                .context("the controller's snapshot")?;
+            Ok(json!({
+                "snapshot": b64(&snap),
+                "last_index": m.last_index,
+                "nodes": m.view().nodes.len(),
+                "voters": m.members.voters.iter().map(hex::encode).collect::<Vec<_>>(),
+            }))
+        }
         _ => bail!("unknown command {cmd}"),
     }
 }
@@ -798,6 +830,7 @@ pub fn status(n: &Arc<Node>) -> Value {
         "tree_root": s.head().map(|h| hex::encode(h.root())),
         "head_expires": s.head().map(|h| h.head.expires_at),
         "valid_until": v.valid_until,
+        "camouflage_expires": crate::transport::camouflage_not_after(n),
         "dns_suffix": v.suffix(),
         "nat": crate::transport::nat_name(crate::transport::nat_type(n)),
         "port_mapping": n.port_mapping.lock().map(|m| json!({"external": m.external.to_string(), "protocol": m.protocol})),
@@ -941,7 +974,8 @@ mod tests {
                 "submit_offline",
                 "submit_signed",
                 "redeem_self",
-                "log"
+                "log",
+                "snapshot"
             ]
         );
         assert_eq!(access("shutdown"), None);

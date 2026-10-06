@@ -185,6 +185,16 @@ tests. Its patterns match the source with any whitespace; if a refactor
 changes the code it looks for, it reports a setup error (exit status 2) and
 the pattern must be updated.
 
+Offline recovery (`controller/recovery.rs`, ops guide 4.1) writes into a
+stopped controller's log: `force-new-cluster` replays the log, and `restore`
+installs an exported `ControllerSnapshot`. Either way it appends one
+`ForceNewClusterEntry` in a new term this server voted itself in
+(`Raft::append_offline`), and `classify_entry` turns it into `Set` with one
+voter. When the log is below `--min-version`, it is replaced by a snapshot
+at that index first, so the new tree heads are above any version a lost
+controller signed. `Machine::prepare` refuses the entry, so a running leader
+never proposes one (`prepare_offline` is for this path only).
+
 When a randomized run fails, rerun the failing test with
 `WEBJET_RAFT_TRACE=1` to find the seed, then reproduce with that one seed.
 Every failing seed so far has been a real bug or a test-harness bug (for
@@ -248,7 +258,16 @@ aren't in the table, and a unit test checks that the table and `handle`
 name the same commands and that only the known state-changing commands are
 not `Read`. A new command needs an entry; a new state-changing one also has
 to be added to that test, together with its signature check. Requests are
-limited to 4 MiB per line and 64 connections at once.
+limited to 4 MiB per line and 64 connections at once. `log` and `snapshot`
+take admin-signed requests (`controller::audit`); a snapshot reply holds the
+PSKs and the camouflage key, so `compression::secret_rpc` keeps it
+uncompressed like Raft traffic.
+
+The signer (`controller/signer.rs`) listens with `ipc::Access::Private`, or
+`Group` (mode 0660) with `--group-access`, which the systemd unit from
+`webjetup install --signer` uses: the signer runs as `webjet-signer` in the
+agent's group, so the agent can sign but never read the key. `serve`
+refuses `Everyone`.
 
 ## Unit tests
 

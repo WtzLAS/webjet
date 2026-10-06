@@ -141,5 +141,91 @@ pub async fn run(n: Arc<Node>) {
             n.clear_alarm("node_tombstoned");
             n.clear_alarm("node_invalid");
         }
+        if i.is_multiple_of(6) || i == 1 {
+            check_camouflage(&n, now);
+        }
+    }
+}
+
+const DAY_MS: u64 = 86_400_000;
+
+/// The camouflage certificate alarm (§9.7.2): raised where it matters, on
+/// nodes that serve AnyTLS and on controllers (which hold the secret), from
+/// 30 days before the certificate expires.
+fn check_camouflage(n: &Node, now: u64) {
+    if n.cfg.listen.anytls.is_none() && !n.is_controller() {
+        return;
+    }
+    match crate::transport::camouflage_not_after(n).and_then(|t| camouflage_alarm(now, t)) {
+        Some((severity, msg)) => {
+            // Re-raise when the severity changes.
+            if n.alarms
+                .lock()
+                .get("camouflage_certificate")
+                .map(|a| a.0.as_str())
+                != Some(severity)
+            {
+                n.clear_alarm("camouflage_certificate");
+            }
+            n.alarm("camouflage_certificate", severity, msg);
+        }
+        None => n.clear_alarm("camouflage_certificate"),
+    }
+}
+
+/// Severity and message for a certificate expiring at `not_after`, or
+/// `None` while more than 30 days remain.
+pub fn camouflage_alarm(now: u64, not_after: u64) -> Option<(&'static str, String)> {
+    if not_after <= now {
+        return Some((
+            "critical",
+            "the camouflage certificate has expired; renew it (ops guide 3.2)".into(),
+        ));
+    }
+    let days = (not_after - now) / DAY_MS;
+    if days >= 30 {
+        return None;
+    }
+    let severity = if days < 7 { "critical" } else { "warning" };
+    Some((
+        severity,
+        format!("the camouflage certificate expires in {days} days; renew it (ops guide 3.2)"),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camouflage_alarm_thresholds() {
+        let now = 1_000 * DAY_MS;
+        assert_eq!(camouflage_alarm(now, now + 31 * DAY_MS), None);
+        assert_eq!(camouflage_alarm(now, now + 30 * DAY_MS), None);
+        assert_eq!(
+            camouflage_alarm(now, now + 29 * DAY_MS).unwrap().0,
+            "warning"
+        );
+        assert!(
+            camouflage_alarm(now, now + 29 * DAY_MS)
+                .unwrap()
+                .1
+                .contains("29 days")
+        );
+        assert_eq!(
+            camouflage_alarm(now, now + 7 * DAY_MS).unwrap().0,
+            "warning"
+        );
+        assert_eq!(
+            camouflage_alarm(now, now + 6 * DAY_MS).unwrap().0,
+            "critical"
+        );
+        assert!(camouflage_alarm(now, now).unwrap().1.contains("expired"));
+        assert!(
+            camouflage_alarm(now, now - 1)
+                .unwrap()
+                .1
+                .contains("expired")
+        );
     }
 }

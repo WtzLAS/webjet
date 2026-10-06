@@ -135,13 +135,32 @@ impl Signer for SocketSigner {
 }
 
 /// Serve the signer protocol for `kp` (`webjetd signer`).
-pub async fn serve(path: &std::path::Path, kp: KeyPair) -> Result<()> {
+/// `access` is `Private`, or `Group` for a signer running as its own user
+/// in the agent's group.
+pub async fn serve(path: &std::path::Path, kp: KeyPair, access: crate::ipc::Access) -> Result<()> {
+    serve_until(path, kp, access, std::future::pending()).await
+}
+
+/// Like [`serve`], until `stop` resolves (the Windows service).
+pub async fn serve_until(
+    path: &std::path::Path,
+    kp: KeyPair,
+    access: crate::ipc::Access,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let mut l = crate::ipc::Listener::bind(path, crate::ipc::Access::Private)?;
+    if access == crate::ipc::Access::Everyone {
+        bail!("the signer's socket must not be open to every user");
+    }
+    let mut l = crate::ipc::Listener::bind(path, access)?;
     tracing::info!("signer listening on {}", path.display());
     let kp = std::sync::Arc::new(kp);
+    tokio::pin!(stop);
     loop {
-        let s = l.accept().await?;
+        let s = tokio::select! {
+            s = l.accept() => s?,
+            _ = &mut stop => return Ok(()),
+        };
         let kp = kp.clone();
         tokio::spawn(async move {
             let (r, mut w) = tokio::io::split(s);
@@ -205,7 +224,7 @@ mod tests {
         let kp = KeyPair::generate();
         let pk = kp.public();
         let p2 = path.clone();
-        tokio::spawn(async move { serve(&p2, kp).await });
+        tokio::spawn(async move { serve(&p2, kp, crate::ipc::Access::Private).await });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let s = SocketSigner::new(path);
         let (pubkey, refused) = tokio::task::spawn_blocking(move || {
@@ -218,5 +237,14 @@ mod tests {
         .unwrap();
         assert_eq!(pubkey, pk);
         assert!(refused, "the signer refuses other message types");
+    }
+
+    #[tokio::test]
+    async fn the_signer_is_never_open_to_everyone() {
+        let p = std::env::temp_dir().join(format!("wj-signer-open-{}.sock", std::process::id()));
+        let e = serve(&p, KeyPair::generate(), crate::ipc::Access::Everyone)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("every user"), "{e}");
     }
 }

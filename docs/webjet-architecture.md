@@ -2486,7 +2486,7 @@ A node that can't reach any controller can't deliver its alarms. The metrics sto
 
 ### 19.9 Backups
 
-- **Controllers:** a daily Raft snapshot, encrypted to a key held by the admins and stored away from the controllers. Restoring from it is a manual procedure (§2).
+- **Controllers:** a daily snapshot of the controller state (`webjetctl network controller snapshot`, admin-signed request), encrypted with a passphrase held by the admins and stored away from the controllers. Restoring it (`webjetctl local controller restore`) makes a node of the snapshot the only voter of a new cluster; an operator does it by hand (§2, ops guide 4.1).
 - **Offline computer:** an encrypted backup of the root and emergency revocation keys (§5).
 - **Metrics store:** optional. Losing it loses history, never network state.
 - **Other nodes:** nothing to back up (§19.4).

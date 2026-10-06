@@ -327,7 +327,7 @@ A node is one machine in the network, owned by an account. Its **roles** decide 
    [node]     sudo systemctl start webjetd
    [node]     webjetctl network controller list      # wait for a non-zero valid_until
    ```
-   The controller's signing key is created on first start, as `signing.key` in `/var/lib/webjet`. To keep it out of the agent's process, run `webjetd signer --socket /var/run/webjet-signer/signer.sock --key /var/lib/webjet-signer/signing.key` as its own service before the first start, and set `signer_socket = "/var/run/webjet-signer/signer.sock"` in the `[controller]` section. The signer's socket is private to the user it runs as, so on Linux run the signer as the `webjet` user too. There is no ready-made service file for it.
+   The controller's signing key is created on first start, as `signing.key` in `/var/lib/webjet`. To keep it out of the agent's process (§19.2), install the signer service before the first start: `sudo webjetup install --signer`. It runs `webjetd signer` as its own service (Linux: unit `webjet-signer` as user `webjet-signer`, whose socket only the agent's group may use; macOS: launchd daemon `net.webjet.signer`; Windows: service `webjet-signer`), sets `signer_socket` in the `[controller]` section of `webjetd.toml`, and is kept on later upgrades. On a controller that already runs, the same command moves the existing `signing.key` to the signer, so the certified key stays. `webjetup status` shows it as `signer`.
 5. Create an account to own infrastructure nodes (section 1.1), and enroll the controller's own node. The overlay doesn't exist yet, so the admin's operations go through the controller's agent. Either run them on the controller with the admin's key directory copied there for the bootstrap (remove it afterwards), or forward the controller's control socket to the admin's machine over SSH and point `webjetctl` at it:
    ```
    [admin]    ssh -N -L /tmp/ctl-01.sock:/var/run/webjet/control.sock root@ctl-01 &
@@ -758,7 +758,7 @@ With automatic membership (section 2.4), the leader does steps 2 and 3 by itself
 
 ## 3.2 Renew or replace the camouflage certificate
 
-**When:** in website mode, before the certificate expires (`openssl x509 -noout -enddate -in site.crt`; Webjet raises no alarm for it yet), or for a key change. In `refuse` mode with the self-signed certificate `apply` made, nothing needs renewing for 825 days. References: §9.7.2, §6.17.
+**When:** in website mode, before the certificate expires, or for a key change. Relays (nodes listening for AnyTLS) and controllers raise the `camouflage_certificate` alarm 30 days before the certificate in the network configuration expires (`critical` from 7 days, and once it has expired); `camouflage_expires` in `webjetctl local status` is the date (Unix time in milliseconds). In `refuse` mode with the self-signed certificate `apply` made, nothing needs renewing for 825 days. References: §9.7.2, §6.17.
 
 ### Renew with the same key
 
@@ -943,7 +943,7 @@ Without `--node`, the commands apply to the node whose agent `webjetctl` talks t
 | What | How | Why |
 |---|---|---|
 | Root and emergency revocation keys | `[offline] webjetctl root backup --out /media/usb1/root-backup.enc`, on two media kept apart, with a passphrase of their own | Without them there are no new admins, no controller retirements, no StateVersions, and the network can't be repaired (section 4.5) |
-| Controller state | Stop the agent on one controller, copy `/var/lib/webjet` (and the signer's directory, if any), start it again; keep the copy encrypted and away from the controllers | The closest thing to a snapshot for section 4.1, step 4 |
+| Controller state | `[admin] webjetctl network controller snapshot --out ctl-$(date +%F).snap`, daily (for example from cron with `WEBJET_ACCOUNT_PASSPHRASE` and `WEBJET_BACKUP_PASSPHRASE` set), and right after every PSK rotation (section 3.1): nodes that moved to a PSK epoch the snapshot doesn't have can't reach a controller restored from it. The file is encrypted with the backup passphrase; it holds the PSKs and the camouflage key, so keep it away from the controllers | Restores the network when no controller survives (section 4.1, step 4) |
 | Admins' account keys | Optional: the person's own encrypted copy of their key directory | A lost key can be replaced (section 1.4), but the person can't act until then |
 | Node identity keys | Nothing | A reinstalled node is re-keyed (section 2.7) |
 
@@ -981,18 +981,31 @@ The validity horizon is the hard deadline. Check how much time is left:
 
 1. **Find out why.** If the voters are alive but unreachable, restore connectivity. Nothing else is needed.
 2. **If lost voters can be brought back within days,** bring them back. Their Raft log is in their data directory, so a controller whose disk survived can be restarted, even on new hardware with the directory restored, as long as its identity key isn't sealed to the old machine (TPM, Keychain, DPAPI; see `[key] storage`).
-3. **If voters are permanently lost but at least one controller (voter or learner) survives:** restarting a survivor as the only voter of a new cluster (`force-new-cluster`) is **not implemented yet**. Until it is, the remaining options are bringing voters back (step 2) or rebuilding (step 4). The intended procedure is:
-   1. Stop Raft on every surviving controller.
-   2. Find the survivor with the highest applied log index (`applied` in `webjetctl network controller list`).
-   3. Restart it as the only voter of a new cluster that continues from its log.
-   4. Re-add the other survivors as learners and promote until there are five voters (section 2.4; automatic membership does this by itself).
-   5. Retire the lost controllers' signing keys (section 2.9), so they can never return with a different history. Never start a lost voter again without wiping it.
-4. **If no controller survives:** rebuild from the latest snapshot (§19.9). The architecture leaves this as a manual procedure (§2), and it loses everything committed after the snapshot. There is no snapshot export or restore tool yet. Keeping a copy of a controller's data directory (section 3.8) is the closest thing available.
-   1. Restore the snapshot onto a new controller host.
-   2. Create new signing keys and certify them (an admin or the root); retire all the old controller keys (section 2.9).
-   3. Start the new cluster's log **above the highest tree version any node holds**, or nodes will reject its tree heads as a rollback. Read the version (`tree_version`) from `webjetctl local status` on several nodes.
-   4. Redo the changes made after the snapshot. Nodes enrolled after it must be enrolled again or re-keyed.
-   5. Rehearse this in a test network before you need it.
+3. **If voters are permanently lost but at least one controller (voter or learner) survives:** restart a survivor as the only voter of a new cluster that continues from its log.
+   1. Stop the agent on every surviving controller.
+   2. Find the survivor with the highest applied log index: `applied` in `webjetctl network controller list`, asked of each survivor while it still ran, or the last `applied:` lines in its log.
+   3. Find the highest tree version any node holds: `tree_version` in `webjetctl local status` on several nodes, relays especially.
+   4. On that survivor:
+      ```
+      [node]     sudo webjetctl local controller force-new-cluster --reason "ctl-01..03 lost" --min-version <highest tree_version>
+      [node]     sudo systemctl start webjetd
+      ```
+      It takes everything in its log, including entries that weren't committed yet, and writes one `ForceNewClusterEntry` (kept in the operation log with the reason) that makes it the only voter. The other members of the old cluster stay as learners. When the log doesn't reach `--min-version`, it jumps there, so the new tree heads are above any version the lost voters signed; this node's own version always counts.
+   5. Start the agent on the other survivors. They catch up as learners (a survivor whose log disagrees receives a snapshot), and automatic membership promotes them until there are five voters (section 2.4); promote them by hand when it is off.
+   6. Remove the lost controllers from the cluster (`webjetctl network controller remove`) and retire their signing keys (section 2.9), so they can never return with a different history. Never start a lost voter again without wiping it (`webjetup nuke`).
+4. **If no controller survives:** restore the latest snapshot (section 3.8) onto a node that was enrolled before it was taken (a relay, for example), and make it the controller. Everything committed after the snapshot is lost.
+   1. Stop the agent on that node and restore:
+      ```
+      [node]     sudo webjetctl local controller restore --from ctl-2026-01-31.snap --reason "all controllers lost" \
+                     --min-version <highest tree_version>
+      [node]     sudo systemctl start webjetd
+      ```
+      It installs the snapshot as the node's controller state and makes the node the only voter, with the control role. The tree versions start above `--min-version` and the snapshot's own.
+   2. Certify the new controller's signing key: `webjetctl network controller certify <node>` with an admin key (the admins in the snapshot are valid), or `webjetctl root controller sign` offline. Until then it signs no tree heads (alarm `no_signing_cert`).
+   3. Retire all the old controllers' signing keys (section 2.9; with no controller majority, inject them, section 4.2).
+   4. Redo the changes made after the snapshot. Nodes enrolled after it must be enrolled again; nodes re-keyed after it, re-keyed again. If the PSK was rotated after it, nodes that took the newer epoch can't connect to the restored controller: re-enroll them (section 2.7).
+   5. Add controllers again (section 2.4).
+   6. Rehearse this in a test network before you need it.
 
 **Check:** a leader exists, tree heads are fresh, the validity horizon moves forward again, and nodes show no alarms.
 

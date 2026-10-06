@@ -177,7 +177,10 @@ pub fn control_payload(n: &Node, payload: &[u8]) -> Option<Vec<u8>> {
 pub fn secret_rpc(body: &RpcBody) -> bool {
     matches!(
         body,
-        RpcBody::PskInfo(_) | RpcBody::CamouflageSecret(_) | RpcBody::RaftRpc(_)
+        RpcBody::PskInfo(_)
+            | RpcBody::CamouflageSecret(_)
+            | RpcBody::RaftRpc(_)
+            | RpcBody::SnapshotReply(_)
     )
 }
 
@@ -342,6 +345,7 @@ mod tests {
         assert!(secret_rpc(&RpcBody::PskInfo(Box::default())));
         assert!(secret_rpc(&RpcBody::CamouflageSecret(Box::default())));
         assert!(secret_rpc(&RpcBody::RaftRpc(Box::default())));
+        assert!(secret_rpc(&RpcBody::SnapshotReply(Box::default())));
         assert!(!secret_rpc(&RpcBody::GetPsk(Box::default())));
         assert!(!secret_rpc(&RpcBody::SubmitOp(Box::default())));
     }

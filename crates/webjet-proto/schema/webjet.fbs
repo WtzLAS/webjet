@@ -326,6 +326,12 @@ table LogRequest {
     limit: uint32;            // at most this many entries (the controller caps it)
 }
 
+// An admin asks a controller for a copy of its state (§19.9, ops guide 3.8).
+table SnapshotRequest {
+    account_id: Key32;
+    issued_at: uint64;
+}
+
 // ---------------------------------------------------------------- self-signed soft state (§6.2, §6.7, §6.8)
 
 table EndpointAddr {
@@ -624,6 +630,15 @@ table GenesisEntry { genesis: [ubyte]; }
 table MembershipEntry { voters: [Key32]; learners: [Key32]; }
 // A membership change the leader proposes by itself (§7.5, automatic membership).
 table AutoMembershipEntry { change: MembershipChange = AddLearner; node_id: Key32; }
+// The cluster restarted with a single voter (ops guide 4.1): written offline
+// into a stopped controller's log by `webjetctl local controller
+// force-new-cluster` or `restore`, never proposed by a running leader.
+table ForceNewClusterEntry {
+    voter: Key32;
+    learners: [Key32];
+    grant_control: bool;      // give the voter the control role (a restore onto a non-controller)
+    reason: string;
+}
 
 union EntryPayload {
     OpEntry,
@@ -637,6 +652,7 @@ union EntryPayload {
     GenesisEntry,
     MembershipEntry,
     AutoMembershipEntry,
+    ForceNewClusterEntry,
 }
 
 // Random values chosen by the leader before proposing (§15.5).

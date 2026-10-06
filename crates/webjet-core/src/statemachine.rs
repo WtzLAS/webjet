@@ -220,6 +220,31 @@ impl Machine {
         timestamp: u64,
         payload: EntryPayload,
     ) -> std::result::Result<wp::LogEntry, ApplyError> {
+        if matches!(payload, EntryPayload::ForceNewClusterEntry(_)) {
+            return rej("a new cluster is only started offline (webjetctl local controller)");
+        }
+        self.prepare_entry(term, index, timestamp, payload)
+    }
+
+    /// `prepare` for an entry written into a stopped controller's log
+    /// (`ForceNewClusterEntry`, ops guide 4.1).
+    pub fn prepare_offline(
+        &self,
+        term: u64,
+        index: u64,
+        timestamp: u64,
+        payload: EntryPayload,
+    ) -> std::result::Result<wp::LogEntry, ApplyError> {
+        self.prepare_entry(term, index, timestamp, payload)
+    }
+
+    fn prepare_entry(
+        &self,
+        term: u64,
+        index: u64,
+        timestamp: u64,
+        payload: EntryPayload,
+    ) -> std::result::Result<wp::LogEntry, ApplyError> {
         refuse_retired(&payload)?;
         let random = wp::EntryRandom {
             node_id: Some(crypto::k32(&crypto::random32())),
@@ -530,6 +555,7 @@ impl Machine {
                 fx.outcome.description =
                     format!("automatic membership {:?} {}", a.change, crypto::short(&id));
             }
+            EntryPayload::ForceNewClusterEntry(f) => self.force_new_cluster(f, &mut fx)?,
         }
         Ok(fx)
     }
@@ -965,6 +991,59 @@ impl Machine {
     }
 
     /// The membership after `change` of `id` (manual or automatic).
+    /// The cluster restarts with one voter (ops guide 4.1). The voter must
+    /// be a valid node holding the control role, unless the entry grants it
+    /// (a restore onto a node that wasn't a controller); learners are kept
+    /// from the old membership only.
+    fn force_new_cluster(
+        &self,
+        f: &wp::ForceNewClusterEntry,
+        fx: &mut Effects,
+    ) -> std::result::Result<(), ApplyError> {
+        let voter = opt_k32(&f.voter);
+        let mut rec = self.live_node(&voter)?;
+        if !self.view.nodes.get(&voter).is_some_and(|n| n.valid) {
+            return rej("the new voter is not a valid node");
+        }
+        if f.grant_control {
+            if rec.control != Some(true) {
+                rec.control = Some(true);
+                rec.version += 1;
+                fx.leaves
+                    .push((kind::NODE, voter, Some(leaf::encode_node(&rec))));
+            }
+        } else if rec.control != Some(true) {
+            return rej("the new voter does not hold the control role");
+        }
+        let mut m = Membership::default();
+        m.voters.insert(voter);
+        for k in f.learners.clone().unwrap_or_default() {
+            let id = k.to_bytes();
+            if id == voter {
+                continue;
+            }
+            if !self.members.contains(&id) {
+                return rej("a learner of the new cluster must be a member of the old one");
+            }
+            m.learners.insert(id);
+        }
+        fx.members = Some(m);
+        fx.admin_member_change = Some((voter, false));
+        fx.outcome.membership_changed = true;
+        fx.outcome.node_id = Some(voter);
+        fx.outcome.description = format!(
+            "new cluster with voter {}{}: {}",
+            rec.name.clone().unwrap_or_else(|| crypto::short(&voter)),
+            if f.grant_control {
+                " (control granted)"
+            } else {
+                ""
+            },
+            f.reason.clone().unwrap_or_default()
+        );
+        Ok(())
+    }
+
     fn change_members(
         &self,
         change: wp::MembershipChange,

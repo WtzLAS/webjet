@@ -196,20 +196,9 @@ pub fn service_state(l: &Layout) -> String {
         if !l.service_file.as_deref().is_some_and(Path::exists) {
             return "not installed".into();
         }
-        match query("launchctl", &["print", &format!("system/{LAUNCHD_LABEL}")]) {
-            Some(out) => out
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("state = ").map(str::to_string))
-                .unwrap_or_else(|| "loaded".into()),
-            None => "not loaded".into(),
-        }
+        launchd_state(LAUNCHD_LABEL)
     } else if cfg!(windows) {
-        match query("sc.exe", &["query", SERVICE]) {
-            Some(out) if out.contains("RUNNING") => "running".into(),
-            Some(out) if out.contains("STOPPED") => "stopped".into(),
-            Some(_) => "changing".into(),
-            None => "not installed".into(),
-        }
+        windows_state(SERVICE)
     } else {
         if !l.service_file.as_deref().is_some_and(Path::exists) {
             return "not installed".into();
@@ -217,13 +206,39 @@ pub fn service_state(l: &Layout) -> String {
         if !have("systemctl") {
             return "installed (no systemd here)".into();
         }
-        // is-active prints the state but exits non-zero when not active.
-        Command::new("systemctl")
-            .args(["is-active", SERVICE])
-            .stderr(Stdio::null())
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "unknown".into())
+        systemd_state(SERVICE)
+    }
+}
+
+/// `systemctl is-active` for a unit (it prints the state but exits
+/// non-zero when the unit isn't active).
+pub fn systemd_state(unit: &str) -> String {
+    Command::new("systemctl")
+        .args(["is-active", unit])
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".into())
+}
+
+/// The `state = …` line of `launchctl print system/<label>`.
+pub fn launchd_state(label: &str) -> String {
+    match query("launchctl", &["print", &format!("system/{label}")]) {
+        Some(out) => out
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("state = ").map(str::to_string))
+            .unwrap_or_else(|| "loaded".into()),
+        None => "not loaded".into(),
+    }
+}
+
+/// What `sc.exe query` says about a Windows service.
+pub fn windows_state(service: &str) -> String {
+    match query("sc.exe", &["query", service]) {
+        Some(out) if out.contains("RUNNING") => "running".into(),
+        Some(out) if out.contains("STOPPED") => "stopped".into(),
+        Some(_) => "changing".into(),
+        None => "not installed".into(),
     }
 }
 
@@ -252,7 +267,7 @@ fn create_windows_service(sys: &Sys, l: &Layout) -> Result<()> {
             "start=",
             "auto",
             "depend=",
-            "W32Time/Dnscache",
+            &agent_depends(query("sc.exe", &["query", crate::layout::SIGNER_SERVICE]).is_some()),
             "DisplayName=",
             crate::layout::SERVICE_DISPLAY_NAME,
         ],
@@ -277,6 +292,28 @@ fn create_windows_service(sys: &Sys, l: &Layout) -> Result<()> {
 
 fn windows_service_exists() -> bool {
     query("sc.exe", &["query", SERVICE]).is_some()
+}
+
+/// The agent's Windows service dependencies; the signer's service joins
+/// them when it is installed, so the agent starts after it.
+pub fn windows_agent_depends(sys: &Sys, signer: bool) {
+    if !windows_service_exists() {
+        return;
+    }
+    sys.try_run(
+        "sc.exe",
+        &["config", SERVICE, "depend=", &agent_depends(signer)],
+    );
+}
+
+/// The services webjetd waits for on Windows: time and DNS (§18.6), and the
+/// signer when there is one.
+fn agent_depends(signer: bool) -> String {
+    if signer {
+        format!("W32Time/Dnscache/{}", crate::layout::SIGNER_SERVICE)
+    } else {
+        "W32Time/Dnscache".to_string()
+    }
 }
 
 /// Stop the agent if it runs.
@@ -374,7 +411,12 @@ fn launchd_plist(l: &Layout) -> String {
 
 /// The Linux system user exists.
 pub fn ensure_linux_user(sys: &Sys) -> Result<()> {
-    if query("id", &["-u", LINUX_USER]).is_some() {
+    ensure_user(sys, LINUX_USER)
+}
+
+/// A Linux system user `name` exists.
+pub fn ensure_user(sys: &Sys, name: &str) -> Result<()> {
+    if query("id", &["-u", name]).is_some() {
         return Ok(());
     }
     let nologin = ["/usr/sbin/nologin", "/sbin/nologin"]
@@ -383,13 +425,7 @@ pub fn ensure_linux_user(sys: &Sys) -> Result<()> {
         .unwrap_or("/bin/false");
     sys.run(
         "useradd",
-        &[
-            "--system",
-            "--no-create-home",
-            "--shell",
-            nologin,
-            LINUX_USER,
-        ],
+        &["--system", "--no-create-home", "--shell", nologin, name],
     )
 }
 

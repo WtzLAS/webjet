@@ -54,6 +54,73 @@ pub mod windows {
 
     define_windows_service!(ffi_service_main, service_main);
 
+    /// The `webjet-signer` service (`webjetd signer-service`).
+    pub const SIGNER_SERVICE_NAME: &str = "webjet-signer";
+
+    static SIGNER: std::sync::OnceLock<(std::path::PathBuf, std::path::PathBuf)> =
+        std::sync::OnceLock::new();
+
+    define_windows_service!(ffi_signer_main, signer_main);
+
+    /// Hand the process to the service control manager as the signer.
+    pub fn run_signer_dispatcher(
+        key: std::path::PathBuf,
+        socket: std::path::PathBuf,
+    ) -> Result<()> {
+        let _ = SIGNER.set((key, socket));
+        service_dispatcher::start(SIGNER_SERVICE_NAME, ffi_signer_main)?;
+        Ok(())
+    }
+
+    fn signer_main(_args: Vec<OsString>) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let tx = std::sync::Mutex::new(Some(tx));
+        let handler = move |ev| -> ServiceControlHandlerResult {
+            match ev {
+                ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
+                    if let Some(t) = tx.lock().ok().and_then(|mut g| g.take()) {
+                        let _ = t.send(());
+                    }
+                    ServiceControlHandlerResult::NoError
+                }
+                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+                _ => ServiceControlHandlerResult::NotImplemented,
+            }
+        };
+        let Ok(h) = service_control_handler::register(SIGNER_SERVICE_NAME, handler) else {
+            return;
+        };
+        let Some((key, socket)) = SIGNER.get().cloned() else {
+            return;
+        };
+        let result = (|| -> Result<()> {
+            let kp = crate::controller::signer::load_or_create_key(&key)?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let _ = h.set_service_status(status(
+                ServiceState::Running,
+                ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+                0,
+                Duration::ZERO,
+            ));
+            rt.block_on(crate::controller::signer::serve_until(
+                &socket,
+                kp,
+                crate::ipc::Access::Private,
+                async move {
+                    let _ = rx.await;
+                },
+            ))
+        })();
+        let _ = h.set_service_status(status(
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            u32::from(result.is_err()),
+            Duration::ZERO,
+        ));
+    }
+
     /// Hand the process to the service control manager.
     pub fn run_dispatcher(config: std::path::PathBuf) -> Result<()> {
         let _ = CONFIG.set(config);

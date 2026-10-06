@@ -71,6 +71,7 @@ pub struct Cluster {
     pub head_key: KeyPair,
     idx: u64,
     seq: u64,
+    log: Vec<Vec<u8>>,
 }
 
 /// What [`Cluster::enroll`] creates.
@@ -100,6 +101,7 @@ impl Cluster {
             head_key: KeyPair::generate(),
             idx: 0,
             seq: 0,
+            log: Vec::new(),
         };
         let g = EntryPayload::GenesisEntry(Box::new(wp::GenesisEntry {
             genesis: Some(c.net.genesis.clone()),
@@ -115,8 +117,19 @@ impl Cluster {
             .machine
             .prepare(1, self.idx, now_ms(), p)
             .inspect_err(|_| self.idx -= 1)?;
-        let e = wp::LogEntry::decode_bytes(&e.encode_bytes()).expect("log entry");
-        self.machine.apply(&e)
+        let bytes = e.encode_bytes();
+        let e = wp::LogEntry::decode_bytes(&bytes).expect("log entry");
+        let out = self.machine.apply(&e);
+        if out.is_ok() {
+            self.log.push(bytes);
+        }
+        out
+    }
+
+    /// The encoded entries applied so far (term 1), as a controller's Raft
+    /// log would hold them.
+    pub fn log(&self) -> &[Vec<u8>] {
+        &self.log
     }
 
     /// Apply an operation signed by the first admin.

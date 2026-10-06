@@ -173,6 +173,12 @@ pub struct NodeFile {
     /// genesis entry and enrolls itself through the control channel.
     #[serde(default)]
     pub bootstrap: bool,
+    /// A controller restored from a snapshot onto this node (ops guide 4.1):
+    /// the controller role starts before the node's own tree shows the
+    /// control role, which only the restored controller can grant. Cleared
+    /// once the tree grants it.
+    #[serde(default)]
+    pub restored_controller: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

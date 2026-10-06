@@ -22,6 +22,12 @@ pub const SERVICE: &str = "webjetd";
 /// The launchd label on macOS.
 pub const LAUNCHD_LABEL: &str = "net.webjet.webjetd";
 
+/// The signer's service (`webjetd signer`, §19.2): systemd unit and Windows
+/// service name, launchd label, and the Linux user it runs as.
+pub const SIGNER_SERVICE: &str = "webjet-signer";
+pub const SIGNER_LAUNCHD_LABEL: &str = "net.webjet.signer";
+pub const SIGNER_USER: &str = "webjet-signer";
+
 /// The Keychain service name under which webjetd stores identity keys.
 pub const KEYCHAIN_SERVICE: &str = "net.webjet.identity";
 /// Where webjetd keeps them unless `[key] keychain` says otherwise.
@@ -66,6 +72,12 @@ pub struct Layout {
     pub log: Option<PathBuf>,
     /// Control socket directory.
     pub runtime_dir: Option<PathBuf>,
+    /// The signer's key, socket (named pipe on Windows), service file and
+    /// log, for `webjetup install --signer`.
+    pub signer_key: PathBuf,
+    pub signer_socket: PathBuf,
+    pub signer_service_file: Option<PathBuf>,
+    pub signer_log: Option<PathBuf>,
 }
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
@@ -83,15 +95,22 @@ impl Layout {
                 bin_dir: PathBuf::from("/usr/local/bin"),
                 config: base.join("webjetd.toml"),
                 data_dir: base.join("state"),
-                config_dir: base,
+                config_dir: base.clone(),
                 service_file: Some(PathBuf::from(format!(
                     "/Library/LaunchDaemons/{LAUNCHD_LABEL}.plist"
                 ))),
                 log: Some(PathBuf::from("/var/log/webjetd.log")),
                 runtime_dir: None,
+                signer_key: base.join("signer").join("signing.key"),
+                signer_socket: PathBuf::from("/var/run/webjet-signer/signer.sock"),
+                signer_service_file: Some(PathBuf::from(format!(
+                    "/Library/LaunchDaemons/{SIGNER_LAUNCHD_LABEL}.plist"
+                ))),
+                signer_log: Some(PathBuf::from("/var/log/webjet-signer.log")),
             }
         } else if cfg!(windows) {
-            let data = env_dir("ProgramData", r"C:\ProgramData").join("Webjet");
+            let program_data = env_dir("ProgramData", r"C:\ProgramData");
+            let data = program_data.join("Webjet");
             Layout {
                 bin_dir: env_dir("ProgramFiles", r"C:\Program Files").join("Webjet"),
                 config: data.join("webjetd.toml"),
@@ -100,6 +119,10 @@ impl Layout {
                 service_file: None,
                 log: None,
                 runtime_dir: None,
+                signer_key: program_data.join("webjet-signer").join("signing.key"),
+                signer_socket: PathBuf::from(r"\\.\pipe\webjet-signer"),
+                signer_service_file: None,
+                signer_log: None,
             }
         } else {
             Layout {
@@ -112,6 +135,12 @@ impl Layout {
                 ))),
                 log: None,
                 runtime_dir: Some(PathBuf::from("/run/webjet")),
+                signer_key: PathBuf::from("/var/lib/webjet-signer/signing.key"),
+                signer_socket: PathBuf::from("/var/run/webjet-signer/signer.sock"),
+                signer_service_file: Some(PathBuf::from(format!(
+                    "/etc/systemd/system/{SIGNER_SERVICE}.service"
+                ))),
+                signer_log: None,
             }
         }
     }

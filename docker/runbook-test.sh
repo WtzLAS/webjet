@@ -21,6 +21,13 @@
 #        without --revoke-issued (the accounts it made stay)
 #   1.4  an admin's new key from the root (--replaces): its controller
 #        certificate becomes void and is certified again with the new key
+#   2.1  (on ctl-02, before 2.4) the signer service: webjetup install --signer
+#   3.8  the controller state exported to an encrypted snapshot
+#   4.1  step 3: both controllers stopped, the learner ctl-02 forced to be
+#        the only voter of a new cluster, which commits; step 4: then ctl-02
+#        lost too, and the snapshot restored on ctl-01, above ctl-02's
+#        versions
+#   Releases without these commands skip them.
 #
 # The offline computer and the admin's machine are directories on ctl-01
 # (/offline, /admin); the hosts run as root, so `sudo` is left out.
@@ -231,6 +238,19 @@ on ctl-02 "webjetup enroll '$T'" >/dev/null || fail "relay enroll on host"
 wait_for ctl-02 'webjetctl local ping ctl-01 -c 1 | grep -q "reply from"' "relay can't reach ctl-01"
 wait_for ctl-01 'webjetctl local peers | grep -q ctl-02' "ctl-01 doesn't list the relay"
 
+if on ctl-02 'webjetup install --help' | grep -q -- --signer; then
+    echo "== 2.1: the signer service on ctl-02"
+    on ctl-02 "webjetup --repo $REPO install --signer" >/dev/null || fail "webjetup install --signer"
+    on ctl-02 'systemctl is-active webjet-signer' | grep -qx active || fail "webjet-signer not active"
+    on ctl-02 'systemctl show -p MainPID --value webjet-signer | xargs -I{} stat -c %U /proc/{}' | grep -qx webjet-signer || fail "the signer doesn't run as webjet-signer"
+    on ctl-02 'grep -q "^signer_socket = \"/var/run/webjet-signer/signer.sock\"" /etc/webjet/webjetd.toml' || fail "signer_socket not set"
+    on ctl-02 'grep -q "^\[\[public\]\]" /etc/webjet/webjetd.toml' || fail "webjetd.toml lost its settings"
+    on ctl-02 'test "$(stat -c %a /var/run/webjet-signer/signer.sock)" = 660' || fail "signer socket mode"
+    ! on ctl-02 'su -s /bin/sh webjet -c "cat /var/lib/webjet-signer/signing.key"' >/dev/null 2>&1 || fail "the agent's user can read the signing key"
+    wait_for ctl-02 'webjetctl local ping ctl-01 -c 1 | grep -q "reply from"' "relay lost ctl-01 after the signer install"
+    SIGNER=1
+fi
+
 echo "== 2.4: make ctl-02 a controller"
 admin "network node update ctl-02 --roles data,relay,control" >/dev/null || fail "grant the control role"
 admin "network node list" | grep ctl-02 | grep -q "control(uncertified)" || fail "role not shown as uncertified"
@@ -240,9 +260,16 @@ on ctl-01 'webjetctl root --dir /offline/root controller sign /offline/ctl-02.re
 admin "network submit /offline/ctl-02.cert" >/dev/null 2>&1 || fail "submit ctl-02 cert"
 # Automatic membership (§7.5): the leader adds the certified controller as
 # a learner by itself; with two controllers one voter stays (an odd count).
-wait_for ctl-02 'webjetctl network controller list | grep -q "role: Learner"' "ctl-02 not added as a learner automatically"
-sleep 3
+# (ctl-02 calls itself a learner before it is a member, so ask the leader.)
 ctl_voters() { on ctl-01 'webjetctl network controller list' | sed -n '/^  voters:/,/^ \{0,2\}[a-z_]*:/p' | grep -c "^  *- "; }
+ctl_learners() { on ctl-01 'webjetctl network controller list' | sed -n '/^  learners:/,/^ \{0,2\}[a-z_]*:/p' | grep -c "^  *- " || true; }
+i=0
+until [ "$(ctl_learners)" = 1 ]; do
+    sleep 1
+    i=$((i + 1))
+    [ $i -lt 120 ] || fail "ctl-02 not added as a learner automatically"
+done
+sleep 3
 [ "$(ctl_voters)" = 1 ] || fail "two controllers should keep one voter"
 # By hand, with automatic membership off.
 admin "network config set controllers.auto_membership false" >/dev/null || fail "turn automatic membership off"
@@ -331,6 +358,42 @@ wait_for ctl-01 'webjetctl network node list | grep "^ctl-01 " | grep -q "contro
 ! on ctl-01 'webjetctl --keys /admin/keys --account alice network node update ctl-02 --tags tag:relay' >/dev/null 2>&1 || fail "alice's old key still signs"
 admin "network controller certify ctl-01" | grep -q "certified ctl-01" || fail "certify ctl-01 with the new key"
 wait_for ctl-01 'webjetctl network node list | grep "^ctl-01 " | grep -q "data,relay,control "' "ctl-01 not certified again"
+
+if [ -n "${SIGNER:-}" ]; then
+    on ctl-02 'test ! -e /var/lib/webjet/signing.key' || fail "ctl-02's agent made its own signing key"
+    on ctl-02 'webjetup status' | grep -q "^signer    active" || fail "webjetup status: signer"
+fi
+
+if on ctl-01 'webjetctl local controller --help' >/dev/null 2>&1; then
+    echo "== 3.8: a snapshot of the controller state"
+    admin "network controller snapshot --out /admin/ctl.snap" | grep -q "controller state at index" || fail "snapshot export"
+    on ctl-01 'head -c 4 /admin/ctl.snap | grep -q WJE1' || fail "the snapshot file isn't encrypted"
+
+    echo "== 4.1 step 3: the voter is lost; force a new cluster on the learner"
+    [ "$(ctl_learners)" = 1 ] || fail "ctl-02 is not a learner"
+    v=$(on ctl-01 'webjetctl local status' | sed -n 's/^tree_version: //p')
+    ! on ctl-02 'webjetctl local controller force-new-cluster --reason test' >/dev/null 2>&1 || fail "force-new-cluster ran while the agent ran"
+    on ctl-01 'systemctl stop webjetd'
+    on ctl-02 'systemctl stop webjetd'
+    on ctl-02 "webjetctl local controller force-new-cluster --reason 'ctl-01 lost' --min-version $v" | grep -q "only voter of a new cluster" || fail "force-new-cluster"
+    on ctl-02 'stat -c %U /var/lib/webjet/raft/log.bin' | grep -qx webjet || fail "Raft log not owned by the agent's user"
+    on ctl-02 'systemctl start webjetd'
+    wait_for ctl-02 'webjetctl network controller list | grep -q "role: Leader"' "ctl-02 did not become leader"
+    docker cp "$P-ctl-01:$AKEYS" "$out/akeys" && docker cp "$out/akeys" "$P-ctl-02:/tmp/akeys"
+    on ctl-02 'webjetctl --keys /tmp/akeys --account alice network psk rotate' >/dev/null || fail "the new cluster doesn't commit"
+    wait_for ctl-02 "[ \"\$(webjetctl local status | sed -n 's/^tree_version: //p')\" -gt $v ]" "no tree heads above the old versions"
+
+    echo "== 4.1 step 4: no controller survives; restore the snapshot on ctl-01"
+    v=$(on ctl-02 'webjetctl local status' | sed -n 's/^tree_version: //p')
+    on ctl-02 'systemctl stop webjetd'
+    ! on ctl-01 'webjetctl local controller restore --from /admin/ctl.snap --reason test' >/dev/null 2>&1 || fail "restore over controller state without --replace"
+    on ctl-01 "webjetctl local controller restore --from /admin/ctl.snap --replace --reason 'all lost' --min-version $v" | grep -q "restored the controller state" || fail "restore"
+    on ctl-01 'systemctl start webjetd'
+    wait_for ctl-01 'webjetctl network controller list | grep -q "role: Leader"' "restored ctl-01 did not become leader"
+    admin "network psk rotate" >/dev/null || fail "the restored cluster doesn't commit"
+    wait_for ctl-01 "[ \"\$(webjetctl local status | sed -n 's/^tree_version: //p')\" -gt $v ]" "restored heads not above ctl-02's versions"
+    admin "network account list" | grep -qE "^bob +true +true" || fail "the snapshot's accounts are gone"
+fi
 
 cleanup
 echo "RUNBOOK TEST PASSED"

@@ -171,6 +171,11 @@ enum LocalCmd {
     },
     /// Inject offline-signed material into this node (spreads by gossip).
     Inject { file: PathBuf },
+    /// Restart the controller cluster with the agent stopped (ops guide 4.1).
+    Controller {
+        #[command(subcommand)]
+        cmd: LocalControllerCmd,
+    },
     /// This node's configuration (`--node` for another one you own):
     /// overrides of the network configuration for this node only
     Config {
@@ -409,6 +414,60 @@ enum ControllerCmd {
     Remove {
         /// The node: name, node id in hex (or a unique prefix of it) or key.
         name: String,
+    },
+    /// Export a controller's state (the network tree, pending enrollments,
+    /// PSKs, the camouflage key) to an encrypted file (admins; ops guide
+    /// 3.8). Restore it with `webjetctl local controller restore` when no
+    /// controller survives (ops guide 4.1). The passphrase comes from
+    /// WEBJET_BACKUP_PASSPHRASE or a prompt.
+    Snapshot {
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+/// Restarting the controller cluster while the agent is stopped (ops guide 4.1).
+#[derive(Subcommand)]
+enum LocalControllerCmd {
+    /// A majority of voters is lost for good: make this stopped controller
+    /// the only voter of a new cluster that continues from its log. Run it
+    /// on the survivor with the highest `applied` index; the others stay as
+    /// learners and are promoted again. Never start a lost voter again
+    /// without wiping it.
+    ForceNewCluster {
+        /// Why (kept in the operation log).
+        #[arg(long)]
+        reason: String,
+        /// Start the new cluster's tree versions above this one: the
+        /// highest `tree_version` any node shows (`webjetctl local status`).
+        /// This node's own is always included.
+        #[arg(long)]
+        min_version: Option<u64>,
+        #[arg(short, long, env = "WEBJET_CONFIG")]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// No controller survives: install a snapshot from `webjetctl network
+    /// controller snapshot` on this stopped node (enrolled before the
+    /// snapshot was taken, for example a relay) and make it the only voter.
+    /// It gets the control role if it lacked it.
+    Restore {
+        /// The encrypted snapshot file.
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        reason: String,
+        /// As for force-new-cluster; at least the snapshot's own index.
+        #[arg(long)]
+        min_version: Option<u64>,
+        /// Set aside controller state this node already holds.
+        #[arg(long)]
+        replace: bool,
+        #[arg(short, long, env = "WEBJET_CONFIG")]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
     },
 }
 
@@ -1145,7 +1204,64 @@ async fn local(cli: &Cli, cmd: &LocalCmd) -> Result<()> {
             print(cli, &r);
         }
         LocalCmd::Config { node, cmd } => local_config(cli, node.as_deref(), cmd).await?,
+        LocalCmd::Controller { cmd } => local_controller(cli, cmd).await?,
     }
+    Ok(())
+}
+
+async fn local_controller(cli: &Cli, cmd: &LocalControllerCmd) -> Result<()> {
+    use webjetd::controller::recovery;
+    let (r, what) = match cmd {
+        LocalControllerCmd::ForceNewCluster {
+            reason,
+            min_version,
+            config,
+            data_dir,
+        } => {
+            let cfg = agent_config(config.as_deref(), data_dir.clone())?;
+            recovery::ensure_stopped(&cfg).await?;
+            (
+                recovery::force_new_cluster(&cfg, *min_version, reason)?,
+                "this controller is now the only voter of a new cluster",
+            )
+        }
+        LocalControllerCmd::Restore {
+            from,
+            reason,
+            min_version,
+            replace,
+            config,
+            data_dir,
+        } => {
+            let cfg = agent_config(config.as_deref(), data_dir.clone())?;
+            recovery::ensure_stopped(&cfg).await?;
+            let pass = passphrase("WEBJET_BACKUP_PASSPHRASE", "snapshot passphrase")?;
+            let snap = unseal(&pass, &read(from)?)?;
+            (
+                recovery::restore(&cfg, &snap, *min_version, *replace, reason)?,
+                "restored the controller state; this node is the only voter of a new cluster",
+            )
+        }
+    };
+    report(
+        cli,
+        format!(
+            "{what} (first entry {}, term {}{}{}).\nStart the agent, certify the controller's signing key if it has none (ops guide 2.4), and retire the lost controllers' keys (ops guide 2.9).",
+            r.index,
+            r.term,
+            if r.jumped {
+                ", above the versions nodes hold"
+            } else {
+                ""
+            },
+            if r.learners.is_empty() {
+                String::new()
+            } else {
+                format!(", {} learners kept", r.learners.len())
+            }
+        ),
+        serde_json::to_value(&r)?,
+    );
     Ok(())
 }
 
@@ -1691,6 +1807,31 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
                         out.display()
                     ),
                     json!({"node_id": target.map(hex::encode), "request_file": out}),
+                );
+            }
+            ControllerCmd::Snapshot { out } => {
+                let a = load_account(cli).await?;
+                let req = a.kp.sign_obj(
+                    wp::msg_type::SNAPSHOT_REQUEST,
+                    &wp::SnapshotRequest {
+                        account_id: Some(crypto::k32(&a.id)),
+                        issued_at: now_ms(),
+                    },
+                );
+                let r = call(cli, json!({"cmd": "snapshot", "request": b64(&req)})).await?;
+                let snap = webjetd::state::unb64(r["snapshot"].as_str().unwrap_or(""))?;
+                let pass =
+                    new_passphrase("WEBJET_BACKUP_PASSPHRASE", "passphrase for the snapshot")?;
+                write_private(out, &seal(&pass, &snap)?)?;
+                report(
+                    cli,
+                    format!(
+                        "controller state at index {} ({} nodes) → {} (encrypted; it holds the PSKs and the camouflage key)",
+                        r["last_index"],
+                        r["nodes"],
+                        out.display()
+                    ),
+                    json!({"file": out, "last_index": r["last_index"], "nodes": r["nodes"], "voters": r["voters"]}),
                 );
             }
             ControllerCmd::List => {

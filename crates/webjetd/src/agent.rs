@@ -300,7 +300,10 @@ fn maybe_start_controller(n: &Arc<Node>, bootstrap: bool) -> Result<()> {
     if n.controller.get().is_some() || !n.cfg.controller.enabled {
         return Ok(());
     }
-    if !bootstrap && !control_granted(n) {
+    // A restored controller (ops guide 4.1) grants itself the role, so it
+    // starts before its own tree shows it.
+    let restored = n.node_file.lock().restored_controller;
+    if !bootstrap && !restored && !control_granted(n) {
         return Ok(());
     }
     let c = crate::controller::Controller::start(n, bootstrap)?;
@@ -325,11 +328,21 @@ async fn watch_control_role(n: Arc<Node>) {
             Err(_) => return,
         }
         let granted = control_granted(&n);
+        if granted && n.node_file.lock().restored_controller {
+            let mut nf = n.node_file.lock();
+            nf.restored_controller = false;
+            if let Err(e) = crate::state::save_json(&n.paths.node(), &*nf) {
+                tracing::warn!("saving node.json: {e:#}");
+            }
+        }
         if n.controller.get().is_none() {
             if granted && let Err(e) = maybe_start_controller(&n, false) {
                 tracing::error!("starting the controller role: {e:#}");
             }
-        } else if !granted && !n.node_file.lock().bootstrap {
+        } else if !granted
+            && !n.node_file.lock().bootstrap
+            && !n.node_file.lock().restored_controller
+        {
             if !warned {
                 tracing::warn!(
                     "this node no longer holds the control role; restart webjetd to stop the controller"

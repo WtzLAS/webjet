@@ -35,6 +35,11 @@ table HeadAnnounce {
 // gone). Secrets in entries (the PSK chosen by the leader, the camouflage
 // private key) are never included.
 table GetLog { request: [ubyte]; }            // Signed(LogRequest) by an admin account key
+table GetSnapshot { request: [ubyte]; }       // Signed(SnapshotRequest) by an admin account key
+table SnapshotReply {
+    error: string;
+    snapshot: [ubyte];        // a ControllerSnapshot (holds secrets: never compressed)
+}
 table LogLeaf { kind: ubyte; key: Key32; hash: Key32; deleted: bool; }
 table LogRecord {
     index: uint64;
@@ -170,6 +175,8 @@ union RpcBody {
     CertRequestReply,
     GetLog,
     LogReply,
+    GetSnapshot,
+    SnapshotReply,
 }
 
 table Rpc { body: RpcBody; }

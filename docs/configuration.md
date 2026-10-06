@@ -445,7 +445,7 @@ re-key); changing `storage` later doesn't move an existing key.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | The controller role runs when the network gives this node the `control` role (`webjetctl network node update <name> --roles ...,control`, operations guide 2.4), and on the first controller of a new network. `false` keeps it from running here even then. Acting as a controller also needs a SigningKeyCert signed by an admin or the root, and Raft membership. |
-| `signer_socket` | none | Socket (Windows: named pipe) of `webjetd signer`, which holds the signing key in a separate process (§19.2). Without it the key is a file in `data_dir`. |
+| `signer_socket` | none | Socket (Windows: named pipe) of `webjetd signer`, which holds the signing key in a separate process (§19.2). Without it the key is a file in `data_dir`. `webjetup install --signer` sets it, to `/var/run/webjet-signer/signer.sock` (Windows: `\\.\pipe\webjet-signer`), and installs the signer's service. |
 | `head_lifetime_hours` | `48` | How long signed tree heads stay valid (§7.3; 24–72 h recommended). |
 
 ### Example: a relay
