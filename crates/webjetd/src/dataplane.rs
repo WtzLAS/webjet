@@ -795,7 +795,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         tracing::info!("tun interface {dev_name} up, mtu {}", n.cfg.tun.mtu);
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4096);
         let d2 = dev.clone();
-        tokio::spawn(async move {
+        n.tasks.service("tun-writer", async move {
             while let Some(p) = rx.recv().await {
                 if let Err(e) = d2.send(&p).await {
                     tracing::debug!("tun write: {e}");
@@ -826,7 +826,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     });
     if let Some(dev) = dev_handle {
         let dp2 = dp.clone();
-        tokio::spawn(async move {
+        n.tasks.service("tun-reader", async move {
             let mut buf = vec![0u8; 65536];
             loop {
                 match dev.recv(&mut buf).await {
@@ -841,7 +841,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     }
     let dp2 = dp.clone();
     let mut ev = n.events.subscribe();
-    tokio::spawn(async move {
+    n.tasks.service("dataplane-refresh", async move {
         dp2.refresh();
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {

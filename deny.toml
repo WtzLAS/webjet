@@ -1,0 +1,78 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny/): security
+# advisories, licences, banned and duplicate crates, and where crates come
+# from. CI runs `cargo deny --locked check` (.forgejo/workflows/ci.yml);
+# docs/development.md explains how to handle a new finding.
+
+[graph]
+# Every platform Webjet ships for, so Windows- and macOS-only crates are
+# checked too.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Vulnerabilities, unsound and yanked crates always fail. Unmaintained
+# crates fail too, unless listed here with the reason they can't be replaced
+# yet. Remove an entry once the dependency that pulls the crate drops it.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # instant 0.1: reed-solomon-erasure 6.0.0 (the newest release, used by
+    # webjet-net's FEC) depends on parking_lot 0.11, which pulls it in. No
+    # code of ours calls it.
+    { id = "RUSTSEC-2024-0384", reason = "via reed-solomon-erasure 6 (latest) -> parking_lot 0.11" },
+    # The rest come only from gpui 0.2.2 (webjet-app); gpui pins them and
+    # there is no newer gpui on crates.io.
+    { id = "RUSTSEC-2025-0052", reason = "async-std, via gpui 0.2.2 (webjet-app only)" },
+    { id = "RUSTSEC-2024-0436", reason = "paste, via gpui 0.2.2 (webjet-app only)" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2, via gpui 0.2.2 (webjet-app only)" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile, via gpui 0.2.2 (webjet-app only)" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz, via gpui 0.2.2 (webjet-app only)" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser, via gpui 0.2.2 (webjet-app only)" },
+]
+
+[licenses]
+# Permissive licences only (Webjet is Apache-2.0). Crates offering a choice
+# ("MIT OR GPL") pass when one allowed licence is among the choices.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    # File-level copyleft only; linking is fine (cbindgen is a build tool,
+    # dwrote and option-ext are libraries of gpui and dirs).
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+ignore = true
+
+[bans]
+# Duplicate versions are common through gpui's pins; report them without
+# failing (`cargo deny check bans` lists them).
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between the (unpublished) workspace crates have no
+# version; that is fine.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

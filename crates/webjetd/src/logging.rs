@@ -20,4 +20,5 @@ pub fn init(cfg: &Config) {
             .try_init()
     };
     let _ = r;
+    crate::tasks::install_panic_hook();
 }

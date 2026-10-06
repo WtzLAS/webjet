@@ -5,3 +5,4 @@ target
 **/*.swp
 .DS_Store
 docs
+fuzz

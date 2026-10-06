@@ -27,6 +27,7 @@ pub mod punch;
 pub mod rpc;
 pub mod service;
 pub mod state;
+pub mod tasks;
 pub mod transport;
 #[cfg(windows)]
 pub mod winsec;

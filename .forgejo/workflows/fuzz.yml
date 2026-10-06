@@ -1,0 +1,46 @@
+# Coverage-guided fuzzing of every parser (fuzz/, scripts/fuzz.sh) with
+# libFuzzer, nightly and on demand. Needs nightly Rust and cargo-fuzz, which
+# the builder image doesn't have, so they are installed first.
+#
+# A finding fails the run and uploads fuzz/artifacts/. Reproduce it locally
+# with `cargo +nightly fuzz run <target> <file>`, fix it, and commit the file
+# under fuzz/regressions/<target>/ so the CI smoke test replays it.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "300"
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    container:
+      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+    steps:
+      - uses: actions/checkout@v4
+      - name: nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install --locked cargo-fuzz@0.13.2
+      - name: fuzz every target
+        env:
+          SECONDS_PER_TARGET: ${{ inputs.seconds || '300' }}
+        run: |
+          case "$SECONDS_PER_TARGET" in
+            ''|*[!0-9]*) echo "seconds must be a number" >&2; exit 2 ;;
+          esac
+          scripts/fuzz.sh "$SECONDS_PER_TARGET"
+      - name: keep the findings
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/

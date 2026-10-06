@@ -38,6 +38,8 @@ cargo fmt
 cargo clippy --workspace --all-targets
 cargo clippy --workspace --all-targets --no-default-features
 cargo test --workspace
+scripts/deny.sh                                   # dependencies (cargo-deny)
+cargo test --release --manifest-path fuzz/Cargo.toml --no-default-features  # fuzz targets, smoke
 ```
 
 All of them must be clean: the workspace has no clippy warnings, including in
@@ -55,6 +57,65 @@ tests.
   too when you touch platform code:
   - Linux: `docker run --rm -v "$PWD":/src -w /src rust:1-bookworm cargo clippy --workspace --exclude webjet-app --all-targets` (or build the Docker image). `webjet-app` is left out because GPUI needs X11/Wayland and Vulkan development packages that the plain Rust image doesn't have.
   - Windows: `cargo xwin clippy --target x86_64-pc-windows-msvc -p webjetd -p webjet-tools --no-default-features`.
+
+## Dependencies
+
+`deny.toml` configures [cargo-deny](https://embarkstudios.github.io/cargo-deny/),
+which `scripts/deny.sh` runs (it installs a pinned release on Linux if
+`cargo-deny` isn't on PATH; on a Mac use `cargo install --locked cargo-deny`).
+It fails on:
+
+- a RustSec advisory (vulnerable, unsound, yanked or unmaintained crate);
+- a licence that isn't in the allow list (permissive licences and MPL-2.0);
+- a crate from anywhere but crates.io.
+
+An unmaintained crate that can't be replaced yet goes into `[advisories]
+ignore` with the reason (today: `instant` via reed-solomon-erasure, and
+crates pinned by gpui 0.2.2 in webjet-app). For a vulnerability, update the
+crate (`cargo update -p <crate>`) instead; ignore it only if the vulnerable
+code is unreachable, and say why. Duplicate versions are reported as
+warnings (`scripts/deny.sh bans` lists them). The workspace crates are
+`publish = false`, so path dependencies without a version are fine.
+
+## Fuzzing
+
+`fuzz/` fuzzes every parser that reads bytes from the network or a local
+client (§20). It is its own workspace, outside `cargo test --workspace`.
+`fuzz/src/lib.rs` has one function per target:
+
+| Target | What it feeds |
+| --- | --- |
+| `proto` | Every FlatBuffers message type (decode, re-encode, decode again), signed envelopes, tree leaves |
+| `frames` | e2e frame headers, handshake and relay frames, AEAD open, the replay window; seal/open round trips |
+| `packet` | IP packets: parsing, NAT rewrite, ECN, ICMP replies, LZ4 round trip |
+| `decompress` | zstd and LZ4 decompression of hostile input: the size cap holds, compressed data round-trips |
+| `gate` | The UDP gate (`UdpObfs::open`) and seal/open round trips |
+| `kcp_session` | FEC shards and KCP segments after the gate, as a session processes them (`kcp::fuzzing`) |
+| `hop_record` | Hop record framing (TLS/AnyTLS/KCP hops), `CONTROL_ZSTD` payloads, HopControl |
+| `dns` | The local resolver: client queries and forwarded zones' answers (`dns::fuzzing`) |
+
+Two ways to run them:
+
+```sh
+# Stable, seconds: seeds plus random mutations (CI runs this).
+cargo test --release --manifest-path fuzz/Cargo.toml --no-default-features
+WEBJET_FUZZ_ITERS=100000 WEBJET_FUZZ_SEED=1 cargo test ...   # longer / repeatable
+
+# Coverage-guided with libFuzzer (nightly + cargo-fuzz):
+rustup toolchain install nightly --profile minimal && cargo install cargo-fuzz
+scripts/fuzz.sh 300            # every target for 300 s
+scripts/fuzz.sh 0 dns          # one target until stopped (Ctrl-C)
+```
+
+`fuzz.sh` starts from the seeds in `fuzz/src/seeds.rs` (valid messages of
+every kind). Corpus and findings stay in `fuzz/corpus/` and
+`fuzz/artifacts/` (gitignored). For a finding: reproduce it with
+`cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>`, fix the
+bug, and commit the input as `fuzz/regressions/<target>/<name>`; the smoke
+test replays every file there. A target fails by panicking, so new targets
+should assert the invariants they can (round trips, size caps), not only
+call the parser. When adding a parser for untrusted input, add a target and
+seeds for it.
 
 ## Wire formats
 
@@ -153,6 +214,42 @@ common bug. Rules:
 `sample <pid>` (macOS) or `gdb -p <pid> -batch -ex 'thread apply all bt'`
 (Linux) on a hung agent shows which locks the threads wait on.
 
+## Agent tasks
+
+The agent's long-running loops are owned by `Node::tasks`
+(`webjetd/src/tasks.rs`), not started with a bare `tokio::spawn`:
+
+- `n.tasks.service(name, fut)` (or `service_result`) for a loop that must run
+  as long as the agent: gossip, e2e, paths, metrics, health, punch,
+  connections, secrets, the controller, the hop listeners, the tun reader and
+  writer, the data plane refresh. If one returns, fails or panics, the agent
+  logs it and exits with an error, and the service manager restarts it
+  (systemd `Restart=on-failure`, launchd `KeepAlive`, Docker's restart
+  policy). Before, such a task died silently and left a running agent that
+  no longer gossiped or routed.
+- `n.tasks.oneshot(name, fut)` for a task that may finish (starting the data
+  plane, port mapping, the control socket and metrics endpoint, whose errors
+  are logged but don't stop the overlay). Only a panic there is fatal.
+- At shutdown `abort_all` stops every task before the agent persists its
+  state and removes routes and DNS settings.
+
+Per-connection and per-request tasks stay plain `tokio::spawn`; a panic
+ends only that connection. Every panic is logged through tracing (the panic
+hook from `tasks::install_panic_hook`, installed by `logging::init`).
+
+## The control channel
+
+Every local user can talk to the agent's control socket (`control.rs`), so
+every command is listed in `control::COMMANDS` with its access class:
+`Read` (shows state; changes nothing), `Signed` (only acts on material whose
+account, admin, root or emergency signature is checked) or `Capability`
+(needs a secret, the enrollment token). `handle` refuses commands that
+aren't in the table, and a unit test checks that the table and `handle`
+name the same commands and that only the known state-changing commands are
+not `Read`. A new command needs an entry; a new state-changing one also has
+to be added to that test, together with its signature check. Requests are
+limited to 4 MiB per line and 64 connections at once.
+
 ## Tests that need more than `cargo test`
 
 | Script | Needs | What it checks |
@@ -205,7 +302,8 @@ label `ubuntu-latest`), with every job in the builder image
 
 | Workflow | When | What |
 | --- | --- | --- |
-| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS) and Windows; `cargo test`. `webjet-app` is left out (GPUI needs X11/Wayland and Vulkan packages). |
+| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS) and Windows; `scripts/deny.sh`; `cargo test`; the fuzz targets' smoke test and clippy. `webjet-app` is left out of clippy and tests (GPUI needs X11/Wayland and Vulkan packages). |
+| `fuzz.yml` | nightly (03:17 UTC), manually | Installs nightly Rust and cargo-fuzz, runs `scripts/fuzz.sh` (300 s per target by default); findings are uploaded as an artifact. |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for Linux x86_64, Linux arm64 (cross-compiled) and Windows x86_64 |
 
 The builder image is Debian 11 (glibc 2.31, so the Linux binaries run on

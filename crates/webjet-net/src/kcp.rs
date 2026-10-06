@@ -761,6 +761,78 @@ fn kcp_rtt<O>(k: &kcp::Kcp<O>) -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
+/// Entry points for the fuzz targets (`fuzz/fuzz_targets/kcp_session.rs`):
+/// what a KCP session does with datagrams that passed the UDP gate, without
+/// sockets or timers.
+#[doc(hidden)]
+pub mod fuzzing {
+    use super::*;
+
+    /// Feed `datagrams` (each `kind || body`, as `recv_loop` hands them to a
+    /// session) through the FEC decoder into KCP, read what KCP delivers,
+    /// and scan KCP's output for retransmissions, like `run_session`.
+    /// Returns the bytes delivered to the user.
+    pub fn session_input(conv: u32, datagrams: &[&[u8]]) -> Vec<u8> {
+        let out = OutQueue::default();
+        let mut kcp = kcp::Kcp::new_stream(conv, out.clone());
+        let _ = kcp.set_mtu(KCP_MTU);
+        kcp.set_nodelay(true, 10, 2, true);
+        kcp.set_wndsize(256, 1024);
+        let mut dec = fec::Decoder::new();
+        let mut enc = fec::Encoder::new();
+        let mut delivered = Vec::new();
+        let mut next_new_sn = None;
+        let mut new_lens = VecDeque::new();
+        for (i, d) in datagrams.iter().enumerate() {
+            let (Some(&kind), Some(body)) = (d.first(), d.get(1..)) else {
+                continue;
+            };
+            let shard = match kind {
+                K_SHARD => body,
+                K_OPEN if body.len() >= 24 => &body[24..],
+                K_STATS if body.len() >= 8 => {
+                    let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
+                    let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
+                    if exp > 0.0 {
+                        enc.adapt(((exp - recv) / exp).clamp(0.0, 1.0));
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            for pkt in dec.push(shard) {
+                let _ = kcp.input(&pkt);
+            }
+            while let Ok(n) = kcp.peeksize() {
+                // A hostile peer can't make KCP deliver more than it buffered.
+                if n > 64 << 20 {
+                    break;
+                }
+                let mut b = vec![0u8; n];
+                if kcp.recv(&mut b).is_err() {
+                    break;
+                }
+                delivered.extend_from_slice(&b);
+            }
+            let _ = kcp.update(10 * i as u32);
+            let _ = kcp.flush();
+            let _ = kcp_rtt(&kcp);
+            let _ = dec.take_loss();
+            for pkt in out.0.lock().drain(..) {
+                scan_output(&pkt, &mut next_new_sn, &mut new_lens);
+                let _ = enc.push(&pkt);
+            }
+        }
+        let _ = enc.flush();
+        delivered
+    }
+
+    /// `scan_output` on arbitrary bytes.
+    pub fn scan(pkt: &[u8]) -> u64 {
+        scan_output(pkt, &mut None, &mut VecDeque::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

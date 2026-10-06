@@ -7,6 +7,8 @@ version = "0.7.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.88"
+# Released as binaries from Forgejo, never to crates.io.
+publish = false
 
 [workspace.dependencies]
 anyhow = "1"

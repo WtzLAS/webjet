@@ -305,7 +305,7 @@ fn maybe_start_controller(n: &Arc<Node>, bootstrap: bool) -> Result<()> {
     }
     let c = crate::controller::Controller::start(n, bootstrap)?;
     if n.controller.set(c.clone()).is_ok() {
-        tokio::spawn(c.run());
+        n.tasks.service("controller", c.run());
         crate::transport::refresh_anytls(n);
     }
     Ok(())
@@ -380,7 +380,8 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
         }
     }
     maybe_start_controller(&n, bootstrap)?;
-    tokio::spawn(watch_control_role(n.clone()));
+    n.tasks
+        .service("watch-control-role", watch_control_role(n.clone()));
     // Seed relays accept all epochs too (§10.7.3).
     if is_seed(&n) {
         n.epochs.write().accept_all = true;
@@ -388,17 +389,17 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
     crate::compression::refresh(&n);
     crate::transport::start_listeners(&n).await?;
     {
+        // Not fatal: the overlay keeps working without the control channel
+        // (an error is logged, e.g. when the socket can't be created).
         let n2 = n.clone();
-        tokio::spawn(async move {
-            if let Err(e) = crate::control::serve(n2).await {
-                tracing::error!("control socket: {e}");
-            }
+        n.tasks.oneshot("control-socket", async move {
+            crate::control::serve(n2).await.context("control socket")
         });
     }
-    tokio::spawn(crate::gossip::run(n.clone()));
-    tokio::spawn(crate::e2e::run(n.clone()));
-    tokio::spawn(crate::paths::run(n.clone()));
-    tokio::spawn(crate::metrics::run(n.clone()));
+    n.tasks.service("gossip", crate::gossip::run(n.clone()));
+    n.tasks.service("e2e", crate::e2e::run(n.clone()));
+    n.tasks.service("paths", crate::paths::run(n.clone()));
+    n.tasks.service("metrics", crate::metrics::run(n.clone()));
     if let Some(addr) = n.cfg.metrics.listen {
         let n2 = n.clone();
         let body: Arc<dyn Fn() -> String + Send + Sync> =
@@ -406,43 +407,67 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
                 Some(c) => c.openmetrics(),
                 None => crate::metrics::local_openmetrics(&n2),
             });
-        tokio::spawn(async move {
-            if let Err(e) = crate::exposition::serve(addr, body).await {
-                tracing::error!("metrics endpoint on {addr}: {e}");
-            }
+        n.tasks.oneshot("metrics-endpoint", async move {
+            crate::exposition::serve(addr, body)
+                .await
+                .with_context(|| format!("metrics endpoint on {addr}"))
         });
     }
-    tokio::spawn(crate::health::run(n.clone()));
-    tokio::spawn(crate::punch::run(n.clone()));
-    tokio::spawn(crate::nat::run_port_mapping(n.clone()));
-    tokio::spawn(connections(n.clone()));
-    tokio::spawn(secrets(n.clone()));
-    tokio::spawn(start_dataplane_when_ready(n.clone()));
+    n.tasks.service("health", crate::health::run(n.clone()));
+    n.tasks.service("punch", crate::punch::run(n.clone()));
+    {
+        // Returns at once when port mapping is off.
+        let n2 = n.clone();
+        n.tasks.oneshot("port-mapping", async move {
+            crate::nat::run_port_mapping(n2).await;
+            Ok(())
+        });
+    }
+    n.tasks.service("connections", connections(n.clone()));
+    n.tasks.service("secrets", secrets(n.clone()));
+    {
+        let n2 = n.clone();
+        n.tasks.oneshot("start-dataplane", async move {
+            start_dataplane_when_ready(n2).await;
+            Ok(())
+        });
+    }
     crate::transport::refresh_anytls(&n);
     tracing::info!(node = %crypto::short(&me), "webjetd running");
-    // Exit on a fatal clock error (§18.6) or a stop request.
+    // Exit on a stop request, a fatal clock error (§18.6) or when a task the
+    // agent can't run without ends (`tasks`); the service manager restarts
+    // it in the last two cases.
     let mut shutdown = shutdown;
-    loop {
+    let failure: Option<String> = loop {
         tokio::select! {
             _ = &mut shutdown => {
                 tracing::info!("shutting down");
-                break;
+                break None;
+            }
+            ended = n.tasks.fatal() => {
+                tracing::error!("{ended}; stopping the agent");
+                break Some(ended.to_string());
             }
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
                 if let Some(e) = crate::health::CLOCK_FATAL.get() {
-                    n.persist_store();
-                    bail!("{e}");
+                    break Some(e.to_string());
                 }
             }
         }
-    }
+    };
+    // Stop every task first, so none of them writes state or re-applies
+    // routes while the agent cleans up.
+    n.tasks.abort_all();
     n.persist_store();
     n.persist_links();
     if let Some(dp) = n.dataplane.get() {
         dp.shutdown();
     }
     crate::nat::release_mapping().await;
-    Ok(())
+    match failure {
+        Some(e) => bail!("{e}"),
+        None => Ok(()),
+    }
 }
 
 async fn start_dataplane_when_ready(n: Arc<Node>) {

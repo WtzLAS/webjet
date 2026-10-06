@@ -283,6 +283,21 @@ impl Decoder {
                 out.push(payload.to_vec());
             }
         } else {
+            // A parity shard. Our encoder never uses more than GROUP_DATA
+            // data shards (and fewer parity shards); anything else is
+            // malformed. Bounding k and m also bounds the codec cache.
+            let (ku, mu) = (usize::from(k), usize::from(m));
+            if ku > GROUP_DATA || mu == 0 || mu > GROUP_DATA {
+                return out;
+            }
+            if usize::from(idx) < ku || usize::from(idx) >= ku + mu {
+                return out;
+            }
+            if g.k != 0 && (g.k, g.m) != (k, m) {
+                // Parity shards of one group disagree about its shape.
+                g.done = true;
+                return out;
+            }
             g.k = k;
             g.m = m;
             g.parity.insert(idx, payload.to_vec());
@@ -299,6 +314,13 @@ impl Decoder {
             return out;
         }
         let width = g.parity.values().next().map(|p| p.len()).unwrap_or(0);
+        // Every data shard is encoded as `len[2] || data`, padded to the
+        // width: a width below 2, or a data shard that doesn't fit, means the
+        // shards don't belong together.
+        if width < 2 || g.data.values().any(|d| d.len() + 2 > width) {
+            g.done = true;
+            return out;
+        }
         let mut slots: Vec<Option<Vec<u8>>> = (0..kk + mm)
             .map(|i| {
                 if i < kk {
@@ -326,12 +348,12 @@ impl Decoder {
         }
         if ok {
             for i in missing {
-                if let Some(s) = &slots[i] {
-                    let l = u16::from_be_bytes([s[0], s[1]]) as usize;
-                    if let Some(d) = s.get(2..2 + l) {
-                        out.push(d.to_vec());
-                        self.recovered += 1;
-                    }
+                if let Some(s) = &slots[i]
+                    && let Some(l) = webjet_core::bytes::be_u16(s, 0)
+                    && let Some(d) = s.get(2..2 + usize::from(l))
+                {
+                    out.push(d.to_vec());
+                    self.recovered += 1;
                 }
             }
         }
@@ -452,5 +474,59 @@ mod tests {
         let (got, expected) = d.take_loss();
         assert!(expected > 0);
         assert_eq!(got, expected);
+    }
+
+    /// A shard: `group || idx || k || m || len || payload`.
+    fn shard(group: u32, idx: u8, k: u8, m: u8, payload: &[u8]) -> Vec<u8> {
+        let mut s = header(group, idx, k, m, payload.len() as u16).to_vec();
+        s.extend_from_slice(payload);
+        s
+    }
+
+    #[test]
+    fn malformed_parity_is_dropped_without_panicking() {
+        // Found by fuzzing: a 1-byte parity shard made the recovered slot
+        // too short for its length prefix.
+        let mut d = Decoder::new();
+        assert!(d.push(&shard(0, 1, 1, 1, &[0x7a])).is_empty());
+        // Data shard too big for the parity width, and the other order.
+        let mut d = Decoder::new();
+        d.push(&shard(1, 0, 0, 0, &[1; 10]));
+        assert!(d.push(&shard(1, 2, 2, 1, &[0; 4])).is_empty());
+        // k or m beyond what an encoder sends, a parity index among the
+        // data indexes, and groups whose parity shards disagree.
+        let mut d = Decoder::new();
+        assert!(d.push(&shard(2, 200, 200, 1, &[0; 8])).is_empty());
+        assert!(d.push(&shard(3, 9, 1, 250, &[0; 8])).is_empty());
+        assert!(d.push(&shard(4, 0, 2, 1, &[0; 8])).is_empty());
+        assert!(d.push(&shard(5, 2, 2, 1, &[0; 8])).is_empty());
+        assert!(d.push(&shard(5, 3, 2, 2, &[0; 8])).is_empty());
+        assert!(d.codecs.len() <= 1);
+    }
+
+    #[test]
+    fn real_groups_still_recover_after_the_checks() {
+        let mut e = Encoder::new();
+        e.ratio = 0.3;
+        let pkts: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i; 1 + i as usize * 30]).collect();
+        let mut shards = Vec::new();
+        for p in &pkts {
+            shards.extend(e.push(p));
+        }
+        shards.extend(e.flush());
+        // Lose the two longest data shards.
+        let mut d = Decoder::new();
+        let mut got = Vec::new();
+        for s in &shards {
+            if s[5] == 0 && (s[4] == 6 || s[4] == 7) {
+                continue;
+            }
+            got.extend(d.push(s));
+        }
+        got.sort();
+        let mut want = pkts.clone();
+        want.sort();
+        assert_eq!(got, want);
+        assert_eq!(d.recovered, 2);
     }
 }

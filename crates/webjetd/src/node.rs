@@ -201,6 +201,8 @@ pub struct Node {
         )>,
     >,
     pub me_weak: OnceLock<Weak<Node>>,
+    /// The agent's long-running tasks (`tasks`).
+    pub tasks: crate::tasks::Supervisor,
 }
 
 /// Trust for hop TLS: a currently trusted node, or (for resync when the
@@ -265,6 +267,7 @@ impl Node {
             #[cfg(feature = "anytls")]
             anytls_acceptor: Mutex::new(None),
             me_weak: OnceLock::new(),
+            tasks: crate::tasks::Supervisor::default(),
             cfg,
         });
         let _ = n.me_weak.set(Arc::downgrade(&n));

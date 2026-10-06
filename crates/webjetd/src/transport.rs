@@ -160,10 +160,12 @@ pub async fn start_listeners(n: &Arc<Node>) -> Result<()> {
         let l = hop::TlsListener::bind(addr).await?;
         tracing::info!("TCP+TLS listening on {addr}");
         let n2 = n.clone();
-        tokio::spawn(async move {
+        n.tasks.service("tls-listener", async move {
             let l = Arc::new(l);
             loop {
                 let Ok((s, remote)) = l.listener.accept().await else {
+                    // Out of file descriptors, most likely: don't spin.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     continue;
                 };
                 let n3 = n2.clone();
@@ -213,7 +215,7 @@ pub async fn start_listeners(n: &Arc<Node>) -> Result<()> {
         tracing::info!("UDP+KCP listening on {}", ep.local_addr()?);
     }
     let n2 = n.clone();
-    tokio::spawn(async move {
+    n.tasks.service("kcp-accept", async move {
         loop {
             let c = {
                 let mut rx = ep.accept_rx.lock().await;
@@ -248,9 +250,10 @@ async fn start_anytls(n: &Arc<Node>, addr: std::net::SocketAddr) -> Result<()> {
     let l = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("TCP+AnyTLS listening on {addr}");
     let n2 = n.clone();
-    tokio::spawn(async move {
+    n.tasks.service("anytls-listener", async move {
         loop {
             let Ok((s, remote)) = l.accept().await else {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
             refresh_anytls(&n2);

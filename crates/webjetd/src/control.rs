@@ -11,27 +11,96 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use webjet_core::crypto::{self, Bytes32};
 use webjet_proto::{self as wp, RpcBody};
+
+/// Longest request line accepted. Every local user may connect, so a line
+/// without a newline must not grow without bound; the largest real request
+/// (a signed network configuration) is far below this.
+pub const MAX_REQUEST: usize = 4 << 20;
+/// Connections served at once; more are answered with an error and closed.
+pub const MAX_CONNECTIONS: usize = 64;
+
+/// What a control command may do, given that every local user can send it
+/// (see the module docs and `ipc::Access::Everyone`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// Reads the agent's state; changes nothing (subscriptions and pings
+    /// included: they only make the agent ask or send on the user's behalf).
+    Read,
+    /// Changes state only through material whose signature is checked
+    /// (account, admin, root or emergency keys) before it has any effect.
+    Signed,
+    /// Needs a secret the caller must already hold (an enrollment token).
+    Capability,
+}
+
+/// Every control command and its access class. `handle` refuses anything
+/// that isn't listed; a test checks that this table and `handle` agree.
+pub const COMMANDS: &[(&str, Access)] = &[
+    ("status", Access::Read),
+    ("peers", Access::Read),
+    ("sessions", Access::Read),
+    ("conntrack", Access::Read),
+    ("proxy", Access::Read),
+    ("topology", Access::Read),
+    ("nodes", Access::Read),
+    ("accounts", Access::Read),
+    ("tree", Access::Read),
+    ("node_config", Access::Read),
+    ("submit_op", Access::Signed),
+    ("submit_offline", Access::Signed),
+    ("submit_signed", Access::Signed),
+    ("enroll_info", Access::Read),
+    ("ping", Access::Read),
+    ("cert_request", Access::Read),
+    ("controller", Access::Read),
+    ("redeem_self", Access::Capability),
+    ("metrics", Access::Read),
+    ("reports", Access::Read),
+    ("head", Access::Read),
+    ("merkle", Access::Read),
+    // The request itself is admin-signed (controller::audit::check_request).
+    ("log", Access::Signed),
+];
+
+pub fn access(cmd: &str) -> Option<Access> {
+    COMMANDS.iter().find(|(c, _)| *c == cmd).map(|(_, a)| *a)
+}
 
 pub async fn serve(n: Arc<Node>) -> Result<()> {
     let path = n.cfg.control_socket.clone();
     let mut l = crate::ipc::Listener::bind(&path, crate::ipc::Access::Everyone)?;
     tracing::info!("control channel at {}", path.display());
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     loop {
         let s = l.accept().await?;
         let n2 = n.clone();
+        let slot = slots.clone().try_acquire_owned();
         tokio::spawn(async move {
             let (r, mut w) = tokio::io::split(s);
-            let mut lines = BufReader::new(r).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let reply = match serde_json::from_str::<Value>(&line) {
-                    Ok(req) => match handle(&n2, req).await {
-                        Ok(v) => json!({"ok": true, "result": v}),
-                        Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
+            let Ok(_slot) = slot else {
+                let busy = json!({"ok": false, "error": "too many control connections"});
+                let _ = w.write_all(format!("{busy}\n").as_bytes()).await;
+                return;
+            };
+            let mut r = BufReader::new(r);
+            loop {
+                let reply = match read_request(&mut r).await {
+                    Ok(Some(line)) => match serde_json::from_slice::<Value>(&line) {
+                        Ok(req) => match handle(&n2, req).await {
+                            Ok(v) => json!({"ok": true, "result": v}),
+                            Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
+                        },
+                        Err(e) => json!({"ok": false, "error": format!("bad request: {e}")}),
                     },
-                    Err(e) => json!({"ok": false, "error": format!("bad request: {e}")}),
+                    Ok(None) => break,
+                    Err(e) => {
+                        let reply = json!({"ok": false, "error": format!("bad request: {e}")});
+                        let _ = w.write_all(format!("{reply}\n").as_bytes()).await;
+                        break;
+                    }
                 };
                 let mut out = serde_json::to_vec(&reply).unwrap_or_default();
                 out.push(b'\n');
@@ -41,6 +110,33 @@ pub async fn serve(n: Arc<Node>) -> Result<()> {
             }
         });
     }
+}
+
+/// One request line (without its newline), at most [`MAX_REQUEST`] bytes.
+/// `None` at the end of the stream.
+async fn read_request<R: tokio::io::AsyncBufRead + Unpin>(
+    r: &mut R,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    let got = (&mut *r)
+        .take(MAX_REQUEST as u64 + 1)
+        .read_until(b'\n', &mut line)
+        .await?;
+    if got == 0 {
+        return Ok(None);
+    }
+    if line.last() == Some(&b'\n') {
+        line.pop();
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+    } else if line.len() > MAX_REQUEST {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("request longer than {MAX_REQUEST} bytes"),
+        ));
+    }
+    Ok(Some(line))
 }
 
 /// The state admins see: a controller's own state machine (which is ahead
@@ -102,6 +198,9 @@ fn node_json(v: &webjet_core::store::View, id: &Bytes32) -> Value {
 
 pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
     let cmd = str_arg(&req, "cmd")?;
+    if access(cmd).is_none() {
+        bail!("unknown command {cmd}");
+    }
     match cmd {
         "status" => Ok(status(n)),
         "peers" => {
@@ -268,7 +367,11 @@ pub async fn handle(n: &Arc<Node>, req: Value) -> Result<Value> {
         "enroll_info" => Ok(enroll_info(n)),
         "ping" => {
             let target = str_arg(&req, "target")?;
-            let count = req.get("count").and_then(|c| c.as_u64()).unwrap_or(3) as u16;
+            let count = req
+                .get("count")
+                .and_then(|c| c.as_u64())
+                .map(|c| u16::try_from(c).unwrap_or(u16::MAX))
+                .unwrap_or(3);
             // Payload bytes, up to what fits a 1280-byte packet (§9.4.7).
             let size = req
                 .get("size")
@@ -770,5 +873,117 @@ pub mod client {
                 v.get("error").and_then(|e| e.as_str()).unwrap_or("error")
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The command names `handle` matches on, read from this file's source.
+    fn handled() -> Vec<String> {
+        let src = include_str!("control.rs");
+        let start = src.find("pub async fn handle(").expect("handle");
+        let body = &src[start..];
+        let end = body.find("\n}\n").expect("end of handle");
+        let mut out: Vec<String> = body[..end]
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim_start();
+                let rest = l.strip_prefix('"')?;
+                let (name, tail) = rest.split_once('"')?;
+                tail.trim_start()
+                    .starts_with("=>")
+                    .then(|| name.to_string())
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn every_command_has_an_access_class() {
+        let mut table: Vec<String> = COMMANDS.iter().map(|(c, _)| c.to_string()).collect();
+        table.sort();
+        let mut dedup = table.clone();
+        dedup.dedup();
+        assert_eq!(table, dedup, "a command is listed twice");
+        assert_eq!(
+            handled(),
+            table,
+            "`handle` and COMMANDS must name the same commands"
+        );
+    }
+
+    #[test]
+    fn state_changing_commands_need_a_signature_or_a_token() {
+        // The commands that change state; each must check a signature or a
+        // secret. A new state-changing command must be added here
+        // deliberately, with that check in place.
+        let changing = [
+            "submit_op",
+            "submit_offline",
+            "submit_signed",
+            "redeem_self",
+        ];
+        for c in changing {
+            assert_ne!(access(c), Some(Access::Read), "{c}");
+        }
+        let not_read: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|(_, a)| *a != Access::Read)
+            .map(|(c, _)| *c)
+            .collect();
+        assert_eq!(
+            not_read,
+            [
+                "submit_op",
+                "submit_offline",
+                "submit_signed",
+                "redeem_self",
+                "log"
+            ]
+        );
+        assert_eq!(access("shutdown"), None);
+    }
+
+    async fn read(input: &[u8]) -> Vec<std::io::Result<Option<Vec<u8>>>> {
+        let mut r = BufReader::new(input);
+        let mut out = Vec::new();
+        loop {
+            let x = read_request(&mut r).await;
+            let stop = !matches!(x, Ok(Some(_)));
+            out.push(x);
+            if stop {
+                return out;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_are_split_into_lines() {
+        let got = read(b"{\"cmd\":\"status\"}\n{}\r\nlast").await;
+        let lines: Vec<Option<Vec<u8>>> = got.into_iter().map(|x| x.expect("ok")).collect();
+        assert_eq!(
+            lines,
+            vec![
+                Some(b"{\"cmd\":\"status\"}".to_vec()),
+                Some(b"{}".to_vec()),
+                Some(b"last".to_vec()),
+                None
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overlong_request_is_refused() {
+        let mut big = vec![b'x'; MAX_REQUEST + 1];
+        let got = read(&big).await;
+        assert!(matches!(got.last(), Some(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData));
+        // Exactly the limit, with its newline, is fine.
+        big.truncate(MAX_REQUEST);
+        big.push(b'\n');
+        let got = read(&big).await;
+        assert!(matches!(&got[0], Ok(Some(l)) if l.len() == MAX_REQUEST));
     }
 }

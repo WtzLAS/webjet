@@ -1,0 +1,103 @@
+# Fuzz targets (architecture §20: fuzzing of every parser). Not part of the
+# main workspace: cargo-fuzz needs nightly. See docs/development.md.
+#
+#   cargo +nightly fuzz run proto            # one target until stopped
+#   scripts/fuzz.sh 60                       # every target for 60 s
+#   cargo test --manifest-path fuzz/Cargo.toml --no-default-features
+#                                            # smoke test on stable (CI)
+[package]
+name = "webjet-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+default = ["libfuzzer"]
+# The libFuzzer binaries; left out for the stable smoke test.
+libfuzzer = ["dep:libfuzzer-sys"]
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", optional = true }
+webjet-core = { path = "../crates/webjet-core" }
+webjet-proto = { path = "../crates/webjet-proto" }
+webjet-net = { path = "../crates/webjet-net", default-features = false }
+webjetd = { path = "../crates/webjetd", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+
+[dev-dependencies]
+rand = "0.10"
+
+# Its own workspace, so the main one's `cargo test --workspace` and clippy
+# runs don't build it.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "proto"
+path = "fuzz_targets/proto.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frames"
+path = "fuzz_targets/frames.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet"
+path = "fuzz_targets/packet.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decompress"
+path = "fuzz_targets/decompress.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gate"
+path = "fuzz_targets/gate.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kcp_session"
+path = "fuzz_targets/kcp_session.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hop_record"
+path = "fuzz_targets/hop_record.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns"
+path = "fuzz_targets/dns.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false

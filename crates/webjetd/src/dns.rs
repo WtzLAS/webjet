@@ -472,6 +472,64 @@ pub fn udp_packet(src: IpAddr, sport: u16, dst: IpAddr, dport: u16, payload: &[u
     p
 }
 
+/// Entry points for the fuzz targets (`fuzz/fuzz_targets/dns.rs`): the
+/// parsing and rewriting the resolver does on bytes from local clients and
+/// from upstream servers, without a running node.
+#[doc(hidden)]
+pub mod fuzzing {
+    use super::*;
+
+    /// A client's query packet (IP/UDP from the tun interface) and an
+    /// upstream server's answer to it, through every step that doesn't need
+    /// the tree: parsing, the empty response, reverse-name parsing, the
+    /// reverse-lookup rewrite and answer rewriting for a mapped route.
+    pub fn query_and_answer(packet: &[u8], response: &[u8]) {
+        let q = match packet::parse(packet) {
+            Some(parsed) if parsed.flow.proto == PROTO_UDP => packet
+                .get(parsed.l4_offset + 8..)
+                .and_then(|b| Message::from_vec(b).ok()),
+            // Not an IP/UDP packet: treat the bytes as the DNS payload.
+            _ => Message::from_vec(packet).ok(),
+        };
+        let Some(q) = q else { return };
+        let r = response_to(&q);
+        let _ = r.to_vec();
+        let mut ptr_orig = None;
+        if let Some(query) = q.queries.first() {
+            let name = query.name().to_ascii();
+            let _ = in_zone(&name, "internal");
+            if let Some(ip) = ptr_to_ip(&name) {
+                // What `forward` does for a reverse lookup of a published
+                // address: the LAN name must parse back.
+                let lan = Name::from_ascii(format!("{}.", ip_to_ptr(ip)));
+                assert!(lan.is_ok(), "{ip}: {lan:?}");
+                ptr_orig = Some(query.name().clone());
+            }
+        }
+        let Ok(resp) = Message::from_vec(response) else {
+            return;
+        };
+        let gs = [
+            grant("192.168.1.0/24", "10.99.1.0/24"),
+            grant("fd00:1::/64", "fd99:1::/64"),
+        ];
+        let out = fix_forwarded(resp, &q, &gs, ptr_orig.as_ref());
+        assert_eq!(out.metadata.id, q.metadata.id);
+        let _ = out.to_vec();
+    }
+
+    fn grant(lan: &str, published: &str) -> Grant {
+        let parse = |s: &str| {
+            s.parse()
+                .unwrap_or_else(|_| unreachable!("constant prefix {s}"))
+        };
+        Grant {
+            lan: parse(lan),
+            published: parse(published),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

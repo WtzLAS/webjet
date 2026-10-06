@@ -1,5 +1,6 @@
 # Checks for every push and pull request: formatting, clippy (Linux and
-# Windows, with and without AnyTLS) and the test suite.
+# Windows, with and without AnyTLS), dependencies (cargo-deny: advisories,
+# licences, sources), the test suite and the fuzz targets' smoke test.
 #
 # Runs on the `ubuntu-latest` runner, in the builder image
 # (ci/builder.Dockerfile), which must be present in the runner's Docker
@@ -39,6 +40,16 @@ jobs:
           -p webjetd -p webjet-tools -p webjetup
           --all-targets --no-default-features -- -D warnings
 
+  dependencies:
+    runs-on: ubuntu-latest
+    container:
+      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+    steps:
+      - uses: actions/checkout@v4
+      # deny.toml; installs a pinned cargo-deny if the image has none.
+      - name: cargo deny
+        run: scripts/deny.sh
+
   test:
     runs-on: ubuntu-latest
     container:
@@ -47,3 +58,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: cargo test
         run: cargo test --locked --workspace --exclude webjet-app
+      # Every fuzz target on its seeds and random mutations, on stable
+      # (fuzz/tests/smoke.rs); the real fuzzing runs in fuzz.yml.
+      - name: fuzz targets (smoke)
+        run: >
+          cargo test --locked --release --manifest-path fuzz/Cargo.toml
+          --no-default-features
+      - name: clippy (fuzz targets)
+        run: >
+          cargo clippy --locked --manifest-path fuzz/Cargo.toml
+          --no-default-features --all-targets -- -D warnings
