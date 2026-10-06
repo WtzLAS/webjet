@@ -3347,11 +3347,19 @@ mod tests {
         };
         let seed = |node: &str| wp::SeedEntry {
             node: Some(node.into()),
-            addrs: Some(vec![wp::SeedAddr {
-                host: Some("198.51.100.7".into()),
-                port: 443,
-                transport: wp::Transport::TcpTls,
-            }]),
+            addrs: Some(vec![
+                wp::SeedAddr {
+                    host: Some("198.51.100.7".into()),
+                    port: 443,
+                    transport: wp::Transport::TcpTls,
+                },
+                // DNS names are fine too; each node resolves them.
+                wp::SeedAddr {
+                    host: Some("sv.wolf109909.top".into()),
+                    port: 4883,
+                    transport: wp::Transport::KcpFecTls,
+                },
+            ]),
         };
         // relay-1 is a data node: not a valid seed.
         let mut c = node_config(&a, 1);
@@ -3378,6 +3386,16 @@ mod tests {
             value: Some("10.7.0.5".into()),
             ttl: 0,
         }]);
+        let mut bad = c.clone();
+        bad.seeds = Some(vec![wp::SeedEntry {
+            node: Some("relay-1".into()),
+            addrs: Some(vec![wp::SeedAddr {
+                host: Some("not a host".into()),
+                port: 443,
+                transport: wp::Transport::TcpTls,
+            }]),
+        }]);
+        assert!(set(&mut h, bad).is_err());
         set(&mut h, c).unwrap();
         let v = h.m.view();
         assert_eq!(v.seeds_for(&a)[0].node.as_deref(), Some("relay-1"));

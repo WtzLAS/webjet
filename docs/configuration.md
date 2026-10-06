@@ -97,7 +97,7 @@ rewrite = ["192.168.1.0/24=10.2.2.0/24"]   # mapped route grants (§11.9.3)
 
 [[seeds]]                       # where nodes find the network (§10.7.1)
 node = "ctl-01"                 # a relay or controller
-addrs = ["tls:203.0.113.10:443", "kcp:203.0.113.10:443"]
+addrs = ["tls:203.0.113.10:443", "kcp:203.0.113.10:443", "kcp:ctl.example.net:4883"]   # transport:host:port; host = IP, [IPv6] or DNS name
 
 [transport.priority]            # 0–255 per transport; 0 = never (§9.6)
 kcp = 30                        # UDP + KCP + FEC
@@ -333,7 +333,11 @@ punching.
 ### `[[public]]`
 
 Addresses to advertise when they differ from the listen addresses (port
-forwarding, cloud 1:1 NAT). Repeat the table per address.
+forwarding, cloud 1:1 NAT). Repeat the table per address. `addr` is
+`ip:port`, `[ipv6]:port` or `name:port`: a DNS name (dynamic DNS for a home
+connection, say) is resolved when the agent starts and every 5 minutes, and
+every address it gives is advertised; the agent republishes its endpoint
+record when they change.
 
 ```toml
 [[public]]
@@ -341,7 +345,7 @@ addr = "203.0.113.5:443"
 transport = "tls"      # tls | kcp | anytls
 
 [[public]]
-addr = "203.0.113.5:443"
+addr = "sv.example.net:4883"
 transport = "kcp"
 ```
 

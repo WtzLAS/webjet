@@ -69,8 +69,71 @@ pub struct Listen {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicAddr {
-    pub addr: SocketAddr,
+    /// `ip:port`, `[ipv6]:port` or `name:port`; a DNS name is resolved
+    /// while the agent runs and every address it gives is advertised.
+    pub addr: HostPort,
     pub transport: String,
+}
+
+/// `host:port` where the host is an IP address or a DNS name.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct HostPort {
+    pub host: String,
+    pub port: u16,
+}
+
+impl HostPort {
+    /// The socket address when the host is an IP address.
+    pub fn ip(&self) -> Option<SocketAddr> {
+        let ip: std::net::IpAddr = self.host.parse().ok()?;
+        Some(SocketAddr::new(ip, self.port))
+    }
+
+    /// The DNS name, when the host isn't an IP address.
+    pub fn name(&self) -> Option<&str> {
+        self.ip().is_none().then_some(self.host.as_str())
+    }
+}
+
+impl TryFrom<String> for HostPort {
+    type Error = String;
+    fn try_from(s: String) -> std::result::Result<Self, String> {
+        if let Ok(a) = s.parse::<SocketAddr>() {
+            return Ok(HostPort {
+                host: a.ip().to_string(),
+                port: a.port(),
+            });
+        }
+        let (host, port) = s
+            .rsplit_once(':')
+            .ok_or_else(|| format!("{s:?}: expected host:port"))?;
+        let port: u16 = port
+            .parse()
+            .map_err(|_| format!("{s:?}: port {port:?} isn't a number from 1 to 65535"))?;
+        if port == 0 {
+            return Err(format!("{s:?}: port 0"));
+        }
+        let host = host.strip_suffix('.').unwrap_or(host);
+        if host.contains(':') || !webjet_core::validate::valid_dns_name(host) {
+            return Err(format!(
+                "{s:?}: the host must be an IP address (IPv6 in brackets) or a DNS name"
+            ));
+        }
+        Ok(HostPort {
+            host: host.to_ascii_lowercase(),
+            port,
+        })
+    }
+}
+
+impl std::fmt::Display for HostPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ip() {
+            Some(a) => write!(f, "{a}"),
+            None => write!(f, "{}:{}", self.host, self.port),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -361,6 +424,40 @@ enabled = false
         assert!(!c.controller.enabled);
         assert!(c.check_removed().is_ok());
         assert!(Config::default().controller.enabled);
+    }
+
+    #[test]
+    fn public_addresses_take_ips_and_dns_names() {
+        let c: Config = toml::from_str(
+            r#"
+[[public]]
+addr = "203.0.113.5:443"
+transport = "tls"
+[[public]]
+addr = "[2001:db8::1]:443"
+transport = "kcp"
+[[public]]
+addr = "SV.wolf109909.top.:4883"
+transport = "kcp"
+"#,
+        )
+        .unwrap();
+        let p: Vec<_> = c.public.iter().map(|p| &p.addr).collect();
+        assert_eq!(p[0].ip(), Some("203.0.113.5:443".parse().unwrap()));
+        assert_eq!(p[1].ip(), Some("[2001:db8::1]:443".parse().unwrap()));
+        assert_eq!(p[2].ip(), None);
+        assert_eq!(p[2].name(), Some("sv.wolf109909.top"));
+        assert_eq!(p[2].port, 4883);
+        assert_eq!(p[2].to_string(), "sv.wolf109909.top:4883");
+        for bad in [
+            "sv.wolf109909.top",
+            "sv.wolf109909.top:0",
+            "bad host:443",
+            "2001:db8::1:443",
+        ] {
+            let t = format!("[[public]]\naddr = \"{bad}\"\ntransport = \"kcp\"\n");
+            assert!(toml::from_str::<Config>(&t).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -439,6 +439,14 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
             Ok(())
         });
     }
+    {
+        // Returns at once when no [[public]] address is a DNS name.
+        let n2 = n.clone();
+        n.tasks.oneshot("public-names", async move {
+            crate::transport::resolve_public(n2).await;
+            Ok(())
+        });
+    }
     n.tasks.service("connections", connections(n.clone()));
     n.tasks.service("secrets", secrets(n.clone()));
     {

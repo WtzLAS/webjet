@@ -321,7 +321,9 @@ pub fn describe(raw: &[u8]) -> String {
 
 // ---------------------------------------------------------------- shared parsing
 
-/// `transport:host:port`, for example `tls:203.0.113.5:443`.
+/// `transport:host:port`, for example `tls:203.0.113.5:443`,
+/// `kcp:[2001:db8::1]:443` or `kcp:relay.example.com:443`. A DNS name is
+/// resolved by each node when it dials the seed.
 pub fn parse_seed_addr(s: &str) -> Result<wp::SeedAddr> {
     let (t, rest) = s
         .split_once(':')
@@ -330,10 +332,31 @@ pub fn parse_seed_addr(s: &str) -> Result<wp::SeedAddr> {
     let (host, port) = rest
         .rsplit_once(':')
         .ok_or_else(|| anyhow!("seed address {s:?} without port"))?;
-    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port: u16 = port
+        .parse()
+        .ok()
+        .filter(|p| *p != 0)
+        .ok_or_else(|| anyhow!("seed address {s:?}: port {port:?} isn't 1–65535"))?;
+    let host = match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        Some(v6) => {
+            v6.parse::<std::net::Ipv6Addr>()
+                .map_err(|_| anyhow!("seed address {s:?}: {v6:?} isn't an IPv6 address"))?;
+            v6.to_string()
+        }
+        None if host.parse::<std::net::IpAddr>().is_ok() => host.to_string(),
+        None => {
+            let name = host.strip_suffix('.').unwrap_or(host);
+            if name.contains(':') || !webjet_core::validate::valid_dns_name(name) {
+                bail!(
+                    "seed address {s:?}: the host must be an IP address (IPv6 in brackets) or a DNS name"
+                );
+            }
+            name.to_ascii_lowercase()
+        }
+    };
     Ok(wp::SeedAddr {
-        host: Some(host.to_string()),
-        port: port.parse()?,
+        host: Some(host),
+        port,
         transport,
     })
 }
@@ -668,6 +691,29 @@ mod tests {
         assert_eq!(a.transport, Transport::TcpTls);
         let a = parse_seed_addr("kcp:[2001:db8::1]:443").unwrap();
         assert_eq!(a.host.as_deref(), Some("2001:db8::1"));
+        let a = parse_seed_addr("kcp:SV.wolf109909.top:4883").unwrap();
+        assert_eq!(
+            (a.host.as_deref(), a.port, a.transport),
+            (Some("sv.wolf109909.top"), 4883, Transport::KcpFecTls)
+        );
+        assert_eq!(
+            parse_seed_addr("tls:relay.example.com.:443")
+                .unwrap()
+                .host
+                .as_deref(),
+            Some("relay.example.com")
+        );
+        for bad in [
+            "kcp:sv.wolf109909.top",
+            "kcp:sv.wolf109909.top:0",
+            "kcp:sv.wolf109909.top:70000",
+            "kcp:bad host:443",
+            "kcp:-bad.example:443",
+            "kcp:[nope]:443",
+            "quic:sv.wolf109909.top:443",
+        ] {
+            assert!(parse_seed_addr(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

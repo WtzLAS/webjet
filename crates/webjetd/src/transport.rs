@@ -371,9 +371,22 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
             v.push(e);
         }
     };
+    let resolved = n.public_resolved.lock().clone();
     for p in &n.cfg.public {
-        if let Some(t) = Transport::parse(&p.transport) {
-            push(p.addr, t, wp::AddrKind::Public);
+        let Some(t) = Transport::parse(&p.transport) else {
+            continue;
+        };
+        match p.addr.ip() {
+            Some(a) => push(a, t, wp::AddrKind::Public),
+            None => {
+                for ip in resolved.get(&p.addr.host).into_iter().flatten() {
+                    push(
+                        std::net::SocketAddr::new(*ip, p.addr.port),
+                        t,
+                        wp::AddrKind::Public,
+                    );
+                }
+            }
         }
     }
     if let Some(a) = n.cfg.listen.tls {
@@ -411,6 +424,58 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
     }
     v.retain(|a| a.priority > 0);
     v
+}
+
+/// Keep the addresses of the DNS names in webjetd.toml `[[public]]` (a
+/// dynamic-DNS name for a home connection, say) current: resolved at start
+/// and every 5 minutes; the endpoint record is republished when they
+/// change. A failed lookup keeps the last addresses.
+pub async fn resolve_public(n: Arc<Node>) {
+    let mut names: Vec<(String, u16)> = n
+        .cfg
+        .public
+        .iter()
+        .filter_map(|p| p.addr.name().map(|h| (h.to_string(), p.addr.port)))
+        .collect();
+    names.sort();
+    names.dedup_by(|a, b| a.0 == b.0);
+    if names.is_empty() {
+        return;
+    }
+    let mut first = true;
+    loop {
+        let mut changed = false;
+        for (host, port) in &names {
+            let ips = match tokio::net::lookup_host((host.as_str(), *port)).await {
+                Ok(it) => {
+                    let mut v: Vec<std::net::IpAddr> = it.map(|a| a.ip()).collect();
+                    v.sort();
+                    v.dedup();
+                    v
+                }
+                Err(e) => {
+                    if first {
+                        tracing::warn!(host = %host, "[[public]] address doesn't resolve: {e}");
+                    }
+                    continue;
+                }
+            };
+            if ips.is_empty() {
+                continue;
+            }
+            let mut r = n.public_resolved.lock();
+            if r.get(host) != Some(&ips) {
+                tracing::info!(host = %host, addrs = ?ips, "[[public]] address resolved");
+                r.insert(host.clone(), ips);
+                changed = true;
+            }
+        }
+        if changed {
+            crate::gossip::publish_endpoint(&n, true);
+        }
+        first = false;
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+    }
 }
 
 /// Our UDP address as relays saw it, over hops not carried by a tunnel

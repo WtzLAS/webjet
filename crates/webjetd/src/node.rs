@@ -179,6 +179,9 @@ pub struct Node {
     pub dialing: Mutex<HashSet<(Bytes32, Transport)>>,
     /// The router's port mapping for the UDP socket (§11.7), if any.
     pub port_mapping: Mutex<Option<crate::nat::Mapped>>,
+    /// Addresses of the DNS names in webjetd.toml `[[public]]`, by name
+    /// (`transport::resolve_public`).
+    pub public_resolved: Mutex<HashMap<String, Vec<std::net::IpAddr>>>,
     pub node_file: Mutex<state::NodeFile>,
     pub circuits: Mutex<crate::circuit::Table>,
     pub e2e: crate::e2e::Sessions,
@@ -252,6 +255,7 @@ impl Node {
             started: Instant::now(),
             dialing: Mutex::new(HashSet::new()),
             port_mapping: Mutex::new(None),
+            public_resolved: Mutex::new(HashMap::new()),
             node_file: Mutex::new(node_file),
             circuits: Mutex::new(crate::circuit::Table::default()),
             e2e: crate::e2e::Sessions::default(),
