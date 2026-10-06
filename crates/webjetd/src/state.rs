@@ -63,16 +63,24 @@ pub fn restrict_dir(dir: &Path) {
     let _ = dir;
 }
 
+/// Replace `path` atomically with `data`, readable only by the agent's
+/// user. Each write goes through its own temp file, so concurrent writers
+/// of one file never mix their contents (the last rename wins), and on Unix
+/// the directory is synced so the rename survives a power cut.
 pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
         restrict_dir(dir);
     }
-    let tmp = path.with_extension("tmp");
-    {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{:016x}.tmp", rand::random::<u64>()));
+    let written = (|| -> Result<()> {
         use std::io::Write;
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -83,9 +91,34 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
             .with_context(|| format!("write {}", tmp.display()))?;
         f.write_all(data)?;
         f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::rename(&tmp, path)?;
+    written?;
+    sync_dir(path.parent());
     Ok(())
+}
+
+/// Make a rename in `dir` durable (Unix; Windows has no directory handles
+/// for this, and NTFS journals the rename itself).
+fn sync_dir(dir: Option<&Path>) {
+    #[cfg(unix)]
+    if let Some(dir) = dir {
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+            tracing::debug!("syncing {}: {e}", dir.display());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 pub struct Paths {
@@ -411,7 +444,15 @@ mod tests {
         save_json(&p, &nf).unwrap();
         let back: NodeFile = load_json(&p).unwrap().unwrap();
         assert_eq!((back.node_id.as_str(), back.bootstrap), ("ab", true));
-        assert!(!p.with_extension("tmp").exists(), "temp file left behind");
+        let files = || {
+            let mut v: Vec<_> = std::fs::read_dir(p.parent().unwrap())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(files(), ["x.json"], "temp file left behind");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -426,6 +467,29 @@ mod tests {
         std::fs::write(&p, "not json").unwrap();
         let e = load_json::<NodeFile>(&p).unwrap_err().to_string();
         assert!(e.contains("x.json"), "{e}");
+    }
+
+    #[test]
+    fn concurrent_writes_of_one_file_never_mix() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("store.json");
+        let blobs: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i; 256 * 1024]).collect();
+        std::thread::scope(|s| {
+            for b in &blobs {
+                let p = &p;
+                s.spawn(move || {
+                    for _ in 0..5 {
+                        write_private(p, b).unwrap();
+                    }
+                });
+            }
+        });
+        let got = std::fs::read(&p).unwrap();
+        assert!(
+            blobs.contains(&got),
+            "the file is one writer's whole content"
+        );
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1);
     }
 
     #[test]

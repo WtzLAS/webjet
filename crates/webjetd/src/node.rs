@@ -724,6 +724,9 @@ impl Node {
 
     // ------------------------------------------------------------ persistence
 
+    /// Save the verified state. The read guard is held until the file is
+    /// replaced, so a store write can't land between two concurrent saves:
+    /// they write the same state, each through its own temp file.
     pub fn persist_store(&self) {
         let s = self.store.read();
         if let Err(e) = state::save_store(&self.paths, &s) {
