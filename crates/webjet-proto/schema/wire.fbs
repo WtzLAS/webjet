@@ -177,6 +177,9 @@ union RpcBody {
     LogReply,
     GetSnapshot,
     SnapshotReply,
+    UpgradeNode,
+    GetUpgradeStatus,
+    UpgradeReply,
 }
 
 table Rpc { body: RpcBody; }
@@ -301,4 +304,15 @@ table EnrollmentTicket {
     controllers: [SeedAddr];
     camouflage_domain: string;
     camouflage_pin: Key32;
+}
+
+// Remote upgrade (§19.8). A node passes these to a controller, which checks
+// the request and forwards it to the node it names.
+table UpgradeNode { request: [ubyte]; }       // Signed(UpgradeRequest) by an admin account key
+table GetUpgradeStatus { node_id: Key32; }
+table UpgradeReply {
+    ok: bool;
+    error: string;
+    version: string;          // the node's running webjetd version
+    status: string;           // the helper's last status (JSON), if any
 }

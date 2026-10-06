@@ -218,6 +218,8 @@ interface and its routes go away with it. Allow it some time:
 
 Pull or build the new image and recreate the container with the same volume.
 Follow the release notes for the order (controllers one at a time, §20.6).
+Containers have no remote upgrade helper, so `webjetctl network node upgrade`
+(architecture §19.8) refuses them; replace the image instead.
 
 ## Tests
 

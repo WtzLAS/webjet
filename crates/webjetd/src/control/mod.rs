@@ -70,6 +70,9 @@ pub const COMMANDS: &[(&str, Access)] = &[
     ("log", Access::Signed),
     // Admin-signed too (controller::audit::check_snapshot_request).
     ("snapshot", Access::Signed),
+    // Admin-signed too (upgrade::check_signed, on every node it passes).
+    ("upgrade", Access::Signed),
+    ("upgrade_status", Access::Read),
 ];
 
 pub fn access(cmd: &str) -> Option<Access> {
@@ -406,6 +409,7 @@ mod tests {
             "submit_offline",
             "submit_signed",
             "redeem_self",
+            "upgrade",
         ];
         for c in changing {
             assert_ne!(access(c), Some(Access::Read), "{c}");
@@ -423,7 +427,8 @@ mod tests {
                 "submit_signed",
                 "redeem_self",
                 "log",
-                "snapshot"
+                "snapshot",
+                "upgrade"
             ]
         );
         assert_eq!(access("shutdown"), None);

@@ -2481,8 +2481,19 @@ A node that can't reach any controller can't deliver its alarms. The metrics sto
 - **Compatibility:** each release speaks the current and the previous wire protocol (§15.8) and reads the previous schema versions (§15.6), so a network can run mixed versions during a rollout.
 - **Rollback:** binaries can be downgraded freely until the root activates a new StateVersion (§15.7). After activation, only forward.
 - **Staged rollout:** by tag, watching software versions and alarms in the metrics store before continuing.
-- **How new binaries reach nodes:** a small **upgrade script kept in the project's git repository** (a shell script for Linux and macOS, and a PowerShell script for Windows). It fetches the chosen release for the platform, replaces the installed programs and restarts the services. Operators run it, or call it from their own tooling, in the order above. The agent has no updater of its own, and nothing in the network tree controls software versions.
-- Because every node runs what that script installs, **the repository is the trust anchor for the software**. Running the script from a pinned tag, not a moving branch, keeps a rollout repeatable.
+- **How new binaries reach nodes:** `webjetup` (§19.2), run on the node by an operator, or started remotely by an admin (below). It fetches the chosen release for the platform, checks it against the published SHA-256, replaces the installed programs and restarts the services. Nothing in the network tree controls software versions.
+- Because every node runs what `webjetup` installs, **the release repository is the trust anchor for the software**. Installing a pinned tag, not "latest", keeps a rollout repeatable.
+
+**Remote upgrades (from 0.9.0).** An admin can upgrade nodes without logging in to them: `webjetctl network node upgrade <version> <nodes | --tag | --all>`. This lets an admin key change the software on every node that allows it, which makes a stolen admin key (§21.13, ops guide 4.4) worth more. The design limits what such a key can do:
+
+- **One signed request per node.** `UpgradeRequest { account_id, node_id, nonce, issued_at, expires_at, version, files }` is signed with the admin's account key (§13.2; normal accounts can't sign one). It names one node, lives at most an hour, and is accepted once. It is **not an operation**: it never enters the log and changes nothing in the tree. It goes from the admin's agent to a controller, which checks it and passes it to the node over the overlay (controllers reach every node, §14.4). Controllers pass it on one hop only, and nodes accept it only from a node of the network.
+- **Pinned files.** `files` holds the SHA-256 of every platform's release archive and `webjetup`, which `webjetctl` reads from the release when it signs. The node installs only files with those exact checksums, so whoever controls the release server later can't change what gets installed. A compromise of the release server *before* signing still gets through, as it does for manual upgrades.
+- **Forward only.** The version must be newer than the running one; a request can't downgrade a node to a release with known bugs.
+- **Checked twice, by the agent and by a separate root helper.** The agent (unprivileged on Linux) checks the request against its tree, where a revoked admin is invalid, and drops it into a spool directory. The **helper** (`webjetup apply-upgrade`, started by systemd/launchd/a Windows scheduled task when a request appears) doesn't trust the agent: it checks the signature itself against the network's root key and the node id that `webjetup` pinned when it set the helper up (`trust.json`; the admin's root-signed AccountRecord travels with the request), checks the version, expiry and replay, and downloads only the pinned files from the repository `webjetup` was installed with. An agent taken over by an attacker therefore can't make root install anything. The helper doesn't know about revocations after the record it is given; the agent's check covers that.
+- **Rollback.** The helper keeps the previous programs. If the new agent doesn't report the new version on its control socket within two minutes, it puts them back and restarts. A broken node can't take another remote request, so this matters more than for manual upgrades. The result (`done`, `refused`, `failed`, `rolled_back`, `rollback_failed`) is kept in the helper's `status.json`, readable over the overlay (`webjetctl network node upgrade-status`).
+- **`webjetup` updates itself here.** A remote upgrade also replaces `webjetup` with the release's (pinned too); otherwise fixes to it would never reach remotely-upgraded nodes. Manual `webjetup upgrade` still keeps the running `webjetup` (`install.sh` replaces it).
+- **On by default, opt-out per node.** `webjetup install --no-remote-upgrade` removes the helper and sets `[upgrade] remote = false` in `webjetd.toml`, so both the agent and the missing helper refuse. Docker containers have no helper. A remote admin can't turn this back on.
+- **Order.** `webjetctl` rolls out as above: controllers one at a time (learners, voters, the leader last), then relays, then the other nodes in batches (`--batch`), and waits for each stage to report the new version before the next. It stops at the first refusal, failure or timeout.
 
 ### 19.9 Backups
 
@@ -2721,6 +2732,12 @@ A release is blocked by any failing security test, any golden-vector change with
 - **Threat:** a person tags their own node `tag:admin`, makes their account an admin, or an admin creates a second admin.
 - **Defense:** tags, owners and roles change only through admin-signed operations (§14.1); normal accounts can only rename or tombstone nodes they own (§13.3); admin accounts can be created only by the root (§13.2).
 
+### 21.13a Abuse of remote upgrades
+
+- **Threat:** a stolen admin key, a compromised agent, or a compromised release server is used to run attacker-chosen software as root on nodes through remote upgrades (§19.8).
+- **Defense:** a request is admin-signed, for one node, valid for at most an hour, used once, and only to a newer release. It pins the checksums of the release files when the admin signs it, so the release server can't swap files afterwards. The root helper checks it again on its own against the root key and node id it pinned at install, so taking over the agent's user isn't enough. A node can opt out (`webjetup install --no-remote-upgrade`), and a remote admin can't turn that back on.
+- **Residual risk:** an attacker who holds an admin key **and** controls the release server can upgrade every node that allows it to their own build. Admins are as trusted as controllers (§13.2); the release repository is the software's trust anchor (§19.8). Nodes whose compromise would cost most can opt out.
+
 ### 21.14 Abuse of self-service
 
 - **Threat:** a normal account renames a node to impersonate another node's name in rules, or tombstones someone else's node.
@@ -2860,7 +2877,8 @@ No state has to be rebuilt: the remaining controllers already hold the full comm
 
 **Operations**
 
-- **A self-updater built into the agent,** with a root-certified release key and target versions set in the tree: more machinery than this deployment needs. Upgrades are left to a script in the repository.
+- **A self-updater built into the agent,** with a root-certified release key and target versions set in the tree: more machinery than this deployment needs. Upgrades are started by an operator on the node or by an admin's signed per-node request (§19.8), carried out by `webjetup`, not by the agent.
+- **Remote upgrades as a tree operation** (a version target in the tree that nodes follow): durable and audited, but every node would act on one admin signature at once. A per-node request with a short lifetime, rolled out in order by the admin's tool, limits a mistake or a stolen key to the nodes it is signed for, within the hour.
 - **Runbooks inside this document:** they change with tooling more often than the architecture does. They live in a separate Operations Guide.
 - **A direct alert channel from controllers (webhooks):** Prometheus alert rules with Grafana are enough, and add no new component.
 - **Network-wide settings in local files:** every node would need editing by hand, and nodes could disagree. Shared settings are in the tree.
@@ -3038,7 +3056,7 @@ No state has to be rebuilt: the remaining controllers already hold the full comm
 | Configuration | TOML throughout. `webjetd.toml`: how one machine runs the agent. In the tree: the network configuration (one versioned document, admins) and each node's configuration (its owner or an admin) | §6.18, §6.19, §19.3 |
 | Alarms | Logged, shown locally, carried in metric reports; alerting by Prometheus rules, viewed in Grafana | §19.7 |
 | Runbooks | In a separate Operations Guide | §19.10 |
-| Software updates | Left entirely to a small upgrade script kept in the git repository, run by operators in the documented order; no updater in the agent | §19.8 |
+| Software updates | `webjetup` on the node, by an operator, or remotely by an admin's signed per-node request (pinned checksums, forward only, checked again by a root helper, automatic rollback, opt-out per node); no updater in the agent | §19.8 |
 | Naming | The project and its programs are named Webjet; protocol labels use `webjet` | §15.3, §15.4, §15.8, §19.2 |
 | Testing | Property tests, golden vectors, fuzzing of every parser, deterministic simulation, network emulation, one security test per attack, probe and fingerprint checks, scale and chaos runs | §20 |
 

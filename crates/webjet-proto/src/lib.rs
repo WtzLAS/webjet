@@ -108,7 +108,7 @@ codec! {
     ControllerSnapshot => ControllerSnapshotRef, EnrollRequest => EnrollRequestRef,
     EnrollResponse => EnrollResponseRef, EnrollmentTicket => EnrollmentTicketRef,
     CreateEnrollment => CreateEnrollmentRef, LogRequest => LogRequestRef,
-    SnapshotRequest => SnapshotRequestRef,
+    SnapshotRequest => SnapshotRequestRef, UpgradeRequest => UpgradeRequestRef,
 }
 
 // ---------------------------------------------------------------- fixed-size structs
@@ -314,6 +314,7 @@ pub mod msg_type {
     pub const LOG_REQUEST: u16 = 27;
     pub const CONTROLLER_SETTINGS: u16 = 28;
     pub const SNAPSHOT_REQUEST: u16 = 29;
+    pub const UPGRADE_REQUEST: u16 = 30;
 
     pub fn name(t: u16) -> &'static str {
         match t {
@@ -346,6 +347,7 @@ pub mod msg_type {
             LOG_REQUEST => "LogRequest",
             CONTROLLER_SETTINGS => "ControllerSettings",
             SNAPSHOT_REQUEST => "SnapshotRequest",
+            UPGRADE_REQUEST => "UpgradeRequest",
             _ => "unknown",
         }
     }

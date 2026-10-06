@@ -13,6 +13,7 @@ use zeroize::Zeroizing;
 pub mod config;
 pub mod prompt;
 pub mod root;
+pub mod upgrade;
 
 pub use prompt::{new_passphrase, passphrase};
 pub use webjetd::state::write_private;

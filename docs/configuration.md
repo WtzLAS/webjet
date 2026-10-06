@@ -452,6 +452,14 @@ re-key); changing `storage` later doesn't move an existing key.
 | `signer_socket` | none | Socket (Windows: named pipe) of `webjetd signer`, which holds the signing key in a separate process (§19.2). Without it the key is a file in `data_dir`. `webjetup install --signer` sets it, to `/var/run/webjet-signer/signer.sock` (Windows: `\\.\pipe\webjet-signer`), and installs the signer's service. |
 | `head_lifetime_hours` | `48` | How long signed tree heads stay valid (§7.3; 24–72 h recommended). |
 
+### `[upgrade]`
+
+Remote upgrades (architecture §19.8, operations guide 3.3), from 0.9.0.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `remote` | `true` | Accept an admin's signed request to upgrade this node (`webjetctl network node upgrade`). The request is carried out by a helper `webjetup` installs, which runs as root, checks the request again itself, installs only the release files whose checksums the admin signed, never downgrades, and puts the previous version back when the new agent doesn't come up. `webjetup install --no-remote-upgrade` sets `false` and removes the helper; `--remote-upgrade` turns it back on. Docker containers have no helper. |
+
 ### Example: a relay
 
 ```toml

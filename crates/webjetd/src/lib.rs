@@ -1,6 +1,9 @@
 //! webjetd: the Webjet agent. One binary for every role (§13.4); the roles a
 //! node holds come from its record in the network tree.
 
+/// What `webjetd features` prints (webjetup asks before it relies on them).
+pub const FEATURES: &[&str] = &["remote-upgrade"];
+
 pub mod agent;
 pub mod circuit;
 pub mod compression;
@@ -31,5 +34,6 @@ pub mod tasks;
 #[cfg(test)]
 pub(crate) mod testnode;
 pub mod transport;
+pub mod upgrade;
 #[cfg(windows)]
 pub mod winsec;

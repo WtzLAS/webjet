@@ -795,11 +795,23 @@ A node that was offline through the whole announcement period can't use AnyTLS u
 
 **When:** a new release is out. If its release notes say it introduces a new StateVersion or needs a particular order, follow section 3.4 instead. References: §19.8, §15.8.
 
-Each release speaks the current and the previous wire protocol, so a network runs mixed versions while it is upgraded. Nothing in the network upgrades nodes; you run `webjetup` on each.
+Each release speaks the current and the previous wire protocol, so a network runs mixed versions while it is upgraded. You either run `webjetup` on each node, or, for nodes running 0.9.0 or later that allow it, start the upgrade remotely as an admin (below).
 
-**Steps:**
+**Remote upgrade** (admin, nodes from 0.9.0):
 
-1. Read the release notes. `webjetup` never updates itself: `webjetup upgrade` installs the new `webjetd` and `webjetctl` but keeps the installed `webjetup`. When the notes say the release fixes `webjetup` (for example its service files), upgrade with that release's `install.sh` instead, which installs the new `webjetup` and then upgrades the same way.
+```
+[admin]    webjetctl network node upgrade v0.9.0 --all --dry-run     # shows the order
+[admin]    webjetctl network node upgrade v0.9.0 --all               # or: <node> …, --tag edge
+[admin]    webjetctl network node upgrade-status ctl-01 node-02
+```
+
+`webjetctl` reads the checksums the release publishes (`--repo`, default the official repository), signs one request per node with your account key, and goes through the nodes in the order of the steps below: controllers one at a time, the leader last, then relays, then the rest `--batch` (default 5) at a time. Each node's helper checks the request, installs exactly those files (and the release's `webjetup`), restarts the agent and waits for it to report the new version; if it doesn't within two minutes, it puts the previous version back. The rollout stops at the first node that refuses, fails, rolls back, or isn't done after `--timeout-minutes` (default 15); the nodes after it are left as they are. Fix the cause and run the same command again: nodes already on the version are skipped.
+
+A node refuses when it runs a version older than 0.9.0 (upgrade it with `webjetup` once), when it has no helper (Docker; `--no-remote-upgrade`; or installed by a `webjetup` before 0.9.0, so run `install.sh` of 0.9.0 or later on it once), when `[upgrade] remote = false`, or when the version isn't newer. To keep a node from ever being upgraded remotely: `sudo webjetup install --no-remote-upgrade` on it. A release with a schema change (section 3.4) is rolled out the same way, followed by the StateVersion activation.
+
+**Steps** (by hand):
+
+1. Read the release notes. `webjetup upgrade` installs the new `webjetd` and `webjetctl` but keeps the installed `webjetup` (only a remote upgrade replaces `webjetup` too). When the notes say the release fixes `webjetup` (for example its service files), upgrade with that release's `install.sh` instead, which installs the new `webjetup` and then upgrades the same way.
 2. Upgrade the controllers one at a time: learners first, then voters, the leader last. After each, confirm it has rejoined and caught up (`webjetctl network controller list`).
    ```
    [node]     sudo webjetup upgrade v0.8.0        # Windows: webjetup upgrade v0.8.0 as Administrator
@@ -811,9 +823,9 @@ Each release speaks the current and the previous wire protocol, so a network run
 3. Upgrade relays, then the other nodes, in stages by tag. Watch software versions (`webjet_node_info`, or the version under each node in webjet-app's Nodes tab) and alarms between stages. When a release raises the minimum gossip protocol (its release notes say so), upgraded nodes ignore the endpoint, link-state and attachment records of nodes that haven't been upgraded yet (architecture §10.6.5). Those nodes are shown as `outdated` and no routes go through them until they are upgraded, so upgrade relays without delay.
 4. Upgrade `webjetctl` on admins' machines and on the offline computer (from the release archive, as in "Installing the programs").
 
-**Check:** `sudo webjetup status` on each node shows the new version, and `webjetctl local status` shows no alarms.
+**Check:** `sudo webjetup status` on each node shows the new version (and, under `remote`, the last remote upgrade), and `webjetctl local status` shows no alarms. Remotely: `webjetctl network node upgrade-status <node>`.
 
-**Rollback:** `sudo webjetup install <older version> --force` installs an older release again (not past an activated StateVersion, section 3.4).
+**Rollback:** `sudo webjetup install <older version> --force` on the node installs an older release again (not past an activated StateVersion, section 3.4). Remote upgrades never downgrade.
 
 ---
 
@@ -1067,7 +1079,7 @@ For an admin, `webjetctl root admin revoke` takes the same options, plus `--revo
 
 ## 4.4 An admin account is compromised
 
-**When:** an admin's key, or the machine holding it with its passphrase, may be in someone else's hands. An admin can enroll nodes, change the policy, create accounts and certify controllers, so act quickly. References: §13.6, §6.5.
+**When:** an admin's key, or the machine holding it with its passphrase, may be in someone else's hands. An admin can enroll nodes, change the policy, create accounts, certify controllers and upgrade nodes remotely, so act quickly. References: §13.6, §6.5, §19.8.
 
 **Steps:**
 
@@ -1076,6 +1088,7 @@ For an admin, `webjetctl root admin revoke` takes the same options, plus `--revo
 3. **Review what the key did** since it may have leaked (§13.3): nodes enrolled or re-keyed, tags, roles and owners changed, accounts created, policy and configuration versions applied, camouflage secrets set. Revoke unknown nodes (section 2.6) and accounts (section 1.3), and apply a corrected configuration (section 3.5).
 4. Rotate the PSK twice (section 3.1).
 5. If a controller certificate was signed with the stolen key for a machine you don't control, that machine could act as a controller: retire its key and remove it (section 4.3).
+6. **Remote upgrades** signed with the key install only published releases, newer than what the node runs, whose checksums the request pins, and a request is valid for an hour at most. Look at `webjetctl network node upgrade-status` (or `sudo webjetup status`) on the nodes for upgrades nobody started. If the release server may be compromised too, stop remote upgrades until it is trusted again: `sudo webjetup install --no-remote-upgrade` on the nodes that matter most.
 
 **Check:** `webjetctl network account list` shows the account's new key, or no longer lists it; no node shows `control(uncertified)`; `webjetctl local status` shows no alarms.
 

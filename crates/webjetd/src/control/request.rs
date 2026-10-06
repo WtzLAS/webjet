@@ -84,6 +84,16 @@ pub enum Request {
         #[serde(with = "base64")]
         request: Vec<u8>,
     },
+    /// An admin-signed UpgradeRequest for the node it names (§19.8).
+    Upgrade {
+        #[serde(with = "base64")]
+        request: Vec<u8>,
+    },
+    /// A node's version and remote upgrade state; `None`: this node's.
+    UpgradeStatus {
+        #[serde(default, with = "hex_id", skip_serializing_if = "Option::is_none")]
+        node: Option<Bytes32>,
+    },
 }
 
 impl Request {
@@ -216,6 +226,20 @@ mod tests {
                     request: b"r".to_vec(),
                 },
                 json!({"cmd": "log", "request": crate::state::b64(b"r")}),
+            ),
+            (
+                Request::Upgrade {
+                    request: b"u".to_vec(),
+                },
+                json!({"cmd": "upgrade", "request": crate::state::b64(b"u")}),
+            ),
+            (
+                Request::UpgradeStatus { node: Some(id) },
+                json!({"cmd": "upgrade_status", "node": hex::encode(id)}),
+            ),
+            (
+                Request::UpgradeStatus { node: None },
+                json!({"cmd": "upgrade_status"}),
             ),
         ];
         for (req, wire) in cases {

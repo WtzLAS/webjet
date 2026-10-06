@@ -21,6 +21,7 @@ path = "src/main.rs"
 webjet-core = { path = "../webjet-core" }
 webjet-proto = { path = "../webjet-proto" }
 webjet-net = { path = "../webjet-net", default-features = false }
+webjet-release = { path = "../webjet-release" }
 anyhow.workspace = true
 thiserror.workspace = true
 blake3.workspace = true

@@ -28,6 +28,12 @@ pub const SIGNER_SERVICE: &str = "webjet-signer";
 pub const SIGNER_LAUNCHD_LABEL: &str = "net.webjet.signer";
 pub const SIGNER_USER: &str = "webjet-signer";
 
+/// The remote upgrade helper (`webjetup apply-upgrade`, §19.8): systemd
+/// units (`.path` starts `.service`), launchd label, Windows scheduled task.
+pub const UPGRADE_SERVICE: &str = "webjet-upgrade";
+pub const UPGRADE_LAUNCHD_LABEL: &str = "net.webjet.upgrade";
+pub const UPGRADE_TASK: &str = "Webjet upgrade";
+
 /// The Keychain service name under which webjetd stores identity keys.
 pub const KEYCHAIN_SERVICE: &str = "net.webjet.identity";
 /// Where webjetd keeps them unless `[key] keychain` says otherwise.
@@ -78,6 +84,9 @@ pub struct Layout {
     pub signer_socket: PathBuf,
     pub signer_service_file: Option<PathBuf>,
     pub signer_log: Option<PathBuf>,
+    /// The remote upgrade helper's spool (status, trust, backups; `queue/`
+    /// is the agent's), `webjet_release::default_spool_dir`.
+    pub upgrade_spool: PathBuf,
 }
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
@@ -105,6 +114,7 @@ impl Layout {
                     "/Library/LaunchDaemons/{SIGNER_LAUNCHD_LABEL}.plist"
                 ))),
                 signer_log: Some(PathBuf::from("/var/log/webjet-signer.log")),
+                upgrade_spool: webjet_release::default_spool_dir(),
             }
         } else if cfg!(windows) {
             let program_data = env_dir("ProgramData", r"C:\ProgramData");
@@ -121,6 +131,7 @@ impl Layout {
                 signer_socket: PathBuf::from(r"\\.\pipe\webjet-signer"),
                 signer_service_file: None,
                 signer_log: None,
+                upgrade_spool: webjet_release::default_spool_dir(),
             }
         } else {
             Layout {
@@ -139,6 +150,7 @@ impl Layout {
                     "/etc/systemd/system/{SIGNER_SERVICE}.service"
                 ))),
                 signer_log: None,
+                upgrade_spool: webjet_release::default_spool_dir(),
             }
         }
     }
@@ -177,32 +189,7 @@ pub fn before_0_4(version: &str) -> bool {
     major == 0 && minor < 4
 }
 
-/// The release target of this build of webjetup, which is also the machine's
-/// (install.sh picks the matching webjetup).
-pub fn target() -> Option<&'static str> {
-    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some("x86_64-unknown-linux-gnu")
-    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        Some("aarch64-unknown-linux-gnu")
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        Some("x86_64-apple-darwin")
-    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some("aarch64-apple-darwin")
-    } else if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("x86_64-pc-windows-msvc")
-    } else {
-        None
-    }
-}
-
-/// The release archive for `target`: a zip on Windows, else a gzipped tar.
-pub fn archive_name(tag: &str, target: &str) -> String {
-    if target.contains("windows") {
-        format!("webjet-{tag}-{target}.zip")
-    } else {
-        format!("webjet-{tag}-{target}.tar.gz")
-    }
-}
+pub use webjet_release::{archive_name, target};
 
 #[cfg(test)]
 mod tests {

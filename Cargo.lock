@@ -7733,6 +7733,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "webjet-release"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "hex",
+ "libc",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "ureq",
+ "webjet-core",
+ "webjet-proto",
+]
+
+[[package]]
 name = "webjet-tools"
 version = "0.8.0"
 dependencies = [
@@ -7757,6 +7775,7 @@ dependencies = [
  "webjet-core",
  "webjet-net",
  "webjet-proto",
+ "webjet-release",
  "webjetd",
  "zeroize",
 ]
@@ -7799,6 +7818,7 @@ dependencies = [
  "webjet-core",
  "webjet-net",
  "webjet-proto",
+ "webjet-release",
  "windows-service",
  "windows-sys 0.61.2",
  "zeroize",
@@ -7814,7 +7834,6 @@ dependencies = [
  "flate2",
  "hex",
  "libc",
- "rustls",
  "security-framework",
  "security-framework-sys",
  "serde",
@@ -7824,7 +7843,7 @@ dependencies = [
  "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "toml_edit 0.25.15+spec-1.1.0",
- "ureq",
+ "webjet-release",
  "zip",
 ]
 

@@ -675,3 +675,22 @@ table LogEntry {
     random: EntryRandom;
     leaves: [LeafUpdate];      // the leader's leaf bytes (§15.5)
 }
+
+// An admin tells one node to upgrade itself to a published release (remote
+// upgrade, §19.8). Never in the log: sent to the node (through a controller)
+// and checked there against the node's own tree. The node hands a checked
+// copy to the root helper webjetup installed, which installs only these
+// exact files from its own configured repository.
+table UpgradeFile {
+    name: string;             // e.g. webjet-v0.9.0-x86_64-unknown-linux-gnu.tar.gz
+    sha256: Key32;
+}
+table UpgradeRequest {
+    account_id: Key32;
+    node_id: Key32;           // the one node this is for
+    nonce: Id16;
+    issued_at: uint64;
+    expires_at: uint64;       // at most an hour after issued_at
+    version: string;          // release tag, e.g. v0.9.0; must be newer than the node's
+    files: [UpgradeFile];     // every target's archive and webjetup, as published
+}

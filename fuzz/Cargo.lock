@@ -2685,6 +2685,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "webjet-release"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "webjet-core",
+ "webjet-proto",
+]
+
+[[package]]
 name = "webjetd"
 version = "0.8.0"
 dependencies = [
@@ -2720,6 +2734,7 @@ dependencies = [
  "webjet-core",
  "webjet-net",
  "webjet-proto",
+ "webjet-release",
  "windows-service",
  "windows-sys 0.61.2",
  "zeroize",

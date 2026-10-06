@@ -59,6 +59,8 @@ pub async fn run(n: &Arc<Node>, req: Request) -> Result<Value> {
         Request::Merkle => Ok(merkle(n)),
         Request::Log { request } => log(n, request).await,
         Request::Snapshot { request } => snapshot(n, request).await,
+        Request::Upgrade { request } => crate::upgrade::request(n, request).await,
+        Request::UpgradeStatus { node } => crate::upgrade::remote_status(n, node).await,
     }
 }
 

@@ -48,6 +48,9 @@ pub struct Config {
     transport: Option<toml::Value>,
     #[serde(default)]
     pub controller: ControllerCfg,
+    /// Remote upgrades started by an admin (§19.8).
+    #[serde(default)]
+    pub upgrade: UpgradeCfg,
     /// The control socket for `webjetctl` (§13.1).
     #[serde(default = "default_control")]
     pub control_socket: PathBuf,
@@ -258,6 +261,29 @@ pub struct ControllerCfg {
     pub head_lifetime_hours: u64,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpgradeCfg {
+    /// Accept an admin's signed request to upgrade this node (§19.8). It
+    /// also needs the helper webjetup installs; `webjetup install
+    /// --no-remote-upgrade` sets this to false and leaves the helper out.
+    #[serde(default = "yes")]
+    pub remote: bool,
+}
+
+impl Default for UpgradeCfg {
+    fn default() -> Self {
+        UpgradeCfg { remote: true }
+    }
+}
+
+impl UpgradeCfg {
+    /// The helper's spool directory (where webjetup put it).
+    pub fn spool_dir(&self) -> PathBuf {
+        webjet_release::default_spool_dir()
+    }
+}
+
 impl Default for ControllerCfg {
     fn default() -> Self {
         ControllerCfg {
@@ -416,14 +442,21 @@ published = "10.2.2.0/24"
 interface = "eth1"
 [controller]
 enabled = false
+[upgrade]
+remote = false
 "#,
         )
         .unwrap();
         assert_eq!(c.tun.mtu, 1300);
         assert_eq!(c.gateway.route.len(), 1);
         assert!(!c.controller.enabled);
+        assert!(!c.upgrade.remote);
         assert!(c.check_removed().is_ok());
         assert!(Config::default().controller.enabled);
+        assert!(
+            Config::default().upgrade.remote,
+            "remote upgrades are on by default"
+        );
     }
 
     #[test]

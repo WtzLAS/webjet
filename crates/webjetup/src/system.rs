@@ -37,7 +37,7 @@ pub fn query(prog: &str, args: &[&str]) -> Option<String> {
 }
 
 impl Sys {
-    fn say(&self, what: &str) {
+    pub fn say(&self, what: &str) {
         if self.dry {
             println!("    would {what}");
         } else {

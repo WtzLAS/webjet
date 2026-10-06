@@ -16562,6 +16562,15 @@ mod root {
 
             /// The variant of type `SnapshotReply` in the union `RpcBody`
             SnapshotReply(::planus::alloc::boxed::Box<self::SnapshotReply>),
+
+            /// The variant of type `UpgradeNode` in the union `RpcBody`
+            UpgradeNode(::planus::alloc::boxed::Box<self::UpgradeNode>),
+
+            /// The variant of type `GetUpgradeStatus` in the union `RpcBody`
+            GetUpgradeStatus(::planus::alloc::boxed::Box<self::GetUpgradeStatus>),
+
+            /// The variant of type `UpgradeReply` in the union `RpcBody`
+            UpgradeReply(::planus::alloc::boxed::Box<self::UpgradeReply>),
         }
 
         impl RpcBody {
@@ -16730,6 +16739,30 @@ mod root {
             ) -> ::planus::UnionOffset<Self> {
                 ::planus::UnionOffset::new(20, value.prepare(builder).downcast())
             }
+
+            #[inline]
+            pub fn create_upgrade_node(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::UpgradeNode>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(21, value.prepare(builder).downcast())
+            }
+
+            #[inline]
+            pub fn create_get_upgrade_status(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::GetUpgradeStatus>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(22, value.prepare(builder).downcast())
+            }
+
+            #[inline]
+            pub fn create_upgrade_reply(
+                builder: &mut ::planus::Builder,
+                value: impl ::planus::WriteAsOffset<self::UpgradeReply>,
+            ) -> ::planus::UnionOffset<Self> {
+                ::planus::UnionOffset::new(23, value.prepare(builder).downcast())
+            }
         }
 
         impl ::planus::WriteAsUnion<RpcBody> for RpcBody {
@@ -16760,6 +16793,11 @@ mod root {
                     Self::LogReply(value) => Self::create_log_reply(builder, value),
                     Self::GetSnapshot(value) => Self::create_get_snapshot(builder, value),
                     Self::SnapshotReply(value) => Self::create_snapshot_reply(builder, value),
+                    Self::UpgradeNode(value) => Self::create_upgrade_node(builder, value),
+                    Self::GetUpgradeStatus(value) => {
+                        Self::create_get_upgrade_status(builder, value)
+                    }
+                    Self::UpgradeReply(value) => Self::create_upgrade_reply(builder, value),
                 }
             }
         }
@@ -16973,6 +17011,36 @@ mod root {
             pub fn snapshot_reply<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<20, T>>
             where
                 T: ::planus::WriteAsOffset<self::SnapshotReply>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`UpgradeNode` variant](RpcBody#variant.UpgradeNode).
+            #[inline]
+            pub fn upgrade_node<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<21, T>>
+            where
+                T: ::planus::WriteAsOffset<self::UpgradeNode>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`GetUpgradeStatus` variant](RpcBody#variant.GetUpgradeStatus).
+            #[inline]
+            pub fn get_upgrade_status<T>(
+                self,
+                value: T,
+            ) -> RpcBodyBuilder<::planus::Initialized<22, T>>
+            where
+                T: ::planus::WriteAsOffset<self::GetUpgradeStatus>,
+            {
+                RpcBodyBuilder(::planus::Initialized(value))
+            }
+
+            /// Creates an instance of the [`UpgradeReply` variant](RpcBody#variant.UpgradeReply).
+            #[inline]
+            pub fn upgrade_reply<T>(self, value: T) -> RpcBodyBuilder<::planus::Initialized<23, T>>
+            where
+                T: ::planus::WriteAsOffset<self::UpgradeReply>,
             {
                 RpcBodyBuilder(::planus::Initialized(value))
             }
@@ -17429,6 +17497,72 @@ mod root {
                 ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
             }
         }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<21, T>>
+        where
+            T: ::planus::WriteAsOffset<self::UpgradeNode>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(21, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<21, T>>
+        where
+            T: ::planus::WriteAsOffset<self::UpgradeNode>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<22, T>>
+        where
+            T: ::planus::WriteAsOffset<self::GetUpgradeStatus>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(22, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<22, T>>
+        where
+            T: ::planus::WriteAsOffset<self::GetUpgradeStatus>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
+        impl<T> ::planus::WriteAsUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<23, T>>
+        where
+            T: ::planus::WriteAsOffset<self::UpgradeReply>,
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::UnionOffset<RpcBody> {
+                ::planus::UnionOffset::new(23, (self.0).0.prepare(builder).downcast())
+            }
+        }
+
+        impl<T> ::planus::WriteAsOptionalUnion<RpcBody> for RpcBodyBuilder<::planus::Initialized<23, T>>
+        where
+            T: ::planus::WriteAsOffset<self::UpgradeReply>,
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::UnionOffset<RpcBody>> {
+                ::core::option::Option::Some(::planus::WriteAsUnion::prepare(self, builder))
+            }
+        }
 
         /// Reference to a deserialized [RpcBody].
         #[derive(Copy, Clone, Debug)]
@@ -17453,6 +17587,9 @@ mod root {
             LogReply(self::LogReplyRef<'a>),
             GetSnapshot(self::GetSnapshotRef<'a>),
             SnapshotReply(self::SnapshotReplyRef<'a>),
+            UpgradeNode(self::UpgradeNodeRef<'a>),
+            GetUpgradeStatus(self::GetUpgradeStatusRef<'a>),
+            UpgradeReply(self::UpgradeReplyRef<'a>),
         }
 
         impl<'a> ::core::convert::TryFrom<RpcBodyRef<'a>> for RpcBody {
@@ -17569,6 +17706,24 @@ mod root {
                             ::core::convert::TryFrom::try_from(value)?,
                         ))
                     }
+
+                    RpcBodyRef::UpgradeNode(value) => {
+                        Self::UpgradeNode(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
+
+                    RpcBodyRef::GetUpgradeStatus(value) => {
+                        Self::GetUpgradeStatus(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
+
+                    RpcBodyRef::UpgradeReply(value) => {
+                        Self::UpgradeReply(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryFrom::try_from(value)?,
+                        ))
+                    }
                 })
             }
         }
@@ -17640,6 +17795,15 @@ mod root {
                     20 => ::core::result::Result::Ok(Self::SnapshotReply(
                         ::planus::TableRead::from_buffer(buffer, field_offset)?,
                     )),
+                    21 => ::core::result::Result::Ok(Self::UpgradeNode(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
+                    22 => ::core::result::Result::Ok(Self::GetUpgradeStatus(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
+                    23 => ::core::result::Result::Ok(Self::UpgradeReply(
+                        ::planus::TableRead::from_buffer(buffer, field_offset)?,
+                    )),
                     _ => {
                         ::core::result::Result::Err(::planus::errors::ErrorKind::UnknownUnionTag {
                             tag,
@@ -17656,7 +17820,7 @@ mod root {
         /// The table `Rpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Rpc` in the file `schema/wire.fbs:182`
+        /// * Table `Rpc` in the file `schema/wire.fbs:185`
         #[derive(
             Clone,
             Debug,
@@ -17926,7 +18090,7 @@ mod root {
         /// The table `RaftVote` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVote` in the file `schema/wire.fbs:186`
+        /// * Table `RaftVote` in the file `schema/wire.fbs:189`
         #[derive(
             Clone,
             Debug,
@@ -18338,7 +18502,7 @@ mod root {
         /// The table `RaftVoteResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:193`
+        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:196`
         #[derive(
             Clone,
             Debug,
@@ -18720,7 +18884,7 @@ mod root {
         /// The table `RaftAppend` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppend` in the file `schema/wire.fbs:195`
+        /// * Table `RaftAppend` in the file `schema/wire.fbs:198`
         #[derive(
             Clone,
             Debug,
@@ -19200,7 +19364,7 @@ mod root {
         /// The table `RaftAppendResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:203`
+        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:206`
         #[derive(
             Clone,
             Debug,
@@ -19641,7 +19805,7 @@ mod root {
         /// The table `RaftSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:210`
+        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:213`
         #[derive(
             Clone,
             Debug,
@@ -20055,7 +20219,7 @@ mod root {
         /// The table `RaftSnapshotResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:217`
+        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:220`
         #[derive(
             Clone,
             Debug,
@@ -20390,7 +20554,7 @@ mod root {
         /// The table `RaftForward` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForward` in the file `schema/wire.fbs:220`
+        /// * Table `RaftForward` in the file `schema/wire.fbs:223`
         #[derive(
             Clone,
             Debug,
@@ -20706,7 +20870,7 @@ mod root {
         /// The table `RaftForwardResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:221`
+        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:224`
         #[derive(
             Clone,
             Debug,
@@ -21143,7 +21307,7 @@ mod root {
         /// The table `RaftTimeoutNow` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:222`
+        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:225`
         #[derive(
             Clone,
             Debug,
@@ -21406,7 +21570,7 @@ mod root {
         /// The union `RaftBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RaftBody` in the file `schema/wire.fbs:224`
+        /// * Union `RaftBody` in the file `schema/wire.fbs:227`
         #[derive(
             Clone,
             Debug,
@@ -22003,7 +22167,7 @@ mod root {
         /// The table `RaftMessage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftMessage` in the file `schema/wire.fbs:236`
+        /// * Table `RaftMessage` in the file `schema/wire.fbs:239`
         #[derive(
             Clone,
             Debug,
@@ -22372,7 +22536,7 @@ mod root {
         /// The table `PendingEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:239`
+        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:242`
         #[derive(
             Clone,
             Debug,
@@ -22867,7 +23031,7 @@ mod root {
         /// The table `OpSeq` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpSeq` in the file `schema/wire.fbs:247`
+        /// * Table `OpSeq` in the file `schema/wire.fbs:250`
         #[derive(
             Clone,
             Debug,
@@ -23180,7 +23344,7 @@ mod root {
         /// The table `MemberSince` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MemberSince` in the file `schema/wire.fbs:249`
+        /// * Table `MemberSince` in the file `schema/wire.fbs:252`
         #[derive(
             Clone,
             Debug,
@@ -23492,7 +23656,7 @@ mod root {
         /// The table `ControllerSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:251`
+        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:254`
         #[derive(
             Clone,
             Debug,
@@ -24895,7 +25059,7 @@ mod root {
         /// The table `EnrollRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollRequest` in the file `schema/wire.fbs:272`
+        /// * Table `EnrollRequest` in the file `schema/wire.fbs:275`
         #[derive(
             Clone,
             Debug,
@@ -25314,7 +25478,7 @@ mod root {
         /// The table `MerkleProof` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MerkleProof` in the file `schema/wire.fbs:279`
+        /// * Table `MerkleProof` in the file `schema/wire.fbs:282`
         #[derive(
             Clone,
             Debug,
@@ -25635,7 +25799,7 @@ mod root {
         /// The table `EnrollResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollResponse` in the file `schema/wire.fbs:281`
+        /// * Table `EnrollResponse` in the file `schema/wire.fbs:284`
         #[derive(
             Clone,
             Debug,
@@ -26590,7 +26754,7 @@ mod root {
         /// The table `EnrollmentTicket` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:298`
+        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:301`
         #[derive(
             Clone,
             Debug,
@@ -27092,6 +27256,962 @@ mod root {
                 )
                 .map_err(|error_kind| {
                     error_kind.with_error_location("[EnrollmentTicketRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `UpgradeNode` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `UpgradeNode` in the file `schema/wire.fbs:311`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct UpgradeNode {
+            /// The field `request` in the table `UpgradeNode`
+            pub request: ::core::option::Option<::planus::alloc::vec::Vec<u8>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for UpgradeNode {
+            fn default() -> Self {
+                Self {
+                    request: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl UpgradeNode {
+            /// Creates a [UpgradeNodeBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> UpgradeNodeBuilder<()> {
+                UpgradeNodeBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_request: impl ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_request = field_request.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_request.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[u8]>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_request) = prepared_request {
+                            object_writer.write::<_, _, 4>(&prepared_request);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<UpgradeNode>> for UpgradeNode {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeNode> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<UpgradeNode>> for UpgradeNode {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeNode>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<UpgradeNode> for UpgradeNode {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeNode> {
+                UpgradeNode::create(builder, &self.request)
+            }
+        }
+
+        /// Builder for serializing an instance of the [UpgradeNode] type.
+        ///
+        /// Can be created using the [UpgradeNode::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct UpgradeNodeBuilder<State>(State);
+
+        impl UpgradeNodeBuilder<()> {
+            /// Setter for the [`request` field](UpgradeNode#structfield.request).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn request<T0>(self, value: T0) -> UpgradeNodeBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>,
+            {
+                UpgradeNodeBuilder((value,))
+            }
+
+            /// Sets the [`request` field](UpgradeNode#structfield.request) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn request_as_null(self) -> UpgradeNodeBuilder<((),)> {
+                self.request(())
+            }
+        }
+
+        impl<T0> UpgradeNodeBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [UpgradeNode].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeNode>
+            where
+                Self: ::planus::WriteAsOffset<UpgradeNode>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAs<::planus::Offset<UpgradeNode>> for UpgradeNodeBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<UpgradeNode>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeNode> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAsOptional<::planus::Offset<UpgradeNode>> for UpgradeNodeBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<UpgradeNode>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeNode>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[u8]>>>
+            ::planus::WriteAsOffset<UpgradeNode> for UpgradeNodeBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeNode> {
+                let (v0,) = &self.0;
+                UpgradeNode::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [UpgradeNode].
+        #[derive(Copy, Clone)]
+        pub struct UpgradeNodeRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> UpgradeNodeRef<'a> {
+            /// Getter for the [`request` field](UpgradeNode#structfield.request).
+            #[inline]
+            pub fn request(&self) -> ::planus::Result<::core::option::Option<&'a [u8]>> {
+                self.0.access(0, "UpgradeNode", "request")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for UpgradeNodeRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("UpgradeNodeRef");
+                if let ::core::option::Option::Some(field_request) = self.request().transpose() {
+                    f.field("request", &field_request);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<UpgradeNodeRef<'a>> for UpgradeNode {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: UpgradeNodeRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    request: value.request()?.map(|v| v.to_vec()),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for UpgradeNodeRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for UpgradeNodeRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[UpgradeNodeRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<UpgradeNode>> for UpgradeNode {
+            type Value = ::planus::Offset<UpgradeNode>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<UpgradeNode>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for UpgradeNodeRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[UpgradeNodeRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `GetUpgradeStatus` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `GetUpgradeStatus` in the file `schema/wire.fbs:312`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct GetUpgradeStatus {
+            /// The field `node_id` in the table `GetUpgradeStatus`
+            pub node_id: ::core::option::Option<self::Key32>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for GetUpgradeStatus {
+            fn default() -> Self {
+                Self {
+                    node_id: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl GetUpgradeStatus {
+            /// Creates a [GetUpgradeStatusBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> GetUpgradeStatusBuilder<()> {
+                GetUpgradeStatusBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_node_id: impl ::planus::WriteAsOptional<self::Key32>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_node_id = field_node_id.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_node_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_node_id) = prepared_node_id {
+                            object_writer.write::<_, _, 32>(&prepared_node_id);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<GetUpgradeStatus>> for GetUpgradeStatus {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<GetUpgradeStatus> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<GetUpgradeStatus>> for GetUpgradeStatus {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<GetUpgradeStatus>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<GetUpgradeStatus> for GetUpgradeStatus {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<GetUpgradeStatus> {
+                GetUpgradeStatus::create(builder, self.node_id)
+            }
+        }
+
+        /// Builder for serializing an instance of the [GetUpgradeStatus] type.
+        ///
+        /// Can be created using the [GetUpgradeStatus::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct GetUpgradeStatusBuilder<State>(State);
+
+        impl GetUpgradeStatusBuilder<()> {
+            /// Setter for the [`node_id` field](GetUpgradeStatus#structfield.node_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id<T0>(self, value: T0) -> GetUpgradeStatusBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                GetUpgradeStatusBuilder((value,))
+            }
+
+            /// Sets the [`node_id` field](GetUpgradeStatus#structfield.node_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id_as_null(self) -> GetUpgradeStatusBuilder<((),)> {
+                self.node_id(())
+            }
+        }
+
+        impl<T0> GetUpgradeStatusBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [GetUpgradeStatus].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<GetUpgradeStatus>
+            where
+                Self: ::planus::WriteAsOffset<GetUpgradeStatus>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<self::Key32>>
+            ::planus::WriteAs<::planus::Offset<GetUpgradeStatus>>
+            for GetUpgradeStatusBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<GetUpgradeStatus>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<GetUpgradeStatus> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<self::Key32>>
+            ::planus::WriteAsOptional<::planus::Offset<GetUpgradeStatus>>
+            for GetUpgradeStatusBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<GetUpgradeStatus>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<GetUpgradeStatus>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<self::Key32>> ::planus::WriteAsOffset<GetUpgradeStatus>
+            for GetUpgradeStatusBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<GetUpgradeStatus> {
+                let (v0,) = &self.0;
+                GetUpgradeStatus::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [GetUpgradeStatus].
+        #[derive(Copy, Clone)]
+        pub struct GetUpgradeStatusRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> GetUpgradeStatusRef<'a> {
+            /// Getter for the [`node_id` field](GetUpgradeStatus#structfield.node_id).
+            #[inline]
+            pub fn node_id(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "GetUpgradeStatus", "node_id")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for GetUpgradeStatusRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("GetUpgradeStatusRef");
+                if let ::core::option::Option::Some(field_node_id) = self.node_id().transpose() {
+                    f.field("node_id", &field_node_id);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<GetUpgradeStatusRef<'a>> for GetUpgradeStatus {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: GetUpgradeStatusRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    node_id: value.node_id()?.map(::core::convert::Into::into),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for GetUpgradeStatusRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for GetUpgradeStatusRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[GetUpgradeStatusRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<GetUpgradeStatus>> for GetUpgradeStatus {
+            type Value = ::planus::Offset<GetUpgradeStatus>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<GetUpgradeStatus>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for GetUpgradeStatusRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[GetUpgradeStatusRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `UpgradeReply` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `UpgradeReply` in the file `schema/wire.fbs:313`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct UpgradeReply {
+            /// The field `ok` in the table `UpgradeReply`
+            pub ok: bool,
+            /// The field `error` in the table `UpgradeReply`
+            pub error: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `version` in the table `UpgradeReply`
+            pub version: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `status` in the table `UpgradeReply`
+            pub status: ::core::option::Option<::planus::alloc::string::String>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for UpgradeReply {
+            fn default() -> Self {
+                Self {
+                    ok: false,
+                    error: ::core::default::Default::default(),
+                    version: ::core::default::Default::default(),
+                    status: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl UpgradeReply {
+            /// Creates a [UpgradeReplyBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> UpgradeReplyBuilder<()> {
+                UpgradeReplyBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_ok: impl ::planus::WriteAsDefault<bool, bool>,
+                field_error: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_version: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_status: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_ok = field_ok.prepare(builder, &false);
+                let prepared_error = field_error.prepare(builder);
+                let prepared_version = field_version.prepare(builder);
+                let prepared_status = field_status.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_error.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(1);
+                }
+                if prepared_version.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(2);
+                }
+                if prepared_status.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(3);
+                }
+                if prepared_ok.is_some() {
+                    table_writer.write_entry::<bool>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_error) = prepared_error {
+                            object_writer.write::<_, _, 4>(&prepared_error);
+                        }
+                        if let ::core::option::Option::Some(prepared_version) = prepared_version {
+                            object_writer.write::<_, _, 4>(&prepared_version);
+                        }
+                        if let ::core::option::Option::Some(prepared_status) = prepared_status {
+                            object_writer.write::<_, _, 4>(&prepared_status);
+                        }
+                        if let ::core::option::Option::Some(prepared_ok) = prepared_ok {
+                            object_writer.write::<_, _, 1>(&prepared_ok);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<UpgradeReply>> for UpgradeReply {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeReply> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<UpgradeReply>> for UpgradeReply {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeReply>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<UpgradeReply> for UpgradeReply {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeReply> {
+                UpgradeReply::create(builder, self.ok, &self.error, &self.version, &self.status)
+            }
+        }
+
+        /// Builder for serializing an instance of the [UpgradeReply] type.
+        ///
+        /// Can be created using the [UpgradeReply::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct UpgradeReplyBuilder<State>(State);
+
+        impl UpgradeReplyBuilder<()> {
+            /// Setter for the [`ok` field](UpgradeReply#structfield.ok).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn ok<T0>(self, value: T0) -> UpgradeReplyBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsDefault<bool, bool>,
+            {
+                UpgradeReplyBuilder((value,))
+            }
+
+            /// Sets the [`ok` field](UpgradeReply#structfield.ok) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn ok_as_default(self) -> UpgradeReplyBuilder<(::planus::DefaultValue,)> {
+                self.ok(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0> UpgradeReplyBuilder<(T0,)> {
+            /// Setter for the [`error` field](UpgradeReply#structfield.error).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn error<T1>(self, value: T1) -> UpgradeReplyBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0,) = self.0;
+                UpgradeReplyBuilder((v0, value))
+            }
+
+            /// Sets the [`error` field](UpgradeReply#structfield.error) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn error_as_null(self) -> UpgradeReplyBuilder<(T0, ())> {
+                self.error(())
+            }
+        }
+
+        impl<T0, T1> UpgradeReplyBuilder<(T0, T1)> {
+            /// Setter for the [`version` field](UpgradeReply#structfield.version).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version<T2>(self, value: T2) -> UpgradeReplyBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1) = self.0;
+                UpgradeReplyBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`version` field](UpgradeReply#structfield.version) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version_as_null(self) -> UpgradeReplyBuilder<(T0, T1, ())> {
+                self.version(())
+            }
+        }
+
+        impl<T0, T1, T2> UpgradeReplyBuilder<(T0, T1, T2)> {
+            /// Setter for the [`status` field](UpgradeReply#structfield.status).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn status<T3>(self, value: T3) -> UpgradeReplyBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1, v2) = self.0;
+                UpgradeReplyBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`status` field](UpgradeReply#structfield.status) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn status_as_null(self) -> UpgradeReplyBuilder<(T0, T1, T2, ())> {
+                self.status(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> UpgradeReplyBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [UpgradeReply].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeReply>
+            where
+                Self: ::planus::WriteAsOffset<UpgradeReply>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<bool, bool>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T2: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAs<::planus::Offset<UpgradeReply>>
+            for UpgradeReplyBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<UpgradeReply>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeReply> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<bool, bool>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T2: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAsOptional<::planus::Offset<UpgradeReply>>
+            for UpgradeReplyBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<UpgradeReply>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeReply>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsDefault<bool, bool>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T2: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T3: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            > ::planus::WriteAsOffset<UpgradeReply> for UpgradeReplyBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeReply> {
+                let (v0, v1, v2, v3) = &self.0;
+                UpgradeReply::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [UpgradeReply].
+        #[derive(Copy, Clone)]
+        pub struct UpgradeReplyRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> UpgradeReplyRef<'a> {
+            /// Getter for the [`ok` field](UpgradeReply#structfield.ok).
+            #[inline]
+            pub fn ok(&self) -> ::planus::Result<bool> {
+                ::core::result::Result::Ok(self.0.access(0, "UpgradeReply", "ok")?.unwrap_or(false))
+            }
+
+            /// Getter for the [`error` field](UpgradeReply#structfield.error).
+            #[inline]
+            pub fn error(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(1, "UpgradeReply", "error")
+            }
+
+            /// Getter for the [`version` field](UpgradeReply#structfield.version).
+            #[inline]
+            pub fn version(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(2, "UpgradeReply", "version")
+            }
+
+            /// Getter for the [`status` field](UpgradeReply#structfield.status).
+            #[inline]
+            pub fn status(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(3, "UpgradeReply", "status")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for UpgradeReplyRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("UpgradeReplyRef");
+                f.field("ok", &self.ok());
+                if let ::core::option::Option::Some(field_error) = self.error().transpose() {
+                    f.field("error", &field_error);
+                }
+                if let ::core::option::Option::Some(field_version) = self.version().transpose() {
+                    f.field("version", &field_version);
+                }
+                if let ::core::option::Option::Some(field_status) = self.status().transpose() {
+                    f.field("status", &field_status);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<UpgradeReplyRef<'a>> for UpgradeReply {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: UpgradeReplyRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    ok: ::core::convert::TryInto::try_into(value.ok()?)?,
+                    error: value.error()?.map(::core::convert::Into::into),
+                    version: value.version()?.map(::core::convert::Into::into),
+                    status: value.status()?.map(::core::convert::Into::into),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for UpgradeReplyRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for UpgradeReplyRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[UpgradeReplyRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<UpgradeReply>> for UpgradeReply {
+            type Value = ::planus::Offset<UpgradeReply>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<UpgradeReply>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for UpgradeReplyRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[UpgradeReplyRef]", "read_as_root", 0)
                 })
             }
         }
@@ -72157,6 +73277,901 @@ mod root {
                 )
                 .map_err(|error_kind| {
                     error_kind.with_error_location("[LogEntryRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `UpgradeFile` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:684`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct UpgradeFile {
+            /// The field `name` in the table `UpgradeFile`
+            pub name: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `sha256` in the table `UpgradeFile`
+            pub sha256: ::core::option::Option<self::Key32>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for UpgradeFile {
+            fn default() -> Self {
+                Self {
+                    name: ::core::default::Default::default(),
+                    sha256: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl UpgradeFile {
+            /// Creates a [UpgradeFileBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> UpgradeFileBuilder<()> {
+                UpgradeFileBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_name: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_sha256: impl ::planus::WriteAsOptional<self::Key32>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_name = field_name.prepare(builder);
+                let prepared_sha256 = field_sha256.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<8> =
+                    ::core::default::Default::default();
+                if prepared_sha256.is_some() {
+                    table_writer.write_entry::<self::Key32>(1);
+                }
+                if prepared_name.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_sha256) = prepared_sha256 {
+                            object_writer.write::<_, _, 32>(&prepared_sha256);
+                        }
+                        if let ::core::option::Option::Some(prepared_name) = prepared_name {
+                            object_writer.write::<_, _, 4>(&prepared_name);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<UpgradeFile>> for UpgradeFile {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeFile> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<UpgradeFile>> for UpgradeFile {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeFile>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<UpgradeFile> for UpgradeFile {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeFile> {
+                UpgradeFile::create(builder, &self.name, self.sha256)
+            }
+        }
+
+        /// Builder for serializing an instance of the [UpgradeFile] type.
+        ///
+        /// Can be created using the [UpgradeFile::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct UpgradeFileBuilder<State>(State);
+
+        impl UpgradeFileBuilder<()> {
+            /// Setter for the [`name` field](UpgradeFile#structfield.name).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn name<T0>(self, value: T0) -> UpgradeFileBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                UpgradeFileBuilder((value,))
+            }
+
+            /// Sets the [`name` field](UpgradeFile#structfield.name) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn name_as_null(self) -> UpgradeFileBuilder<((),)> {
+                self.name(())
+            }
+        }
+
+        impl<T0> UpgradeFileBuilder<(T0,)> {
+            /// Setter for the [`sha256` field](UpgradeFile#structfield.sha256).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn sha256<T1>(self, value: T1) -> UpgradeFileBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0,) = self.0;
+                UpgradeFileBuilder((v0, value))
+            }
+
+            /// Sets the [`sha256` field](UpgradeFile#structfield.sha256) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn sha256_as_null(self) -> UpgradeFileBuilder<(T0, ())> {
+                self.sha256(())
+            }
+        }
+
+        impl<T0, T1> UpgradeFileBuilder<(T0, T1)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [UpgradeFile].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeFile>
+            where
+                Self: ::planus::WriteAsOffset<UpgradeFile>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAs<::planus::Offset<UpgradeFile>> for UpgradeFileBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<UpgradeFile>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeFile> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAsOptional<::planus::Offset<UpgradeFile>>
+            for UpgradeFileBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<UpgradeFile>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeFile>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAsOffset<UpgradeFile> for UpgradeFileBuilder<(T0, T1)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeFile> {
+                let (v0, v1) = &self.0;
+                UpgradeFile::create(builder, v0, v1)
+            }
+        }
+
+        /// Reference to a deserialized [UpgradeFile].
+        #[derive(Copy, Clone)]
+        pub struct UpgradeFileRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> UpgradeFileRef<'a> {
+            /// Getter for the [`name` field](UpgradeFile#structfield.name).
+            #[inline]
+            pub fn name(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(0, "UpgradeFile", "name")
+            }
+
+            /// Getter for the [`sha256` field](UpgradeFile#structfield.sha256).
+            #[inline]
+            pub fn sha256(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(1, "UpgradeFile", "sha256")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for UpgradeFileRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("UpgradeFileRef");
+                if let ::core::option::Option::Some(field_name) = self.name().transpose() {
+                    f.field("name", &field_name);
+                }
+                if let ::core::option::Option::Some(field_sha256) = self.sha256().transpose() {
+                    f.field("sha256", &field_sha256);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<UpgradeFileRef<'a>> for UpgradeFile {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: UpgradeFileRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    name: value.name()?.map(::core::convert::Into::into),
+                    sha256: value.sha256()?.map(::core::convert::Into::into),
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for UpgradeFileRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for UpgradeFileRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[UpgradeFileRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<UpgradeFile>> for UpgradeFile {
+            type Value = ::planus::Offset<UpgradeFile>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<UpgradeFile>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for UpgradeFileRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[UpgradeFileRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `UpgradeRequest` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:688`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct UpgradeRequest {
+            /// The field `account_id` in the table `UpgradeRequest`
+            pub account_id: ::core::option::Option<self::Key32>,
+            /// The field `node_id` in the table `UpgradeRequest`
+            pub node_id: ::core::option::Option<self::Key32>,
+            /// The field `nonce` in the table `UpgradeRequest`
+            pub nonce: ::core::option::Option<self::Id16>,
+            /// The field `issued_at` in the table `UpgradeRequest`
+            pub issued_at: u64,
+            /// The field `expires_at` in the table `UpgradeRequest`
+            pub expires_at: u64,
+            /// The field `version` in the table `UpgradeRequest`
+            pub version: ::core::option::Option<::planus::alloc::string::String>,
+            /// The field `files` in the table `UpgradeRequest`
+            pub files: ::core::option::Option<::planus::alloc::vec::Vec<self::UpgradeFile>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for UpgradeRequest {
+            fn default() -> Self {
+                Self {
+                    account_id: ::core::default::Default::default(),
+                    node_id: ::core::default::Default::default(),
+                    nonce: ::core::default::Default::default(),
+                    issued_at: 0,
+                    expires_at: 0,
+                    version: ::core::default::Default::default(),
+                    files: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl UpgradeRequest {
+            /// Creates a [UpgradeRequestBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> UpgradeRequestBuilder<()> {
+                UpgradeRequestBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_account_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_node_id: impl ::planus::WriteAsOptional<self::Key32>,
+                field_nonce: impl ::planus::WriteAsOptional<self::Id16>,
+                field_issued_at: impl ::planus::WriteAsDefault<u64, u64>,
+                field_expires_at: impl ::planus::WriteAsDefault<u64, u64>,
+                field_version: impl ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                field_files: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::UpgradeFile>]>,
+                >,
+            ) -> ::planus::Offset<Self> {
+                let prepared_account_id = field_account_id.prepare(builder);
+                let prepared_node_id = field_node_id.prepare(builder);
+                let prepared_nonce = field_nonce.prepare(builder);
+                let prepared_issued_at = field_issued_at.prepare(builder, &0);
+                let prepared_expires_at = field_expires_at.prepare(builder, &0);
+                let prepared_version = field_version.prepare(builder);
+                let prepared_files = field_files.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
+                    ::core::default::Default::default();
+                if prepared_account_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(0);
+                }
+                if prepared_node_id.is_some() {
+                    table_writer.write_entry::<self::Key32>(1);
+                }
+                if prepared_nonce.is_some() {
+                    table_writer.write_entry::<self::Id16>(2);
+                }
+                if prepared_issued_at.is_some() {
+                    table_writer.write_entry::<u64>(3);
+                }
+                if prepared_expires_at.is_some() {
+                    table_writer.write_entry::<u64>(4);
+                }
+                if prepared_version.is_some() {
+                    table_writer.write_entry::<::planus::Offset<str>>(5);
+                }
+                if prepared_files.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::UpgradeFile>]>>(6);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_account_id) =
+                            prepared_account_id
+                        {
+                            object_writer.write::<_, _, 32>(&prepared_account_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_node_id) = prepared_node_id {
+                            object_writer.write::<_, _, 32>(&prepared_node_id);
+                        }
+                        if let ::core::option::Option::Some(prepared_nonce) = prepared_nonce {
+                            object_writer.write::<_, _, 16>(&prepared_nonce);
+                        }
+                        if let ::core::option::Option::Some(prepared_issued_at) = prepared_issued_at
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_issued_at);
+                        }
+                        if let ::core::option::Option::Some(prepared_expires_at) =
+                            prepared_expires_at
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_expires_at);
+                        }
+                        if let ::core::option::Option::Some(prepared_version) = prepared_version {
+                            object_writer.write::<_, _, 4>(&prepared_version);
+                        }
+                        if let ::core::option::Option::Some(prepared_files) = prepared_files {
+                            object_writer.write::<_, _, 4>(&prepared_files);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<UpgradeRequest>> for UpgradeRequest {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeRequest> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<UpgradeRequest>> for UpgradeRequest {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeRequest>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<UpgradeRequest> for UpgradeRequest {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeRequest> {
+                UpgradeRequest::create(
+                    builder,
+                    self.account_id,
+                    self.node_id,
+                    self.nonce,
+                    self.issued_at,
+                    self.expires_at,
+                    &self.version,
+                    &self.files,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [UpgradeRequest] type.
+        ///
+        /// Can be created using the [UpgradeRequest::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct UpgradeRequestBuilder<State>(State);
+
+        impl UpgradeRequestBuilder<()> {
+            /// Setter for the [`account_id` field](UpgradeRequest#structfield.account_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id<T0>(self, value: T0) -> UpgradeRequestBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<self::Key32>,
+            {
+                UpgradeRequestBuilder((value,))
+            }
+
+            /// Sets the [`account_id` field](UpgradeRequest#structfield.account_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn account_id_as_null(self) -> UpgradeRequestBuilder<((),)> {
+                self.account_id(())
+            }
+        }
+
+        impl<T0> UpgradeRequestBuilder<(T0,)> {
+            /// Setter for the [`node_id` field](UpgradeRequest#structfield.node_id).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id<T1>(self, value: T1) -> UpgradeRequestBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0,) = self.0;
+                UpgradeRequestBuilder((v0, value))
+            }
+
+            /// Sets the [`node_id` field](UpgradeRequest#structfield.node_id) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn node_id_as_null(self) -> UpgradeRequestBuilder<(T0, ())> {
+                self.node_id(())
+            }
+        }
+
+        impl<T0, T1> UpgradeRequestBuilder<(T0, T1)> {
+            /// Setter for the [`nonce` field](UpgradeRequest#structfield.nonce).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nonce<T2>(self, value: T2) -> UpgradeRequestBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<self::Id16>,
+            {
+                let (v0, v1) = self.0;
+                UpgradeRequestBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`nonce` field](UpgradeRequest#structfield.nonce) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nonce_as_null(self) -> UpgradeRequestBuilder<(T0, T1, ())> {
+                self.nonce(())
+            }
+        }
+
+        impl<T0, T1, T2> UpgradeRequestBuilder<(T0, T1, T2)> {
+            /// Setter for the [`issued_at` field](UpgradeRequest#structfield.issued_at).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at<T3>(self, value: T3) -> UpgradeRequestBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2) = self.0;
+                UpgradeRequestBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`issued_at` field](UpgradeRequest#structfield.issued_at) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn issued_at_as_default(
+                self,
+            ) -> UpgradeRequestBuilder<(T0, T1, T2, ::planus::DefaultValue)> {
+                self.issued_at(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3> UpgradeRequestBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`expires_at` field](UpgradeRequest#structfield.expires_at).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn expires_at<T4>(self, value: T4) -> UpgradeRequestBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                UpgradeRequestBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`expires_at` field](UpgradeRequest#structfield.expires_at) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn expires_at_as_default(
+                self,
+            ) -> UpgradeRequestBuilder<(T0, T1, T2, T3, ::planus::DefaultValue)> {
+                self.expires_at(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> UpgradeRequestBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`version` field](UpgradeRequest#structfield.version).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version<T5>(self, value: T5) -> UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                UpgradeRequestBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`version` field](UpgradeRequest#structfield.version) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn version_as_null(self) -> UpgradeRequestBuilder<(T0, T1, T2, T3, T4, ())> {
+                self.version(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`files` field](UpgradeRequest#structfield.files).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn files<T6>(self, value: T6) -> UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::UpgradeFile>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                UpgradeRequestBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`files` field](UpgradeRequest#structfield.files) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn files_as_null(self) -> UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5, ())> {
+                self.files(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [UpgradeRequest].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeRequest>
+            where
+                Self: ::planus::WriteAsOffset<UpgradeRequest>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+                T2: ::planus::WriteAsOptional<self::Id16>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::UpgradeFile>]>>,
+            > ::planus::WriteAs<::planus::Offset<UpgradeRequest>>
+            for UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+        {
+            type Prepared = ::planus::Offset<UpgradeRequest>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeRequest> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+                T2: ::planus::WriteAsOptional<self::Id16>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::UpgradeFile>]>>,
+            > ::planus::WriteAsOptional<::planus::Offset<UpgradeRequest>>
+            for UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+        {
+            type Prepared = ::planus::Offset<UpgradeRequest>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<UpgradeRequest>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<self::Key32>,
+                T1: ::planus::WriteAsOptional<self::Key32>,
+                T2: ::planus::WriteAsOptional<self::Id16>,
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsOptional<::planus::Offset<::core::primitive::str>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::UpgradeFile>]>>,
+            > ::planus::WriteAsOffset<UpgradeRequest>
+            for UpgradeRequestBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<UpgradeRequest> {
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                UpgradeRequest::create(builder, v0, v1, v2, v3, v4, v5, v6)
+            }
+        }
+
+        /// Reference to a deserialized [UpgradeRequest].
+        #[derive(Copy, Clone)]
+        pub struct UpgradeRequestRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> UpgradeRequestRef<'a> {
+            /// Getter for the [`account_id` field](UpgradeRequest#structfield.account_id).
+            #[inline]
+            pub fn account_id(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(0, "UpgradeRequest", "account_id")
+            }
+
+            /// Getter for the [`node_id` field](UpgradeRequest#structfield.node_id).
+            #[inline]
+            pub fn node_id(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(1, "UpgradeRequest", "node_id")
+            }
+
+            /// Getter for the [`nonce` field](UpgradeRequest#structfield.nonce).
+            #[inline]
+            pub fn nonce(&self) -> ::planus::Result<::core::option::Option<self::Id16Ref<'a>>> {
+                self.0.access(2, "UpgradeRequest", "nonce")
+            }
+
+            /// Getter for the [`issued_at` field](UpgradeRequest#structfield.issued_at).
+            #[inline]
+            pub fn issued_at(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(3, "UpgradeRequest", "issued_at")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`expires_at` field](UpgradeRequest#structfield.expires_at).
+            #[inline]
+            pub fn expires_at(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(4, "UpgradeRequest", "expires_at")?
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Getter for the [`version` field](UpgradeRequest#structfield.version).
+            #[inline]
+            pub fn version(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<&'a ::core::primitive::str>> {
+                self.0.access(5, "UpgradeRequest", "version")
+            }
+
+            /// Getter for the [`files` field](UpgradeRequest#structfield.files).
+            #[inline]
+            pub fn files(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::UpgradeFileRef<'a>>>,
+                >,
+            > {
+                self.0.access(6, "UpgradeRequest", "files")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for UpgradeRequestRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("UpgradeRequestRef");
+                if let ::core::option::Option::Some(field_account_id) =
+                    self.account_id().transpose()
+                {
+                    f.field("account_id", &field_account_id);
+                }
+                if let ::core::option::Option::Some(field_node_id) = self.node_id().transpose() {
+                    f.field("node_id", &field_node_id);
+                }
+                if let ::core::option::Option::Some(field_nonce) = self.nonce().transpose() {
+                    f.field("nonce", &field_nonce);
+                }
+                f.field("issued_at", &self.issued_at());
+                f.field("expires_at", &self.expires_at());
+                if let ::core::option::Option::Some(field_version) = self.version().transpose() {
+                    f.field("version", &field_version);
+                }
+                if let ::core::option::Option::Some(field_files) = self.files().transpose() {
+                    f.field("files", &field_files);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<UpgradeRequestRef<'a>> for UpgradeRequest {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: UpgradeRequestRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    account_id: value.account_id()?.map(::core::convert::Into::into),
+                    node_id: value.node_id()?.map(::core::convert::Into::into),
+                    nonce: value.nonce()?.map(::core::convert::Into::into),
+                    issued_at: ::core::convert::TryInto::try_into(value.issued_at()?)?,
+                    expires_at: ::core::convert::TryInto::try_into(value.expires_at()?)?,
+                    version: value.version()?.map(::core::convert::Into::into),
+                    files: if let ::core::option::Option::Some(files) = value.files()? {
+                        ::core::option::Option::Some(files.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for UpgradeRequestRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for UpgradeRequestRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[UpgradeRequestRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<UpgradeRequest>> for UpgradeRequest {
+            type Value = ::planus::Offset<UpgradeRequest>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<UpgradeRequest>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for UpgradeRequestRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[UpgradeRequestRef]", "read_as_root", 0)
                 })
             }
         }

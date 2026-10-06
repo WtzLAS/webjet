@@ -8,9 +8,12 @@
 //!   webjetup list                  published releases
 //!   webjetup remove                programs and service; keeps the identity
 //!   webjetup nuke                  everything, including the node's identity
+//!   webjetup apply-upgrade         (the remote upgrade helper, run by the
+//!                                  service manager; see `remote`)
 
 mod layout;
 mod release;
+mod remote;
 mod signer;
 mod system;
 
@@ -65,6 +68,15 @@ enum Cmd {
         /// in-process key moves to the signer.
         #[arg(long)]
         signer: bool,
+        /// Let admins upgrade this node remotely (the default; architecture
+        /// §19.8): installs a helper that carries out an admin's signed
+        /// upgrade request. Kept on later upgrades.
+        #[arg(long, conflicts_with = "no_remote_upgrade")]
+        remote_upgrade: bool,
+        /// Don't let admins upgrade this node remotely: removes the helper
+        /// and sets `[upgrade] remote = false`. Kept on later upgrades.
+        #[arg(long)]
+        no_remote_upgrade: bool,
     },
     /// Enroll this node with an enrollment string from `webjetctl network node enroll`
     /// and (re)start the agent. Also used to re-key a node.
@@ -97,6 +109,10 @@ enum Cmd {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Carry out a queued remote upgrade request (run by the service
+    /// manager when webjetd queues one; nothing to do otherwise).
+    #[command(hide = true)]
+    ApplyUpgrade,
 }
 
 fn main() {
@@ -127,6 +143,8 @@ fn run(cli: Cli) -> Result<()> {
             force,
             no_start,
             signer,
+            remote_upgrade,
+            no_remote_upgrade,
         } => {
             system::require_privileges(sys.dry)?;
             let repo = Repo::parse(&cli.repo)?;
@@ -142,8 +160,17 @@ fn run(cli: Cli) -> Result<()> {
             if signer || signer::configured(&layout) {
                 signer::setup(&sys, &layout, !no_start)?;
             }
+            // Before the agent starts: it reads `[upgrade]` and its
+            // sandbox setting then.
+            let want = match (remote_upgrade, no_remote_upgrade) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            };
+            remote::setup(&sys, &layout, &repo, want, false)?;
             if let Some(s) = enroll {
                 do_enroll(&sys, &layout, &s, !no_start)?;
+                remote::setup(&sys, &layout, &repo, None, true)?;
             } else {
                 start_after_install(&sys, &layout, !no_start)?;
             }
@@ -156,8 +183,11 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 string
             };
-            do_enroll(&sys, &layout, &s, true)
+            do_enroll(&sys, &layout, &s, true)?;
+            // The helper pins the node id, known now (a re-key keeps it).
+            remote::setup(&sys, &layout, &Repo::parse(&cli.repo)?, None, true)
         }
+        Cmd::ApplyUpgrade => remote::apply(&sys, &layout),
         Cmd::Status => status(&layout),
         Cmd::List { limit } => list(&Repo::parse(&cli.repo)?, &layout, limit),
         Cmd::Remove { yes } => {
@@ -462,6 +492,7 @@ fn status(l: &Layout) -> Result<()> {
     if let Some(st) = signer::state(l) {
         println!("signer    {st}");
     }
+    println!("remote    {}", remote::state(l));
     if let Some(log) = &l.log {
         println!("log       {}", log.display());
     } else if cfg!(target_os = "linux") {
@@ -522,6 +553,7 @@ fn remove(sys: &Sys, l: &Layout) -> Result<()> {
     println!("==> Stopping and removing the service");
     system::remove_service(sys, l)?;
     signer::remove(sys, l)?;
+    remote::remove(sys, l)?;
     println!("==> Removing the programs");
     for f in wanted_files() {
         sys.remove_file(&l.bin_dir.join(&f))?;

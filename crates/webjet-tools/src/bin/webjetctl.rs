@@ -20,6 +20,7 @@ use webjet_tools::config::{
     self, ConfigFile, effective_from_json, network_from_tree, node_from_wire, render_effective,
     render_network, render_node,
 };
+use webjet_tools::upgrade;
 use webjet_tools::*;
 use webjetd::control::{Request, client};
 
@@ -346,6 +347,48 @@ enum NodeCmd {
         expires_hours: u64,
         #[arg(long)]
         controller: Vec<String>,
+    },
+    /// Upgrade nodes to a release remotely (ops guide 3.3, architecture
+    /// §19.8). Pins the release's published checksums, signs a request for
+    /// each node, and rolls out in order: controllers one at a time (the
+    /// leader last), then relays, then the other nodes in batches, waiting
+    /// for each to run the new version. Stops at the first failure. Nodes
+    /// need the helper `webjetup` installs (on unless
+    /// `--no-remote-upgrade`); a node whose new agent doesn't come up puts
+    /// the previous version back by itself.
+    Upgrade {
+        /// The release tag, e.g. v0.9.0. Only upgrades: nodes refuse older
+        /// or equal versions.
+        version: String,
+        /// The nodes: names, node ids in hex (or unique prefixes) or keys.
+        nodes: Vec<String>,
+        /// Also every node with one of these tags.
+        #[arg(long, value_delimiter = ',')]
+        tag: Vec<String>,
+        /// Every node of the network.
+        #[arg(long, conflicts_with_all = ["nodes", "tag"])]
+        all: bool,
+        /// Nodes upgraded at once after the controllers.
+        #[arg(long, default_value_t = 5)]
+        batch: usize,
+        /// The repository the release's checksums come from (the nodes
+        /// download from the one webjetup was installed with).
+        #[arg(long, env = "WEBJETUP_REPO", default_value = webjet_release::http::DEFAULT_REPO)]
+        repo: String,
+        /// How long one stage may take before the rollout stops.
+        #[arg(long, default_value_t = 15)]
+        timeout_minutes: u64,
+        /// Show the order and stop.
+        #[arg(long)]
+        dry_run: bool,
+        /// Don't ask for confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Nodes' versions and remote upgrade state (default: this node).
+    UpgradeStatus {
+        /// The nodes: names, node ids in hex (or unique prefixes) or keys.
+        nodes: Vec<String>,
     },
 }
 
@@ -1523,6 +1566,52 @@ async fn network_account(cli: &Cli, cmd: &AccountCmd) -> Result<()> {
 /// `webjetctl network node …`: enrollment and node records.
 async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
     match cmd {
+        NodeCmd::Upgrade {
+            version,
+            nodes,
+            tag,
+            all,
+            batch,
+            repo,
+            timeout_minutes,
+            dry_run,
+            yes,
+        } => {
+            let sel = Selection {
+                names: nodes,
+                tags: tag,
+                all: *all,
+            };
+            let opts = RolloutOpts {
+                batch: *batch,
+                repo,
+                timeout: std::time::Duration::from_secs(timeout_minutes * 60),
+                dry_run: *dry_run,
+                yes: *yes,
+            };
+            return upgrade_nodes(cli, version, &sel, &opts).await;
+        }
+        NodeCmd::UpgradeStatus { nodes } => {
+            let ids: Vec<Option<Bytes32>> = if nodes.is_empty() {
+                vec![None]
+            } else {
+                let mut v = Vec::new();
+                for n in nodes {
+                    v.push(Some(node_id(cli, n).await?));
+                }
+                v
+            };
+            let mut out = Vec::new();
+            for id in ids {
+                out.push(match call(cli, Request::UpgradeStatus { node: id }).await {
+                    Ok(v) => v,
+                    Err(e) => json!({"node_id": id.map(hex::encode), "error": format!("{e:#}")}),
+                });
+            }
+            let names = node_names(cli).await.unwrap_or_default();
+            print(cli, &with_node_names(json!(out), &names));
+            return Ok(());
+        }
         NodeCmd::Enroll {
             owner,
             name,
@@ -1733,6 +1822,249 @@ async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- remote upgrades
+
+struct Selection<'a> {
+    names: &'a [String],
+    tags: &'a [String],
+    all: bool,
+}
+
+struct RolloutOpts<'a> {
+    batch: usize,
+    repo: &'a str,
+    timeout: std::time::Duration,
+    dry_run: bool,
+    yes: bool,
+}
+
+/// The nodes a selection names, as rollout targets.
+async fn upgrade_targets(cli: &Cli, sel: &Selection<'_>) -> Result<Vec<upgrade::Target>> {
+    let all = nodes(cli).await?;
+    let mut ids: Vec<Bytes32> = Vec::new();
+    for v in &all {
+        let Some(id) = v["id"].as_str().and_then(crypto::parse_hex32) else {
+            continue;
+        };
+        let tagged = v["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|t| t.as_str().is_some_and(|t| sel.tags.iter().any(|x| x == t)));
+        if v["valid"].as_bool() == Some(true) && (sel.all || tagged) {
+            ids.push(id);
+        }
+    }
+    for n in sel.names {
+        let id = node_id(cli, n).await?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        bail!("no nodes selected (name them, or use --tag or --all)");
+    }
+    let ctl = call(cli, Request::Controller)
+        .await
+        .map_err(|e| anyhow!("can't read the controllers' Raft state: {e:#}"))?;
+    let (roles, leader) = upgrade::raft_roles(&ctl);
+    let me = call(cli, Request::Status)
+        .await?
+        .get("node_id")
+        .and_then(|x| x.as_str())
+        .and_then(crypto::parse_hex32);
+    Ok(ids
+        .into_iter()
+        .map(|id| {
+            let v = all
+                .iter()
+                .find(|v| v["id"].as_str() == Some(hex::encode(id).as_str()));
+            upgrade::Target {
+                id,
+                name: v
+                    .and_then(|v| v["name"].as_str())
+                    .map_or_else(|| hex::encode(id), str::to_string),
+                relay: v.and_then(|v| v["relay"].as_bool()).unwrap_or(false),
+                voter: roles.get(&id).copied(),
+                leader: leader == Some(id),
+                me: me == Some(id),
+            }
+        })
+        .collect())
+}
+
+fn confirm(question: &str) -> Result<()> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        bail!("not confirmed: run with --yes to skip the question");
+    }
+    eprint!("{question} [yes]: ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if matches!(answer.trim(), "yes" | "y") {
+        Ok(())
+    } else {
+        bail!("cancelled")
+    }
+}
+
+/// `webjetctl network node upgrade`.
+async fn upgrade_nodes(
+    cli: &Cli,
+    version: &str,
+    sel: &Selection<'_>,
+    opts: &RolloutOpts<'_>,
+) -> Result<()> {
+    let tag = webjet_release::normalize_version(version);
+    if !webjet_release::valid_tag(&tag) {
+        bail!("{version:?} is not a release tag like v0.9.0");
+    }
+    let targets = upgrade_targets(cli, sel).await?;
+    let stages = upgrade::stages(&targets, opts.batch);
+    if !cli.json {
+        println!("Upgrade to {tag}, in this order (each stage waits for the one before):");
+        for (i, s) in stages.iter().enumerate() {
+            let names: Vec<String> = s
+                .iter()
+                .map(|t| {
+                    let role = match (t.leader, t.voter) {
+                        (true, _) => " (controller, leader)",
+                        (_, Some(true)) => " (controller, voter)",
+                        (_, Some(false)) => " (controller, learner)",
+                        _ if t.relay => " (relay)",
+                        _ => "",
+                    };
+                    let me = if t.me { " (this node)" } else { "" };
+                    format!("{}{role}{me}", t.name)
+                })
+                .collect();
+            println!("  {:>2}. {}", i + 1, names.join(", "));
+        }
+    }
+    if opts.dry_run {
+        if cli.json {
+            print(
+                cli,
+                &json!({"version": tag, "stages": stages.iter().map(|s| s.iter().map(|t| json!({"name": t.name, "node_id": hex::encode(t.id)})).collect::<Vec<_>>()).collect::<Vec<_>>()}),
+            );
+        }
+        return Ok(());
+    }
+    let repo = opts.repo.to_string();
+    let pin_tag = tag.clone();
+    let (files, missing) =
+        tokio::task::spawn_blocking(move || upgrade::pin_release(&repo, &pin_tag)).await??;
+    if !missing.is_empty() {
+        eprintln!(
+            "note: {tag} has no files for {} yet; nodes on those platforms will refuse",
+            missing.join(", ")
+        );
+    }
+    if !opts.yes {
+        confirm(&format!(
+            "Upgrade {} node(s) to {tag}? Each restarts its agent",
+            targets.len()
+        ))?;
+    }
+    let a = load_account(cli).await?;
+    let mut done: Vec<Value> = Vec::new();
+    for (i, stage) in stages.iter().enumerate() {
+        let mut waiting: Vec<(&upgrade::Target, String)> = Vec::new();
+        for t in stage {
+            let st = call(cli, Request::UpgradeStatus { node: Some(t.id) })
+                .await
+                .map_err(|e| {
+                    anyhow!(
+                        "{}: {e:#} (nodes before 0.9.0 can't be upgraded remotely: upgrade them with webjetup)",
+                        t.name
+                    )
+                })?;
+            if upgrade::progress(&st, &tag, "-") == upgrade::Progress::Done {
+                if !cli.json {
+                    println!(
+                        "  {}: runs {} already",
+                        t.name,
+                        st["version"].as_str().unwrap_or("?")
+                    );
+                }
+                done.push(json!({"name": t.name, "node_id": hex::encode(t.id), "result": "already", "version": st["version"]}));
+                continue;
+            }
+            if st["remote"].as_bool() == Some(false) {
+                bail!(
+                    "{}: remote upgrades are turned off there ([upgrade] remote = false); stopped",
+                    t.name
+                );
+            }
+            if st["helper"].as_bool() != Some(true) {
+                bail!(
+                    "{}: no upgrade helper installed there (webjetup install sets it up); stopped",
+                    t.name
+                );
+            }
+            let req = upgrade::sign_request(&a.kp, &a.id, &t.id, &tag, &files, now_ms());
+            let r = call(cli, Request::Upgrade { request: req })
+                .await
+                .map_err(|e| anyhow!("{}: {e:#}; stopped", t.name))?;
+            let id = r["id"].as_str().unwrap_or_default().to_string();
+            if !cli.json {
+                println!(
+                    "  {}: {} → {tag} queued",
+                    t.name,
+                    st["version"].as_str().unwrap_or("?")
+                );
+            }
+            waiting.push((t, id));
+        }
+        let start = std::time::Instant::now();
+        while !waiting.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let mut still = Vec::new();
+            for (t, id) in waiting {
+                // A node restarting doesn't answer for a while.
+                let p = match call(cli, Request::UpgradeStatus { node: Some(t.id) }).await {
+                    Ok(v) => upgrade::progress(&v, &tag, &id),
+                    Err(e) => upgrade::Progress::Waiting(format!("{e:#}")),
+                };
+                match p {
+                    upgrade::Progress::Done => {
+                        if !cli.json {
+                            println!("  {}: runs {tag}", t.name);
+                        }
+                        done.push(json!({"name": t.name, "node_id": hex::encode(t.id), "result": "upgraded", "version": tag}));
+                    }
+                    upgrade::Progress::Failed(e) => {
+                        bail!(
+                            "{}: {e}; stopped (stage {} of {})",
+                            t.name,
+                            i + 1,
+                            stages.len()
+                        )
+                    }
+                    upgrade::Progress::Waiting(why) => {
+                        if start.elapsed() > opts.timeout {
+                            bail!(
+                                "{}: not done after {} min ({why}); stopped",
+                                t.name,
+                                opts.timeout.as_secs() / 60
+                            );
+                        }
+                        still.push((t, id));
+                    }
+                }
+            }
+            waiting = still;
+        }
+    }
+    report(
+        cli,
+        format!("{} node(s) run {tag}.", done.len()),
+        json!({"version": tag, "nodes": done}),
+    );
     Ok(())
 }
 

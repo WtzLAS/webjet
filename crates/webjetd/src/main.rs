@@ -38,6 +38,11 @@ enum Cmd {
         #[arg(long)]
         group_access: bool,
     },
+    /// Print the optional features this build has, one per line, for
+    /// webjetup (`remote-upgrade`: the `[upgrade]` section and remote
+    /// upgrades, §19.8). Older agents don't have this command.
+    #[command(hide = true)]
+    Features,
     /// Run under the Windows service manager (the installed service's entry
     /// point; webjetup registers it).
     #[cfg(windows)]
@@ -70,6 +75,12 @@ fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(webjetd::config::default_config_path);
     match cli.cmd {
+        Cmd::Features => {
+            for f in webjetd::FEATURES {
+                println!("{f}");
+            }
+            return Ok(());
+        }
         #[cfg(windows)]
         Cmd::Service => return webjetd::service::windows::run_dispatcher(cfg_path),
         #[cfg(windows)]

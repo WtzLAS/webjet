@@ -16,9 +16,8 @@ clap.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 hex.workspace = true
-rustls = { workspace = true }
-# HTTPS with the workspace's aws-lc-rs provider (no ring) and Mozilla's roots.
-ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
+# Release names, the release server client and the remote upgrade spool.
+webjet-release = { path = "../webjet-release", features = ["http"] }
 sha2 = "0.11"
 flate2 = "1"
 tar = "0.4"

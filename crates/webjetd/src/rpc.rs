@@ -85,9 +85,14 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
             let n = n.clone();
             let from = *from;
             tokio::spawn(async move {
-                let reply = match n.controller.get() {
-                    Some(c) => c.clone().handle_rpc(from, body).await,
-                    None => Some(RpcBody::RpcAck(Box::new(wp::RpcAck {
+                let reply = match (body, n.controller.get()) {
+                    // Remote upgrades (§19.8) reach every node, not only
+                    // controllers.
+                    (body @ (RpcBody::UpgradeNode(_) | RpcBody::GetUpgradeStatus(_)), _) => {
+                        crate::upgrade::on_rpc(&n, from, body).await
+                    }
+                    (body, Some(c)) => c.clone().handle_rpc(from, body).await,
+                    (_, None) => Some(RpcBody::RpcAck(Box::new(wp::RpcAck {
                         ok: false,
                         error: Some("not a controller".into()),
                     }))),
