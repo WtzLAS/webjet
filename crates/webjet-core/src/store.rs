@@ -698,32 +698,50 @@ impl Store {
                 self.high_water
             );
         }
+        // Every check is against the tree as it was before this sync, and a
+        // leaf may appear only once: otherwise removing a leaf and adding it
+        // back would get past both the tombstone and the version rules.
+        let mut seen = HashSet::new();
         let mut t = self.tree.clone();
         for (k, key, bytes) in &updates {
+            if !seen.insert(merkle::path_of(*k, key)) {
+                bail!("leaf listed twice in one sync");
+            }
+            let old = self
+                .tree
+                .get(*k, key)
+                .and_then(|old| Some((leaf::decode(*k, key, &old.bytes).ok()?, &old.bytes)));
+            let tomb_old = old.as_ref().is_some_and(|(v, _)| {
+                matches!(
+                    v,
+                    LeafValue::NodeTombstone(_) | LeafValue::AccountTombstone(..)
+                )
+            });
             match bytes {
                 Some(b) => {
                     let new = leaf::decode(*k, key, b)?;
-                    if let Some(old) = t.get(*k, key)
-                        && let Ok(oldv) = leaf::decode(*k, key, &old.bytes)
+                    // Sending a leaf unchanged is harmless.
+                    if let Some((oldv, old_bytes)) = &old
+                        && *old_bytes != b
                     {
-                        let tomb_old = matches!(
-                            oldv,
-                            LeafValue::NodeTombstone(_) | LeafValue::AccountTombstone(..)
-                        );
                         if tomb_old {
                             bail!("a tombstone can't be replaced");
                         }
                         if *k != kind::VALIDITY
                             && !matches!(new, LeafValue::Unknown)
-                            && leaf::version(&new) <= leaf::version(&oldv)
-                            && old.bytes != *b
+                            && leaf::version(&new) <= leaf::version(oldv)
                         {
                             bail!("leaf version went backwards");
                         }
                     }
                     t.insert(*k, *key, b.clone());
                 }
-                None => t.remove(*k, key),
+                None => {
+                    if tomb_old {
+                        bail!("a tombstone can't be removed");
+                    }
+                    t.remove(*k, key);
+                }
             }
         }
         let root = t.root();
@@ -1233,4 +1251,124 @@ pub fn default_resolver_ips(pool: &[IpNet], taken: impl Fn(&IpAddr) -> bool) -> 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::Cluster;
+
+    /// A head from the cluster's signing key over `tree`, newer than any
+    /// the cluster has signed: what a compromised head signer could send.
+    fn forged_head(c: &Cluster, tree: &mut Tree) -> Vec<u8> {
+        let head = wp::SignedTreeHead {
+            signing_key_id: Some(crypto::k32(&crypto::signing_key_id(&c.head_key.public()))),
+            version: c.machine.last_index + 10,
+            root: Some(crypto::k32(&tree.root())),
+            state_version: 1,
+            issued_at: now_ms(),
+            expires_at: now_ms() + 3_600_000,
+        };
+        c.head_key.sign_obj(mt::SIGNED_TREE_HEAD, &head)
+    }
+
+    /// A node, its record leaf as first enrolled, and a store that has seen
+    /// the node revoked.
+    fn revoked_node() -> (Cluster, Bytes32, Vec<u8>, Store) {
+        let mut c = Cluster::new();
+        let (id, _) = c.data_node("a", "10.7.0.5", &[]);
+        let record = c.machine.tree.get(kind::NODE, &id).unwrap().bytes.clone();
+        c.admin_op(webjet_proto::AccountOp::TombstoneNode(Box::new(
+            wp::TombstoneNode {
+                node_id: Some(crypto::k32(&id)),
+                reason: None,
+            },
+        )))
+        .unwrap();
+        let st = c.store();
+        assert!(!st.view().nodes.get(&id).is_some_and(|n| n.valid));
+        (c, id, record, st)
+    }
+
+    #[test]
+    fn a_tombstone_cannot_be_removed() {
+        let (c, id, _, mut st) = revoked_node();
+        let mut t = st.tree().clone();
+        t.remove(kind::NODE, &id);
+        let head = forged_head(&c, &mut t);
+        let e = st.install(&head, vec![(kind::NODE, id, None)]).unwrap_err();
+        assert!(e.to_string().contains("can't be removed"), "{e}");
+        assert!(st.tree().get(kind::NODE, &id).is_some());
+    }
+
+    #[test]
+    fn a_tombstone_cannot_be_replaced_even_after_removing_it() {
+        let (c, id, record, mut st) = revoked_node();
+        let mut t = st.tree().clone();
+        t.insert(kind::NODE, id, record.clone());
+        let head = forged_head(&c, &mut t);
+        // Directly...
+        let e = st
+            .install(&head, vec![(kind::NODE, id, Some(record.clone()))])
+            .unwrap_err();
+        assert!(e.to_string().contains("can't be replaced"), "{e}");
+        // ...or removed first in the same sync.
+        let e = st
+            .install(
+                &head,
+                vec![(kind::NODE, id, None), (kind::NODE, id, Some(record))],
+            )
+            .unwrap_err();
+        assert!(e.to_string().contains("can't be removed"), "{e}");
+    }
+
+    #[test]
+    fn a_leaf_may_appear_once_per_sync() {
+        let mut c = Cluster::new();
+        let (id, _) = c.data_node("a", "10.7.0.5", &[]);
+        let mut st = c.store();
+        let record = st.tree().get(kind::NODE, &id).unwrap().bytes.clone();
+        let mut t = st.tree().clone();
+        let head = forged_head(&c, &mut t);
+        let e = st
+            .install(
+                &head,
+                vec![
+                    (kind::NODE, id, Some(record.clone())),
+                    (kind::NODE, id, Some(record)),
+                ],
+            )
+            .unwrap_err();
+        assert!(e.to_string().contains("listed twice"), "{e}");
+    }
+
+    #[test]
+    fn ordinary_leaves_are_still_removed_and_resent_unchanged() {
+        let mut c = Cluster::new();
+        let (id, _) = c.data_node("a", "10.7.0.5", &[]);
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&id)),
+            limits: Some(vec![wp::LimitValue {
+                name: Some("circuits_global".into()),
+                value: 7,
+            }]),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut st = c.store();
+        assert!(st.tree().get(kind::NODE_CONFIG, &id).is_some());
+        // Revoking the node removes its configuration leaf; the sync sends
+        // every leaf, unchanged ones included.
+        c.admin_op(webjet_proto::AccountOp::TombstoneNode(Box::new(
+            wp::TombstoneNode {
+                node_id: Some(crypto::k32(&id)),
+                reason: None,
+            },
+        )))
+        .unwrap();
+        c.sync(&mut st);
+        assert!(st.tree().get(kind::NODE_CONFIG, &id).is_none());
+        // The same tree again is accepted.
+        c.sync(&mut st);
+    }
 }
