@@ -188,6 +188,8 @@ const SETTLE_LAG: u32 = 4;
 /// A larger jump in group numbers is an outage, not line loss; it is skipped
 /// rather than counted group by group.
 const MAX_SETTLE_GAP: u32 = 256;
+/// Groups kept for recovery, counted back from the newest.
+const WINDOW: u32 = 64;
 
 pub struct Decoder {
     groups: BTreeMap<u32, Group>,
@@ -302,8 +304,12 @@ impl Decoder {
             self.next_settle = Some(group);
         }
         self.settle();
-        while self.groups.len() > 64 {
-            self.groups.pop_first();
+        // Group numbers wrap: the groups kept are the WINDOW newest by
+        // distance from `newest`, not the numerically largest (after the
+        // wrap, 0, 1, … are the newest and u32::MAX the stalest).
+        if self.groups.len() > WINDOW as usize {
+            let newest = self.newest;
+            self.groups.retain(|g, _| newest.wrapping_sub(*g) < WINDOW);
         }
         let g = self.groups.entry(group).or_insert(Group {
             data: BTreeMap::new(),
@@ -578,5 +584,33 @@ mod tests {
         want.sort();
         assert_eq!(got, want);
         assert_eq!(d.recovered, 2);
+    }
+
+    #[test]
+    fn recovery_keeps_working_across_the_group_number_wrap() {
+        // A long-lived hop's group counter wraps: groups 0, 1, … are then
+        // the newest, and evicting by number would drop each group as it
+        // fills, ending recovery for the rest of the session.
+        let mut e = Encoder::new();
+        e.ratio = 0.25;
+        e.group = u32::MAX - 100;
+        let mut d = Decoder::new();
+        let (mut sent, mut got) = (0usize, 0usize);
+        for i in 0..300 * GROUP_DATA {
+            let pkt = [i as u8; 40];
+            sent += 1;
+            for s in e.push(&pkt) {
+                // One data shard lost in every group.
+                if is_data(&s) && s[4] == 3 {
+                    continue;
+                }
+                got += d.push(&s).len();
+            }
+        }
+        assert!(e.group < 300, "the counter wrapped");
+        assert_eq!(got, sent, "every lost shard rebuilt");
+        assert_eq!(d.recovered, 300);
+        assert!(d.groups.len() <= WINDOW as usize + 1);
+        assert!(d.groups.keys().all(|g| d.newest.wrapping_sub(*g) <= WINDOW));
     }
 }
