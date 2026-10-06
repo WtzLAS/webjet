@@ -259,6 +259,7 @@ impl Machine {
             leaves: None,
         };
         let fx = self.execute(&entry)?;
+        self.refuse_route_conflicts(entry.payload.as_ref())?;
         entry.leaves = Some(
             fx.leaves
                 .iter()
@@ -289,7 +290,9 @@ impl Machine {
             })),
             leaves: None,
         };
-        Ok(self.execute(&entry)?.outcome)
+        let fx = self.execute(&entry)?;
+        self.refuse_route_conflicts(entry.payload.as_ref())?;
+        Ok(fx.outcome)
     }
 
     // ------------------------------------------------------------ applying (every replica)
@@ -1326,6 +1329,78 @@ impl Machine {
         Ok(out)
     }
 
+    /// Published prefixes are reserved by pending enrollments the way names
+    /// and overlay IPs are: a new enrollment or a node update may not claim
+    /// a prefix overlapping a pending one's grants (identical grants are
+    /// allowed, as between nodes), and a redemption re-checks its grants
+    /// against the nodes as they are now. Only new entries are checked
+    /// (`prepare`, `check`): entries already in the log apply as before, so
+    /// a replica replaying an older log doesn't diverge.
+    fn refuse_route_conflicts(
+        &self,
+        payload: Option<&EntryPayload>,
+    ) -> std::result::Result<(), ApplyError> {
+        let (routes, node) = match payload {
+            Some(EntryPayload::RedeemEnrollmentEntry(r)) => {
+                // Against the nodes only: of two pending enrollments that
+                // already overlap (from before this check), the first one
+                // redeemed gets the prefix.
+                let th = opt_k32(&r.token_hash);
+                if let Some(p) = self.pending.get(&th)
+                    && let Some(c) = &p.create
+                {
+                    self.check_routes(c.routes.as_deref().unwrap_or_default(), &p.node_id)?;
+                }
+                return Ok(());
+            }
+            Some(EntryPayload::OpEntry(o)) => {
+                let Some(op) = o
+                    .signed_op
+                    .as_deref()
+                    .and_then(|raw| open_envelope(raw).ok())
+                    .and_then(|v| v.decode::<wp::SignedOp>().ok())
+                    .and_then(|op| op.op)
+                else {
+                    return Ok(());
+                };
+                match op {
+                    AccountOp::CreateEnrollment(c) => (c.routes.unwrap_or_default(), None),
+                    AccountOp::UpdateNode(u) if u.set_routes => {
+                        (u.routes.unwrap_or_default(), Some(opt_k32(&u.node_id)))
+                    }
+                    _ => return Ok(()),
+                }
+            }
+            _ => return Ok(()),
+        };
+        let mut grants = Vec::new();
+        for r in &routes {
+            grants.push(Grant::from_wire(r).map_err(|e| ApplyError::Rejected(e.to_string()))?);
+        }
+        for p in self.pending.values() {
+            if Some(p.node_id) == node {
+                continue;
+            }
+            let Some(c) = &p.create else { continue };
+            for pr in c.routes.as_deref().unwrap_or_default() {
+                let Ok(pg) = Grant::from_wire(pr) else {
+                    continue;
+                };
+                if let Some(g) = grants
+                    .iter()
+                    .find(|g| overlaps(&pg.published, &g.published) && pg != **g)
+                {
+                    return rej(format!(
+                        "published prefix {} overlaps a grant reserved by the pending enrollment of {}",
+                        g.published,
+                        c.name.as_deref().unwrap_or("?")
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn all_grants(&self, except: Option<&Bytes32>) -> Vec<Grant> {
         self.view
             .nodes
@@ -2200,6 +2275,96 @@ mod tests {
             },
         )));
         assert!(matches!(r, Err(ApplyError::Rejected(_))));
+    }
+
+    #[test]
+    fn pending_enrollments_reserve_their_published_prefixes() {
+        let mut h = H::new();
+        let grant = |s: &str| crate::types::Grant::parse(s).unwrap().to_wire();
+        let pending = |h: &mut H, name: &str, ip: &str, route: &str, th: &Bytes32| {
+            h.admin_op(AccountOp::CreateEnrollment(Box::new(
+                wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&h.net.admin_id)),
+                    name: Some(name.into()),
+                    overlay_ips: Some(vec![super::ops::ip(ip).unwrap()]),
+                    routes: Some(vec![grant(route)]),
+                    token_hash: Some(crypto::k32(th)),
+                    expires_at: now_ms() + 3_600_000,
+                    ..Default::default()
+                },
+            )))
+        };
+        let (th1, th2) = (crypto::token_hash(b"one"), crypto::token_hash(b"two"));
+        let gw1 = pending(&mut h, "gw1", "10.7.0.21", "192.168.0.0/16", &th1)
+            .unwrap()
+            .node_id
+            .unwrap();
+        // An overlapping prefix on another pending enrollment...
+        let e = pending(&mut h, "gw2", "10.7.0.22", "192.168.5.0/24", &th2).unwrap_err();
+        assert!(e.to_string().contains("pending enrollment of gw1"), "{e}");
+        // ... or on a node update is refused; the same grant (two gateways
+        // serving one LAN) is not.
+        pending(&mut h, "gw2", "10.7.0.22", "192.168.0.0/16", &th2).unwrap();
+        let other = enroll(&mut h, "other", "10.7.0.23", &KeyPair::generate());
+        let update = |route: &str| {
+            AccountOp::UpdateNode(Box::new(wp::UpdateNode {
+                node_id: Some(crypto::k32(&other)),
+                set_routes: true,
+                routes: Some(vec![grant(route)]),
+                ..Default::default()
+            }))
+        };
+        assert!(h.admin_op(update("192.168.128.0/17")).is_err());
+        assert!(
+            h.m.check(now_ms(), {
+                h.seq += 1;
+                op_entry(sign_op(
+                    &h.net.admin,
+                    &h.net.admin_id,
+                    h.seq,
+                    now_ms(),
+                    update("192.168.1.0/24"),
+                ))
+            })
+            .is_err(),
+            "check() refuses it early too"
+        );
+        // Entries already in the log apply as before: one prepared before
+        // the pending enrollment existed still applies on every replica.
+        let (th3, idx) = (crypto::token_hash(b"three"), h.idx);
+        let old_seq = h.seq + 2;
+        let old =
+            h.m.prepare(
+                1,
+                idx + 2,
+                now_ms(),
+                op_entry(sign_op(
+                    &h.net.admin,
+                    &h.net.admin_id,
+                    old_seq,
+                    now_ms(),
+                    update("10.99.0.0/24"),
+                )),
+            )
+            .unwrap();
+        pending(&mut h, "gw3", "10.7.0.24", "10.99.0.0/16", &th3).unwrap();
+        h.m.apply(&old).unwrap();
+        (h.idx, h.seq) = (h.idx + 1, old_seq);
+        // Redeeming re-checks against the nodes as they are now: the node
+        // that took 10.99.0.0/24 meanwhile keeps gw3 from going live with
+        // an overlapping prefix.
+        let redeem = |th: &Bytes32, nid: Option<Bytes32>| {
+            EntryPayload::RedeemEnrollmentEntry(Box::new(wp::RedeemEnrollmentEntry {
+                token_hash: Some(crypto::k32(th)),
+                identity_key: Some(crypto::k32(&KeyPair::generate().public())),
+                node_id: nid.map(|n| crypto::k32(&n)),
+            }))
+        };
+        let gw3 = h.m.pending[&th3].node_id;
+        let e = h.run(redeem(&th3, Some(gw3))).unwrap_err();
+        assert!(e.to_string().contains("overlaps another grant"), "{e}");
+        h.run(redeem(&th1, Some(gw1))).unwrap();
+        assert_eq!(h.m.view().nodes[&gw1].routes.len(), 1);
     }
 
     #[test]
