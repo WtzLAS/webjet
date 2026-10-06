@@ -63,7 +63,7 @@ webjetctl network account use              # show the current choice; --clear fo
 There are two kinds, both TOML ([configuration.md](configuration.md)):
 
 - `/etc/webjet/webjetd.toml` on each machine: how that machine runs the agent (listen and public addresses, interface, key storage, gateway routes, metrics). Edit it by hand and restart the agent.
-- The **network configuration** in the signed tree: policy, DNS, seeds, transport priorities and camouflage, limits. It has two scopes. `webjetctl network config` changes it for the whole network (admins, section 3.5). `webjetctl local config` changes it for one node (the node's owner or an admin, section 3.6), which overrides the network's values for that node: transport priorities and limits, plus extra seeds and DNS entries. Both have the same verbs: `show`, `check <file>`, `apply <file>`, `edit`, and `get`/`set`/`unset <key>` for one value.
+- The **network configuration** in the signed tree: policy, DNS, seeds, transport priorities and camouflage, limits. It has two scopes. `webjetctl network config` changes it for the whole network (admins, section 3.5). `webjetctl local config` changes it for one node (the node's owner or an admin, section 3.6), which overrides the network's values for that node: transport priorities, compression and limits, plus extra seeds and DNS entries and its reverse proxy ports. Both have the same verbs: `show`, `check <file>`, `apply <file>`, `edit`, and `get`/`set`/`unset <key>` for one value.
 
 ### Reading the output
 
