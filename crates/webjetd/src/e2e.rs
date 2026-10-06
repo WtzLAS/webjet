@@ -262,6 +262,7 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
     }
     s.tx_packets.fetch_add(1, Ordering::Relaxed);
     if c.send(n, &f, ecn) {
+        c.live.tx.fetch_add(1, Ordering::Relaxed);
         SendResult::Sent
     } else {
         SendResult::Dropped
@@ -771,6 +772,9 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
     }
     *s.last_used.lock() = Instant::now();
     s.rx_packets.fetch_add(1, Ordering::Relaxed);
+    if h.ty != ftype::PROBE && h.ty != ftype::PROBE_ACK {
+        c.live.rx.fetch_add(1, Ordering::Relaxed);
+    }
     // Compressed payloads (§9.8) are accepted whatever this node's settings.
     let (ty, plain) = match h.ty {
         ftype::DATA_LZ4 | ftype::PROXY_LZ4 => {

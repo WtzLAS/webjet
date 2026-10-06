@@ -2661,6 +2661,7 @@ dependencies = [
  "chacha20poly1305",
  "futures",
  "kcp",
+ "libc",
  "parking_lot 0.12.5",
  "rand",
  "reed-solomon-erasure",
@@ -2672,6 +2673,7 @@ dependencies = [
  "tracing",
  "webjet-core",
  "webjet-proto",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

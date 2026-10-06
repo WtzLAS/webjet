@@ -1,6 +1,10 @@
 //! Path selection (§11.4): candidates from the relay graph plus the direct
-//! route, opened as circuits and measured end to end with encrypted probes.
-//! The session sends on the circuit with the best measured cost.
+//! route, opened as circuits. A circuit's cost is the sum of its links' raw
+//! measurements (§11.2): this node's first hop live, the rest as their ends
+//! advertise them. End-to-end probes go only over circuits without enough
+//! traffic of their own, so they never queue behind it: they show the
+//! circuit is alive and give its cost until the links are known. The
+//! session sends on the circuit with the best cost.
 
 use crate::circuit::{self, LocalCircuit};
 use crate::node::Node;
@@ -135,7 +139,8 @@ pub fn on_probe_ack(n: &Arc<Node>, c: &Arc<LocalCircuit>, payload: &[u8]) {
         return;
     }
     let now_us = n.started.elapsed().as_micros() as u64;
-    if let Some(rtt) = c.probes.lock().on_ack(p.probe_seq, now_us) {
+    let rtt = c.probes.lock().on_ack(p.probe_seq, now_us);
+    if let Some(rtt) = rtt {
         *c.e2e_rtt_ms.lock() = Some(rtt);
     }
 }
@@ -147,6 +152,7 @@ fn send_probe(n: &Arc<Node>, c: &Arc<LocalCircuit>, seq: u64) {
     }
     let us = n.started.elapsed().as_micros() as u64;
     c.probes.lock().on_sent(seq, us);
+    c.on_probe_sent();
     let p = wp::Probe {
         route_id: Some(crypto::k32(&c.route_id)),
         probe_seq: seq,
@@ -155,7 +161,43 @@ fn send_probe(n: &Arc<Node>, c: &Arc<LocalCircuit>, seq: u64) {
     crate::e2e::send_on(n, &s, c, ftype::PROBE, &p.encode_bytes());
 }
 
-/// The path maintenance loop: probe every circuit, keep a backup open while
+/// The cost of the path `me → relays → peer` from its links' measurements
+/// (§11.2, §11.4): the first hop live, the others as advertised (relay
+/// links and the far end's attachment). No load penalty: an established
+/// circuit doesn't move because a relay got busier, only when one is full
+/// (§11.8.3). `None` while a link isn't known.
+pub fn path_cost(
+    n: &Node,
+    g: &webjet_core::routing::Graph,
+    peer: &Bytes32,
+    relays: &[Bytes32],
+) -> Option<f64> {
+    let first = relays.first().unwrap_or(peer);
+    let mut cost = n
+        .best_hop(first)
+        .map(|h| h.cost())
+        .filter(|c| c.is_finite())?;
+    let mut prev = *first;
+    for next in relays.iter().skip(1).chain(std::iter::once(peer)) {
+        if prev == *peer {
+            break;
+        }
+        cost += g.link(&prev, next)?;
+        prev = *next;
+    }
+    let full = relays.iter().any(|r| {
+        g.relays
+            .get(r)
+            .is_some_and(|i| webjet_core::routing::load_penalty(i.load).is_none())
+    });
+    Some(if full { cost * FULL_RELAY_FACTOR } else { cost })
+}
+
+/// A circuit through a full relay costs this much more, so traffic leaves
+/// it (§11.8.3) unless every other path is far worse.
+const FULL_RELAY_FACTOR: f64 = 4.0;
+
+/// The path maintenance loop: probe idle circuits, keep a backup open while
 /// a session is active, and close circuits nobody uses.
 pub async fn run(n: Arc<Node>) {
     let mut tick = tokio::time::interval(PROBE_INTERVAL);
@@ -167,6 +209,8 @@ pub async fn run(n: Arc<Node>) {
         tick.tick().await;
         seq += 1;
         let sessions = n.e2e.all();
+        // Built once per round, when an active session needs it.
+        let mut graph: Option<webjet_core::routing::Graph> = None;
         let mut active: HashMap<Bytes32, bool> = HashMap::new();
         for s in &sessions {
             let recent = s.last_used.lock().elapsed() < Duration::from_secs(60);
@@ -175,8 +219,15 @@ pub async fn run(n: Arc<Node>) {
                 continue;
             }
             let circs = n.circuits.lock().local_circuits(&s.peer);
+            let g = graph.get_or_insert_with(|| crate::gossip::graph(&n));
             for c in &circs {
-                send_probe(&n, c, seq);
+                *c.live.path_cost.lock() = path_cost(&n, g, &s.peer, &c.relays_from_me());
+                // A circuit carrying traffic both ways needs no probe: the
+                // traffic shows it works, and a probe would only measure the
+                // queue in front of it.
+                if !c.busy() {
+                    send_probe(&n, c, seq);
+                }
             }
             // Keep a backup (§11.4 step 4), and every TRIAL_EVERY try the best
             // path not tried lately; the measurements decide which two stay
@@ -216,7 +267,7 @@ pub async fn run(n: Arc<Node>) {
                 if let Some(worst) = mine
                     .iter()
                     .filter(|c| Some(c.label) != primary)
-                    .filter(|c| c.probes.lock().samples >= MEASURED_PROBES)
+                    .filter(|c| c.measured(MEASURED_PROBES))
                     .max_by(|a, b| {
                         a.cost()
                             .partial_cmp(&b.cost())
@@ -228,12 +279,8 @@ pub async fn run(n: Arc<Node>) {
             }
             // A circuit whose probes all fail for a while is dead.
             for c in &circs {
-                let st = c.probes.lock();
-                if c.created.elapsed() > Duration::from_secs(15)
-                    && st.loss > 0.95
-                    && circs.len() > 1
-                {
-                    drop(st);
+                let loss = c.probes.lock().loss;
+                if c.created.elapsed() > Duration::from_secs(15) && loss > 0.95 && circs.len() > 1 {
                     circuit::close_local(&n, c);
                 }
             }
@@ -458,6 +505,7 @@ mod tests {
             probes: parking_lot::Mutex::new(Default::default()),
             e2e_rtt_ms: parking_lot::Mutex::new(None),
             last_rx: parking_lot::Mutex::new(Instant::now()),
+            live: Default::default(),
         });
         c.probes.lock().on_sent(7, 0);
         let probe = |route: Bytes32, seq| {
@@ -477,6 +525,103 @@ mod tests {
         assert!(c.e2e_rtt_ms.lock().is_some());
         assert_eq!(c.probes.lock().samples, 1);
         assert!(c.cost().is_finite());
+    }
+
+    fn circuit(peer: Bytes32, hops: Vec<Bytes32>, source: bool) -> Arc<LocalCircuit> {
+        Arc::new(LocalCircuit {
+            peer,
+            label: 1,
+            next: if source {
+                hops.first().copied().unwrap_or(peer)
+            } else {
+                hops.last().copied().unwrap_or(peer)
+            },
+            out_label: parking_lot::Mutex::new(Some(2)),
+            hops,
+            route_id: [9; 32],
+            acct: Default::default(),
+            is_source: source,
+            created: Instant::now(),
+            probes: parking_lot::Mutex::new(Default::default()),
+            e2e_rtt_ms: parking_lot::Mutex::new(None),
+            last_rx: parking_lot::Mutex::new(Instant::now()),
+            live: Default::default(),
+        })
+    }
+
+    /// A circuit is busy only with traffic both ways in one interval.
+    #[test]
+    fn busy_needs_traffic_both_ways() {
+        use std::sync::atomic::Ordering;
+        let c = circuit([3; 32], vec![], true);
+        assert!(!c.busy());
+        c.live.tx.fetch_add(10, Ordering::Relaxed);
+        assert!(!c.busy(), "sending only: the probe checks the way back");
+        c.live.tx.fetch_add(10, Ordering::Relaxed);
+        c.live.rx.fetch_add(circuit::BUSY_FRAMES, Ordering::Relaxed);
+        assert!(c.busy());
+        assert!(!c.busy(), "counted per interval");
+    }
+
+    /// The path cost: the live first hop plus the advertised links, the far
+    /// end's attachment last; unknown while a link is missing.
+    #[test]
+    fn path_cost_from_links() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        lsa(&n, t.r1, &[(t.r2, 5)]);
+        lsa(&n, t.r2, &[(t.r1, 7)]);
+        attach(&n, t.peer, &[(t.r2, 10)]);
+        let g = || crate::gossip::graph(&n);
+        assert_eq!(
+            path_cost(&n, &g(), &t.peer, &[t.r1, t.r2]),
+            None,
+            "no hop to r1"
+        );
+        let (h, _rx) = n.test_hop(t.r1, Transport::TcpTls);
+        h.stats
+            .lock()
+            .on_raw(Some((20.0, 20.0)), Some(0.0), 100, 0, now_ms());
+        let first = h.cost();
+        assert!(first.is_finite());
+        let c = path_cost(&n, &g(), &t.peer, &[t.r1, t.r2]).unwrap();
+        // r1–r2 at the higher of both ends' figures (7), then r2–peer (10).
+        assert!((c - (first + 7.0 + 10.0)).abs() < 1e-9, "{c} vs {first}");
+        assert_eq!(
+            path_cost(&n, &g(), &t.peer, &[t.r1]),
+            None,
+            "peer not on r1"
+        );
+        // A full relay on the path makes it much dearer.
+        n.records.lock().lsas.get_mut(&t.r2).unwrap().0.load = Some(Box::new(wp::RelayLoad {
+            util_pct: 95,
+            ..Default::default()
+        }));
+        let full = path_cost(&n, &g(), &t.peer, &[t.r1, t.r2]).unwrap();
+        assert!((full - c * FULL_RELAY_FACTOR).abs() < 1e-9);
+        // The destination end of the same circuit sees it reversed.
+        let d = circuit(t.me.0, vec![t.r1, t.r2], false);
+        assert_eq!(d.relays_from_me(), vec![t.r2, t.r1]);
+    }
+
+    /// The circuit's cost follows its links, ignoring what its probes say,
+    /// and turns infinite when a probe goes unanswered with nothing else
+    /// received.
+    #[test]
+    fn circuit_cost_prefers_links_and_notices_silence() {
+        let c = circuit([3; 32], vec![], true);
+        assert_eq!(c.cost(), f64::INFINITY, "nothing known");
+        c.probes.lock().on_sent_at(1, 0, now_ms());
+        c.probes.lock().on_ack_at(1, 300_000, now_ms());
+        assert_eq!(c.cost(), 375.0, "probe only (300 ms + half its jitter)");
+        *c.live.path_cost.lock() = Some(25.0);
+        assert_eq!(c.cost(), 25.0, "links win over a probe stuck behind data");
+        c.on_probe_sent();
+        assert_eq!(c.cost(), 25.0, "just sent");
+        *c.live.probe_pending.lock() = Some(Instant::now() - Duration::from_secs(4));
+        assert_eq!(c.cost(), f64::INFINITY, "unanswered");
+        c.on_received();
+        assert_eq!(c.cost(), 25.0, "answered");
     }
 
     #[tokio::test]

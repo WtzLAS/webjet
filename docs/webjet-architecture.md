@@ -811,7 +811,7 @@ Frames use the format in §6.9.
 
 - **AEAD:** ChaCha20-Poly1305 by default; AES-256-GCM where hardware AES is available.
 - **`DATA`:** one inner IP packet, never fragmented. **`DATA_LZ4`** carries it LZ4-compressed (§9.8).
-- **`PROBE` / `PROBE_ACK`:** `{ route_id, probe_seq, sent_at }`. Encrypted end to end, so a relay can delay or drop probes but never forge an answer. This is what makes path selection by measured end-to-end cost (§11.4) safe.
+- **`PROBE` / `PROBE_ACK`:** `{ route_id, probe_seq, sent_at }`. Encrypted end to end, so a relay can delay or drop probes but never forge an answer. They are sent only over circuits with little traffic of their own (§11.4): they show the circuit works, and give its cost until its links are known.
 - **`PUNCH_OFFER` / `PUNCH_GO`:** hole-punching coordination (§11.7).
 - **`CLOSE`:** the peer tears down the session.
 - The whole E2EFrame is the **inner frame** counted by accounting (§12.1).
@@ -1186,7 +1186,11 @@ DATA ─┬─ Relay A ── Relay B ── Relay C ─┬─ DATA
 
 ### 11.2 Link measurement
 
-- **Piggyback on keepalives.** Every keepalive carries a timestamp and sequence number, giving RTT and loss without extra traffic.
+- **Measure below the hop stream, from the traffic it carries.** A message written into a hop waits behind everything written before it (the hop queue, KCP's send buffer and pacer, or the TCP send buffer), so under load its round trip shows the sender's own backlog, not the path. Each transport is therefore measured underneath:
+  - **UDP+KCP+FEC:** RTT from a new data segment leaving the socket to its acknowledgement arriving. Acknowledgements go out at once in their own datagrams (`RAW_ACK`), outside FEC and the pacer, carrying how long the receiver held the acknowledged data; that time is subtracted. Retransmitted segments give no sample. Loss is the datagram loss of both directions before FEC recovery, which each end counts from shard-group gaps and reports once a second (§17.6).
+  - **TCP+TLS and TCP+AnyTLS:** the kernel's smoothed RTT and its retransmitted share of what it sent (`TCP_INFO` on Linux, `TCP_CONNECTION_INFO` on macOS, `SIO_TCP_INFO` on Windows).
+  - The figures are read every keepalive (2 s). On an idle link the keepalives are the traffic being measured, so no extra probe packets are needed either way.
+- **Keepalives as a fallback.** Every keepalive carries a timestamp and sequence number. Their round trips are the link's measurement only until the transport has given an RTT (a peer before 0.9, or a platform without TCP statistics); after that they only show the link is alive (§10.5).
 - **Measure per transport.** KCP+FEC, AnyTLS and plain TLS between the same two nodes can behave very differently, especially under loss. Each eligible transport is measured separately, and each node sends on the cheapest one (§9.6). Adverts carry that selected transport and its cost.
 - **Smooth and quantize.** Use an EWMA for RTT and loss, and round values before advertising them so small fluctuations never trigger an update.
 - **Cost function:** `cost = rtt_ms × (1 + k × loss_fraction)`, with k ≈ 10 as a starting point. Loss hurts tunnelled TCP far more than latency does. Path cost additionally includes a load penalty for the relays on the path (§11.8.2).
@@ -1209,8 +1213,9 @@ DATA ─┬─ Relay A ── Relay B ── Relay C ─┬─ DATA
 ### 11.4 Path computation and selection (source routing)
 
 1. The source builds a graph from all valid LinkStateAdverts and AttachmentRecords and computes the **k best paths** to the destination (Yen's algorithm), with at most **3 relays** per path.
-2. It probes the top candidates end to end.
-3. It uses the path with the best **measured end-to-end** cost. Advertised metrics only choose candidates; measured performance decides. A relay that lies about its links can't fake end-to-end performance.
+2. It opens circuits on the top candidates.
+3. It uses the circuit with the best **cost**: the sum of the measured costs of its links (§11.2), its own first hop live and the others as their ends advertise them (relay links, and the destination's attachment). The busier a circuit, the more its own traffic would distort anything measured through it; the link figures don't include that backlog, so a loaded circuit isn't mistaken for a bad one and abandoned for an idle one. No load penalty applies to an established circuit (§11.8.3), except that a full relay multiplies its cost by 4. Until all of a circuit's links are known, its end-to-end probes give its cost.
+   - **End-to-end probes** (`PROBE`/`PROBE_ACK`, §9.4.3) go once a second over each circuit that hasn't carried at least 3 session frames each way since the last probe. On an idle circuit they show it is alive; on a busy one the traffic shows that, and a probe would only measure the queue in front of it. A circuit whose probe goes unanswered for 3 s with nothing else received meanwhile is unusable (infinite cost) until something comes back, and one whose probes keep failing is closed.
 4. It keeps **one or two backup paths** open with light probing, for fast failover. Every 30 s an active session also opens a **trial circuit** on the best candidate it hasn't tried in the last 5 minutes; once its probes have answered, the worst measured circuit beyond two (never the one in use) is closed. A new or improved relay therefore gets measured, and used when it is better, within a minute or so.
 5. **Hysteresis:** switch paths only if the new one is better by more than 15–20% and stays better for several seconds. This prevents flapping between near-equal paths, which causes packet reordering for tunnelled TCP.
 6. **Spreading:** among candidates within 10% of the best cost, the source picks at random, weighted by spare capacity, rather than always the single best (§11.8.3).
@@ -1337,7 +1342,7 @@ path_cost  = Σ link_cost × max penalty(L) over the relays on the path
 1. **Load affects only new choices.** An established circuit doesn't move because a relay got busier. It moves only if the relay becomes full, or its measured end-to-end quality degrades past the normal hysteresis (§11.4).
 2. **Randomized choice among near-equal paths.** Candidates within 10% of the best cost are picked at random, weighted by spare capacity (`100 − L`), which spreads new circuits across relays without coordination.
 3. **Jittered re-evaluation.** Each source re-checks its paths at randomized times, so sources don't all react in the same second.
-4. **Measured performance still decides** (§11.4). Advertised load only ranks candidates; real congestion also shows up in end-to-end probes.
+4. **Measured performance still decides** (§11.4). Advertised load only ranks candidates; real congestion on a link shows up in its measured RTT and loss, which every end advertises.
 
 #### 11.8.4 Admission control
 
@@ -1585,7 +1590,7 @@ Transport overhead (TLS records, KCP headers, FEC parity) differs per hop and is
 
 | Metric | Type | Notes |
 |---|---|---|
-| `e2e_rtt_ms`, `e2e_loss_pct` | gauge (EWMA) | end-to-end probe results used by path selection |
+| `e2e_rtt_ms`, `e2e_loss_pct` | gauge (EWMA) | end-to-end probe results; probes go only while the circuit carries little traffic (§11.4) |
 | `selected` | gauge | 0 idle, 1 primary, 2 backup |
 | `switches` | monotonic | how often the session to the route's destination moved its traffic to another circuit |
 
@@ -2204,7 +2209,7 @@ Every hop session has a small managed queue in front of it, on every node:
 - **What counts as a flow:**
   - on the **source node**, the inner packet's addresses and ports, so a bulk transfer can't starve an interactive session
   - on **relays**, where frames are opaque, the source node first and then the circuit. This is the per-source fair share of §16.2.
-- **Short socket buffers.** TCP hops set `TCP_NOTSENT_LOWAT` and KCP hops keep a small send window ahead of the pacer, so waiting data sits in the managed queue and not in a kernel or KCP buffer.
+- **Short socket buffers.** TCP hops set `TCP_NOTSENT_LOWAT` (16 kB, Linux and macOS). A KCP hop takes more data from the hop only while its send buffer holds less than two windows and its pacer less than one, through a 64 kB pipe. Waiting data thus sits in the managed queue and not in a kernel or KCP buffer, and the queue's CoDel interval follows the hop's raw RTT (§11.2), not one inflated by such a buffer.
 - When CoDel decides a frame must go, it is **marked** if the frame is ECN-capable and **dropped** (`aqm`) otherwise (§17.7).
 
 ### 17.3 Control traffic
@@ -2219,7 +2224,7 @@ The kernel's TCP does the congestion control. The agent requests **BBR** per soc
 
 KCP's own congestion window is turned off. It backs off on every loss, which collapses on lossy long-distance links, the links KCP is meant for. Sending with no control at all is unfair to other traffic, causes its own loss and invites throttling. Instead, each KCP hop session is **paced** by a BBR-style controller:
 
-- **Estimates:** the bottleneck bandwidth (the highest delivery rate seen over recent round trips) and the minimum RTT (over about 10 s), both taken from KCP acknowledgements.
+- **Estimates:** the bottleneck bandwidth (the highest delivery rate seen over recent round trips) and the minimum RTT (over about 10 s), both taken from KCP acknowledgements. The RTT is the raw one of §11.2 (from the socket, acknowledgements sent outside the pacer); with a peer that doesn't send `RAW_ACK`, KCP's own estimate.
 - **Pacing:** packets leave at the estimated bandwidth, with BBR's phases: a fast start-up, a drain, steady probing for more bandwidth, and periodic probing for the minimum RTT.
 - **In flight:** capped at about twice the bandwidth-delay product, which also sizes KCP's send window.
 - **Loss is not a congestion signal.** Random line loss doesn't reduce the rate. Only loss that stays well above the link's usual level while probing for bandwidth lowers the estimate.

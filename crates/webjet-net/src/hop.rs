@@ -7,6 +7,7 @@ use crate::gate::{
     self, GateResult, ReplayCache, SharedEpochs, TCP_PREAMBLE, check_tcp_preamble, tcp_preamble,
 };
 use crate::kcp::{KcpStats, UdpEndpoint};
+use crate::meter::{Meter, MeteredTcp};
 use crate::tls::{self, PeerTrust};
 use anyhow::{Context, Result, anyhow, bail};
 use std::net::SocketAddr;
@@ -44,6 +45,8 @@ pub struct Established {
     pub remote: SocketAddr,
     pub bootstrap: bool,
     pub kcp_stats: Option<Arc<KcpStats>>,
+    /// The transport's own RTT and loss (§11.2), where it can be read.
+    pub meter: Option<Meter>,
 }
 
 pub async fn read_record<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8, Vec<u8>)> {
@@ -78,44 +81,38 @@ pub async fn write_record<W: AsyncWrite + Unpin>(
     w.write_all(&encode_record(ty, payload)).await
 }
 
-fn tune_tcp(s: &TcpStream) {
+/// Socket options for every TCP hop (§17.4): no Nagle delay, BBR where
+/// the kernel offers it, and a small unsent backlog in the kernel
+/// (`TCP_NOTSENT_LOWAT`), so data waits in the hop queue, where fair
+/// queueing and CoDel manage it, rather than in the socket buffer.
+pub(crate) fn tune_tcp(s: &TcpStream) {
     let _ = s.set_nodelay(true);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::fd::AsRawFd;
         let fd = s.as_raw_fd();
-        // Ask for BBR where the kernel offers it (§17.4).
-        let algo = b"bbr";
-        unsafe {
-            libc_setsockopt(
-                fd,
-                6,  /* IPPROTO_TCP */
-                13, /* TCP_CONGESTION */
-                algo.as_ptr() as *const _,
-                algo.len() as u32,
-            );
-            let lowat: i32 = 16384;
-            libc_setsockopt(
-                fd,
-                6,
-                25, /* TCP_NOTSENT_LOWAT */
-                &lowat as *const i32 as *const _,
-                4,
-            );
-        }
+        let set = |name: libc::c_int, val: &[u8]| {
+            // SAFETY: `fd` is the live socket `s` borrows; `val` is a valid
+            // buffer of the given length. Failures are ignored on purpose.
+            unsafe {
+                libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_TCP,
+                    name,
+                    val.as_ptr().cast(),
+                    val.len() as libc::socklen_t,
+                );
+            }
+        };
+        #[cfg(target_os = "linux")]
+        set(libc::TCP_CONGESTION, b"bbr");
+        #[cfg(target_os = "linux")]
+        const NOTSENT_LOWAT: libc::c_int = libc::TCP_NOTSENT_LOWAT;
+        // <netinet/tcp.h>; the libc crate doesn't have it for Apple.
+        #[cfg(target_os = "macos")]
+        const NOTSENT_LOWAT: libc::c_int = 0x201;
+        set(NOTSENT_LOWAT, &16384i32.to_ne_bytes());
     }
-}
-
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    #[link_name = "setsockopt"]
-    fn libc_setsockopt(
-        fd: i32,
-        level: i32,
-        name: i32,
-        val: *const std::ffi::c_void,
-        len: u32,
-    ) -> i32;
 }
 
 // ---------------------------------------------------------------- TCP + TLS
@@ -137,8 +134,9 @@ pub async fn dial_tls(
     psk: &Bytes32,
 ) -> Result<Established> {
     let fut = async {
-        let mut s = TcpStream::connect(addr).await?;
+        let s = TcpStream::connect(addr).await?;
         tune_tcp(&s);
+        let (mut s, meter) = MeteredTcp::new(s);
         s.write_all(&tcp_preamble(epoch, psk)).await?;
         let cfg = tls::client_config(kp, expected, trust, tls::ALPN_HOP)?;
         let tls = tokio_rustls::TlsConnector::from(cfg)
@@ -153,6 +151,7 @@ pub async fn dial_tls(
             remote: addr,
             bootstrap: false,
             kcp_stats: None,
+            meter: Some(Meter::Tcp(meter)),
         })
     };
     tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
@@ -214,7 +213,7 @@ impl TlsListener {
 /// Handle one accepted TCP connection: PSK gate, then TLS. Failures close
 /// the connection without a reply (§9.1).
 pub async fn accept_tls(
-    mut s: TcpStream,
+    s: TcpStream,
     remote: SocketAddr,
     kp: &KeyPair,
     trust: Arc<dyn PeerTrust>,
@@ -223,6 +222,7 @@ pub async fn accept_tls(
     enroll: Option<&dyn EnrollGate>,
 ) -> Result<Accepted> {
     tune_tcp(&s);
+    let (mut s, meter) = MeteredTcp::new(s);
     let mut pre = [0u8; TCP_PREAMBLE];
     tokio::time::timeout(Duration::from_secs(5), s.read_exact(&mut pre))
         .await
@@ -286,6 +286,7 @@ pub async fn accept_tls(
         remote,
         bootstrap: gate_res.bootstrap(),
         kcp_stats: None,
+        meter: Some(Meter::Tcp(meter)),
     }))
 }
 
@@ -312,6 +313,7 @@ pub async fn dial_kcp(
             transport: Transport::KcpFecTls,
             remote: addr,
             bootstrap: false,
+            meter: Some(Meter::Kcp(c.stats.clone())),
             kcp_stats: Some(c.stats),
         })
     };
@@ -340,6 +342,7 @@ pub async fn accept_kcp(
         transport: Transport::KcpFecTls,
         remote: c.peer,
         bootstrap: c.gate.bootstrap(),
+        meter: Some(Meter::Kcp(c.stats.clone())),
         kcp_stats: Some(c.stats),
     })
 }

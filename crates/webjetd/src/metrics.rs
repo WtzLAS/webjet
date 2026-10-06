@@ -574,6 +574,7 @@ mod tests {
                 probes: parking_lot::Mutex::new(probes),
                 e2e_rtt_ms: parking_lot::Mutex::new(None),
                 last_rx: parking_lot::Mutex::new(std::time::Instant::now()),
+                live: Default::default(),
             })
         };
         let mut t = crate::circuit::Table::default();

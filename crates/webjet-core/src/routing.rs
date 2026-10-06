@@ -83,6 +83,15 @@ impl Graph {
         Some(ca.max(*cb))
     }
 
+    /// The advertised cost between two neighbors on a path: a relay link
+    /// (both ends must advertise it), or a node's attachment to a relay.
+    pub fn link(&self, a: &Bytes32, b: &Bytes32) -> Option<f64> {
+        self.relay_link(a, b)
+            .or_else(|| self.attachments.get(b).and_then(|m| m.get(a)).copied())
+            .or_else(|| self.attachments.get(a).and_then(|m| m.get(b)).copied())
+            .filter(|c| c.is_finite())
+    }
+
     /// Edges out of `n`, for path search from `src` to `dst`.
     fn edges(&self, n: &Bytes32, src: &Bytes32, dst: &Bytes32) -> Vec<(Bytes32, f64)> {
         let mut out = Vec::new();
@@ -464,6 +473,28 @@ impl LinkHistory {
         self.samples += 1;
     }
 
+    /// A raw measurement (§11.2): an RTT, a loss fraction, or both.
+    pub fn observe_raw(
+        &mut self,
+        rtt_ms: Option<f64>,
+        jitter_ms: f64,
+        loss: Option<f64>,
+        now_ms: u64,
+    ) {
+        if rtt_ms.is_none() && (loss.is_none() || self.samples == 0) {
+            return;
+        }
+        let a = self.decay(now_ms);
+        if let Some(r) = rtt_ms {
+            self.rtt_ms += a * (r - self.rtt_ms);
+            self.jitter_ms += a * (jitter_ms - self.jitter_ms);
+            self.samples += 1;
+        }
+        if let Some(l) = loss {
+            self.loss += a * (l - self.loss);
+        }
+    }
+
     /// One probe lost.
     pub fn observe_loss(&mut self, now_ms: u64) {
         let a = self.decay(now_ms);
@@ -509,12 +540,15 @@ pub struct LinkStats {
     pub rttvar_ms: f64,
     /// Lowest RTT over the last ten minutes (the path's base delay).
     pub min_rtt_ms: f64,
-    /// Short-term loss EWMA (~10 probes).
+    /// Short-term loss EWMA (~10 probes or raw reports).
     pub loss: f64,
     pub samples: u64,
     pub history: LinkHistory,
     sent: BTreeMap<u64, u64>,
-    outcomes: std::collections::VecDeque<bool>,
+    /// Recent (lost, sent) counts: one per probe, or per raw report.
+    outcomes: std::collections::VecDeque<(f64, f64)>,
+    /// Fed by the transport's own measurements (§11.2).
+    raw: bool,
     min_buckets: std::collections::VecDeque<(u64, f64)>,
 }
 
@@ -528,6 +562,10 @@ const MIN_BUCKET_US: u64 = 60_000_000;
 const MIN_BUCKETS: usize = 10;
 /// Probes before the session's own measurements fully replace history.
 const WARMUP: u64 = 8;
+/// A raw loss report's EWMA weight once it covers [`RAW_LOSS_PACKETS`]
+/// packets (one report a second: about ten seconds of memory).
+const RAW_LOSS_WEIGHT: f64 = 0.1;
+const RAW_LOSS_PACKETS: f64 = 100.0;
 
 impl LinkStats {
     pub fn with_history(history: LinkHistory) -> Self {
@@ -540,12 +578,20 @@ impl LinkStats {
             history,
             sent: BTreeMap::new(),
             outcomes: std::collections::VecDeque::new(),
+            raw: false,
             min_buckets: std::collections::VecDeque::new(),
         }
     }
 
-    fn record(&mut self, ok: bool) {
-        self.outcomes.push_back(ok);
+    /// Whether the transport's own measurements feed this link
+    /// ([`Self::on_raw`]); keepalive acknowledgements then only keep the
+    /// link alive.
+    pub fn is_raw(&self) -> bool {
+        self.raw
+    }
+
+    fn record(&mut self, lost: f64, total: f64) {
+        self.outcomes.push_back((lost, total));
         while self.outcomes.len() > LOSS_WINDOW {
             self.outcomes.pop_front();
         }
@@ -553,7 +599,7 @@ impl LinkStats {
 
     fn lost_one(&mut self, now_ms: u64) {
         self.loss = self.loss * 0.9 + 0.1;
-        self.record(false);
+        self.record(1.0, 1.0);
         self.history.observe_loss(now_ms);
     }
 
@@ -568,7 +614,9 @@ impl LinkStats {
             if self.sent.pop_first().is_none() {
                 break;
             }
-            self.lost_one(now_ms);
+            if !self.raw {
+                self.lost_one(now_ms);
+            }
         }
     }
 
@@ -576,15 +624,62 @@ impl LinkStats {
         self.on_ack_at(seq, now_us, crate::types::now_ms())
     }
 
+    /// A probe answered: its round trip, which also feeds the estimate
+    /// unless the link is measured raw.
     pub fn on_ack_at(&mut self, seq: u64, now_us: u64, now_ms: u64) -> Option<f64> {
         let at = self.sent.remove(&seq)?;
         // Earlier unacked probes are lost.
         let lost: Vec<u64> = self.sent.range(..seq).map(|(k, _)| *k).collect();
         for k in lost {
             self.sent.remove(&k);
-            self.lost_one(now_ms);
+            if !self.raw {
+                self.lost_one(now_ms);
+            }
         }
         let rtt = (now_us.saturating_sub(at)) as f64 / 1000.0;
+        if self.raw {
+            return Some(rtt);
+        }
+        self.rtt_sample(rtt, rtt, now_us);
+        self.samples += 1;
+        self.loss *= 0.9;
+        self.record(0.0, 1.0);
+        self.history.observe(rtt, self.rttvar_ms, now_ms);
+        Some(rtt)
+    }
+
+    /// What the transport underneath measured (§11.2): the mean and lowest
+    /// RTT of its samples, and the loss fraction over `packets` packets.
+    /// From the first RTT on, the link is measured this way only.
+    pub fn on_raw(
+        &mut self,
+        rtt: Option<(f64, f64)>,
+        loss: Option<f64>,
+        packets: u64,
+        now_us: u64,
+        now_ms: u64,
+    ) {
+        let loss = loss.map(|l| l.clamp(0.0, 1.0));
+        if let Some((mean, min)) = rtt {
+            self.raw = true;
+            self.rtt_sample(mean, min, now_us);
+            self.samples += 1;
+        }
+        if !self.raw {
+            return;
+        }
+        if let Some(l) = loss {
+            // A few packets say little: their weight grows with the count.
+            let a = RAW_LOSS_WEIGHT * (packets as f64 / RAW_LOSS_PACKETS).min(1.0);
+            self.loss += a * (l - self.loss);
+            let n = packets.max(1) as f64;
+            self.record(l * n, n);
+        }
+        self.history
+            .observe_raw(rtt.map(|r| r.0), self.rttvar_ms, loss, now_ms);
+    }
+
+    fn rtt_sample(&mut self, rtt: f64, min: f64, now_us: u64) {
         if self.samples == 0 {
             self.srtt_ms = rtt;
             self.rttvar_ms = rtt / 2.0;
@@ -595,8 +690,8 @@ impl LinkStats {
         // Windowed minimum in one-minute buckets.
         let bucket = now_us / MIN_BUCKET_US;
         match self.min_buckets.back_mut() {
-            Some((b, m)) if *b == bucket => *m = m.min(rtt),
-            _ => self.min_buckets.push_back((bucket, rtt)),
+            Some((b, m)) if *b == bucket => *m = m.min(min),
+            _ => self.min_buckets.push_back((bucket, min)),
         }
         while self
             .min_buckets
@@ -610,19 +705,15 @@ impl LinkStats {
             .iter()
             .map(|x| x.1)
             .fold(f64::INFINITY, f64::min);
-        self.loss *= 0.9;
-        self.record(true);
-        self.samples += 1;
-        self.history.observe(rtt, self.rttvar_ms, now_ms);
-        Some(rtt)
     }
 
-    /// Exact loss over the recent probe window.
+    /// Exact loss over the recent window (probes, or packets when raw).
     pub fn window_loss(&self) -> f64 {
-        if self.outcomes.is_empty() {
-            return 0.0;
-        }
-        self.outcomes.iter().filter(|o| !**o).count() as f64 / self.outcomes.len() as f64
+        let (lost, total) = self
+            .outcomes
+            .iter()
+            .fold((0.0, 0.0), |(l, t), (a, b)| (l + a, t + b));
+        if total > 0.0 { lost / total } else { 0.0 }
     }
 
     /// Effective RTT and loss: what the cost is computed from, and what is
@@ -799,6 +890,56 @@ mod tests {
         if !lost {
             st.on_ack_at(seq, (t_ms + rtt_ms) * 1000, t_ms + rtt_ms);
         }
+    }
+
+    /// Raw measurements replace the keepalive estimate: once a link has a
+    /// raw RTT, keepalive round trips (which queue behind the link's data)
+    /// and lost keepalives no longer move it; loss comes in packet counts.
+    #[test]
+    fn raw_measurements_take_over() {
+        let mut st = LinkStats::default();
+        probe(&mut st, 1, 20, 0, false);
+        assert!(!st.is_raw());
+        assert_eq!(st.srtt_ms, 20.0);
+        // Loss without an RTT doesn't switch the link over.
+        st.on_raw(None, Some(0.5), 100, 1_000_000, 1000);
+        assert!(!st.is_raw());
+        assert_eq!(st.window_loss(), 0.0);
+        st.on_raw(Some((10.0, 8.0)), Some(0.0), 100, 2_000_000, 2000);
+        assert!(st.is_raw());
+        assert_eq!(st.samples, 2);
+        // A keepalive stuck behind 400 ms of data, then lost ones: ignored.
+        st.on_sent_at(2, 3_000_000, 3000);
+        st.on_sent_at(3, 3_000_000, 3000);
+        assert_eq!(st.on_ack_at(3, 3_400_000, 3400), Some(400.0));
+        for i in 4..40 {
+            st.on_sent_at(i, i * 1_000_000, i * 1000);
+        }
+        let srtt = st.srtt_ms;
+        assert!(srtt < 20.0, "{srtt}");
+        assert_eq!(st.loss, 0.0);
+        assert_eq!(st.min_rtt_ms, 8.0);
+        // 10% of 1000 packets lost, then a clean report of only 10 packets.
+        st.on_raw(Some((10.0, 9.0)), Some(0.1), 1000, 40_000_000, 40_000);
+        assert!((st.loss - 0.01).abs() < 1e-9, "{}", st.loss);
+        st.on_raw(None, Some(0.0), 10, 41_000_000, 41_000);
+        // The probe, then 100, 1000 and 10 packets.
+        assert!((st.window_loss() - 100.0 / 1111.0).abs() < 1e-9);
+        assert!(st.cost().is_finite());
+        assert!(st.history.samples >= 2);
+    }
+
+    #[test]
+    fn graph_links_both_ways() {
+        let g = mesh();
+        assert_eq!(g.link(&id(1), &id(2)), Some(10.0));
+        assert_eq!(g.link(&id(100), &id(1)), Some(5.0), "source attachment");
+        assert_eq!(
+            g.link(&id(3), &id(200)),
+            Some(5.0),
+            "destination attachment"
+        );
+        assert_eq!(g.link(&id(100), &id(3)), None);
     }
 
     #[test]

@@ -13,6 +13,7 @@
 
 use crate::gate::{Epochs, GateResult, SharedEpochs, anytls_enroll_password, anytls_password};
 use crate::hop::{BoxIo, Established, HANDSHAKE_TIMEOUT, exchange_identity};
+use crate::meter::{Meter, MeteredTcp};
 use crate::tls::PeerTrust;
 use anyhow::{Result, anyhow, bail};
 use boring::ssl::{
@@ -136,9 +137,10 @@ fn chrome_connector(cam: &Camouflage) -> Result<SslConnector> {
 async fn client_outer(
     addr: SocketAddr,
     cam: &Camouflage,
-) -> Result<tokio_boring::SslStream<TcpStream>> {
+) -> Result<tokio_boring::SslStream<MeteredTcp>> {
     let s = TcpStream::connect(addr).await?;
-    let _ = s.set_nodelay(true);
+    crate::hop::tune_tcp(&s);
+    let (s, _) = MeteredTcp::new(s);
     let conn = chrome_connector(cam)?;
     let cfg = conn.configure()?.verify_hostname(false);
     let tls = tokio_boring::connect(cfg, &cam.domain, s)
@@ -186,6 +188,7 @@ pub async fn dial(
         let ex = exporter(tls.ssl())?;
         let peer =
             exchange_identity(&mut tls, &ex, kp, true, Some(&expected), trust.as_ref()).await?;
+        let meter = tls.get_ref().meter();
         Ok(Established {
             io: Box::new(tls) as BoxIo,
             peer_key: peer,
@@ -193,6 +196,7 @@ pub async fn dial(
             remote: addr,
             bootstrap: false,
             kcp_stats: None,
+            meter: Some(meter),
         })
     };
     tokio::time::timeout(Duration::from_secs(15), fut)
@@ -275,7 +279,8 @@ pub async fn accept(s: TcpStream, remote: SocketAddr, ctx: &AcceptCtx<'_>) -> Re
         enroll_keys,
     } = ctx;
     let website = *website;
-    let _ = s.set_nodelay(true);
+    crate::hop::tune_tcp(&s);
+    let (s, meter) = MeteredTcp::new(s);
     let mut tls = tokio::time::timeout(Duration::from_secs(10), tokio_boring::accept(acc, s))
         .await
         .map_err(|_| anyhow!("AnyTLS accept timeout"))?
@@ -316,6 +321,7 @@ pub async fn accept(s: TcpStream, remote: SocketAddr, ctx: &AcceptCtx<'_>) -> Re
                 remote,
                 bootstrap: gr.bootstrap(),
                 kcp_stats: None,
+                meter: Some(Meter::Tcp(meter)),
             }))
         }
         Some(PwResult::Enroll) => {

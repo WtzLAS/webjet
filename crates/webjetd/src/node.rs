@@ -61,6 +61,8 @@ pub struct Hop {
     pub stats: Mutex<LinkStats>,
     pub last_rx: Mutex<Instant>,
     pub kcp_stats: Option<Arc<KcpStats>>,
+    /// The transport's own RTT and loss (§11.2), read every keepalive.
+    pub meter: Option<webjet_net::meter::Meter>,
     pub tx_bytes: AtomicU64,
     pub rx_bytes: AtomicU64,
     pub dropped: AtomicU64,
@@ -449,6 +451,7 @@ impl Node {
             )),
             last_rx: Mutex::new(Instant::now()),
             kcp_stats: est.kcp_stats.clone(),
+            meter: est.meter.clone(),
             tx_bytes: AtomicU64::new(0),
             rx_bytes: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
@@ -772,8 +775,16 @@ async fn writer(
             }
         }
         if tune_at.elapsed() > Duration::from_secs(1) {
+            // The raw RTT (§11.2), not one inflated by this queue; the cap
+            // follows a KCP hop's bandwidth estimate (§17.2).
             let rtt = Duration::from_micros((hop.stats.lock().srtt_ms * 1000.0) as u64);
-            q.tune(rtt, 12_500_000.0);
+            let rate = hop
+                .kcp_stats
+                .as_ref()
+                .map(|k| k.bw_estimate_kbps.load(Ordering::Relaxed) as f64 * 125.0)
+                .filter(|r| *r > 0.0)
+                .unwrap_or(12_500_000.0);
+            q.tune(rtt, rate);
             tune_at = Instant::now();
         }
         let mut batch = Vec::with_capacity(64 * 1024);
@@ -880,7 +891,16 @@ async fn keepalive(n: Arc<Node>, hop: Arc<Hop>) {
         }
         let seq = hop.keepalive_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let us = n.started.elapsed().as_micros() as u64;
-        hop.stats.lock().on_sent(seq, us);
+        // What the transport measured since the last keepalive: from the
+        // link's traffic, or from the keepalives themselves when it's idle.
+        let raw = hop.meter.as_ref().map(|m| m.take());
+        {
+            let mut st = hop.stats.lock();
+            if let Some(r) = raw {
+                st.on_raw(r.rtt_ms, r.loss, r.packets, us, now_ms());
+            }
+            st.on_sent(seq, us);
+        }
         let digest = if n.is_relay() || n.is_controller() {
             None
         } else {
@@ -1000,6 +1020,7 @@ impl Node {
             stats: Mutex::new(LinkStats::default()),
             last_rx: Mutex::new(Instant::now()),
             kcp_stats: None,
+            meter: None,
             tx_bytes: AtomicU64::new(0),
             rx_bytes: AtomicU64::new(0),
             dropped: AtomicU64::new(0),

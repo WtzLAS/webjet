@@ -11,8 +11,21 @@
 //!       | 3 PUNCH (type[1] || token[16])         — connectivity checks (§11.7):
 //!                                                  type 1 PING is answered with
 //!                                                  type 2 PONG to its source
-//!       | 4 STATS (received[4] || expected[4])   — loss feedback for FEC
+//!       | 4 STATS (received[4] || expected[4] [|| flags[1]])
+//!                                                — loss feedback for FEC;
+//!                                                  flag 1: takes RAW_ACK
+//!       | 5 RAW_ACK (held_us[4] || KCP ACKs)    — acknowledgements outside
+//!                                                  FEC and the pacer, sent
+//!                                                  only to peers that set
+//!                                                  the STATS flag; held_us:
+//!                                                  how long the sender held
+//!                                                  the acknowledged data
 //! ```
+//!
+//! Acknowledgements skip the pacer so the time from a segment leaving the
+//! socket to its acknowledgement is the path's round trip, whatever the
+//! peer is sending (§11.2). That RTT and the FEC line loss of both
+//! directions are the hop's measurements ([`KcpStats::take_sample`]).
 //!
 //! A session is created on the listening side only for a valid OPEN
 //! (timestamp within ±60 s, fresh nonce); unknown sessions are dropped
@@ -37,6 +50,9 @@ const K_SHARD: u8 = 1;
 const K_OPEN: u8 = 2;
 const K_PUNCH: u8 = 3;
 const K_STATS: u8 = 4;
+const K_RAW_ACK: u8 = 5;
+/// STATS flag: this end takes RAW_ACK datagrams.
+const STATS_RAW_ACK: u8 = 1;
 const PUNCH_PING: u8 = 1;
 const PUNCH_PONG: u8 = 2;
 /// PONGs sent per second at most (a captured PING replayed with a forged
@@ -57,7 +73,11 @@ pub struct PunchEvent {
 /// obfuscation (42+2) inside a 1400-byte datagram.
 pub const KCP_MTU: usize = 1300;
 const _: () = assert!(KCP_MTU + 2 <= crate::fec::MAX_SHARD);
-const DUPLEX: usize = 512 * 1024;
+/// The byte pipe between the hop writer and the session. Small: the
+/// session's KCP queue already holds about a round trip of data, and
+/// anything more should wait in the hop queue, where fair queueing and
+/// CoDel manage it (§17.2), not in a buffer in front of KCP.
+const DUPLEX: usize = 64 * 1024;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Per-session counters for metrics (§12.3).
@@ -70,6 +90,32 @@ pub struct KcpStats {
     pub retrans: AtomicU64,
     pub fec_ratio_pct: AtomicU64,
     pub bw_estimate_kbps: AtomicU64,
+    /// Raw RTT samples and loss counts since the last [`Self::take_sample`].
+    meas: Mutex<Measured>,
+}
+
+#[derive(Debug, Default)]
+struct Measured {
+    rtt: crate::meter::RttAgg,
+    /// What the peer received of ours (its STATS), and we of its.
+    tx: crate::meter::Counts,
+    rx: crate::meter::Counts,
+}
+
+impl KcpStats {
+    /// The path's RTT and round-trip datagram loss (before FEC recovery)
+    /// since the last call (§11.2).
+    pub fn take_sample(&self) -> crate::meter::Sample {
+        let mut m = self.meas.lock();
+        let s = crate::meter::Sample {
+            rtt_ms: m.rtt.take(),
+            loss: crate::meter::round_trip_loss(m.tx.loss(), m.rx.loss()),
+            packets: m.tx.expected.saturating_add(m.rx.expected),
+        };
+        m.tx = Default::default();
+        m.rx = Default::default();
+        s
+    }
 }
 
 pub struct KcpConn {
@@ -79,8 +125,11 @@ pub struct KcpConn {
     pub stats: Arc<KcpStats>,
 }
 
+/// A datagram for a session (`kind || body`) and when the socket gave it to us.
+type Arrived = (Instant, Vec<u8>);
+
 struct SessionHandle {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<Arrived>,
 }
 
 pub struct UdpEndpoint {
@@ -203,6 +252,7 @@ impl UdpEndpoint {
                     continue;
                 }
             };
+            let at = Instant::now();
             let Some((gate, inner)) = self.obfs.open(&buf[..n], &self.epochs.read()) else {
                 continue;
             };
@@ -221,7 +271,7 @@ impl UdpEndpoint {
                 let mut d = Vec::with_capacity(1 + body.len());
                 d.push(kind);
                 d.extend_from_slice(body);
-                let _ = tx.try_send(d);
+                let _ = tx.try_send((at, d));
                 continue;
             }
             if kind != K_OPEN || !self.listening {
@@ -245,7 +295,7 @@ impl UdpEndpoint {
             let (stream, tx, stats) = self.clone().spawn_session(from, conv);
             let mut d = vec![K_OPEN];
             d.extend_from_slice(body);
-            let _ = tx.try_send(d);
+            let _ = tx.try_send((at, d));
             if self
                 .accept_tx
                 .try_send(KcpConn {
@@ -290,7 +340,7 @@ impl UdpEndpoint {
         self: Arc<Self>,
         peer: SocketAddr,
         conv: u32,
-    ) -> (DuplexStream, mpsc::Sender<Vec<u8>>, Arc<KcpStats>) {
+    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>) {
         self.spawn_session_inner(peer, conv, false)
     }
 
@@ -299,7 +349,7 @@ impl UdpEndpoint {
         peer: SocketAddr,
         conv: u32,
         dialer: bool,
-    ) -> (DuplexStream, mpsc::Sender<Vec<u8>>, Arc<KcpStats>) {
+    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>) {
         let (user, inner) = tokio::io::duplex(DUPLEX);
         let (tx, rx) = mpsc::channel(4096);
         self.sessions
@@ -535,9 +585,30 @@ fn new_kcp(conv: u32, out: OutQueue) -> kcp::Kcp<OutQueue> {
 enum Inbound<'a> {
     /// An FEC shard (from a SHARD, or an OPEN after its timestamp and nonce).
     Shard(&'a [u8]),
-    /// The peer's loss feedback: the line loss it saw before FEC recovery.
-    Loss(f64),
+    /// The peer's loss feedback: of the datagrams we sent, how many it
+    /// received before FEC recovery, and whether it takes RAW_ACK.
+    Loss {
+        received: u64,
+        expected: u64,
+        raw_ack: bool,
+    },
+    /// KCP acknowledgements sent outside FEC, and how long the peer held
+    /// them after the acknowledged data reached its socket.
+    RawAck {
+        held: Duration,
+        acks: &'a [u8],
+    },
     Ignore,
+}
+
+impl Inbound<'_> {
+    /// The loss fraction a `Loss` reports.
+    fn loss(received: u64, expected: u64) -> f64 {
+        if expected == 0 {
+            return 0.0;
+        }
+        (expected.saturating_sub(received) as f64 / expected as f64).clamp(0.0, 1.0)
+    }
 }
 
 fn inbound(d: &[u8]) -> Inbound<'_> {
@@ -548,14 +619,25 @@ fn inbound(d: &[u8]) -> Inbound<'_> {
         K_SHARD => Inbound::Shard(body),
         K_OPEN if body.len() >= 24 => Inbound::Shard(&body[24..]),
         K_STATS if body.len() >= 8 => {
-            let recv = webjet_core::bytes::be_u32(body, 0).unwrap_or(0) as f64;
-            let exp = webjet_core::bytes::be_u32(body, 4).unwrap_or(0) as f64;
-            if exp > 0.0 {
-                Inbound::Loss(((exp - recv) / exp).clamp(0.0, 1.0))
+            let recv = u64::from(webjet_core::bytes::be_u32(body, 0).unwrap_or(0));
+            let exp = u64::from(webjet_core::bytes::be_u32(body, 4).unwrap_or(0));
+            if exp > 0 {
+                Inbound::Loss {
+                    received: recv.min(exp),
+                    expected: exp,
+                    // 0.6 and earlier send no flags.
+                    raw_ack: body.get(8).is_some_and(|f| f & STATS_RAW_ACK != 0),
+                }
             } else {
                 Inbound::Ignore
             }
         }
+        K_RAW_ACK if body.len() >= 4 => Inbound::RawAck {
+            held: Duration::from_micros(u64::from(
+                webjet_core::bytes::be_u32(body, 0).unwrap_or(0),
+            )),
+            acks: &body[4..],
+        },
         _ => Inbound::Ignore,
     }
 }
@@ -573,11 +655,23 @@ fn take_ready(kcp: &mut kcp::Kcp<OutQueue>) -> Option<Vec<u8>> {
 /// A STATS datagram (before sealing): what we received of what the peer's
 /// shard groups said it sent (§17.6).
 fn stats_frame(conv: u32, received: u64, expected: u64) -> Vec<u8> {
-    let mut inner = Vec::with_capacity(13);
+    let mut inner = Vec::with_capacity(14);
     inner.push(K_STATS);
     inner.extend_from_slice(&conv.to_be_bytes());
     inner.extend_from_slice(&(received.min(u64::from(u32::MAX)) as u32).to_be_bytes());
     inner.extend_from_slice(&(expected.min(u64::from(u32::MAX)) as u32).to_be_bytes());
+    inner.push(STATS_RAW_ACK);
+    inner
+}
+
+/// A RAW_ACK datagram (before sealing).
+fn raw_ack_frame(conv: u32, held: Duration, acks: &[u8]) -> Vec<u8> {
+    let mut inner = Vec::with_capacity(9 + acks.len());
+    inner.push(K_RAW_ACK);
+    inner.extend_from_slice(&conv.to_be_bytes());
+    let us = u32::try_from(held.as_micros()).unwrap_or(u32::MAX);
+    inner.extend_from_slice(&us.to_be_bytes());
+    inner.extend_from_slice(acks);
     inner
 }
 
@@ -639,7 +733,7 @@ async fn run_session(
     conv: u32,
     dialer: bool,
     user: DuplexStream,
-    mut rx: mpsc::Receiver<Vec<u8>>,
+    mut rx: mpsc::Receiver<Arrived>,
     stats: Arc<KcpStats>,
 ) {
     let out = OutQueue::default();
@@ -651,7 +745,18 @@ async fn run_session(
     let mut bbr = Bbr::new();
     let mut opened = !dialer; // the dialer sends OPENs until it hears back
     let mut last_rx = Instant::now();
-    let mut paced: VecDeque<Vec<u8>> = VecDeque::new();
+    // Shards waiting for the pacer, each with the new data segments it
+    // carries (their send time starts the raw RTT).
+    let mut paced: VecDeque<(Vec<u8>, Vec<u32>)> = VecDeque::new();
+    let mut raw_rtt = RawRtt::default();
+    let mut rtts: Vec<Duration> = Vec::new();
+    // The peer takes acknowledgements outside FEC and the pacer (it said so
+    // in its STATS).
+    let mut peer_raw_ack = false;
+    let mut sns: Vec<(u32, bool)> = Vec::new();
+    // When the newest datagram whose segments KCP is about to acknowledge
+    // reached the socket: the peer subtracts how long we held them.
+    let mut acked_arrival: Option<Instant> = None;
     let mut pacer = Pacer::new(Instant::now());
     let mut fec_flush_at: Option<Instant> = None;
     let mut delivery = Delivery::new(Instant::now());
@@ -682,8 +787,12 @@ async fn run_session(
     };
 
     loop {
-        // Pull more user data only while KCP's send queue is short (§17.2).
-        let can_take = user_open && kcp.wait_snd() < bbr.window() as usize * 2;
+        // Pull more user data only while KCP's send queue is short and the
+        // pacer isn't behind (§17.2): data that can't leave yet waits in the
+        // hop queue, where CoDel sees it, not here.
+        let can_take = user_open
+            && kcp.wait_snd() < bbr.window() as usize * 2
+            && paced.len() < bbr.window() as usize;
         // New data or acknowledgements to send: flush KCP now instead of at
         // its next 10 ms interval, which added up to 10 ms per direction and
         // per hop (and delayed acknowledgements inflated KCP's RTT).
@@ -710,20 +819,37 @@ async fn run_session(
                         Err(_) => break,
                     }
                 }
-                for d in batch {
+                for (at, d) in batch {
                     stats.wire_rx.fetch_add(d.len() as u64, Ordering::Relaxed);
                     match inbound(&d) {
                         Inbound::Shard(shard) => {
                             for pkt in dec.push(shard) {
+                                raw_rtt.on_packet(&pkt, at, Duration::ZERO, &mut rtts);
                                 let _ = kcp.input(&pkt);
                                 flush_now = true;
+                                // What this flush acknowledges arrived by then.
+                                acked_arrival = Some(acked_arrival.map_or(at, |t: Instant| t.max(at)));
                             }
                         }
-                        Inbound::Loss(loss) => {
-                            enc.adapt(loss);
+                        Inbound::RawAck { held, acks } => {
+                            raw_rtt.on_packet(acks, at, held, &mut rtts);
+                            let _ = kcp.input(acks);
+                        }
+                        Inbound::Loss { received, expected, raw_ack } => {
+                            peer_raw_ack = raw_ack;
+                            stats.meas.lock().tx.add(received, expected);
+                            enc.adapt(Inbound::loss(received, expected));
                             stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
                         }
                         Inbound::Ignore => {}
+                    }
+                }
+                if !rtts.is_empty() {
+                    let mut m = stats.meas.lock();
+                    let now = Instant::now();
+                    for r in rtts.drain(..) {
+                        m.rtt.add(r.as_secs_f64() * 1000.0);
+                        bbr.on_rtt(r, now);
                     }
                 }
                 stats.fec_recovered.store(dec.recovered, Ordering::Relaxed);
@@ -782,14 +908,40 @@ async fn run_session(
             .bw_estimate_kbps
             .store((bbr.btl_bw * 8.0 / 1000.0) as u64, Ordering::Relaxed);
         // FEC-wrap new KCP packets; parity counts toward the paced rate.
+        // Acknowledgements go out at once and on their own where the peer
+        // takes that, so the peer's RTT never includes our send backlog.
         let pkts: Vec<Vec<u8>> = out.0.lock().drain(..).collect();
+        let now = Instant::now();
         for p in pkts {
-            let re = scan_output(&p, &mut next_new_sn, &mut delivery.in_flight);
+            let p = if peer_raw_ack && opened {
+                let (acks, rest) = split_acks(&p);
+                if !acks.is_empty() {
+                    let held = acked_arrival.map_or(Duration::ZERO, |t| now.duration_since(t));
+                    seal_and_send(raw_ack_frame(conv, held, &acks)).await;
+                }
+                if rest.is_empty() {
+                    continue;
+                }
+                rest
+            } else {
+                p
+            };
+            sns.clear();
+            let re = scan_output(&p, &mut next_new_sn, &mut delivery.in_flight, &mut sns);
             if re > 0 {
                 stats.retrans.fetch_add(re, Ordering::Relaxed);
             }
+            let mut fresh = Vec::new();
+            for (sn, new) in &sns {
+                if *new {
+                    fresh.push(*sn);
+                } else {
+                    raw_rtt.on_retransmit(*sn);
+                }
+            }
             for s in enc.push(&p) {
-                paced.push_back(s);
+                // The data shard comes first; parity carries no new segment.
+                paced.push_back((s, std::mem::take(&mut fresh)));
             }
             if fec_flush_at.is_none() {
                 fec_flush_at = Some(now + Duration::from_millis(15));
@@ -797,10 +949,11 @@ async fn run_session(
         }
         if fec_flush_at.is_some_and(|t| now >= t) {
             for s in enc.flush() {
-                paced.push_back(s);
+                paced.push_back((s, Vec::new()));
             }
             fec_flush_at = None;
         }
+        acked_arrival = None;
         stats
             .fec_parity_tx
             .store(enc.parity_bytes, Ordering::Relaxed);
@@ -808,18 +961,24 @@ async fn run_session(
         if now.duration_since(stats_sent_at) > Duration::from_secs(1) {
             // Line loss before FEC recovery, counted from shard group gaps.
             let (received, expected) = dec.take_loss();
+            stats.meas.lock().rx.add(received, expected);
             if expected > 0 {
                 seal_and_send(stats_frame(conv, received, expected)).await;
             }
             stats_sent_at = now;
-            if let Some(rtt) = kcp_rtt(&kcp) {
+            // KCP's own RTT only until the raw one has samples (an older
+            // peer acknowledges behind its paced data).
+            if !peer_raw_ack && let Some(rtt) = kcp_rtt(&kcp) {
                 bbr.on_rtt(rtt, now);
             }
         }
         // Pace.
         pacer.refill(now, bbr.pacing_rate(now));
-        while paced.front().is_some_and(|s| pacer.take(s.len())) {
-            let Some(s) = paced.pop_front() else { break };
+        while paced.front().is_some_and(|s| pacer.take(s.0.len())) {
+            let Some((s, segs)) = paced.pop_front() else {
+                break;
+            };
+            raw_rtt.on_wire(&segs, Instant::now());
             seal_and_send(shard_frame(opened, conv, &s)).await;
         }
         if paced.len() > 8192 {
@@ -841,29 +1000,111 @@ const KCP_SEG_HDR: usize = 24;
 /// in KCP's receive queue, where it shrinks the advertised window.
 const PENDING_MAX: usize = 256 * 1024;
 const KCP_CMD_PUSH: u8 = 81;
+const KCP_CMD_ACK: u8 = 82;
+
+/// The segments of one KCP packet: (cmd, sn, the segment's bytes). Stops at
+/// the first segment that runs past the end.
+fn segments(pkt: &[u8]) -> impl Iterator<Item = (u8, u32, &[u8])> {
+    let mut at = 0usize;
+    std::iter::from_fn(move || {
+        let le = |o: usize| webjet_core::bytes::array::<4>(pkt, at + o).map(u32::from_le_bytes);
+        let (&cmd, sn, len) = (pkt.get(at + 4)?, le(12)?, le(20)?);
+        let end = (at + KCP_SEG_HDR).checked_add(len as usize)?;
+        let seg = pkt.get(at..end)?;
+        at = end;
+        Some((cmd, sn, seg))
+    })
+}
 
 /// Scan one KCP output packet. Returns the data segments in it that were sent
 /// before: KCP sends new segments in sequence order, so a PUSH whose number is
 /// below the next new one is a retransmission (timeout or fast resend; §12.3
 /// `kcp_retrans`). The `kcp` crate counts only timeouts, and privately. The
-/// payload length of each new segment is appended to `new_lens`.
-fn scan_output(pkt: &[u8], next_new_sn: &mut Option<u32>, new_lens: &mut VecDeque<usize>) -> u64 {
-    let le = |at: usize| webjet_core::bytes::array::<4>(pkt, at).map(u32::from_le_bytes);
+/// payload length of each new segment is appended to `new_lens`, and every
+/// PUSH to `sns` as (sn, new).
+fn scan_output(
+    pkt: &[u8],
+    next_new_sn: &mut Option<u32>,
+    new_lens: &mut VecDeque<usize>,
+    sns: &mut Vec<(u32, bool)>,
+) -> u64 {
     let mut n = 0;
-    let mut at = 0;
-    while let (Some(&cmd), Some(sn), Some(len)) = (pkt.get(at + 4), le(at + 12), le(at + 20)) {
-        if cmd == KCP_CMD_PUSH {
-            match *next_new_sn {
-                Some(next) if sn.wrapping_sub(next) >= u32::MAX / 2 => n += 1,
-                _ => {
-                    *next_new_sn = Some(sn.wrapping_add(1));
-                    new_lens.push_back(len as usize);
-                }
+    for (cmd, sn, seg) in segments(pkt) {
+        if cmd != KCP_CMD_PUSH {
+            continue;
+        }
+        match *next_new_sn {
+            Some(next) if sn.wrapping_sub(next) >= u32::MAX / 2 => {
+                n += 1;
+                sns.push((sn, false));
+            }
+            _ => {
+                *next_new_sn = Some(sn.wrapping_add(1));
+                new_lens.push_back(seg.len() - KCP_SEG_HDR);
+                sns.push((sn, true));
             }
         }
-        at += KCP_SEG_HDR + len as usize;
     }
     n
+}
+
+/// A KCP output packet split into its acknowledgements and the rest.
+fn split_acks(pkt: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let (mut acks, mut rest) = (Vec::new(), Vec::new());
+    for (cmd, _, seg) in segments(pkt) {
+        if cmd == KCP_CMD_ACK {
+            acks.extend_from_slice(seg);
+        } else {
+            rest.extend_from_slice(seg);
+        }
+    }
+    (acks, rest)
+}
+
+/// Segments sent and not acknowledged yet, kept at most this long.
+const RAW_RTT_KEEP: Duration = Duration::from_secs(10);
+const RAW_RTT_MAX: usize = 16_384;
+
+/// The path's round trip as the socket sees it (§11.2): from a new data
+/// segment leaving the socket (after the pacer) to its acknowledgement
+/// arriving. Retransmitted segments give no sample (Karn's rule).
+#[derive(Debug, Default)]
+struct RawRtt {
+    sent: HashMap<u32, Instant>,
+}
+
+impl RawRtt {
+    /// Segments of a datagram that just went out.
+    fn on_wire(&mut self, sns: &[u32], now: Instant) {
+        if self.sent.len() + sns.len() > RAW_RTT_MAX {
+            self.sent
+                .retain(|_, t| now.duration_since(*t) < RAW_RTT_KEEP);
+            if self.sent.len() + sns.len() > RAW_RTT_MAX {
+                self.sent.clear();
+            }
+        }
+        for sn in sns {
+            self.sent.insert(*sn, now);
+        }
+    }
+
+    /// A segment was sent again: its acknowledgement is ambiguous.
+    fn on_retransmit(&mut self, sn: u32) {
+        self.sent.remove(&sn);
+    }
+
+    /// Round trips of the segments a received packet acknowledges; `held`
+    /// is the time the peer took to answer, which is not the path's.
+    fn on_packet(&mut self, pkt: &[u8], now: Instant, held: Duration, out: &mut Vec<Duration>) {
+        for (cmd, sn, _) in segments(pkt) {
+            if cmd == KCP_CMD_ACK
+                && let Some(t) = self.sent.remove(&sn)
+                && let Some(rtt) = now.duration_since(t).checked_sub(held)
+            {
+                out.push(rtt);
+            }
+        }
+    }
 }
 
 fn kcp_rtt<O>(k: &kcp::Kcp<O>) -> Option<Duration> {
@@ -905,7 +1146,12 @@ pub mod fuzzing {
                         let _ = kcp.input(&pkt);
                     }
                 }
-                Inbound::Loss(loss) => enc.adapt(loss),
+                Inbound::Loss {
+                    received, expected, ..
+                } => enc.adapt(Inbound::loss(received, expected)),
+                Inbound::RawAck { acks, .. } => {
+                    let _ = kcp.input(acks);
+                }
                 Inbound::Ignore => continue,
             }
             while let Some(b) = take_ready(&mut kcp) {
@@ -916,7 +1162,8 @@ pub mod fuzzing {
             let _ = kcp_rtt(&kcp);
             let _ = dec.take_loss();
             for pkt in out.0.lock().drain(..) {
-                scan_output(&pkt, &mut next_new_sn, &mut new_lens);
+                scan_output(&pkt, &mut next_new_sn, &mut new_lens, &mut Vec::new());
+                let _ = split_acks(&pkt);
                 let _ = enc.push(&pkt);
             }
         }
@@ -926,7 +1173,7 @@ pub mod fuzzing {
 
     /// `scan_output` on arbitrary bytes.
     pub fn scan(pkt: &[u8]) -> u64 {
-        scan_output(pkt, &mut None, &mut VecDeque::new())
+        scan_output(pkt, &mut None, &mut VecDeque::new(), &mut Vec::new())
     }
 }
 
@@ -952,22 +1199,53 @@ mod tests {
         // An OPEN too short for its timestamp and nonce carries nothing.
         assert_eq!(inbound(&[K_OPEN, 1, 2, 3]), Inbound::Ignore);
         let frame = stats_frame(7, 90, 100);
-        assert_eq!(frame.len(), 13);
+        assert_eq!(frame.len(), 14);
         // `recv_loop` strips kind and conv, then hands `kind || body` on.
         let mut d = vec![K_STATS];
         d.extend_from_slice(&frame[5..]);
-        match inbound(&d) {
-            Inbound::Loss(l) => assert!((l - 0.1).abs() < 1e-9, "{l}"),
-            x => panic!("{x:?}"),
-        }
+        assert_eq!(
+            inbound(&d),
+            Inbound::Loss {
+                received: 90,
+                expected: 100,
+                raw_ack: true
+            }
+        );
+        assert!((Inbound::loss(90, 100) - 0.1).abs() < 1e-9);
+        // An older peer's STATS has no flags.
+        assert_eq!(
+            inbound(&d[..9]),
+            Inbound::Loss {
+                received: 90,
+                expected: 100,
+                raw_ack: false
+            }
+        );
         // More received than expected is no loss, nothing expected no report.
         d[1..5].copy_from_slice(&200u32.to_be_bytes());
-        assert_eq!(inbound(&d), Inbound::Loss(0.0));
+        assert_eq!(
+            inbound(&d),
+            Inbound::Loss {
+                received: 100,
+                expected: 100,
+                raw_ack: true
+            }
+        );
+        assert_eq!(Inbound::loss(100, 100), 0.0);
         let empty = stats_frame(7, 0, 0);
         assert_eq!(
             inbound(&[&[K_STATS][..], &empty[5..]].concat()),
             Inbound::Ignore
         );
+        let ack = raw_ack_frame(7, Duration::from_micros(1234), b"acks");
+        assert_eq!(
+            inbound(&[&[K_RAW_ACK][..], &ack[5..]].concat()),
+            Inbound::RawAck {
+                held: Duration::from_micros(1234),
+                acks: b"acks"
+            }
+        );
+        assert_eq!(inbound(&[K_RAW_ACK, 0, 0]), Inbound::Ignore);
         assert_eq!(inbound(&[]), Inbound::Ignore);
         assert_eq!(inbound(&[99, 1]), Inbound::Ignore);
     }
@@ -1261,7 +1539,7 @@ mod tests {
         for t in (0..3000).step_by(10) {
             a.update(t).unwrap();
             for p in a_out.0.lock().drain(..).collect::<Vec<_>>() {
-                re += scan_output(&p, &mut next, &mut VecDeque::new());
+                re += scan_output(&p, &mut next, &mut VecDeque::new(), &mut Vec::new());
                 if !dropped && get_sn(&p) == 3 {
                     dropped = true; // lose one data packet once
                     continue;
@@ -1280,6 +1558,160 @@ mod tests {
 
     fn get_sn(p: &[u8]) -> u32 {
         u32::from_le_bytes([p[12], p[13], p[14], p[15]])
+    }
+
+    /// Acknowledgements are split from data; a raw round trip is taken
+    /// from an acknowledged new segment, never from a retransmitted one.
+    #[test]
+    fn raw_rtt_from_acknowledgements() {
+        let (a_out, b_out) = (OutQueue::default(), OutQueue::default());
+        let mut a = new_kcp(7, a_out.clone());
+        let mut b = new_kcp(7, b_out.clone());
+        a.update(0).unwrap();
+        b.update(0).unwrap();
+        a.send(&[1u8; 3000]).unwrap();
+        a.flush().unwrap();
+        let t0 = Instant::now();
+        let (mut raw, mut next, mut sns) = (RawRtt::default(), None, Vec::new());
+        let a_pkts: Vec<Vec<u8>> = a_out.0.lock().drain(..).collect();
+        for p in &a_pkts {
+            scan_output(p, &mut next, &mut VecDeque::new(), &mut sns);
+        }
+        assert_eq!(sns, vec![(0, true), (1, true), (2, true)]);
+        raw.on_wire(&[0, 1, 2], t0);
+        raw.on_retransmit(1);
+        // b answers with data of its own: the acknowledgements and the data
+        // share KCP's output packet.
+        b.send(&[2u8; 100]).unwrap();
+        for p in &a_pkts {
+            b.input(p).unwrap();
+        }
+        b.flush().unwrap();
+        let b_pkts: Vec<Vec<u8>> = b_out.0.lock().drain(..).collect();
+        let (acks, rest): (Vec<u8>, Vec<u8>) = b_pkts.iter().map(|p| split_acks(p)).fold(
+            (Vec::new(), Vec::new()),
+            |(mut x, mut y), (a1, r1)| {
+                x.extend(a1);
+                y.extend(r1);
+                (x, y)
+            },
+        );
+        assert_eq!(acks.len(), 3 * KCP_SEG_HDR);
+        assert!(segments(&acks).all(|(c, _, _)| c == KCP_CMD_ACK));
+        assert!(segments(&rest).all(|(c, _, _)| c == KCP_CMD_PUSH));
+        let mut out = Vec::new();
+        raw.on_wire(&[0], t0);
+        raw.on_packet(
+            &acks,
+            t0 + Duration::from_millis(30),
+            Duration::from_millis(5),
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![Duration::from_millis(25); 2],
+            "sn 1 was resent; 5 ms held"
+        );
+        // An answer held longer than the round trip gives no sample.
+        raw.on_wire(&[0], t0);
+        raw.on_packet(
+            &acks,
+            t0 + Duration::from_millis(3),
+            Duration::from_millis(5),
+            &mut out,
+        );
+        assert_eq!(out.len(), 2);
+        // Both halves are valid KCP input on their own.
+        a.input(&acks).unwrap();
+        a.input(&rest).unwrap();
+        assert_eq!(a.wait_snd(), 0, "all acknowledged");
+        // A segment running past the end is not a segment.
+        assert_eq!(segments(&acks[..KCP_SEG_HDR + 3]).count(), 1);
+    }
+
+    /// While both ends push bulk data through a 20 Mbit/s, 20 ms path, the
+    /// raw RTT stays near the path's (its delay plus the path's own queue),
+    /// although each end has a large backlog of its own.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn raw_rtt_ignores_the_send_backlog() {
+        const RATE_BPS: f64 = 20e6;
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        // 10 ms each way, each direction serialized at RATE_BPS, 50 ms queue.
+        let proxy = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let (b_addr, p) = (ep_b.local_addr().unwrap(), proxy.clone());
+        tokio::spawn(async move {
+            let (mut buf, mut a_addr) = (vec![0u8; 65536], None);
+            let mut free_at = [tokio::time::Instant::now(); 2];
+            while let Ok((len, from)) = p.recv_from(&mut buf).await {
+                let (dir, to) = if from == b_addr {
+                    (1, a_addr)
+                } else {
+                    a_addr = Some(from);
+                    (0, Some(b_addr))
+                };
+                let Some(to) = to else { continue };
+                let now = tokio::time::Instant::now();
+                let done = free_at[dir].max(now)
+                    + Duration::from_secs_f64((len + 28) as f64 * 8.0 / RATE_BPS);
+                if done - now > Duration::from_millis(50) {
+                    continue;
+                }
+                free_at[dir] = done;
+                let (p, d) = (p.clone(), buf[..len].to_vec());
+                tokio::spawn(async move {
+                    tokio::time::sleep_until(done + Duration::from_millis(10)).await;
+                    let _ = p.send_to(&d, to).await;
+                });
+            }
+        });
+        let total = 6_000_000usize;
+        let mut c = ep_a.dial(proxy.local_addr().unwrap());
+        let stats = c.stats.clone();
+        c.stream.write_all(&[0u8; 1]).await.unwrap();
+        let mut s = tokio::time::timeout(Duration::from_secs(5), async {
+            ep_b.accept_rx.lock().await.recv().await.unwrap()
+        })
+        .await
+        .unwrap();
+        let mut one = [0u8; 1];
+        s.stream.read_exact(&mut one).await.unwrap();
+        let _ = stats.take_sample();
+        let (mut ca, mut cb) = tokio::io::split(c.stream);
+        let (mut sa, mut sb) = tokio::io::split(s.stream);
+        let push_a = tokio::spawn(async move { cb.write_all(&vec![1u8; total]).await });
+        let push_b = tokio::spawn(async move { sb.write_all(&vec![2u8; total]).await });
+        let pull_a = tokio::spawn(async move {
+            let mut got = vec![0u8; total];
+            ca.read_exact(&mut got).await.map(|_| ())
+        });
+        let pull_b = tokio::spawn(async move {
+            let mut got = vec![0u8; total];
+            sa.read_exact(&mut got).await.map(|_| ())
+        });
+        let mut worst: f64 = 0.0;
+        let mut seen = 0;
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Some((mean, min)) = stats.take_sample().rtt_ms {
+                seen += 1;
+                worst = worst.max(mean);
+                assert!(min >= 19.0, "min {min} ms below the path delay");
+            }
+        }
+        assert!(seen >= 6, "raw RTT samples while loaded: {seen}");
+        // 20 ms of delay plus at most 50 ms of queue each way.
+        assert!(worst < 150.0, "raw RTT {worst} ms under load");
+        for t in [push_a, push_b] {
+            t.abort();
+        }
+        for t in [pull_a, pull_b] {
+            t.abort();
+        }
     }
 
     #[tokio::test]

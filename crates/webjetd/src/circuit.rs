@@ -39,24 +39,114 @@ pub struct LocalCircuit {
     pub acct: Arc<RouteAcct>,
     pub is_source: bool,
     pub created: Instant,
+    /// End-to-end probes (§11.4): sent only while the circuit carries
+    /// little traffic, so they measure the path and not the backlog in
+    /// front of it. They show the circuit is alive, and give the cost
+    /// until the path's links are known.
     pub probes: Mutex<LinkStats>,
     pub e2e_rtt_ms: Mutex<Option<f64>>,
     pub last_rx: Mutex<Instant>,
+    pub live: Live,
 }
+
+/// A circuit's traffic and its path cost from link measurements.
+#[derive(Default)]
+pub struct Live {
+    /// Session frames sent and received (not probes).
+    pub tx: AtomicU64,
+    pub rx: AtomicU64,
+    /// The counts at the last [`LocalCircuit::busy`].
+    seen: Mutex<(u64, u64)>,
+    /// The path's cost composed from its links (§11.4); `None` while a link
+    /// isn't known. Refreshed every second by the path loop.
+    pub path_cost: Mutex<Option<f64>>,
+    /// The first probe sent since the last frame received.
+    pub(crate) probe_pending: Mutex<Option<Instant>>,
+}
+
+/// Frames each way per probe interval that make a circuit busy enough to
+/// skip its probe: the traffic itself shows it works.
+pub const BUSY_FRAMES: u64 = 3;
+/// A probe unanswered this long, with nothing else received meanwhile,
+/// makes a circuit unusable until it answers again.
+const UNANSWERED: Duration = Duration::from_secs(3);
 
 impl LocalCircuit {
     pub fn direct(&self) -> bool {
         self.hops.is_empty()
     }
 
-    /// Measured end-to-end cost; infinite until probes have answered.
+    /// The circuit's cost (§11.4): the sum of its links' measured costs
+    /// (the first hop live, the rest as advertised), which a busy circuit's
+    /// own traffic can't distort. Until those are known, the probes' cost;
+    /// infinite while the circuit doesn't answer.
     pub fn cost(&self) -> f64 {
+        if self.unanswered() {
+            return f64::INFINITY;
+        }
+        if let Some(c) = *self.live.path_cost.lock() {
+            return c;
+        }
         let p = self.probes.lock();
         if p.samples == 0 {
             f64::INFINITY
         } else {
             p.cost()
         }
+    }
+
+    /// A probe has waited [`UNANSWERED`] and nothing came back since.
+    fn unanswered(&self) -> bool {
+        self.live
+            .probe_pending
+            .lock()
+            .is_some_and(|at| at.elapsed() >= UNANSWERED)
+    }
+
+    /// A probe went out.
+    pub fn on_probe_sent(&self) {
+        self.live
+            .probe_pending
+            .lock()
+            .get_or_insert_with(Instant::now);
+    }
+
+    /// A frame came in on this circuit.
+    pub fn on_received(&self) {
+        let now = Instant::now();
+        *self.last_rx.lock() = now;
+        *self.live.probe_pending.lock() = None;
+    }
+
+    /// Whether the circuit carried at least [`BUSY_FRAMES`] session frames
+    /// each way since the last call (made once per probe interval).
+    pub fn busy(&self) -> bool {
+        let (tx, rx) = (
+            self.live.tx.load(Ordering::Relaxed),
+            self.live.rx.load(Ordering::Relaxed),
+        );
+        let mut seen = self.live.seen.lock();
+        let busy =
+            tx.saturating_sub(seen.0) >= BUSY_FRAMES && rx.saturating_sub(seen.1) >= BUSY_FRAMES;
+        *seen = (tx, rx);
+        busy
+    }
+
+    /// Whether the cost reflects measurements (to compare and drop circuits).
+    pub fn measured(&self, min_probes: u64) -> bool {
+        self.probes.lock().samples >= min_probes
+            || (self.live.path_cost.lock().is_some()
+                && self.created.elapsed() >= Duration::from_secs(5)
+                && self.last_rx.lock().elapsed() < UNANSWERED)
+    }
+
+    /// The relays from this end to the other, in order.
+    pub fn relays_from_me(&self) -> Vec<Bytes32> {
+        let mut h = self.hops.clone();
+        if !self.is_source {
+            h.reverse();
+        }
+        h
     }
 
     fn flow(&self) -> u64 {
@@ -306,6 +396,7 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
             probes: Mutex::new(LinkStats::default()),
             e2e_rtt_ms: Mutex::new(None),
             last_rx: Mutex::new(Instant::now()),
+            live: Default::default(),
         });
         t.insert_local(c.clone());
         t.pending.insert(
@@ -660,6 +751,7 @@ fn accept_as_destination(
             probes: Mutex::new(LinkStats::default()),
             e2e_rtt_ms: Mutex::new(None),
             last_rx: Mutex::new(Instant::now()),
+            live: Default::default(),
         }));
         label
     };
@@ -835,7 +927,7 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
     };
     match action {
         Ok(c) => {
-            *c.last_rx.lock() = Instant::now();
+            c.on_received();
             c.acct.rev.add(body.len());
             if ecn == frames::ecn::CE {
                 c.acct.ecn_marked.fetch_add(1, Ordering::Relaxed);
@@ -970,6 +1062,8 @@ struct LocalSummary {
     rtt_ms: f64,
     loss: f64,
     samples: u64,
+    /// What path selection compares (§11.4); `None` when infinite.
+    cost: Option<f64>,
     age_s: u64,
     route_id: Bytes32,
 }
@@ -984,6 +1078,7 @@ pub fn summary(n: &Node) -> serde_json::Value {
             .values()
             .filter_map(|e| match &e.kind {
                 Kind::Local(c) => {
+                    let cost = Some(c.cost()).filter(|x| x.is_finite());
                     let p = c.probes.lock();
                     Some(LocalSummary {
                         peer: c.peer,
@@ -995,6 +1090,7 @@ pub fn summary(n: &Node) -> serde_json::Value {
                         rtt_ms: p.srtt_ms,
                         loss: p.loss,
                         samples: p.samples,
+                        cost,
                         age_s: c.created.elapsed().as_secs(),
                         route_id: c.route_id,
                     })
@@ -1030,6 +1126,7 @@ pub fn summary(n: &Node) -> serde_json::Value {
                 "rtt_ms": c.rtt_ms,
                 "loss": c.loss,
                 "probes": c.samples,
+                "cost": c.cost,
                 "age_s": c.age_s,
                 "route_id": hex::encode(&c.route_id[..8]),
             })
