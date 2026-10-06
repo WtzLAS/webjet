@@ -985,3 +985,472 @@ pub fn summary(n: &Node) -> serde_json::Value {
         .collect();
     serde_json::json!({ "local": locals, "routes": routes, "transit": transit, "refused": refused })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::TestHopRx;
+    use crate::testnode::{self, Cluster};
+    use webjet_core::crypto::KeyPair;
+    use webjet_core::testutil::NodeSpec;
+    use webjet_proto::Transport;
+
+    struct Net {
+        c: Cluster,
+        s: (Bytes32, KeyPair),
+        r: (Bytes32, KeyPair),
+        d: (Bytes32, KeyPair),
+    }
+
+    fn allow_all() -> wp::Policy {
+        wp::Policy {
+            default_action: wp::Action::Deny,
+            rules: Some(vec![wp::Rule {
+                id: Some("all".into()),
+                action: wp::Action::Allow,
+                src: Some(vec!["*".into()]),
+                dst: Some(vec!["*".into()]),
+                ports: Some(vec!["*".into()]),
+            }]),
+            ..Default::default()
+        }
+    }
+
+    /// Source `s`, relay `r`, destination `d`; everything allowed.
+    fn net() -> Net {
+        let mut c = Cluster::new();
+        let s = c.data_node("src", "10.7.0.2", &[]);
+        let r = c.enroll(NodeSpec {
+            name: "relay",
+            ip: "10.7.0.3",
+            roles: &[wp::Role::Data, wp::Role::Relay],
+            ..Default::default()
+        });
+        let d = c.data_node("dst", "10.7.0.4", &[]);
+        c.set_policy(allow_all()).unwrap();
+        Net { c, s, r, d }
+    }
+
+    fn setup(src: &(Bytes32, KeyPair), dst: &Bytes32, hops: &[Bytes32]) -> wp::CircuitSetup {
+        wp::CircuitSetup {
+            route_id: Some(crypto::k32(&crypto::route_id(&src.0, dst, hops))),
+            src: Some(crypto::k32(&src.0)),
+            dst: Some(crypto::k32(dst)),
+            hops: Some(hops.iter().map(crypto::k32).collect()),
+            nonce: Some(wp::Id16::from_bytes(&crypto::random16())),
+            issued_at: now_ms(),
+        }
+    }
+
+    fn open_msg(signer: &KeyPair, s: &wp::CircuitSetup, label: u32) -> wp::CircuitOpen {
+        wp::CircuitOpen {
+            setup: Some(signer.sign_obj(mt::CIRCUIT_SETUP, s)),
+            label,
+        }
+    }
+
+    fn only(mut v: Vec<HopMsg>) -> HopMsg {
+        assert_eq!(v.len(), 1, "expected one control message");
+        v.remove(0)
+    }
+
+    fn refused(rx: &mut TestHopRx) -> String {
+        match only(rx.control()) {
+            HopMsg::CircuitRefuse(r) => r.reason.unwrap_or_default(),
+            _ => panic!("expected CircuitRefuse"),
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_sets_up_forwards_and_closes() {
+        let mut t = net();
+        let (rn, _dir) = testnode::node(&mut t.c, t.r.0, t.r.1.clone());
+        let (hs, mut rs) = rn.test_hop(t.s.0, Transport::TcpTls);
+        let (hd, mut rd) = rn.test_hop(t.d.0, Transport::TcpTls);
+
+        // The source opens with its label 11.
+        let s = setup(&t.s, &t.d.0, &[t.r.0]);
+        on_open(&rn, &hs, open_msg(&t.s.1, &s, 11)).await.unwrap();
+        let HopMsg::CircuitOpen(fwd) = only(rd.control()) else {
+            panic!("expected CircuitOpen to the destination");
+        };
+        let back = fwd.label;
+        assert_eq!(
+            fwd.setup,
+            open_msg(&t.s.1, &s, 0).setup,
+            "setup forwarded as signed"
+        );
+        assert!(rs.control().is_empty());
+        assert_eq!(rn.circuits.lock().transit_count(), 1);
+
+        // The destination accepts with its label 22.
+        on_accept(
+            &rn,
+            &hd,
+            wp::CircuitAccept {
+                label: back,
+                peer_label: 22,
+            },
+        );
+        let HopMsg::CircuitAccept(acc) = only(rs.control()) else {
+            panic!("expected CircuitAccept to the source");
+        };
+        assert_eq!(acc.label, 11);
+        let in_label = acc.peer_label;
+
+        // Forward: source → destination, label swapped, hop limit decremented.
+        let frame = [
+            frames::relay_header(in_label, 5, frames::ecn::ECT0).as_slice(),
+            b"hi",
+        ]
+        .concat();
+        on_relay_frame(&rn, &hs, frame);
+        let out = rd.relay();
+        assert_eq!(out.len(), 1);
+        let (label, limit, ecn, body) = frames::parse_relay(&out[0]).unwrap();
+        assert_eq!(
+            (label, limit, ecn, body),
+            (22, 4, frames::ecn::ECT0, &b"hi"[..])
+        );
+
+        // Reverse: destination → source with the source's label.
+        let frame = [frames::relay_header(back, 5, 0).as_slice(), b"yo"].concat();
+        on_relay_frame(&rn, &hd, frame);
+        let out = rs.relay();
+        assert_eq!(frames::parse_relay(&out[0]).unwrap().0, 11);
+
+        // Hop limit 0 is dropped and counted.
+        on_relay_frame(&rn, &hs, frames::relay_header(in_label, 0, 0).to_vec());
+        assert!(rd.relay().is_empty());
+        // Unknown labels are ignored.
+        on_relay_frame(&rn, &hs, frames::relay_header(999, 5, 0).to_vec());
+        assert!(rd.relay().is_empty());
+        {
+            let tb = rn.circuits.lock();
+            let r = &tb.routes[&crypto::route_id(&t.s.0, &t.d.0, &[t.r.0])];
+            assert_eq!(r.fwd.frames.load(Ordering::Relaxed), 1);
+            assert_eq!(r.rev.frames.load(Ordering::Relaxed), 1);
+            assert_eq!(r.dropped_hop_limit.load(Ordering::Relaxed), 1);
+        }
+        let sum = summary(&rn);
+        assert_eq!(sum["transit"], 1);
+        assert_eq!(sum["routes"][0]["role"], "transit");
+        assert_eq!(sum["routes"][0]["src"], "src");
+
+        // The source closes: the destination is told with its label; both
+        // directions are gone.
+        on_close(&rn, &hs, in_label);
+        let HopMsg::CircuitClose(cl) = only(rd.control()) else {
+            panic!("expected CircuitClose");
+        };
+        assert_eq!(cl.label, 22);
+        assert!(rn.circuits.lock().entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn relay_passes_a_refusal_back() {
+        let mut t = net();
+        let (rn, _dir) = testnode::node(&mut t.c, t.r.0, t.r.1.clone());
+        let (hs, mut rs) = rn.test_hop(t.s.0, Transport::TcpTls);
+        let (hd, mut rd) = rn.test_hop(t.d.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.d.0, &[t.r.0]);
+        on_open(&rn, &hs, open_msg(&t.s.1, &s, 11)).await.unwrap();
+        let HopMsg::CircuitOpen(fwd) = only(rd.control()) else {
+            panic!()
+        };
+        on_refuse(
+            &rn,
+            &hd,
+            wp::CircuitRefuse {
+                label: fwd.label,
+                reason: Some("policy".into()),
+            },
+        );
+        let HopMsg::CircuitRefuse(r) = only(rs.control()) else {
+            panic!()
+        };
+        assert_eq!((r.label, r.reason.as_deref()), (11, Some("policy")));
+        assert!(rn.circuits.lock().entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hop_down_closes_the_other_side() {
+        let mut t = net();
+        let (rn, _dir) = testnode::node(&mut t.c, t.r.0, t.r.1.clone());
+        let (hs, _rs) = rn.test_hop(t.s.0, Transport::TcpTls);
+        let (hd, mut rd) = rn.test_hop(t.d.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.d.0, &[t.r.0]);
+        on_open(&rn, &hs, open_msg(&t.s.1, &s, 11)).await.unwrap();
+        let HopMsg::CircuitOpen(fwd) = only(rd.control()) else {
+            panic!()
+        };
+        on_accept(
+            &rn,
+            &hd,
+            wp::CircuitAccept {
+                label: fwd.label,
+                peer_label: 22,
+            },
+        );
+        rn.hop_down(&hs);
+        let HopMsg::CircuitClose(cl) = only(rd.control()) else {
+            panic!("expected CircuitClose")
+        };
+        assert_eq!(cl.label, 22);
+        assert!(rn.circuits.lock().entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn relay_refusals() {
+        let mut t = net();
+        let other = t.c.data_node("other", "10.7.0.5", &[]);
+        let (rn, _dir) = testnode::node(&mut t.c, t.r.0, t.r.1.clone());
+        let (hs, mut rs) = rn.test_hop(t.s.0, Transport::TcpTls);
+        let (ho, mut ro) = rn.test_hop(other.0, Transport::TcpTls);
+        let (_hd, _rd) = rn.test_hop(t.d.0, Transport::TcpTls);
+        let path = [t.r.0];
+
+        // Signed by a key that isn't the source's.
+        let s = setup(&t.s, &t.d.0, &path);
+        assert!(on_open(&rn, &hs, open_msg(&other.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "source");
+        // Not a CircuitSetup at all.
+        let bogus = wp::CircuitOpen {
+            setup: Some(b"junk".to_vec()),
+            label: 1,
+        };
+        assert!(on_open(&rn, &hs, bogus).await.is_err());
+        assert_eq!(refused(&mut rs), "bad setup");
+        // Route id that doesn't match the path.
+        let s = wp::CircuitSetup {
+            route_id: Some(crypto::k32(&[1; 32])),
+            ..setup(&t.s, &t.d.0, &path)
+        };
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "route_id");
+        // Too old.
+        let s = wp::CircuitSetup {
+            issued_at: now_ms() - SKEW_SHORT_RECORD - 1000,
+            ..setup(&t.s, &t.d.0, &path)
+        };
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "stale");
+        // Unknown destination.
+        let s = setup(&t.s, &[9; 32], &path);
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "destination");
+        // We're not on the path.
+        let s = setup(&t.s, &t.d.0, &[other.0]);
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "not on path");
+        // Arrives from a neighbor that isn't before us on the path.
+        let s = setup(&t.s, &t.d.0, &path);
+        assert!(on_open(&rn, &ho, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut ro), "wrong_neighbor");
+        // The next hop on the path must be a relay.
+        let s = setup(&t.s, &t.d.0, &[t.r.0, other.0]);
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "next_hop");
+        // A replayed setup.
+        let s = setup(&t.s, &t.d.0, &path);
+        on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.unwrap();
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 2)).await.is_err());
+        assert_eq!(refused(&mut rs), "replay");
+
+        let refused_counts = rn.circuits.lock().refused.clone();
+        for why in [
+            "source",
+            "route_id",
+            "stale",
+            "destination",
+            "not_on_path",
+            "wrong_neighbor",
+            "next_hop",
+            "replay",
+        ] {
+            assert_eq!(
+                refused_counts.get(why),
+                Some(&1),
+                "{why}: {refused_counts:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn only_relays_relay() {
+        let mut t = net();
+        // The destination is asked to relay for a path that lists it.
+        let (dn, _dir) = testnode::node(&mut t.c, t.d.0, t.d.1.clone());
+        let (hs, mut rs) = dn.test_hop(t.s.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.r.0, &[t.d.0]);
+        assert!(on_open(&dn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "not_relay");
+    }
+
+    #[tokio::test]
+    async fn relay_follows_the_policy() {
+        let mut t = net();
+        t.c.set_policy(wp::Policy {
+            default_action: wp::Action::Deny,
+            ..Default::default()
+        })
+        .unwrap();
+        let (rn, _dir) = testnode::node(&mut t.c, t.r.0, t.r.1.clone());
+        let (hs, mut rs) = rn.test_hop(t.s.0, Transport::TcpTls);
+        let (_hd, _rd) = rn.test_hop(t.d.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.d.0, &[t.r.0]);
+        assert!(on_open(&rn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "policy");
+    }
+
+    #[tokio::test]
+    async fn destination_accepts() {
+        let mut t = net();
+        let (dn, _dir) = testnode::node(&mut t.c, t.d.0, t.d.1.clone());
+        let (hr, mut rr) = dn.test_hop(t.r.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.d.0, &[t.r.0]);
+        on_open(&dn, &hr, open_msg(&t.s.1, &s, 33)).await.unwrap();
+        let HopMsg::CircuitAccept(a) = only(rr.control()) else {
+            panic!("expected CircuitAccept")
+        };
+        assert_eq!(a.label, 33);
+        {
+            let tb = dn.circuits.lock();
+            let Some(Entry {
+                kind: Kind::Local(c),
+                ..
+            }) = tb.entries.get(&(t.r.0, a.peer_label))
+            else {
+                panic!("no local circuit")
+            };
+            assert_eq!((c.peer, c.next, c.is_source), (t.s.0, t.r.0, false));
+            assert_eq!(*c.out_label.lock(), Some(33));
+            assert_eq!(tb.local_circuits(&t.s.0).len(), 1);
+        }
+        let sum = summary(&dn);
+        assert_eq!(sum["local"][0]["peer"], "src");
+        assert_eq!(sum["local"][0]["source"], false);
+        assert_eq!(sum["routes"][0]["role"], "destination");
+
+        // The same setup from a neighbor that isn't the last relay.
+        let (hs, mut rs) = dn.test_hop(t.s.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.d.0, &[t.r.0]);
+        assert!(on_open(&dn, &hs, open_msg(&t.s.1, &s, 34)).await.is_err());
+        assert_eq!(refused(&mut rs), "wrong neighbor");
+    }
+
+    #[tokio::test]
+    async fn destination_follows_the_policy() {
+        let mut t = net();
+        t.c.set_policy(wp::Policy {
+            default_action: wp::Action::Deny,
+            ..Default::default()
+        })
+        .unwrap();
+        let (dn, _dir) = testnode::node(&mut t.c, t.d.0, t.d.1.clone());
+        let (hs, mut rs) = dn.test_hop(t.s.0, Transport::TcpTls);
+        let s = setup(&t.s, &t.d.0, &[]);
+        assert!(on_open(&dn, &hs, open_msg(&t.s.1, &s, 1)).await.is_err());
+        assert_eq!(refused(&mut rs), "policy");
+        assert!(dn.circuits.lock().entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn source_opens_through_a_relay() {
+        let mut t = net();
+        let (sn, _dir) = testnode::node(&mut t.c, t.s.0, t.s.1.clone());
+        let (hr, mut rr) = sn.test_hop(t.r.0, Transport::TcpTls);
+        let n2 = sn.clone();
+        let (peer, relay) = (t.d.0, t.r.0);
+        let opening = tokio::spawn(async move { open(&n2, peer, vec![relay]).await });
+        // Wait for the CircuitOpen to the relay and answer it.
+        let o = loop {
+            if let Some(HopMsg::CircuitOpen(o)) = rr.control().pop() {
+                break o;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        let v = crypto::open_envelope(o.setup.as_deref().unwrap()).unwrap();
+        assert_eq!(v.signer, t.s.1.public());
+        on_accept(
+            &sn,
+            &hr,
+            wp::CircuitAccept {
+                label: o.label,
+                peer_label: 44,
+            },
+        );
+        let c = opening.await.unwrap().unwrap();
+        assert_eq!(*c.out_label.lock(), Some(44));
+        assert!(c.is_source && !c.direct());
+        assert_eq!(c.cost(), f64::INFINITY, "no probes yet");
+
+        // Frames go out with the relay's label.
+        assert!(c.send(&sn, b"data", 0));
+        let out = rr.relay();
+        let (label, limit, _, body) = frames::parse_relay(&out[0]).unwrap();
+        assert_eq!((label, limit, body), (44, DEFAULT_HOP_LIMIT, &b"data"[..]));
+
+        close_local(&sn, &c);
+        let HopMsg::CircuitClose(cl) = only(rr.control()) else {
+            panic!()
+        };
+        assert_eq!(cl.label, 44);
+        assert!(sn.circuits.lock().entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn source_open_refused() {
+        let mut t = net();
+        let (sn, _dir) = testnode::node(&mut t.c, t.s.0, t.s.1.clone());
+        let (hr, mut rr) = sn.test_hop(t.r.0, Transport::TcpTls);
+        let n2 = sn.clone();
+        let (peer, relay) = (t.d.0, t.r.0);
+        let opening = tokio::spawn(async move { open(&n2, peer, vec![relay]).await });
+        let o = loop {
+            if let Some(HopMsg::CircuitOpen(o)) = rr.control().pop() {
+                break o;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        on_refuse(
+            &sn,
+            &hr,
+            wp::CircuitRefuse {
+                label: o.label,
+                reason: Some("rate".into()),
+            },
+        );
+        let Err(e) = opening.await.unwrap() else {
+            panic!("refused circuit opened")
+        };
+        let e = e.to_string();
+        assert!(e.contains("rate"), "{e}");
+        assert!(sn.circuits.lock().entries.is_empty());
+    }
+
+    #[test]
+    fn may_talk_follows_the_policy_with_the_controller_exception() {
+        let mut t = net();
+        let ctl = t.c.enroll(NodeSpec {
+            name: "ctl",
+            ip: "10.7.0.9",
+            control: true,
+            ..Default::default()
+        });
+        t.c.set_policy(wp::Policy {
+            default_action: wp::Action::Deny,
+            ..Default::default()
+        })
+        .unwrap();
+        let (n, _dir) = testnode::node(&mut t.c, t.s.0, t.s.1.clone());
+        assert!(!may_talk(&n, &t.s.0, &t.d.0));
+        assert!(!may_talk(&n, &t.s.0, &[9; 32]), "unknown node");
+        // Controllers are reachable whatever the policy says, once certified.
+        let certified = n.store.read().view().is_controller(&ctl.0);
+        assert_eq!(may_talk(&n, &t.s.0, &ctl.0), certified);
+        t.c.set_policy(allow_all()).unwrap();
+        testnode::sync(&mut t.c, &n);
+        assert!(may_talk(&n, &t.s.0, &t.d.0));
+    }
+}

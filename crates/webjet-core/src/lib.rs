@@ -18,5 +18,7 @@ pub mod queue;
 pub mod routing;
 pub mod statemachine;
 pub mod store;
+#[cfg(any(test, feature = "testutil"))]
+pub mod testutil;
 pub mod types;
 pub mod validate;

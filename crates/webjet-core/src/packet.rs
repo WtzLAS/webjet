@@ -605,31 +605,7 @@ pub fn echo_reply(req: &[u8]) -> Option<Vec<u8>> {
 pub mod tests {
     use super::*;
 
-    pub fn udp4(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, payload: &[u8]) -> Vec<u8> {
-        let total = 28 + payload.len();
-        let mut p = vec![0x45, 0, 0, 0, 0, 0, 0x40, 0, 64, 17, 0, 0];
-        p[2..4].copy_from_slice(&(total as u16).to_be_bytes());
-        p.extend_from_slice(&src);
-        p.extend_from_slice(&dst);
-        p.extend_from_slice(&sport.to_be_bytes());
-        p.extend_from_slice(&dport.to_be_bytes());
-        p.extend_from_slice(&((8 + payload.len()) as u16).to_be_bytes());
-        p.extend_from_slice(&[0, 0]);
-        p.extend_from_slice(payload);
-        fix_checksums(&mut p);
-        p
-    }
-
-    pub fn tcp4(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, flags: u8) -> Vec<u8> {
-        let mut p = vec![0x45, 0, 0, 40, 0, 0, 0x40, 0, 64, 6, 0, 0];
-        p.extend_from_slice(&src);
-        p.extend_from_slice(&dst);
-        p.extend_from_slice(&sport.to_be_bytes());
-        p.extend_from_slice(&dport.to_be_bytes());
-        p.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0x50, flags, 0xff, 0xff, 0, 0, 0, 0]);
-        fix_checksums(&mut p);
-        p
-    }
+    pub use crate::testutil::packets::{tcp4, udp4};
 
     fn verify_udp(p: &[u8]) -> bool {
         let parsed = parse(p).unwrap();
@@ -701,6 +677,161 @@ pub mod tests {
             let _ = parse(&w);
             rewrite(&mut w, Some(("1.2.3.4".parse().unwrap(), 1)), None);
             let _ = icmp_unreachable(&w, Unreach::Host);
+        }
+    }
+}
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use crate::testutil::packets::{tcp4, udp4};
+    use proptest::prelude::*;
+
+    /// Every checksum of a TCP/UDP/ICMP IPv4 packet verifies.
+    fn checksums_ok(p: &[u8]) -> bool {
+        let Some(pp) = parse(p) else { return false };
+        let ihl = ((p[0] & 0x0f) as usize) * 4;
+        if checksum(&p[..ihl]) != 0 {
+            return false;
+        }
+        let off = pp.l4_offset;
+        match pp.flow.proto {
+            PROTO_TCP | PROTO_UDP => {
+                fold(sum16(
+                    &p[off..],
+                    pseudo(&pp.flow.src, &pp.flow.dst, pp.flow.proto, p.len() - off),
+                )) == 0
+            }
+            PROTO_ICMP => checksum(&p[off..]) == 0,
+            _ => true,
+        }
+    }
+
+    fn v4() -> impl Strategy<Value = [u8; 4]> {
+        any::<[u8; 4]>()
+    }
+
+    proptest! {
+        #[test]
+        fn parse_reads_what_was_built(
+            src in v4(), dst in v4(), sport in any::<u16>(), dport in any::<u16>(),
+            payload in proptest::collection::vec(any::<u8>(), 0..200),
+            flags in any::<u8>(),
+        ) {
+            let u = udp4(src, dst, sport, dport, &payload);
+            let p = parse(&u).unwrap();
+            prop_assert_eq!(p.flow, Flow {
+                proto: PROTO_UDP,
+                src: IpAddr::from(src),
+                dst: IpAddr::from(dst),
+                sport,
+                dport,
+            });
+            prop_assert!(checksums_ok(&u));
+            let t = tcp4(src, dst, sport, dport, flags);
+            let p = parse(&t).unwrap();
+            prop_assert_eq!((p.flow.proto, p.tcp_flags), (PROTO_TCP, flags));
+            prop_assert_eq!(src_dst(&t), Some((IpAddr::from(src), IpAddr::from(dst))));
+        }
+
+        /// Rewriting keeps the packet valid, changes exactly what was asked,
+        /// and rewriting back restores the original bytes.
+        #[test]
+        fn rewrite_roundtrip(
+            src in v4(), dst in v4(), sport in any::<u16>(), dport in any::<u16>(),
+            nsrc in v4(), nsport in any::<u16>(), ndst in v4(), ndport in any::<u16>(),
+            tcp in any::<bool>(),
+            payload in proptest::collection::vec(any::<u8>(), 0..100),
+            which in 0u8..3,
+        ) {
+            let orig = if tcp {
+                tcp4(src, dst, sport, dport, tcpf::SYN)
+            } else {
+                udp4(src, dst, sport, dport, &payload)
+            };
+            let s = (which != 1).then_some((IpAddr::from(nsrc), nsport));
+            let d = (which != 0).then_some((IpAddr::from(ndst), ndport));
+            let mut p = orig.clone();
+            rewrite(&mut p, s, d);
+            prop_assert!(checksums_ok(&p));
+            let f = parse(&p).unwrap().flow;
+            let want_src = s.unwrap_or((IpAddr::from(src), sport));
+            let want_dst = d.unwrap_or((IpAddr::from(dst), dport));
+            prop_assert_eq!((f.src, f.sport), want_src);
+            prop_assert_eq!((f.dst, f.dport), want_dst);
+            rewrite(
+                &mut p,
+                s.map(|_| (IpAddr::from(src), sport)),
+                d.map(|_| (IpAddr::from(dst), dport)),
+            );
+            prop_assert_eq!(p, orig);
+        }
+
+        /// An ICMP error about a packet quotes it; rewriting the error with
+        /// the inverse mapping rewrites the quote too.
+        #[test]
+        fn icmp_errors_quote_and_follow_nat(
+            src in v4(), dst in v4(), sport in any::<u16>(), dport in any::<u16>(),
+            nsrc in v4(), nsport in any::<u16>(),
+            prohibited in any::<bool>(),
+        ) {
+            let orig = udp4(src, dst, sport, dport, b"payload");
+            let why = if prohibited { Unreach::Prohibited } else { Unreach::Host };
+            let Some(err) = icmp_unreachable(&orig, why) else {
+                // Never answered: errors about ICMP errors, non-unicast sources.
+                return Ok(());
+            };
+            let e = parse(&err).unwrap();
+            prop_assert_eq!(e.icmp, Some(IcmpKind::Error));
+            prop_assert_eq!(e.flow.dst, IpAddr::from(src), "sent back to the source");
+            prop_assert_eq!(e.inner, Some(parse(&orig).unwrap().flow));
+            prop_assert!(checksums_ok(&err));
+            // The error travels back through a gateway that had translated
+            // the source: its destination becomes the original source.
+            let mut back = err.clone();
+            rewrite(&mut back, None, Some((IpAddr::from(nsrc), nsport)));
+            let b = parse(&back).unwrap();
+            prop_assert_eq!(b.flow.dst, IpAddr::from(nsrc));
+            let inner = b.inner.unwrap();
+            prop_assert_eq!((inner.src, inner.sport), (IpAddr::from(nsrc), nsport));
+            prop_assert!(checksums_ok(&back));
+        }
+
+        #[test]
+        fn echo_reply_swaps_and_keeps_id_and_seq(
+            src in v4(), dst in v4(), id in any::<u16>(), seq in any::<u16>(),
+            payload in proptest::collection::vec(any::<u8>(), 0..100),
+        ) {
+            let req = icmp_echo(IpAddr::from(src), IpAddr::from(dst), true, id, seq, &payload);
+            prop_assert!(checksums_ok(&req));
+            let p = parse(&req).unwrap();
+            prop_assert_eq!(p.icmp, Some(IcmpKind::Echo { request: true }));
+            let rep = echo_reply(&req).unwrap();
+            prop_assert_eq!(rep, icmp_echo(IpAddr::from(dst), IpAddr::from(src), false, id, seq, &payload));
+            // A reply has no reply.
+            prop_assert!(echo_reply(&echo_reply(&req).unwrap()).is_none());
+        }
+
+        #[test]
+        fn ecn_set_and_read(src in v4(), dst in v4(), ecn in 0u8..4) {
+            let mut p = udp4(src, dst, 1, 2, b"x");
+            set_ecn(&mut p, ecn);
+            prop_assert_eq!(ecn_of(&p), ecn);
+            prop_assert_eq!(parse(&p).unwrap().ecn, ecn);
+            prop_assert!(checksums_ok(&p));
+        }
+
+        /// Arbitrary bytes never panic any packet function.
+        #[test]
+        fn any_bytes(mut b in proptest::collection::vec(any::<u8>(), 0..120)) {
+            let _ = parse(&b);
+            let _ = src_dst(&b);
+            let _ = echo_reply(&b);
+            let _ = icmp_unreachable(&b, Unreach::Host);
+            let _ = ecn_of(&b);
+            fix_checksums(&mut b);
+            set_ecn(&mut b, 3);
+            rewrite(&mut b, Some(("10.0.0.1".parse().unwrap(), 1)), Some(("fd00::1".parse().unwrap(), 2)));
         }
     }
 }

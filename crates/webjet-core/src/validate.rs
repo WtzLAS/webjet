@@ -237,3 +237,385 @@ pub fn controller_settings(c: &wp::ControllerSettings) -> Result<()> {
 pub fn compression(c: &wp::CompressionConfig) -> Result<()> {
     crate::compress::check(c.control, c.data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::k32;
+
+    fn cidr(s: &str) -> wp::Cidr {
+        crate::types::net_to_cidr(&s.parse().unwrap())
+    }
+
+    fn node() -> wp::NodeRecord {
+        wp::NodeRecord {
+            node_id: Some(k32(&[1; 32])),
+            identity_key: Some(k32(&[2; 32])),
+            owner: Some(k32(&[3; 32])),
+            name: Some("web-01".into()),
+            overlay_ips: Some(vec![cidr("10.7.0.2/32"), cidr("fd00::2/128")]),
+            roles: Some(vec![wp::Role::Data, wp::Role::Relay]),
+            tags: Some(vec!["tag:a".into(), "tag:b".into()]),
+            routes: Some(vec![wp::RouteGrant {
+                lan: cidr("192.168.1.0/24"),
+                published: cidr("10.2.2.0/24"),
+            }]),
+            version: 1,
+            control: None,
+        }
+    }
+
+    #[test]
+    fn node_record_accepts_a_good_record() {
+        node_record(&node()).unwrap();
+        // Every list may be missing.
+        node_record(&wp::NodeRecord {
+            overlay_ips: None,
+            roles: None,
+            tags: None,
+            routes: None,
+            ..node()
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn node_record_rejects() {
+        let bad: Vec<(&str, wp::NodeRecord)> = vec![
+            (
+                "no id",
+                wp::NodeRecord {
+                    node_id: None,
+                    ..node()
+                },
+            ),
+            (
+                "no key",
+                wp::NodeRecord {
+                    identity_key: None,
+                    ..node()
+                },
+            ),
+            (
+                "no owner",
+                wp::NodeRecord {
+                    owner: None,
+                    ..node()
+                },
+            ),
+            (
+                "no name",
+                wp::NodeRecord {
+                    name: None,
+                    ..node()
+                },
+            ),
+            (
+                "bad name",
+                wp::NodeRecord {
+                    name: Some("Web_01".into()),
+                    ..node()
+                },
+            ),
+            (
+                "host bits",
+                wp::NodeRecord {
+                    overlay_ips: Some(vec![wp::Cidr::new("10.7.0.2".parse().unwrap(), 24)]),
+                    ..node()
+                },
+            ),
+            (
+                "unsorted ips",
+                wp::NodeRecord {
+                    overlay_ips: Some(vec![cidr("10.7.0.3/32"), cidr("10.7.0.2/32")]),
+                    ..node()
+                },
+            ),
+            (
+                "duplicate ips",
+                wp::NodeRecord {
+                    overlay_ips: Some(vec![cidr("10.7.0.2/32"), cidr("10.7.0.2/32")]),
+                    ..node()
+                },
+            ),
+            (
+                "unsorted roles",
+                wp::NodeRecord {
+                    roles: Some(vec![wp::Role::Relay, wp::Role::Data]),
+                    ..node()
+                },
+            ),
+            (
+                "bad tag",
+                wp::NodeRecord {
+                    tags: Some(vec!["a".into()]),
+                    ..node()
+                },
+            ),
+            (
+                "unsorted tags",
+                wp::NodeRecord {
+                    tags: Some(vec!["tag:b".into(), "tag:a".into()]),
+                    ..node()
+                },
+            ),
+            (
+                "/0 route",
+                wp::NodeRecord {
+                    routes: Some(vec![wp::RouteGrant {
+                        lan: cidr("0.0.0.0/0"),
+                        published: cidr("0.0.0.0/0"),
+                    }]),
+                    ..node()
+                },
+            ),
+            (
+                "route changes prefix length",
+                wp::NodeRecord {
+                    routes: Some(vec![wp::RouteGrant {
+                        lan: cidr("192.168.1.0/24"),
+                        published: cidr("10.2.0.0/16"),
+                    }]),
+                    ..node()
+                },
+            ),
+            (
+                "duplicate routes",
+                wp::NodeRecord {
+                    routes: Some(vec![
+                        wp::RouteGrant {
+                            lan: cidr("192.168.1.0/24"),
+                            published: cidr("192.168.1.0/24"),
+                        },
+                        wp::RouteGrant {
+                            lan: cidr("192.168.1.0/24"),
+                            published: cidr("192.168.1.0/24"),
+                        },
+                    ]),
+                    ..node()
+                },
+            ),
+        ];
+        for (what, r) in bad {
+            assert!(node_record(&r).is_err(), "{what} accepted");
+        }
+    }
+
+    fn account() -> wp::AccountRecord {
+        wp::AccountRecord {
+            account_id: Some(k32(&[1; 32])),
+            account_key: Some(k32(&[2; 32])),
+            name: Some("alice".into()),
+            admin: false,
+            issuer_root: false,
+            issuer: Some(k32(&[3; 32])),
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn account_records() {
+        account_record(&account()).unwrap();
+        // Root-signed accounts and admins need no issuer.
+        account_record(&wp::AccountRecord {
+            issuer_root: true,
+            issuer: None,
+            ..account()
+        })
+        .unwrap();
+        account_record(&wp::AccountRecord {
+            admin: true,
+            issuer_root: true,
+            issuer: None,
+            ..account()
+        })
+        .unwrap();
+
+        assert!(
+            account_record(&wp::AccountRecord {
+                account_id: None,
+                ..account()
+            })
+            .is_err()
+        );
+        assert!(
+            account_record(&wp::AccountRecord {
+                account_key: None,
+                ..account()
+            })
+            .is_err()
+        );
+        assert!(
+            account_record(&wp::AccountRecord {
+                name: Some("".into()),
+                ..account()
+            })
+            .is_err()
+        );
+        assert!(
+            account_record(&wp::AccountRecord {
+                issuer: None,
+                ..account()
+            })
+            .is_err()
+        );
+        // An admin signed by another admin.
+        assert!(
+            account_record(&wp::AccountRecord {
+                admin: true,
+                ..account()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dns_names() {
+        for ok in [
+            "example.com",
+            "example.com.",
+            "a",
+            "_dmarc.x-y.example",
+            &"a".repeat(63),
+        ] {
+            assert!(valid_dns_name(ok), "{ok:?}");
+        }
+        let long = vec!["a".repeat(63); 4].join("."); // 255 characters
+        for bad in [
+            "",
+            ".",
+            "a..b",
+            "-a.com",
+            "a-.com",
+            "a b.com",
+            "é.com",
+            &"a".repeat(64),
+            &long,
+        ] {
+            assert!(!valid_dns_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn limit_table() {
+        assert_eq!(limit_default("conntrack_per_peer"), Some(4096));
+        assert_eq!(limit_default("relay_capacity_mbps"), None);
+        assert_eq!(limit_default("nope"), None);
+        assert!(known_limit("relay_capacity_mbps"));
+        assert!(!known_limit("nope"));
+        let mut names: Vec<_> = LIMITS.iter().map(|l| l.name).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), LIMITS.len(), "duplicate limit names");
+        assert!(LIMITS.iter().all(|l| l.default != Some(0)));
+    }
+
+    fn lv(name: &str, value: u64) -> wp::LimitValue {
+        wp::LimitValue {
+            name: Some(name.into()),
+            value,
+        }
+    }
+
+    #[test]
+    fn limits_leaf() {
+        let good = wp::Limits {
+            version: 1,
+            defaults: Some(vec![lv("conntrack_per_peer", 100)]),
+            overrides: Some(vec![wp::LimitOverride {
+                select: Some(vec!["tag:big".into()]),
+                values: Some(vec![lv("rate_ceiling_mbps", 50)]),
+            }]),
+        };
+        limits(&good).unwrap();
+        limits(&wp::Limits::default()).unwrap();
+
+        let unknown = wp::Limits {
+            defaults: Some(vec![lv("nope", 1)]),
+            ..good.clone()
+        };
+        assert!(limits(&unknown).is_err());
+        let zero = wp::Limits {
+            defaults: Some(vec![lv("conntrack_per_peer", 0)]),
+            ..good.clone()
+        };
+        assert!(limits(&zero).is_err());
+        let bad_override = wp::Limits {
+            overrides: Some(vec![wp::LimitOverride {
+                select: Some(vec!["tag:big".into()]),
+                values: Some(vec![lv("circuits_global", 0)]),
+            }]),
+            ..good.clone()
+        };
+        assert!(limits(&bad_override).is_err());
+        let bad_selector = wp::Limits {
+            overrides: Some(vec![wp::LimitOverride {
+                select: Some(vec!["bogus:x".into()]),
+                values: None,
+            }]),
+            ..good
+        };
+        assert!(limits(&bad_selector).is_err());
+    }
+
+    #[test]
+    fn transport_leaf() {
+        let camo = |d: &str| wp::TransportConfig {
+            camouflage: Some(Box::new(wp::Camouflage {
+                domain: Some(d.into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        transport(&wp::TransportConfig::default()).unwrap();
+        transport(&camo("www.example.com")).unwrap();
+        transport(&camo("")).unwrap(); // empty: no domain
+        assert!(transport(&camo("bad domain")).is_err());
+
+        let pad = |l: &str| wp::TransportConfig {
+            padding: Some(Box::new(wp::PaddingScheme {
+                stop: 2,
+                lines: Some(vec![l.into()]),
+            })),
+            ..Default::default()
+        };
+        transport(&pad("0=30-30,c,100-200")).unwrap();
+        assert!(transport(&pad("0=30")).is_err());
+        assert!(transport(&pad("0=200-100")).is_err());
+
+        let comp = |control, data| wp::TransportConfig {
+            compression: Some(Box::new(wp::CompressionConfig { control, data })),
+            ..Default::default()
+        };
+        use crate::compress::algo;
+        transport(&comp(algo::ZSTD, algo::LZ4)).unwrap();
+        transport(&comp(algo::UNSET, algo::OFF)).unwrap();
+        assert!(transport(&comp(algo::LZ4, algo::UNSET)).is_err());
+        assert!(transport(&comp(algo::UNSET, algo::ZSTD)).is_err());
+        assert!(transport(&comp(99, algo::UNSET)).is_err());
+    }
+
+    #[test]
+    fn controllers_leaf() {
+        let c = |voters, dead| wp::ControllerSettings {
+            voters,
+            dead_voter_after_s: dead,
+            ..Default::default()
+        };
+        for v in [1, 3, 5, 7] {
+            controller_settings(&c(Some(v), None)).unwrap();
+        }
+        for v in [0, 2, 4, 9] {
+            assert!(
+                controller_settings(&c(Some(v), None)).is_err(),
+                "{v} voters"
+            );
+        }
+        controller_settings(&c(None, None)).unwrap();
+        controller_settings(&c(None, Some(0))).unwrap();
+        controller_settings(&c(None, Some(crate::membership::MIN_DEAD_AFTER_S))).unwrap();
+        assert!(
+            controller_settings(&c(None, Some(crate::membership::MIN_DEAD_AFTER_S - 1))).is_err()
+        );
+    }
+}

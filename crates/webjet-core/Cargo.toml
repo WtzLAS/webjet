@@ -25,6 +25,10 @@ chacha20poly1305.workspace = true
 zstd.workspace = true
 lz4_flex.workspace = true
 
+[features]
+# Test helpers (a whole network in memory) for this and other crates' tests.
+testutil = []
+
 [dev-dependencies]
 proptest.workspace = true
 toml.workspace = true

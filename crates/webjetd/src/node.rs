@@ -941,3 +941,79 @@ async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> 
 pub fn opt_bytes(k: &Option<wp::Key32>) -> Bytes32 {
     opt_k32(k)
 }
+
+/// What a test hop's writer would have sent.
+#[cfg(test)]
+pub(crate) struct TestHopRx {
+    pub data: mpsc::Receiver<Out>,
+    pub ctl: mpsc::UnboundedReceiver<Vec<u8>>,
+}
+
+#[cfg(test)]
+impl TestHopRx {
+    /// Control messages queued so far, decoded.
+    pub fn control(&mut self) -> Vec<HopMsg> {
+        let mut out = Vec::new();
+        while let Ok(rec) = self.ctl.try_recv() {
+            let c = wp::HopControl::decode_bytes(&rec[4..]).expect("control record");
+            out.extend(c.msg);
+        }
+        out
+    }
+
+    /// Relay frames (payloads of RELAY records) queued so far.
+    pub fn relay(&mut self) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(o) = self.data.try_recv() {
+            if let Out::Relay { frame, .. } = o {
+                out.push(frame[4..].to_vec());
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+impl Node {
+    /// Register a hop to `peer` without a connection: what it sends is read
+    /// from the returned receivers.
+    pub(crate) fn test_hop(&self, peer: Bytes32, transport: Transport) -> (Arc<Hop>, TestHopRx) {
+        let (tx, data) = mpsc::channel::<Out>(1024);
+        let (ctl_tx, ctl) = mpsc::unbounded_channel::<Vec<u8>>();
+        let peer_key = self
+            .store
+            .read()
+            .view()
+            .nodes
+            .get(&peer)
+            .map(|x| x.key)
+            .unwrap_or_default();
+        let hop = Arc::new(Hop {
+            id: HOP_IDS.fetch_add(1, Ordering::Relaxed),
+            peer,
+            peer_key,
+            transport,
+            remote: "192.0.2.1:443".parse().expect("address"),
+            outbound: true,
+            restricted: false,
+            created: Instant::now(),
+            tx,
+            ctl_tx,
+            closed: AtomicBool::new(false),
+            intentional: AtomicBool::new(false),
+            stats: Mutex::new(LinkStats::default()),
+            last_rx: Mutex::new(Instant::now()),
+            kcp_stats: None,
+            tx_bytes: AtomicU64::new(0),
+            rx_bytes: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            clock_offset: Mutex::new(None),
+            observed: Mutex::new(None),
+            peer_digest: Mutex::new(None),
+            keepalive_seq: AtomicU64::new(0),
+            queue_delay_us: AtomicU64::new(0),
+        });
+        self.hops.lock().insert(hop.id, hop.clone());
+        (hop, TestHopRx { data, ctl })
+    }
+}

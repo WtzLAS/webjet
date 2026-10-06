@@ -357,3 +357,201 @@ pub fn save_links(
     v.sort_by(|a, b| (&a.peer, &a.transport).cmp(&(&b.peer, &b.transport)));
     save_json(&p.links(), &v)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use webjet_core::crypto::k32;
+    use webjet_core::testutil::Cluster;
+    use webjet_proto::{self as wp, Transport, msg_type as mt};
+
+    #[test]
+    fn base64_fields_roundtrip() {
+        let f = StoreFile {
+            head: vec![1, 2, 3],
+            offline: vec![vec![], vec![0xff; 40]],
+            ..Default::default()
+        };
+        let j = serde_json::to_string(&f).unwrap();
+        assert!(j.contains("\"AQID\""), "{j}");
+        let back: StoreFile = serde_json::from_str(&j).unwrap();
+        assert_eq!((back.head, back.offline), (f.head, f.offline));
+        // A store file without a head (never synced) still loads.
+        let old = r#"{"high_water":0,"trusted_floor":0,"leaves":[],"offline":[]}"#;
+        assert!(
+            serde_json::from_str::<StoreFile>(old)
+                .unwrap()
+                .head
+                .is_empty()
+        );
+        assert!(
+            serde_json::from_str::<StoreFile>(
+                r#"{"head":"%%","high_water":0,"trusted_floor":0,"leaves":[],"offline":[]}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn json_files() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("sub/x.json");
+        assert!(load_json::<NodeFile>(&p).unwrap().is_none());
+        let nf = NodeFile {
+            node_id: "ab".into(),
+            bootstrap: true,
+            ..Default::default()
+        };
+        save_json(&p, &nf).unwrap();
+        let back: NodeFile = load_json(&p).unwrap().unwrap();
+        assert_eq!((back.node_id.as_str(), back.bootstrap), ("ab", true));
+        assert!(!p.with_extension("tmp").exists(), "temp file left behind");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&p), 0o600);
+            assert_eq!(mode(p.parent().unwrap()), 0o700);
+        }
+        // Older node files lack the later fields.
+        std::fs::write(&p, r#"{"node_id":"cd"}"#).unwrap();
+        let old: NodeFile = load_json(&p).unwrap().unwrap();
+        assert!(!old.bootstrap && old.enroll_seeds.is_empty());
+        std::fs::write(&p, "not json").unwrap();
+        let e = load_json::<NodeFile>(&p).unwrap_err().to_string();
+        assert!(e.contains("x.json"), "{e}");
+    }
+
+    #[test]
+    fn store_survives_a_restart() {
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::new(d.path());
+        let mut c = Cluster::new();
+        let (id, _) = c.data_node("web", "10.7.0.2", &[]);
+        let (gone, _) = c.data_node("gone", "10.7.0.3", &[]);
+        let mut st = c.store();
+        // An offline tombstone too.
+        let tomb = wp::Tombstone {
+            node_id: Some(k32(&gone)),
+            version: 99,
+            reason: None,
+        };
+        st.add_offline_tombstone(&c.net.emergency.sign_obj(mt::TOMBSTONE, &tomb))
+            .unwrap();
+        save_store(&p, &st).unwrap();
+
+        let back = load_store(&p, c.net.genesis.clone()).unwrap();
+        assert_eq!(back.high_water, st.high_water);
+        assert_eq!(back.view().by_name.get("web"), Some(&id));
+        assert!(back.node_trusted(&id));
+        assert!(!back.node_trusted(&gone));
+        assert_eq!(back.all_leaves(), st.all_leaves());
+    }
+
+    #[test]
+    fn a_damaged_store_file_falls_back_to_resync() {
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::new(d.path());
+        let mut c = Cluster::new();
+        c.data_node("web", "10.7.0.2", &[]);
+        let st = c.store();
+        save_store(&p, &st).unwrap();
+        let mut f: StoreFile = load_json(&p.store()).unwrap().unwrap();
+        // A leaf that doesn't match the signed head.
+        f.leaves[0].bytes[10] ^= 1;
+        save_json(&p.store(), &f).unwrap();
+        let back = load_store(&p, c.net.genesis.clone()).unwrap();
+        assert!(back.head().is_none(), "tree not restored");
+        assert!(!back.view().by_name.contains_key("web"));
+        // The rollback floor is kept.
+        assert_eq!(back.high_water, st.high_water);
+        // No store file at all: an empty store.
+        std::fs::remove_file(p.store()).unwrap();
+        assert!(
+            load_store(&p, c.net.genesis.clone())
+                .unwrap()
+                .head()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn psk_epochs() {
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::new(d.path());
+        assert!(load_psk(&p).unwrap().keys.is_empty());
+        let mut e = webjet_net::gate::Epochs::default();
+        e.keys.insert(3, [3; 32]);
+        e.keys.insert(4, [4; 32]);
+        e.current = 4;
+        save_psk(&p, &e).unwrap();
+        let back = load_psk(&p).unwrap();
+        assert_eq!((back.current, back.keys), (4, e.keys.clone()));
+        // A damaged key is dropped, the rest kept.
+        let mut f: PskFile = load_json(&p.psk()).unwrap().unwrap();
+        f.epochs.insert(5, "zz".into());
+        save_json(&p.psk(), &f).unwrap();
+        assert_eq!(load_psk(&p).unwrap().keys, e.keys);
+    }
+
+    #[test]
+    fn link_history() {
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::new(d.path());
+        assert!(load_links(&p).is_empty());
+        let h = webjet_core::routing::LinkHistory {
+            rtt_ms: 12.5,
+            samples: 9,
+            ..Default::default()
+        };
+        let m = std::collections::HashMap::from([
+            (([1; 32], Transport::TcpTls), h.clone()),
+            (([2; 32], Transport::KcpFecTls), h.clone()),
+        ]);
+        save_links(&p, &m).unwrap();
+        let back = load_links(&p);
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[&([1; 32], Transport::TcpTls)].rtt_ms, 12.5);
+        // Garbage in the file: nothing, not an error.
+        std::fs::write(p.links(), "[{]").unwrap();
+        assert!(load_links(&p).is_empty());
+        // Entries with an unknown transport are skipped, the rest kept.
+        let entry = |t: &str| {
+            format!(
+                r#"{{"peer":"{}","transport":"{t}","rtt_ms":1,"loss":0,"jitter_ms":0,"flaps":0,"samples":1,"updated_ms":0}}"#,
+                hex::encode([1u8; 32])
+            )
+        };
+        let file = format!(
+            "[{},{}]",
+            entry("carrier-pigeon"),
+            entry(Transport::TcpTls.name())
+        );
+        std::fs::write(p.links(), file).unwrap();
+        let back = load_links(&p);
+        assert_eq!(back.len(), 1);
+        assert!(back.contains_key(&([1; 32], Transport::TcpTls)));
+    }
+
+    #[test]
+    fn paths() {
+        let p = Paths::new(Path::new("/x"));
+        let names = [
+            p.identity(),
+            p.node(),
+            p.genesis(),
+            p.store(),
+            p.psk(),
+            p.relays(),
+            p.camouflage(),
+            p.links(),
+            p.metrics_ring(),
+            p.raft(),
+        ];
+        let mut uniq = names.to_vec();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), names.len());
+        assert!(names.iter().all(|n| n.parent() == Some(Path::new("/x"))));
+    }
+}

@@ -935,3 +935,180 @@ expect = "deny"
         assert!(all.is_empty());
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+
+    const TAGS: [&str; 3] = ["tag:a", "tag:b", "tag:c"];
+
+    fn range() -> impl Strategy<Value = (u16, u16)> {
+        (any::<u16>(), 0u16..2000).prop_map(|(lo, len)| (lo, lo.saturating_add(len)))
+    }
+
+    fn ranges() -> impl Strategy<Value = Vec<(u16, u16)>> {
+        proptest::collection::vec(range(), 0..5)
+    }
+
+    fn portset() -> impl Strategy<Value = PortSet> {
+        (ranges(), ranges(), any::<bool>(), any::<bool>()).prop_map(|(t, u, icmp, other)| PortSet {
+            tcp: norm(t),
+            udp: norm(u),
+            icmp,
+            other,
+        })
+    }
+
+    fn selector() -> impl Strategy<Value = Selector> {
+        prop_oneof![
+            Just(Selector::Any),
+            (0..TAGS.len()).prop_map(|i| Selector::Tag(TAGS[i].into())),
+            Just(Selector::Role(RoleSel::Relay)),
+            Just(Selector::Role(RoleSel::Data)),
+        ]
+    }
+
+    fn rule(i: usize) -> impl Strategy<Value = Rule> {
+        (
+            any::<bool>(),
+            proptest::collection::vec(selector(), 1..3),
+            proptest::collection::vec(selector(), 1..3),
+            portset(),
+        )
+            .prop_map(move |(deny, src, dst, ports)| Rule {
+                id: format!("r{i}"),
+                action: if deny {
+                    Decision::Deny
+                } else {
+                    Decision::Allow
+                },
+                src,
+                dst,
+                ports,
+            })
+    }
+
+    fn policy() -> impl Strategy<Value = Policy> {
+        (
+            any::<bool>(),
+            (0usize..6).prop_flat_map(|n| (0..n).map(rule).collect::<Vec<_>>()),
+        )
+            .prop_map(|(allow, rules)| Policy {
+                version: 1,
+                default: if allow {
+                    Decision::Allow
+                } else {
+                    Decision::Deny
+                },
+                rules,
+                tests: Vec::new(),
+            })
+    }
+
+    fn subject() -> impl Strategy<Value = Subject> {
+        (
+            proptest::sample::subsequence(TAGS.to_vec(), 0..=3),
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(|(tags, data, relay)| Subject {
+                enrolled: true,
+                tags: tags.into_iter().map(String::from).collect(),
+                data,
+                relay,
+                ..Default::default()
+            })
+    }
+
+    fn flow() -> impl Strategy<Value = (u8, u16)> {
+        (
+            prop_oneof![
+                Just(PROTO_TCP),
+                Just(PROTO_UDP),
+                Just(PROTO_ICMP),
+                Just(47u8)
+            ],
+            any::<u16>(),
+        )
+    }
+
+    /// The model: the set of (proto, port) as a plain predicate.
+    fn model_contains(p: &PortSet, proto: u8, port: u16) -> bool {
+        let inr = |v: &[(u16, u16)]| v.iter().any(|(lo, hi)| *lo <= port && port <= *hi);
+        match proto {
+            PROTO_TCP => inr(&p.tcp),
+            PROTO_UDP => inr(&p.udp),
+            PROTO_ICMP | PROTO_ICMPV6 => p.icmp,
+            _ => p.other,
+        }
+    }
+
+    proptest! {
+        /// `evaluate` agrees with a straightforward reading of §14.3: a
+        /// matching deny wins, then the first matching allow, else default.
+        #[test]
+        fn evaluate_matches_the_reference(pol in policy(), s in subject(), d in subject(), (proto, port) in flow()) {
+            let hit = |r: &Rule| {
+                model_contains(&r.ports, proto, port)
+                    && r.src.iter().any(|x| x.matches_node(&s))
+                    && r.dst.iter().any(|x| x.matches_node(&d))
+            };
+            let want = if let Some(r) = pol.rules.iter().find(|r| r.action == Decision::Deny && hit(r)) {
+                (Decision::Deny, Some(r.id.clone()))
+            } else if let Some(r) = pol.rules.iter().find(|r| r.action == Decision::Allow && hit(r)) {
+                (Decision::Allow, Some(r.id.clone()))
+            } else {
+                (pol.default, None)
+            };
+            let v = pol.evaluate(&s, Dest::Node(&d), proto, port);
+            prop_assert_eq!((v.decision, v.rule), want);
+            // `allowed` is the set of flows `evaluate` admits.
+            let allowed = pol.allowed(&s, Dest::Node(&d));
+            prop_assert_eq!(allowed.contains(proto, port), v.decision == Decision::Allow);
+        }
+
+        /// Set operations agree with the predicate model.
+        #[test]
+        fn portset_algebra(a in portset(), b in portset(), (proto, port) in flow()) {
+            let (ia, ib) = (model_contains(&a, proto, port), model_contains(&b, proto, port));
+            prop_assert_eq!(a.contains(proto, port), ia);
+            let mut u = a.clone();
+            u.union(&b);
+            prop_assert_eq!(u.contains(proto, port), ia || ib);
+            let mut d = a.clone();
+            d.subtract(&b);
+            prop_assert_eq!(d.contains(proto, port), ia && !ib);
+            // Normalized: sorted, disjoint, not adjacent.
+            for v in [&u.tcp, &u.udp, &d.tcp, &d.udp] {
+                prop_assert!(v.windows(2).all(|w| (w[0].1 as u32) + 1 < w[1].0 as u32));
+                prop_assert!(v.iter().all(|(lo, hi)| lo <= hi));
+            }
+            prop_assert_eq!(u.is_empty(), a.is_empty() && b.is_empty());
+        }
+
+        /// A port spec that parses describes what it says.
+        #[test]
+        fn port_specs(lo in any::<u16>(), len in 0u16..100, udp in any::<bool>(), probe in any::<u16>()) {
+            let hi = lo.saturating_add(len);
+            let proto = if udp { "udp" } else { "tcp" };
+            let p = PortSet::parse_spec(&format!("{proto}:{lo}-{hi}")).unwrap();
+            let n = if udp { PROTO_UDP } else { PROTO_TCP };
+            prop_assert_eq!(p.contains(n, probe), lo <= probe && probe <= hi);
+            let other_proto = if udp { PROTO_TCP } else { PROTO_UDP };
+            prop_assert!(!p.contains(other_proto, probe));
+            if lo < hi {
+                let reversed = format!("{proto}:{hi}-{lo}");
+                prop_assert!(PortSet::parse_spec(&reversed).is_err());
+            }
+            let one = PortSet::parse_spec(&format!("{proto}:{lo}")).unwrap();
+            prop_assert_eq!(one.contains(n, probe), probe == lo);
+        }
+
+        #[test]
+        fn selector_parse_never_panics(s in "\\PC{0,40}") {
+            let _ = Selector::parse(&s);
+            let _ = PortSet::parse_spec(&s);
+        }
+    }
+}

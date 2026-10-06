@@ -59,5 +59,9 @@ security-framework = "3"
 security-framework-sys = "2"
 core-foundation = "0.10"
 
+[dev-dependencies]
+webjet-core = { path = "../webjet-core", features = ["testutil"] }
+tempfile = "3"
+
 [lints]
 workspace = true

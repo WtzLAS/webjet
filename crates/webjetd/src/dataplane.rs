@@ -725,6 +725,42 @@ impl Dataplane {
     }
 }
 
+#[cfg(test)]
+impl Dataplane {
+    /// A data plane without a tun interface or tasks, installed in `n`;
+    /// what would go to the tun interface arrives on the receiver.
+    pub(crate) fn for_test(n: &Arc<Node>) -> (Arc<Dataplane>, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let mut ct = Conntrack::new(0, 0, 0);
+        apply_limits(n, &mut ct);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let dp = Arc::new(Dataplane {
+            node: Arc::downgrade(n),
+            dev_name: "test0".into(),
+            tun_tx: None,
+            sink: Mutex::new(Some(tx)),
+            conntrack: Mutex::new(ct),
+            icmp_bucket: Mutex::new(Bucket::new(1000.0, 1000.0)),
+            my_ips: RwLock::new(Vec::new()),
+            serving: RwLock::new(Vec::new()),
+            routes: Mutex::new(Vec::new()),
+            applied_gen: AtomicU64::new(u64::MAX),
+            resolver: RwLock::new(Vec::new()),
+            gw_choice: Mutex::new(HashMap::new()),
+            nat_done: Mutex::new(Vec::new()),
+            pings: Mutex::new(HashMap::new()),
+            proxy: crate::proxy::Proxy::new(),
+        });
+        let _ = n.dataplane.set(dp.clone());
+        dp.refresh();
+        (dp, rx)
+    }
+
+    /// Serve a grant as a gateway (tests skip the interface check).
+    pub(crate) fn serve_for_test(&self, g: Grant) {
+        self.serving.write().push((g, "lan0".into()));
+    }
+}
+
 /// Create the data plane: the tun device (if enabled) and its tasks.
 /// Connection tracking limits from the effective Limits (§16.2, §16.4).
 fn apply_limits(n: &Node, ct: &mut Conntrack) {
@@ -975,4 +1011,352 @@ pub fn flows(n: &Node) -> serde_json::Value {
         "limits": limits,
         "flows": out,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnode::{self, Cluster};
+    use webjet_core::crypto::KeyPair;
+    use webjet_core::packet::tcpf;
+    use webjet_core::testutil::{
+        NodeSpec,
+        packets::{tcp4, udp4},
+    };
+    use webjet_proto as wp;
+
+    const ME: [u8; 4] = [10, 7, 0, 2];
+    const CLIENT: [u8; 4] = [10, 7, 0, 3];
+    const OTHER: [u8; 4] = [10, 7, 0, 4];
+
+    fn rule(id: &str, src: &str, dst: &str, ports: &str) -> wp::Rule {
+        wp::Rule {
+            id: Some(id.into()),
+            action: wp::Action::Allow,
+            src: Some(vec![src.into()]),
+            dst: Some(vec![dst.into()]),
+            ports: Some(vec![ports.into()]),
+        }
+    }
+
+    /// Clients may reach servers on tcp:80 and ICMP; nothing else.
+    fn policy() -> wp::Policy {
+        wp::Policy {
+            default_action: wp::Action::Deny,
+            rules: Some(vec![
+                rule("web", "tag:client", "tag:server", "tcp:80"),
+                rule("ping", "*", "*", "icmp"),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    struct T {
+        c: Cluster,
+        n: Arc<Node>,
+        dp: Arc<Dataplane>,
+        tun: mpsc::UnboundedReceiver<Vec<u8>>,
+        client: Bytes32,
+        other: Bytes32,
+        gw: (Bytes32, KeyPair),
+        _dir: tempfile::TempDir,
+    }
+
+    fn setup() -> T {
+        let mut c = Cluster::new();
+        let me = c.data_node("me", "10.7.0.2", &["tag:server"]);
+        let client = c.data_node("client", "10.7.0.3", &["tag:client"]).0;
+        let other = c.data_node("other", "10.7.0.4", &[]).0;
+        let gw = c.enroll(NodeSpec {
+            name: "gw",
+            ip: "10.7.0.5",
+            tags: &["tag:server"],
+            routes: &["172.31.99.0/24"],
+            ..Default::default()
+        });
+        c.set_policy(policy()).unwrap();
+        let (n, dir) = testnode::node(&mut c, me.0, me.1);
+        let (dp, tun) = Dataplane::for_test(&n);
+        T {
+            c,
+            n,
+            dp,
+            tun,
+            client,
+            other,
+            gw,
+            _dir: dir,
+        }
+    }
+
+    fn tun_packets(t: &mut T) -> Vec<Vec<u8>> {
+        let mut v = Vec::new();
+        while let Ok(p) = t.tun.try_recv() {
+            v.push(p);
+        }
+        v
+    }
+
+    fn counter(a: &AtomicU64) -> u64 {
+        a.load(Ordering::Relaxed)
+    }
+
+    #[tokio::test]
+    async fn inbound_allowed_by_policy() {
+        let mut t = setup();
+        let syn = tcp4(CLIENT, ME, 40000, 80, tcpf::SYN);
+        t.dp.inbound(&t.client, syn.clone());
+        assert_eq!(tun_packets(&mut t), vec![syn]);
+        assert_eq!(t.dp.conntrack.lock().len(), 1);
+        assert_eq!(t.n.metrics.rule_hits.lock()[&("web".into(), true)], 1);
+        let f = flows(&t.n);
+        assert_eq!(f["total"], 1);
+        assert_eq!(f["flows"][0]["peer"], "client");
+        assert_eq!(f["flows"][0]["rule"], "web");
+        assert_eq!(f["flows"][0]["proto"], "tcp");
+        assert_eq!(f["flows"][0]["outbound"], false);
+    }
+
+    #[tokio::test]
+    async fn inbound_denied_by_policy() {
+        let mut t = setup();
+        t.dp.inbound(&t.client, tcp4(CLIENT, ME, 40000, 22, tcpf::SYN));
+        // Not tagged as a client.
+        t.dp.inbound(&t.other, tcp4(OTHER, ME, 40000, 80, tcpf::SYN));
+        assert!(tun_packets(&mut t).is_empty());
+        assert_eq!(counter(&t.n.metrics.acl_denied), 2);
+        assert_eq!(t.dp.conntrack.lock().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn cryptokey_routing_drops_spoofed_and_misdirected_packets() {
+        let mut t = setup();
+        // The client sends with the other node's address.
+        t.dp.inbound(&t.client, tcp4(OTHER, ME, 40000, 80, tcpf::SYN));
+        // To an address that is neither ours nor a LAN we serve.
+        t.dp.inbound(&t.client, tcp4(CLIENT, OTHER, 40000, 80, tcpf::SYN));
+        // From a node that doesn't exist.
+        t.dp.inbound(&[9; 32], tcp4(CLIENT, ME, 40000, 80, tcpf::SYN));
+        // Not an IP packet.
+        t.dp.inbound(&t.client, b"junk".to_vec());
+        assert!(tun_packets(&mut t).is_empty());
+        assert_eq!(counter(&t.n.metrics.cryptokey_dropped), 2);
+    }
+
+    #[tokio::test]
+    async fn the_resolver_is_not_reachable_from_the_network() {
+        let mut t = setup();
+        let resolver = t.dp.resolver.read()[0];
+        let IpAddr::V4(r) = resolver else {
+            panic!("IPv4 pool, IPv4 resolver")
+        };
+        t.dp.inbound(&t.client, udp4(CLIENT, r.octets(), 5353, 53, b"query"));
+        assert!(tun_packets(&mut t).is_empty());
+    }
+
+    #[tokio::test]
+    async fn outbound_without_a_route_is_host_unreachable() {
+        let mut t = setup();
+        let p = tcp4(ME, [10, 7, 9, 9], 40000, 80, tcpf::SYN);
+        t.dp.outbound(p.clone());
+        let out = tun_packets(&mut t);
+        assert_eq!(out.len(), 1, "an ICMP error back to the host");
+        let icmp = packet::parse(&out[0]).unwrap();
+        assert_eq!(icmp.icmp, Some(packet::IcmpKind::Error));
+        assert_eq!(icmp.flow.dst, IpAddr::from(ME));
+        assert_eq!(counter(&t.n.metrics.no_route), 1);
+        assert_eq!(counter(&t.n.metrics.tun_rx), 1);
+    }
+
+    #[tokio::test]
+    async fn outbound_denied_is_prohibited() {
+        let mut t = setup();
+        // A server may not open connections to the client.
+        t.dp.outbound(tcp4(ME, CLIENT, 40000, 80, tcpf::SYN));
+        let out = tun_packets(&mut t);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            packet::parse(&out[0]).unwrap().icmp,
+            Some(packet::IcmpKind::Error)
+        );
+        assert_eq!(counter(&t.n.metrics.acl_denied), 1);
+        assert_eq!(t.dp.conntrack.lock().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn outbound_allowed_is_tracked_and_replies_come_back() {
+        let mut t = setup();
+        t.c.set_policy(wp::Policy {
+            rules: Some(vec![rule("out", "tag:server", "tag:client", "tcp:443")]),
+            ..policy()
+        })
+        .unwrap();
+        testnode::sync(&mut t.c, &t.n);
+        t.dp.refresh();
+        t.dp.outbound(tcp4(ME, CLIENT, 40000, 443, tcpf::SYN));
+        assert!(tun_packets(&mut t).is_empty(), "sent to the overlay");
+        assert_eq!(t.dp.conntrack.lock().len(), 1);
+        // Queued in the new end-to-end session until its handshake.
+        assert!(t.n.e2e.get(&t.client).is_some());
+        // The reply is let in although the policy has nothing for that
+        // direction: it belongs to a tracked flow.
+        let reply = tcp4(CLIENT, ME, 443, 40000, tcpf::SYN | tcpf::ACK);
+        t.dp.inbound(&t.client, reply.clone());
+        assert_eq!(tun_packets(&mut t), vec![reply]);
+        assert_eq!(flows(&t.n)["flows"][0]["state"], "tcp established");
+    }
+
+    #[tokio::test]
+    async fn a_policy_change_closes_flows_it_no_longer_allows() {
+        let mut t = setup();
+        t.dp.inbound(&t.client, tcp4(CLIENT, ME, 40000, 80, tcpf::SYN));
+        assert_eq!(t.dp.conntrack.lock().len(), 1);
+        t.c.set_policy(wp::Policy {
+            rules: Some(vec![rule("ping", "*", "*", "icmp")]),
+            ..policy()
+        })
+        .unwrap();
+        // Unchanged tree: nothing re-evaluated.
+        t.dp.refresh();
+        assert_eq!(t.dp.conntrack.lock().len(), 1);
+        testnode::sync(&mut t.c, &t.n);
+        t.dp.refresh();
+        assert_eq!(t.dp.conntrack.lock().len(), 0);
+        // Now the next packet of the flow is new again, and denied.
+        t.dp.inbound(&t.client, tcp4(CLIENT, ME, 40000, 80, tcpf::ACK));
+        let _ = tun_packets(&mut t);
+        assert_eq!(t.dp.conntrack.lock().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn own_addresses_loop_back() {
+        let mut t = setup();
+        let p = udp4(ME, ME, 1000, 2000, b"hello");
+        t.dp.outbound(p.clone());
+        assert_eq!(tun_packets(&mut t), vec![p]);
+        assert_eq!(counter(&t.n.metrics.tun_rx), 0, "not overlay traffic");
+        assert!(t.dp.is_mine(&IpAddr::from(ME)));
+        assert_eq!(t.dp.my_ip(false), Some(IpAddr::from(ME)));
+        assert_eq!(t.dp.my_ip(true), None);
+    }
+
+    #[tokio::test]
+    async fn ping_myself_without_a_tun_interface() {
+        let t = setup();
+        let r = t.dp.ping(IpAddr::from(ME), 2, 32).await;
+        assert_eq!(r.len(), 2);
+        assert!(r.iter().all(|x| x.is_some()), "{r:?}");
+        // No address of that family: nothing to ping from.
+        assert!(
+            t.dp.ping("fd00::1".parse().unwrap(), 1, 32)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn published_prefixes_route_to_a_serving_gateway() {
+        let t = setup();
+        let lan: IpAddr = "172.31.99.7".parse().unwrap();
+        // Nodes by overlay address.
+        assert_eq!(
+            t.dp.route(&t.n, &IpAddr::from(CLIENT)),
+            Some((t.client, true))
+        );
+        // No record of the gateway yet: assumed to serve its grant.
+        assert_eq!(t.dp.route(&t.n, &lan), Some((t.gw.0, false)));
+        // Its record says it serves nothing: no route.
+        let rec = |serving: Vec<wp::Cidr>| wp::EndpointRecord {
+            node_id: Some(webjet_core::crypto::k32(&t.gw.0)),
+            serving: Some(serving),
+            ..Default::default()
+        };
+        t.n.records
+            .lock()
+            .endpoints
+            .insert(t.gw.0, (rec(vec![]), Vec::new()));
+        assert_eq!(t.dp.route(&t.n, &lan), None);
+        let published = webjet_core::types::net_to_cidr(&"172.31.99.0/24".parse().unwrap());
+        t.n.records
+            .lock()
+            .endpoints
+            .insert(t.gw.0, (rec(vec![published]), Vec::new()));
+        assert_eq!(t.dp.route(&t.n, &lan), Some((t.gw.0, false)));
+        assert_eq!(t.dp.route(&t.n, &"172.31.98.1".parse().unwrap()), None);
+    }
+
+    #[tokio::test]
+    async fn serving_a_mapped_grant_translates_destinations() {
+        let mut t = setup();
+        let g = Grant::parse("192.168.50.0/24=172.31.99.0/24").unwrap();
+        t.dp.serve_for_test(g);
+        assert_eq!(t.dp.serving_prefixes(), vec![g.published]);
+        assert_eq!(t.dp.serving_grant(&"172.31.99.9".parse().unwrap()), Some(g));
+        // Clients may reach the published prefix on tcp:80.
+        t.c.set_policy(wp::Policy {
+            rules: Some(vec![rule(
+                "lan",
+                "tag:client",
+                "cidr:172.31.99.0/24",
+                "tcp:80",
+            )]),
+            ..policy()
+        })
+        .unwrap();
+        testnode::sync(&mut t.c, &t.n);
+        t.dp.refresh();
+        t.dp.serve_for_test(g);
+        t.dp.inbound(
+            &t.client,
+            tcp4(CLIENT, [172, 31, 99, 9], 40000, 80, tcpf::SYN),
+        );
+        let out = tun_packets(&mut t);
+        assert_eq!(out.len(), 1);
+        let p = packet::parse(&out[0]).unwrap();
+        assert_eq!(p.flow.dst, "192.168.50.9".parse::<IpAddr>().unwrap());
+        assert_eq!(p.flow.dport, 80);
+        let f = flows(&t.n);
+        assert_eq!(f["gateway"], 1);
+        // LAN hosts may answer the tracked flow but not start one.
+        t.dp.outbound(tcp4([192, 168, 50, 10], CLIENT, 80, 40000, tcpf::SYN));
+        assert_eq!(t.dp.conntrack.lock().len(), 1, "no new flow");
+    }
+
+    #[test]
+    fn names() {
+        use webjet_core::conntrack::State;
+        assert_eq!(state_name(State::UdpBoth), "udp");
+        assert_eq!(state_name(State::TcpOpening), "tcp opening");
+        assert_eq!(proto_name(6), "tcp");
+        assert_eq!(proto_name(58), "icmpv6");
+        assert_eq!(proto_name(47), "47");
+    }
+
+    #[tokio::test]
+    async fn limits_follow_the_tree() {
+        let mut t = setup();
+        assert_eq!(t.dp.conntrack.lock().per_peer_quota, 4096);
+        t.c.set_network(wp::NetworkConfig {
+            policy: Some(Box::new(policy())),
+            limits: Some(Box::new(wp::Limits {
+                defaults: Some(vec![wp::LimitValue {
+                    name: Some("conntrack_per_peer".into()),
+                    value: 3,
+                }]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut t.c, &t.n);
+        t.dp.refresh();
+        assert_eq!(t.dp.conntrack.lock().per_peer_quota, 3);
+        assert_eq!(flows(&t.n)["limits"]["per_peer"], 3);
+        // The fourth flow from one peer is refused and counted.
+        for port in 0..4 {
+            t.dp.inbound(&t.client, tcp4(CLIENT, ME, 40000 + port, 80, tcpf::SYN));
+        }
+        assert_eq!(t.dp.conntrack.lock().len(), 3);
+        assert_eq!(counter(&t.n.metrics.conntrack_limit), 1);
+    }
 }

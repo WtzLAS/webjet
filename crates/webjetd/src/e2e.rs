@@ -917,6 +917,17 @@ pub fn summary(s: &Session) -> serde_json::Value {
 }
 
 #[cfg(test)]
+impl Sessions {
+    /// What waits in `peer`'s session for its handshake: (frame type,
+    /// payload).
+    pub(crate) fn queued_for_test(&self, peer: &Bytes32) -> Vec<(u8, Vec<u8>)> {
+        self.get(peer)
+            .map(|s| s.inner.lock().queue.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use webjet_proto::{self as wp, Decodable, Encodable};

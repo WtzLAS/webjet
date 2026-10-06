@@ -188,3 +188,212 @@ pub fn encode_node_config(c: &wp::NodeConfig) -> Vec<u8> {
 pub fn encode_controllers(c: &wp::ControllerSettings) -> Vec<u8> {
     wrap(mt::CONTROLLER_SETTINGS, c.encode_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::{KeyPair, k32};
+
+    fn record(id: Bytes32) -> wp::NodeRecord {
+        wp::NodeRecord {
+            node_id: Some(k32(&id)),
+            identity_key: Some(k32(&[2; 32])),
+            owner: Some(k32(&[3; 32])),
+            name: Some("web-01".into()),
+            version: 7,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn node_leaves_roundtrip() {
+        let id = [1; 32];
+        let v = decode(kind::NODE, &id, &encode_node(&record(id))).unwrap();
+        assert!(matches!(&v, LeafValue::Node(r) if r.name.as_deref() == Some("web-01")));
+        assert_eq!(version(&v), 7);
+
+        let t = wp::Tombstone {
+            node_id: Some(k32(&id)),
+            version: 9,
+            reason: None,
+        };
+        let v = decode(kind::NODE, &id, &encode_tombstone(&t)).unwrap();
+        assert!(matches!(v, LeafValue::NodeTombstone(_)));
+        assert_eq!(version(&v), 9);
+    }
+
+    #[test]
+    fn node_leaves_rejected() {
+        let id = [1; 32];
+        // Stored under another node's key.
+        assert!(decode(kind::NODE, &[9; 32], &encode_node(&record(id))).is_err());
+        let t = wp::Tombstone {
+            node_id: Some(k32(&id)),
+            ..Default::default()
+        };
+        assert!(decode(kind::NODE, &[9; 32], &encode_tombstone(&t)).is_err());
+        // Semantically invalid record.
+        let bad = wp::NodeRecord {
+            name: Some("NO".into()),
+            ..record(id)
+        };
+        assert!(decode(kind::NODE, &id, &encode_node(&bad)).is_err());
+        // A policy leaf in the node kind.
+        assert!(decode(kind::NODE, &id, &encode_policy(&wp::Policy::default())).is_err());
+        // Garbage, unknown schema, missing body.
+        assert!(decode(kind::NODE, &id, b"garbage").is_err());
+        let future = wp::Leaf {
+            type_: mt::NODE_RECORD,
+            schema: wp::SCHEMA_V1 + 1,
+            body: Some(record(id).encode_bytes()),
+        };
+        assert!(decode(kind::NODE, &id, &future.encode_bytes()).is_err());
+        let empty = wp::Leaf {
+            type_: mt::NODE_RECORD,
+            schema: wp::SCHEMA_V1,
+            body: None,
+        };
+        assert!(decode(kind::NODE, &id, &empty.encode_bytes()).is_err());
+    }
+
+    #[test]
+    fn account_leaves_are_signed_envelopes() {
+        let kp = KeyPair::generate();
+        let id = [4; 32];
+        let r = wp::AccountRecord {
+            account_id: Some(k32(&id)),
+            account_key: Some(k32(&kp.public())),
+            name: Some("alice".into()),
+            issuer_root: true,
+            version: 3,
+            ..Default::default()
+        };
+        let raw = kp.sign_obj(mt::ACCOUNT_RECORD, &r);
+        let v = decode(kind::ACCOUNT, &id, &raw).unwrap();
+        assert!(matches!(&v, LeafValue::Account(_, ver) if ver.signer == kp.public()));
+        assert_eq!(version(&v), 3);
+        assert!(decode(kind::ACCOUNT, &[5; 32], &raw).is_err());
+
+        // A flipped bit breaks the signature.
+        let mut tampered = raw.clone();
+        let n = tampered.len();
+        tampered[n - 1] ^= 1;
+        assert!(decode(kind::ACCOUNT, &id, &tampered).is_err());
+        // An unsigned leaf is not an account.
+        assert!(
+            decode(
+                kind::ACCOUNT,
+                &id,
+                &wrap(mt::ACCOUNT_RECORD, r.encode_bytes())
+            )
+            .is_err()
+        );
+
+        let t = wp::AccountTombstone {
+            account_id: Some(k32(&id)),
+            version: 4,
+            ..Default::default()
+        };
+        let raw = kp.sign_obj(mt::ACCOUNT_TOMBSTONE, &t);
+        let v = decode(kind::ACCOUNT, &id, &raw).unwrap();
+        assert!(matches!(v, LeafValue::AccountTombstone(..)));
+        assert_eq!(version(&v), 4);
+        assert!(decode(kind::ACCOUNT, &[5; 32], &raw).is_err());
+        // A signed node record is not an account leaf.
+        let raw = kp.sign_obj(mt::NODE_RECORD, &record(id));
+        assert!(decode(kind::ACCOUNT, &id, &raw).is_err());
+    }
+
+    #[test]
+    fn node_config_leaf() {
+        let id = [6; 32];
+        let c = wp::NodeConfig {
+            node_id: Some(k32(&id)),
+            version: 2,
+            ..Default::default()
+        };
+        let v = decode(kind::NODE_CONFIG, &id, &encode_node_config(&c)).unwrap();
+        assert_eq!(version(&v), 2);
+        assert!(decode(kind::NODE_CONFIG, &[7; 32], &encode_node_config(&c)).is_err());
+        assert!(decode(kind::NODE_CONFIG, &id, &encode_node(&record(id))).is_err());
+    }
+
+    #[test]
+    fn singleton_leaves() {
+        let cases: Vec<(u8, Vec<u8>, u64)> = vec![
+            (
+                kind::POLICY,
+                encode_policy(&wp::Policy {
+                    version: 11,
+                    ..Default::default()
+                }),
+                11,
+            ),
+            (
+                kind::DNS,
+                encode_dns(&wp::DnsConfig {
+                    version: 12,
+                    ..Default::default()
+                }),
+                12,
+            ),
+            (
+                kind::SEEDS,
+                encode_seeds(&wp::Seeds {
+                    version: 13,
+                    ..Default::default()
+                }),
+                13,
+            ),
+            (
+                kind::LIMITS,
+                encode_limits(&wp::Limits {
+                    version: 14,
+                    ..Default::default()
+                }),
+                14,
+            ),
+            (
+                kind::VALIDITY,
+                encode_validity(&wp::Validity { valid_until: 15 }),
+                15,
+            ),
+            (
+                kind::TRANSPORT,
+                encode_transport(&wp::TransportConfig {
+                    version: 16,
+                    ..Default::default()
+                }),
+                16,
+            ),
+            (
+                kind::CONTROLLERS,
+                encode_controllers(&wp::ControllerSettings {
+                    version: 17,
+                    ..Default::default()
+                }),
+                17,
+            ),
+        ];
+        for (i, (k, bytes, ver)) in cases.iter().enumerate() {
+            let v = decode(*k, &SINGLETON, bytes).unwrap();
+            assert_eq!(version(&v), *ver, "kind {k}");
+            // Never under a non-zero key.
+            assert!(decode(*k, &[1; 32], bytes).is_err(), "kind {k}");
+            // Never in another singleton kind.
+            let (other, other_bytes, _) = &cases[(i + 1) % cases.len()];
+            assert!(
+                decode(*k, &SINGLETON, other_bytes).is_err(),
+                "{other} in {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_kinds_are_kept() {
+        // A later release's leaf kind: any bytes, version 0.
+        let v = decode(200, &[1; 32], b"whatever").unwrap();
+        assert!(matches!(v, LeafValue::Unknown));
+        assert_eq!(version(&v), 0);
+    }
+}

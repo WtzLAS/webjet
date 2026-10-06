@@ -1941,7 +1941,8 @@ mod tests {
     use super::ops::*;
     use super::*;
     use crate::crypto::KeyPair;
-    use crate::store::{Store, testutil};
+    use crate::store::Store;
+    use crate::testutil;
     use crate::types::now_ms;
     use webjet_proto::Encodable;
 

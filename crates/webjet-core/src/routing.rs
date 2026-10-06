@@ -909,3 +909,184 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+
+    const SRC: u8 = 100;
+    const DST: u8 = 200;
+
+    fn id(i: u8) -> Bytes32 {
+        [i; 32]
+    }
+
+    /// A random graph of up to 6 relays (some links one-sided, some loaded)
+    /// with a DATA source and destination attached to some of them.
+    fn graph() -> impl Strategy<Value = Graph> {
+        (2u8..7).prop_flat_map(|n| {
+            let pairs: Vec<(u8, u8)> = (1..=n)
+                .flat_map(|a| (1..=n).filter(move |b| *b != a).map(move |b| (a, b)))
+                .collect();
+            (
+                proptest::collection::vec(
+                    proptest::option::weighted(0.5, 1.0f64..50.0),
+                    pairs.len(),
+                ),
+                proptest::collection::vec(prop_oneof![4 => Just(0u8), 1 => 0u8..100], n as usize),
+                proptest::collection::vec(
+                    proptest::option::weighted(0.5, 1.0f64..20.0),
+                    n as usize,
+                ),
+                proptest::collection::vec(
+                    proptest::option::weighted(0.5, 1.0f64..20.0),
+                    n as usize,
+                ),
+            )
+                .prop_map(move |(costs, loads, src_att, dst_att)| {
+                    let mut g = Graph::default();
+                    for r in 1..=n {
+                        g.relays.insert(
+                            id(r),
+                            RelayInfo {
+                                load: loads[(r - 1) as usize],
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    for ((a, b), c) in pairs.iter().zip(costs) {
+                        if let Some(c) = c {
+                            g.relays.get_mut(&id(*a)).unwrap().links.insert(id(*b), c);
+                        }
+                    }
+                    let att = |v: &[Option<f64>]| -> HashMap<Bytes32, f64> {
+                        v.iter()
+                            .enumerate()
+                            .filter_map(|(i, c)| c.map(|c| (id(i as u8 + 1), c)))
+                            .collect()
+                    };
+                    g.attachments.insert(id(SRC), att(&src_att));
+                    g.attachments.insert(id(DST), att(&dst_att));
+                    g
+                })
+        })
+    }
+
+    /// Every loop-free relay path of at most MAX_RELAYS relays, with its
+    /// cost, by brute force.
+    fn all_paths(g: &Graph) -> Vec<(f64, Vec<Bytes32>)> {
+        let relays: Vec<Bytes32> = g.relays.keys().copied().collect();
+        let mut out = Vec::new();
+        let mut stack: Vec<Vec<Bytes32>> = relays.iter().map(|r| vec![*r]).collect();
+        while let Some(p) = stack.pop() {
+            let mut full = vec![id(SRC)];
+            full.extend(&p);
+            full.push(id(DST));
+            if let Some((c, _)) = g.path_cost(&full, &id(SRC), &id(DST)) {
+                out.push((c, p.clone()));
+            }
+            if p.len() < MAX_RELAYS {
+                for r in &relays {
+                    if !p.contains(r) {
+                        let mut q = p.clone();
+                        q.push(*r);
+                        stack.push(q);
+                    }
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn k_paths_are_valid_distinct_and_ordered(g in graph(), k in 1usize..6) {
+            let paths = g.k_paths(&id(SRC), &id(DST), k);
+            let reference = all_paths(&g);
+            prop_assert!(paths.len() <= k);
+            // Something is found exactly when some valid path exists.
+            prop_assert_eq!(paths.is_empty(), reference.is_empty());
+            for p in &paths {
+                prop_assert!(!p.hops.is_empty() && p.hops.len() <= MAX_RELAYS);
+                let mut uniq = p.hops.clone();
+                uniq.sort();
+                uniq.dedup();
+                prop_assert_eq!(uniq.len(), p.hops.len(), "a loop");
+                // Every relay on it can take traffic, and its cost is real.
+                for h in &p.hops {
+                    prop_assert!(load_penalty(g.relays[h].load).is_some());
+                }
+                let mut full = vec![id(SRC)];
+                full.extend(&p.hops);
+                full.push(id(DST));
+                let (c, spare) = g.path_cost(&full, &id(SRC), &id(DST)).unwrap();
+                prop_assert!((c - p.cost).abs() < 1e-9);
+                prop_assert_eq!(spare, p.spare);
+            }
+            prop_assert!(paths.windows(2).all(|w| w[0].cost <= w[1].cost));
+            for (i, a) in paths.iter().enumerate() {
+                prop_assert!(paths[i + 1..].iter().all(|b| b.hops != a.hops), "duplicate path");
+            }
+        }
+
+        /// The first path has the lowest raw link cost (Dijkstra ignores the
+        /// load penalty; the reported cost includes it).
+        #[test]
+        fn best_path_is_cheapest(g in graph()) {
+            let raw = |hops: &[Bytes32]| {
+                let mut full = vec![id(SRC)];
+                full.extend(hops);
+                full.push(id(DST));
+                full.windows(2)
+                    .map(|w| {
+                        g.edges(&w[0], &id(SRC), &id(DST))
+                            .iter()
+                            .find(|(n, _)| *n == w[1])
+                            .map(|e| e.1)
+                    })
+                    .sum::<Option<f64>>()
+            };
+            let paths = g.k_paths(&id(SRC), &id(DST), 1);
+            let best_raw = all_paths(&g)
+                .iter()
+                .filter_map(|(_, p)| raw(p))
+                .fold(f64::INFINITY, f64::min);
+            match paths.first() {
+                Some(p) => prop_assert!((raw(&p.hops).unwrap() - best_raw).abs() < 1e-9),
+                None => prop_assert!(best_raw.is_infinite()),
+            }
+        }
+
+        #[test]
+        fn cost_and_load_are_monotonic(rtt in 0.0f64..1000.0, loss in 0.0f64..1.0, d in 0.0f64..0.5, l in 0u8..100) {
+            prop_assert!(link_cost(rtt, loss) <= link_cost(rtt + 1.0, loss));
+            prop_assert!(link_cost(rtt, loss) <= link_cost(rtt, (loss + d).min(1.0)));
+            prop_assert!(link_cost(rtt, loss) >= 0.1);
+            match (load_penalty(l), load_penalty(l.saturating_add(1))) {
+                (Some(a), Some(b)) => prop_assert!(a <= b && a >= 1.0),
+                (None, Some(_)) => prop_assert!(false, "load {} full but {} not", l, l + 1),
+                _ => prop_assert!(l + 1 >= FULL_LOAD),
+            }
+            let q = relay_load(l, l / 2, 0, 0);
+            prop_assert!(q.is_multiple_of(10) && q <= l && l - q < 10);
+        }
+
+        /// Spreading only ever picks paths within SPREAD of the best.
+        #[test]
+        fn spread_stays_near_the_best(costs in proptest::collection::vec(1.0f64..100.0, 1..8), spares in proptest::collection::vec(0u8..100, 8)) {
+            let mut cands: Vec<Path> = costs
+                .iter()
+                .zip(&spares)
+                .map(|(c, s)| Path { hops: vec![id(1)], cost: *c, spare: *s })
+                .collect();
+            cands.sort_by(|a, b| a.cost.total_cmp(&b.cost));
+            let best = cands[0].cost;
+            for _ in 0..20 {
+                let p = spread_pick(&cands).unwrap();
+                prop_assert!(p.cost <= best * (1.0 + SPREAD) + 1e-9);
+            }
+        }
+    }
+}

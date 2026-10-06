@@ -267,3 +267,226 @@ pub async fn run(n: Arc<Node>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnode::{self, Cluster};
+    use webjet_core::testutil::NodeSpec;
+    use webjet_core::types::now_ms;
+    use webjet_proto::Transport;
+
+    struct Net {
+        c: Cluster,
+        me: (Bytes32, webjet_core::crypto::KeyPair),
+        peer: Bytes32,
+        r1: Bytes32,
+        r2: Bytes32,
+    }
+
+    fn relay(c: &mut Cluster, name: &str, ip: &str) -> Bytes32 {
+        c.enroll(NodeSpec {
+            name,
+            ip,
+            roles: &[wp::Role::Data, wp::Role::Relay],
+            ..Default::default()
+        })
+        .0
+    }
+
+    fn net() -> Net {
+        let mut c = Cluster::new();
+        let me = c.data_node("me", "10.7.0.2", &[]);
+        let peer = c.data_node("peer", "10.7.0.3", &[]).0;
+        let r1 = relay(&mut c, "r1", "10.7.0.10");
+        let r2 = relay(&mut c, "r2", "10.7.0.11");
+        Net {
+            c,
+            me,
+            peer,
+            r1,
+            r2,
+        }
+    }
+
+    fn lsa(n: &Node, origin: Bytes32, links: &[(Bytes32, u16)]) {
+        let l = wp::LinkStateAdvert {
+            origin: Some(crypto::k32(&origin)),
+            seq: 1,
+            links: Some(
+                links
+                    .iter()
+                    .map(|(p, rtt)| wp::LinkEntry {
+                        peer: Some(crypto::k32(p)),
+                        transport: Transport::TcpTls,
+                        rtt_ms: *rtt,
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            expires_at: now_ms() + 60_000,
+            ..Default::default()
+        };
+        n.records.lock().lsas.insert(origin, (l, Vec::new()));
+    }
+
+    fn attach(n: &Node, node: Bytes32, relays: &[(Bytes32, u16)]) {
+        let a = wp::AttachmentRecord {
+            node_id: Some(crypto::k32(&node)),
+            seq: 1,
+            relays: Some(
+                relays
+                    .iter()
+                    .map(|(r, rtt)| wp::AttachmentEntry {
+                        relay: Some(crypto::k32(r)),
+                        transport: Transport::TcpTls,
+                        rtt_ms: *rtt,
+                        loss_pct: 0,
+                    })
+                    .collect(),
+            ),
+            expires_at: now_ms() + 60_000,
+            ..Default::default()
+        };
+        n.records.lock().attachments.insert(node, (a, Vec::new()));
+    }
+
+    fn endpoint(n: &Node, node: Bytes32, kind: wp::AddrKind, priority: u8) {
+        let r = wp::EndpointRecord {
+            node_id: Some(crypto::k32(&node)),
+            addrs: Some(vec![wp::EndpointAddr {
+                addr: Some(wp::SockAddr::from_sock("198.51.100.7:443".parse().unwrap())),
+                transport: Transport::TcpTls,
+                kind,
+                priority,
+            }]),
+            expires_at: now_ms() + 60_000,
+            ..Default::default()
+        };
+        n.records.lock().endpoints.insert(node, (r, Vec::new()));
+    }
+
+    #[test]
+    fn no_records_no_candidates() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        assert!(candidates(&n, &t.peer).is_empty());
+        assert!(!direct_possible(&n, &t.peer));
+    }
+
+    #[test]
+    fn direct_when_a_hop_or_a_public_address_exists() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        // A host address, or a public one with priority 0, isn't enough.
+        endpoint(&n, t.peer, wp::AddrKind::Host, 10);
+        assert!(!direct_possible(&n, &t.peer));
+        endpoint(&n, t.peer, wp::AddrKind::Public, 0);
+        assert!(!direct_possible(&n, &t.peer));
+        endpoint(&n, t.peer, wp::AddrKind::Public, 10);
+        assert!(direct_possible(&n, &t.peer));
+        let c = candidates(&n, &t.peer);
+        assert_eq!(c.len(), 1);
+        assert!(c[0].hops.is_empty());
+        assert_eq!(c[0].cost, f64::INFINITY, "not measured yet");
+
+        // An open hop makes it possible whatever the records say.
+        n.records.lock().endpoints.clear();
+        let (_h, _rx) = n.test_hop(t.peer, Transport::TcpTls);
+        assert!(direct_possible(&n, &t.peer));
+    }
+
+    #[test]
+    fn relay_paths_best_first_and_reachable_only() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        // Both relays know each other; the peer hangs off both; we have a
+        // hop to r1 only (and no addresses for r2).
+        lsa(&n, t.r1, &[(t.r2, 5)]);
+        lsa(&n, t.r2, &[(t.r1, 5)]);
+        attach(&n, t.peer, &[(t.r1, 30), (t.r2, 10)]);
+        attach(&n, t.me.0, &[(t.r1, 10), (t.r2, 10)]);
+        let (_h, _rx) = n.test_hop(t.r1, Transport::TcpTls);
+        let c = candidates(&n, &t.peer);
+        assert!(!c.is_empty());
+        assert!(c.iter().all(|p| p.hops.first() == Some(&t.r1)), "{c:?}");
+        assert!(c.windows(2).all(|w| w[0].cost <= w[1].cost));
+
+        // Once r2 has an address we could dial, its paths count too.
+        endpoint(&n, t.r2, wp::AddrKind::Public, 10);
+        let c = candidates(&n, &t.peer);
+        assert!(c.iter().any(|p| p.hops == vec![t.r2]), "{c:?}");
+    }
+
+    #[test]
+    fn expired_or_revoked_relays_are_left_out() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        lsa(&n, t.r1, &[]);
+        attach(&n, t.peer, &[(t.r1, 10)]);
+        attach(&n, t.me.0, &[(t.r1, 10)]);
+        let (_h, _rx) = n.test_hop(t.r1, Transport::TcpTls);
+        assert_eq!(candidates(&n, &t.peer).len(), 1);
+        n.records.lock().lsas.get_mut(&t.r1).unwrap().0.expires_at = 1;
+        assert!(candidates(&n, &t.peer).is_empty(), "expired advert");
+
+        // A fresh advert again, but the relay is revoked.
+        lsa(&n, t.r1, &[]);
+        assert_eq!(candidates(&n, &t.peer).len(), 1);
+        t.c.admin_op(webjet_proto::AccountOp::TombstoneNode(Box::new(
+            wp::TombstoneNode {
+                node_id: Some(crypto::k32(&t.r1)),
+                ..Default::default()
+            },
+        )))
+        .unwrap();
+        testnode::sync(&mut t.c, &n);
+        assert!(candidates(&n, &t.peer).is_empty(), "revoked relay");
+    }
+
+    #[test]
+    fn probe_acks_measure_the_circuit() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        let rid = crypto::route_id(&t.me.0, &t.peer, &[]);
+        let c = Arc::new(LocalCircuit {
+            peer: t.peer,
+            label: 1,
+            next: t.peer,
+            out_label: parking_lot::Mutex::new(Some(2)),
+            hops: vec![],
+            route_id: rid,
+            is_source: true,
+            created: Instant::now(),
+            probes: parking_lot::Mutex::new(Default::default()),
+            e2e_rtt_ms: parking_lot::Mutex::new(None),
+            last_rx: parking_lot::Mutex::new(Instant::now()),
+        });
+        c.probes.lock().on_sent(7, 0);
+        let probe = |route: Bytes32, seq| {
+            wp::Probe {
+                route_id: Some(crypto::k32(&route)),
+                probe_seq: seq,
+                sent_at_us: 0,
+            }
+            .encode_bytes()
+        };
+        // Another route's probe, an unknown sequence number, garbage: ignored.
+        on_probe_ack(&n, &c, &probe([1; 32], 7));
+        on_probe_ack(&n, &c, &probe(rid, 8));
+        on_probe_ack(&n, &c, b"junk");
+        assert!(c.e2e_rtt_ms.lock().is_none());
+        on_probe_ack(&n, &c, &probe(rid, 7));
+        assert!(c.e2e_rtt_ms.lock().is_some());
+        assert_eq!(c.probes.lock().samples, 1);
+        assert!(c.cost().is_finite());
+    }
+
+    #[tokio::test]
+    async fn open_best_without_a_route() {
+        let mut t = net();
+        let (n, _d) = testnode::node(&mut t.c, t.me.0, t.me.1.clone());
+        let e = open_best(&n, t.peer).await.map(|_| ()).unwrap_err();
+        assert!(e.to_string().contains("no route to peer"), "{e}");
+    }
+}

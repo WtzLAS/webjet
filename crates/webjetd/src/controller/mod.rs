@@ -1372,3 +1372,390 @@ fn submit_result(res: Result<(u64, Outcome)>) -> RpcBody {
         })),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnode;
+    use webjet_core::crypto::KeyPair;
+    use webjet_core::statemachine::ops;
+    use webjet_core::store::Store;
+    use webjet_core::testutil::{Net, net};
+
+    fn op_entry(net: &Net, seq: u64, op: wp::AccountOp) -> EntryPayload {
+        ops::op_entry(ops::sign_op(&net.admin, &net.admin_id, seq, now_ms(), op))
+    }
+
+    fn change(c: wp::MembershipChange, id: Bytes32) -> wp::AccountOp {
+        wp::AccountOp::ChangeMembership(Box::new(wp::ChangeMembership {
+            change: c,
+            node_id: Some(crypto::k32(&id)),
+        }))
+    }
+
+    fn entry(payload: EntryPayload, random_node: Option<Bytes32>) -> Vec<u8> {
+        wp::LogEntry {
+            index: 1,
+            term: 1,
+            payload: Some(payload),
+            random: random_node.map(|id| {
+                Box::new(wp::EntryRandom {
+                    node_id: Some(crypto::k32(&id)),
+                    ..Default::default()
+                })
+            }),
+            ..Default::default()
+        }
+        .encode_bytes()
+    }
+
+    #[test]
+    fn classify_entries() {
+        use raft::ConfChange;
+        let net = net();
+        let me = [7; 32];
+        let g = EntryPayload::GenesisEntry(Box::new(wp::GenesisEntry {
+            genesis: Some(net.genesis.clone()),
+        }));
+        assert!(matches!(
+            classify_entry(&entry(g, Some(me))),
+            Some(ConfChange::Set(m)) if m.voters == BTreeSet::from([me]) && m.learners.is_empty()
+        ));
+        let id = [8; 32];
+        use wp::MembershipChange as M;
+        for (c, want) in [
+            (M::AddLearner, ConfChange::AddLearner(id)),
+            (M::Promote, ConfChange::Promote(id)),
+            (M::Demote, ConfChange::Demote(id)),
+            (M::Remove, ConfChange::Remove(id)),
+        ] {
+            let signed = entry(op_entry(&net, 1, change(c, id)), None);
+            assert_eq!(classify_entry(&signed), Some(want.clone()), "{c:?}");
+            let auto = entry(
+                EntryPayload::AutoMembershipEntry(Box::new(wp::AutoMembershipEntry {
+                    change: c,
+                    node_id: Some(crypto::k32(&id)),
+                })),
+                None,
+            );
+            assert_eq!(classify_entry(&auto), Some(want), "auto {c:?}");
+        }
+        // Other operations, other entries, garbage: no change.
+        let rename = op_entry(&net, 1, wp::AccountOp::RenameNode(Box::default()));
+        assert_eq!(classify_entry(&entry(rename, None)), None);
+        let noop = EntryPayload::NoopEntry(Box::default());
+        assert_eq!(classify_entry(&entry(noop, None)), None);
+        assert_eq!(classify_entry(b"junk"), None);
+        // A membership change with a broken signature is no change.
+        let EntryPayload::OpEntry(mut o) = op_entry(&net, 1, change(M::Promote, id)) else {
+            unreachable!()
+        };
+        let s = o.signed_op.as_mut().unwrap();
+        let last = s.len() - 1;
+        s[last] ^= 1;
+        assert_eq!(classify_entry(&entry(EntryPayload::OpEntry(o), None)), None);
+    }
+
+    #[test]
+    fn root_payloads() {
+        let net = net();
+        let rec = wp::AccountRecord {
+            account_id: Some(crypto::k32(&[1; 32])),
+            ..Default::default()
+        };
+        let raw = net.root.sign_obj(mt::ACCOUNT_RECORD, &rec);
+        assert!(matches!(
+            root_payload(&raw),
+            Ok(EntryPayload::RootAccountEntry(_))
+        ));
+        let raw = net
+            .root
+            .sign_obj(mt::STATE_VERSION, &wp::StateVersion::default());
+        assert!(matches!(
+            root_payload(&raw),
+            Ok(EntryPayload::SetStateVersionEntry(_))
+        ));
+        let raw = net.root.sign_obj(mt::TOMBSTONE, &wp::Tombstone::default());
+        let e = root_payload(&raw).map(|_| ()).unwrap_err().to_string();
+        assert!(e.contains("not submitted through the log"), "{e}");
+        assert!(root_payload(b"junk").is_err());
+    }
+
+    #[test]
+    fn submit_results() {
+        let ok = submit_result(Ok((5, Outcome::default())));
+        assert!(
+            matches!(ok, RpcBody::SubmitResult(r) if r.ok && r.index == 5 && r.error.is_none())
+        );
+        let err = submit_result(Err(anyhow!("nope")));
+        assert!(
+            matches!(err, RpcBody::SubmitResult(r) if !r.ok && r.error.as_deref() == Some("nope"))
+        );
+    }
+
+    #[test]
+    fn remote_status() {
+        let (a, b, c) = ([1; 32], [2; 32], [3; 32]);
+        let s = |me: Bytes32, leader: bool| wp::ControllerStatus {
+            node_id: Some(crypto::k32(&me)),
+            is_leader: leader,
+            leader: Some(crypto::k32(&a)),
+            term: 4,
+            commit_index: 10,
+            applied_index: 9,
+            voters: Some(vec![crypto::k32(&a), crypto::k32(&b)]),
+            learners: Some(vec![crypto::k32(&c)]),
+            signed_version: 8,
+        };
+        let j = remote_status_json(&s(a, true));
+        assert_eq!(j["raft"]["role"], "Leader");
+        assert_eq!(j["answered_by"], hex::encode(a));
+        assert_eq!(j["raft"]["voters"][1], hex::encode(b));
+        assert_eq!(
+            (j["applied"].as_u64(), j["signed_version"].as_u64()),
+            (Some(9), Some(8))
+        );
+        assert_eq!(remote_status_json(&s(b, false))["raft"]["role"], "Follower");
+        assert_eq!(remote_status_json(&s(c, false))["raft"]["role"], "Learner");
+    }
+
+    /// The first controller of a new network, made leader.
+    fn first_controller() -> (Net, Arc<Node>, Arc<Controller>, tempfile::TempDir) {
+        let net = net();
+        let me = crypto::random32();
+        let kp = KeyPair::generate();
+        let store = Store::new(net.genesis.clone()).unwrap();
+        let (n, dir) = testnode::with_store(store, me, kp);
+        let c = Controller::start(&n, true).unwrap();
+        let _ = n.controller.set(c.clone());
+        assert!(n.epochs.read().accept_all, "controllers accept every epoch");
+        // A single voter elects itself once its election timeout passes.
+        let later = Instant::now() + Duration::from_secs(10);
+        let _ = c.raft.lock().tick(later);
+        assert!(c.is_leader());
+        // The new leader's first entry commits at once; apply it, as the
+        // run loop would.
+        let _ = c.raft.lock().tick(later);
+        c.apply_committed(&n);
+        assert_eq!(c.applied.load(Ordering::SeqCst), c.raft.lock().last_index());
+        assert_eq!(c.leader(), Some(me));
+        (net, n, c, dir)
+    }
+
+    #[tokio::test]
+    async fn a_new_network_commits_genesis_and_operations() {
+        let (net, n, c, _d) = first_controller();
+        // Nothing is proposed before genesis.
+        let early = c.propose(op_entry(
+            &net,
+            1,
+            change(wp::MembershipChange::Promote, n.me),
+        ));
+        assert!(early.await.is_err());
+
+        c.clone().leader_duties().await;
+        assert!(c.machine.lock().genesis.is_some());
+        assert_eq!(c.raft.lock().voters(), &BTreeSet::from([n.me]));
+        assert!(
+            n.epochs.read().current_key().is_some(),
+            "PSK epoch 0 synced"
+        );
+
+        let key = KeyPair::generate();
+        let (idx, out) = c
+            .propose(op_entry(
+                &net,
+                1,
+                wp::AccountOp::CreateEnrollment(Box::new(wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&net.admin_id)),
+                    name: Some("web".into()),
+                    overlay_ips: Some(vec![ops::ip("10.7.0.9").unwrap()]),
+                    roles: Some(vec![wp::Role::Data]),
+                    identity_key: Some(crypto::k32(&key.public())),
+                    ..Default::default()
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(idx >= 2);
+        let web = out.node_id.unwrap();
+        assert_eq!(c.applied.load(Ordering::SeqCst), idx);
+        assert!(c.machine.lock().view().nodes.contains_key(&web));
+        // A replayed operation (same sequence number) is refused.
+        let replay = c
+            .propose(op_entry(&net, 1, wp::AccountOp::RenameNode(Box::default())))
+            .await;
+        assert!(replay.is_err());
+        assert!(c.halted.lock().is_none(), "refused at prepare, not halted");
+        // `submit` on the leader proposes.
+        let (i2, _) = c
+            .submit(
+                op_entry(
+                    &net,
+                    2,
+                    wp::AccountOp::RenameNode(Box::new(wp::RenameNode {
+                        node_id: Some(crypto::k32(&web)),
+                        name: Some("www".into()),
+                    })),
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(i2, idx + 1);
+        assert_eq!(c.machine.lock().view().by_name.get("www"), Some(&web));
+
+        let st = c.status();
+        assert_eq!(st["applied"], i2);
+        assert_eq!(st["halted"], serde_json::Value::Null);
+        assert_eq!(st["raft"]["role"], "Leader");
+        assert_eq!(
+            st["membership"]["settings"]["voters"],
+            membership::Settings::of(None).voters
+        );
+        assert_eq!(st["psk_epoch"], 0);
+    }
+
+    #[tokio::test]
+    async fn heads_are_signed_only_with_a_certified_key() {
+        let (net, n, c, _d) = first_controller();
+        c.clone().leader_duties().await;
+        let key = KeyPair::generate();
+        let (_, out) = c
+            .propose(op_entry(
+                &net,
+                1,
+                wp::AccountOp::CreateEnrollment(Box::new(wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&net.admin_id)),
+                    name: Some("web".into()),
+                    overlay_ips: Some(vec![ops::ip("10.7.0.9").unwrap()]),
+                    roles: Some(vec![wp::Role::Data]),
+                    identity_key: Some(crypto::k32(&key.public())),
+                    ..Default::default()
+                })),
+            ))
+            .await
+            .unwrap();
+        let web = out.node_id.unwrap();
+        // No certificate: no head, an alarm.
+        c.maybe_sign_head(&n);
+        assert!(n.store.read().head().is_none());
+        assert!(n.alarms.lock().contains_key("no_signing_cert"));
+
+        // The certificate request is signed by the signing key itself.
+        let req = crypto::open_envelope(&c.cert_request().unwrap()).unwrap();
+        assert_eq!(req.ty, mt::CERT_REQUEST);
+        assert_eq!(crypto::signing_key_id(&req.signer), c.signing_key_id);
+        let body: wp::SigningKeyCert = req.decode().unwrap();
+        assert_eq!(crypto::opt_k32(&body.controller), n.me);
+
+        // The root certifies it: the next head goes into the node's store.
+        let cert = net
+            .root
+            .sign_envelope(mt::SIGNING_KEY_CERT, req.body)
+            .encode_bytes();
+        n.store.write().add_cert(&cert).unwrap();
+        c.maybe_sign_head(&n);
+        assert!(!n.alarms.lock().contains_key("no_signing_cert"));
+        let s = n.store.read();
+        assert_eq!(
+            s.head().unwrap().head.version,
+            c.applied.load(Ordering::SeqCst)
+        );
+        assert!(s.node_trusted(&web));
+        drop(s);
+        assert!(n.paths.store().exists(), "persisted");
+    }
+
+    #[tokio::test]
+    async fn the_operation_log_is_for_admins() {
+        let (net, n, c, _d) = first_controller();
+        c.clone().leader_duties().await;
+        let req = |key: &KeyPair, account: Bytes32, issued_at| {
+            key.sign_obj(
+                mt::LOG_REQUEST,
+                &wp::LogRequest {
+                    account_id: Some(crypto::k32(&account)),
+                    issued_at,
+                    before: 0,
+                    limit: 10,
+                },
+            )
+        };
+        let r = c.log(&req(&net.admin, net.admin_id, now_ms()));
+        assert_eq!(r.error, None);
+        // The new leader's no-op, then genesis.
+        assert_eq!(r.commit_index, 2);
+        let recs = r.records.unwrap();
+        assert_eq!(recs.iter().map(|r| r.index).collect::<Vec<_>>(), vec![1, 2]);
+        // Another key for the admin's account, an unknown account, a stale request.
+        let other = KeyPair::generate();
+        assert!(c.log(&req(&other, net.admin_id, now_ms())).error.is_some());
+        assert!(c.log(&req(&other, [9; 32], now_ms())).error.is_some());
+        let stale = c.log(&req(&net.admin, net.admin_id, now_ms() - 3_600_000));
+        assert!(stale.error.unwrap().contains("clock"));
+        drop(n);
+    }
+
+    #[tokio::test]
+    async fn metric_reports_from_their_nodes() {
+        let (net, n, c, _d) = first_controller();
+        c.clone().leader_duties().await;
+        let key = KeyPair::generate();
+        let (_, out) = c
+            .propose(op_entry(
+                &net,
+                1,
+                wp::AccountOp::CreateEnrollment(Box::new(wp::CreateEnrollment {
+                    owner: Some(crypto::k32(&net.admin_id)),
+                    name: Some("web".into()),
+                    overlay_ips: Some(vec![ops::ip("10.7.0.9").unwrap()]),
+                    roles: Some(vec![wp::Role::Data]),
+                    identity_key: Some(crypto::k32(&key.public())),
+                    ..Default::default()
+                })),
+            ))
+            .await
+            .unwrap();
+        let web = out.node_id.unwrap();
+        // The node's store needs the tree for the signer check.
+        let req = crypto::open_envelope(&c.cert_request().unwrap()).unwrap();
+        let cert = net
+            .root
+            .sign_envelope(mt::SIGNING_KEY_CERT, req.body)
+            .encode_bytes();
+        n.store.write().add_cert(&cert).unwrap();
+        c.maybe_sign_head(&n);
+
+        let report = |seq: u64, taken_at: u64| wp::MetricReport {
+            node_id: Some(crypto::k32(&web)),
+            report_seq: seq,
+            taken_at,
+            policy_version: 42,
+            ..Default::default()
+        };
+        let t = now_ms();
+        c.ingest_metrics(web, &key.sign_obj(mt::METRIC_REPORT, &report(1, t)));
+        assert_eq!(c.reports.lock()[&web].report.report_seq, 1);
+        // Older reports don't replace newer ones.
+        c.ingest_metrics(web, &key.sign_obj(mt::METRIC_REPORT, &report(9, t - 1000)));
+        assert_eq!(c.reports.lock()[&web].report.report_seq, 1);
+        // Signed by another key, or relayed by a node that isn't a controller.
+        let rogue = KeyPair::generate();
+        c.ingest_metrics(web, &rogue.sign_obj(mt::METRIC_REPORT, &report(2, t + 1)));
+        c.ingest_metrics([5; 32], &key.sign_obj(mt::METRIC_REPORT, &report(3, t + 2)));
+        // Not a report at all.
+        c.ingest_metrics(
+            web,
+            &key.sign_obj(mt::LOG_REQUEST, &wp::LogRequest::default()),
+        );
+        assert_eq!(c.reports.lock()[&web].report.report_seq, 1);
+        c.ingest_metrics(web, &key.sign_obj(mt::METRIC_REPORT, &report(2, t + 1)));
+        assert_eq!(c.reports.lock()[&web].report.report_seq, 2);
+
+        let text = c.openmetrics();
+        assert!(text.contains("webjet_policy_version"), "{text}");
+        assert!(text.contains("node=\"web\""), "{text}");
+        assert!(text.ends_with("# EOF\n"));
+    }
+}

@@ -250,6 +250,40 @@ not `Read`. A new command needs an entry; a new state-changing one also has
 to be added to that test, together with its signature check. Requests are
 limited to 4 MiB per line and 64 connections at once.
 
+## Unit tests
+
+`cargo test --workspace --exclude webjet-app` runs everything below in a
+few seconds; nothing needs root, a network or Docker.
+
+- **A real network state in memory.** `webjet_core::testutil` (built for
+  this crate's tests, and for other crates with the `testutil` feature, as
+  webjetd's dev-dependencies do) has `net()` (root, emergency and admin keys
+  and a genesis) and `Cluster`: a controller state machine you enroll nodes
+  into (`data_node`, `enroll(NodeSpec { .. })`) and configure
+  (`set_network`, `set_policy`, `set_node_config`), which hands out stores
+  that trust its tree (`store()`, `sync()`). `testutil::packets` builds
+  checksum-correct IPv4 packets.
+- **An agent without sockets.** In webjetd, `testnode::node(&mut cluster,
+  id, key)` gives a `Node` over such a store with a temporary data
+  directory. `Node::test_hop(peer, transport)` registers a hop with no
+  connection behind it; what the agent sends on it is read from the
+  returned receivers (`control()` decodes the messages, `relay()` gives the
+  relay frames). `Dataplane::for_test(&node)` is a data plane without a tun
+  interface whose tun-bound packets arrive on a channel. The circuit,
+  data plane, reverse proxy, path, metrics, compression, state and
+  controller modules are tested this way.
+- **Property tests** (proptest) compare code with a simple model of what it
+  should do: policy evaluation and port sets, path search (against brute
+  force over every path), the replay window, frames, packet rewriting and
+  ICMP errors, connection tracking counters and eviction order, and the
+  compressors. A failure shrinks to a small case and is saved in
+  `crates/webjet-core/proptest-regressions/`; commit that file, so the
+  case runs first from then on, and add a named regression test.
+- **The offline root commands** run as the real `webjetctl` binary in
+  `crates/webjet-tools/tests/root.rs`.
+- **Coverage:** `cargo llvm-cov --workspace --exclude webjet-app --summary-only`
+  (`cargo install cargo-llvm-cov`, `rustup component add llvm-tools-preview`).
+
 ## Tests that need more than `cargo test`
 
 | Script | Needs | What it checks |

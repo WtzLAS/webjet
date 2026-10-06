@@ -270,26 +270,26 @@ impl Conntrack {
             peer: *peer,
             flow: p.flow,
         };
-        if self
-            .entries
-            .insert(
-                k,
-                Entry {
-                    state,
-                    last: now,
-                    outbound,
-                    saw_reply: false,
-                    rule,
-                    gateway,
-                },
-            )
-            .is_none()
-        {
-            *self.per_peer.entry(*peer).or_insert(0) += 1;
-            if gateway {
-                *self.gateway_per_peer.entry(*peer).or_insert(0) += 1;
-                self.gateway_total += 1;
-            }
+        // A flow already tracked under this key (seen as new from the other
+        // side, or expired but not yet swept) is replaced: take it out with
+        // its counters first, or a replaced gateway flow would keep its
+        // SNAT count forever.
+        self.remove(&k);
+        self.entries.insert(
+            k,
+            Entry {
+                state,
+                last: now,
+                outbound,
+                saw_reply: false,
+                rule,
+                gateway,
+            },
+        );
+        *self.per_peer.entry(*peer).or_insert(0) += 1;
+        if gateway {
+            *self.gateway_per_peer.entry(*peer).or_insert(0) += 1;
+            self.gateway_total += 1;
         }
         Ok(())
     }
@@ -484,5 +484,228 @@ mod tests {
         ct.drop_peer(&a);
         assert_eq!(ct.gateway_len(), 1);
         ct.insert(&b, &flow(7), false, None, true, now).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod regressions {
+    use super::*;
+    use crate::packet::parse;
+    use crate::testutil::packets::udp4;
+
+    /// Found by `prop::counters_and_limits_hold`: a gateway flow replaced by
+    /// the same 5-tuple from the other direction kept its SNAT count, so the
+    /// gateway's quota leaked one slot each time.
+    #[test]
+    fn replacing_a_flow_keeps_the_counters_right() {
+        let mut ct = Conntrack::new(10, 100, 100);
+        let peer = [2; 32];
+        let now = Instant::now();
+        let p = parse(&udp4([10, 7, 0, 1], [10, 7, 0, 2], 1004, 80, b"x")).unwrap();
+        ct.insert(&peer, &p, true, None, true, now).unwrap();
+        assert_eq!((ct.len(), ct.gateway_len()), (1, 1));
+        // The same tuple, inbound and not through the gateway.
+        assert_eq!(ct.classify(&peer, &p, false, now), Verdict::New);
+        ct.insert(&peer, &p, false, None, false, now).unwrap();
+        assert_eq!((ct.len(), ct.gateway_len()), (1, 0));
+        assert_eq!(ct.per_peer.get(&peer), Some(&1));
+        assert!(ct.gateway_per_peer.is_empty());
+        ct.drop_peer(&peer);
+        assert!(ct.is_empty() && ct.per_peer.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use crate::packet::parse;
+    use crate::testutil::packets::{tcp4, udp4};
+    use proptest::prelude::*;
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        /// A new flow from peer `p` (TCP SYN or UDP), port `port`.
+        Insert {
+            p: u8,
+            port: u16,
+            tcp: bool,
+            outbound: bool,
+            gateway: bool,
+        },
+        /// The reply to that flow.
+        Reply {
+            p: u8,
+            port: u16,
+            tcp: bool,
+        },
+        /// Time passes, in seconds.
+        Wait(u64),
+        Expire,
+        DropPeer(u8),
+        /// Drop flows on odd ports.
+        Reevaluate,
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            6 => (0u8..3, 0u16..8, any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
+                |(p, port, tcp, outbound, gateway)| Op::Insert { p, port, tcp, outbound, gateway }
+            ),
+            3 => (0u8..3, 0u16..8, any::<bool>()).prop_map(|(p, port, tcp)| Op::Reply { p, port, tcp }),
+            2 => prop_oneof![Just(1u64), Just(20), Just(45), Just(200)].prop_map(Op::Wait),
+            1 => Just(Op::Expire),
+            1 => (0u8..3).prop_map(Op::DropPeer),
+            1 => Just(Op::Reevaluate),
+        ]
+    }
+
+    fn packet(port: u16, tcp: bool, reply: bool) -> Vec<u8> {
+        let (a, b) = ([10, 7, 0, 1], [10, 7, 0, 2]);
+        let (src, dst, sp, dp) = if reply {
+            (b, a, 80, 1000 + port)
+        } else {
+            (a, b, 1000 + port, 80)
+        };
+        if tcp {
+            tcp4(
+                src,
+                dst,
+                sp,
+                dp,
+                if reply {
+                    tcpf::SYN | tcpf::ACK
+                } else {
+                    tcpf::SYN
+                },
+            )
+        } else {
+            udp4(src, dst, sp, dp, b"x")
+        }
+    }
+
+    /// The bookkeeping matches the entries, and no limit is exceeded.
+    fn check(ct: &Conntrack) -> Result<(), TestCaseError> {
+        let mut per: HashMap<Bytes32, usize> = HashMap::new();
+        let mut gw_per: HashMap<Bytes32, usize> = HashMap::new();
+        for (k, e) in &ct.entries {
+            *per.entry(k.peer).or_default() += 1;
+            if e.gateway {
+                *gw_per.entry(k.peer).or_default() += 1;
+            }
+        }
+        prop_assert_eq!(&ct.per_peer, &per);
+        prop_assert_eq!(&ct.gateway_per_peer, &gw_per);
+        prop_assert_eq!(ct.gateway_total, gw_per.values().sum::<usize>());
+        prop_assert!(ct.entries.len() <= ct.global_cap);
+        prop_assert!(per.values().all(|c| *c <= ct.per_peer_quota));
+        prop_assert!(gw_per.values().all(|c| *c <= ct.gateway_per_peer_quota));
+        prop_assert!(ct.gateway_total <= ct.gateway_cap);
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn counters_and_limits_hold(ops in proptest::collection::vec(op(), 1..120)) {
+            let mut ct = Conntrack::new(5, 1000, 8);
+            ct.gateway_per_peer_quota = 2;
+            ct.gateway_cap = 4;
+            let start = Instant::now();
+            let mut now = start;
+            for o in ops {
+                match o {
+                    Op::Insert { p, port, tcp, outbound, gateway } => {
+                        let pkt = packet(port, tcp, false);
+                        let parsed = parse(&pkt).unwrap();
+                        let peer = [p; 32];
+                        let v = ct.classify(&peer, &parsed, outbound, now);
+                        if v == Verdict::New {
+                            let key = Key { peer, flow: parsed.flow };
+                            let before = ct.get(&key).is_some();
+                            let r = ct.insert(&peer, &parsed, outbound, None, gateway, now);
+                            if r.is_ok() {
+                                // Once inserted, the next packet of the flow is tracked.
+                                let after = ct.get(&key).is_some();
+                                prop_assert!(before || after);
+                                prop_assert_eq!(ct.classify(&peer, &parsed, outbound, now), Verdict::Tracked);
+                            }
+                        }
+                    }
+                    Op::Reply { p, port, tcp } => {
+                        let pkt = packet(port, tcp, true);
+                        let parsed = parse(&pkt).unwrap();
+                        let peer = [p; 32];
+                        let started = parse(&packet(port, tcp, false)).unwrap().flow;
+                        let live = ct
+                            .get(&Key { peer, flow: started })
+                            .map(|e| (e.outbound, now.duration_since(e.last) < e.state.timeout()));
+                        // A reply comes the other way: inbound for our flows.
+                        for outbound in [false, true] {
+                            let v = ct.classify(&peer, &parsed, outbound, now);
+                            if live == Some((!outbound, true)) {
+                                prop_assert_eq!(v, Verdict::Tracked);
+                                let e = ct.get(&Key { peer, flow: started }).unwrap();
+                                prop_assert!(e.saw_reply);
+                                if tcp {
+                                    prop_assert_eq!(e.state, State::TcpEstablished);
+                                } else {
+                                    prop_assert_eq!(e.state, State::UdpBoth);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    Op::Wait(s) => now += Duration::from_secs(s),
+                    Op::Expire => {
+                        ct.expire(now);
+                        prop_assert!(ct.entries.values().all(|e| now.duration_since(e.last) < e.state.timeout()));
+                    }
+                    Op::DropPeer(p) => {
+                        ct.drop_peer(&[p; 32]);
+                        prop_assert!(ct.entries.keys().all(|k| k.peer != [p; 32]));
+                    }
+                    Op::Reevaluate => {
+                        let odd = ct.entries.keys().filter(|k| k.flow.sport % 2 == 1).count();
+                        prop_assert_eq!(ct.reevaluate(|k, _| k.flow.sport % 2 == 0), odd);
+                    }
+                }
+                check(&ct)?;
+            }
+        }
+
+        /// The cap evicts half-open TCP first, then one-way UDP, then the
+        /// longest idle.
+        #[test]
+        fn eviction_order(states in proptest::collection::vec(0u8..3, 4..12)) {
+            let cap = states.len();
+            let mut ct = Conntrack::new(usize::MAX, u32::MAX, cap);
+            let mut now = Instant::now();
+            let peer = [1; 32];
+            for (i, s) in states.iter().enumerate() {
+                let port = i as u16;
+                let tcp = *s != 1;
+                let pkt = packet(port, tcp, false);
+                ct.insert(&peer, &parse(&pkt).unwrap(), true, None, false, now).unwrap();
+                if *s == 2 {
+                    // Answered: established TCP.
+                    let r = packet(port, true, true);
+                    prop_assert_eq!(ct.classify(&peer, &parse(&r).unwrap(), false, now), Verdict::Tracked);
+                }
+                now += Duration::from_millis(10);
+            }
+            let rank = |e: &Entry| e.state.evict_rank();
+            let victim_rank = ct.entries.values().map(rank).min().unwrap();
+            let oldest = ct
+                .entries
+                .iter()
+                .filter(|(_, e)| rank(e) == victim_rank)
+                .min_by_key(|(_, e)| e.last)
+                .map(|(k, _)| *k)
+                .unwrap();
+            let extra = packet(999, false, false);
+            ct.insert(&[2; 32], &parse(&extra).unwrap(), true, None, false, now).unwrap();
+            prop_assert_eq!(ct.len(), cap);
+            prop_assert!(ct.get(&oldest).is_none(), "evicted the wrong flow");
+            prop_assert_eq!(ct.evictions, 1);
+        }
     }
 }

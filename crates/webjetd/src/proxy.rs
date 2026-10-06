@@ -1091,3 +1091,339 @@ pub fn status(n: &Node) -> Value {
         "counters": counters,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnode::{self, Cluster};
+    use tokio::sync::mpsc;
+    use webjet_core::crypto::KeyPair;
+    use webjet_core::testutil::packets::tcp4;
+
+    const CLIENT: [u8; 4] = [203, 0, 113, 5];
+    const ING: [u8; 4] = [10, 7, 0, 2];
+    const WEB: [u8; 4] = [10, 7, 0, 3];
+
+    fn allow(id: &str, src: &str, dst: &str, ports: &str) -> wp::Rule {
+        wp::Rule {
+            id: Some(id.into()),
+            action: wp::Action::Allow,
+            src: Some(vec![src.into()]),
+            dst: Some(vec![dst.into()]),
+            ports: Some(vec![ports.into()]),
+        }
+    }
+
+    fn policy(rules: Vec<wp::Rule>) -> wp::Policy {
+        wp::Policy {
+            default_action: wp::Action::Deny,
+            rules: Some(rules),
+            ..Default::default()
+        }
+    }
+
+    /// tcp 8080 on the ingress → port 80 on nodes tagged `tag:web`.
+    fn web_rule() -> wp::ProxyRule {
+        wp::ProxyRule {
+            name: Some("web".into()),
+            protocol: PROTO_TCP,
+            listen_port: 8080,
+            target: Some(vec!["tag:web".into()]),
+            target_port: 80,
+            real_ip: false,
+        }
+    }
+
+    struct T {
+        c: Cluster,
+        ing: (Bytes32, KeyPair),
+        web: (Bytes32, KeyPair),
+    }
+
+    fn net() -> T {
+        let mut c = Cluster::new();
+        let ing = c.data_node("ing", "10.7.0.2", &["tag:ingress"]);
+        let web = c.data_node("web", "10.7.0.3", &["tag:web"]);
+        c.set_policy(policy(vec![allow(
+            "in",
+            "tag:ingress",
+            "tag:web",
+            "tcp:80",
+        )]))
+        .unwrap();
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&ing.0)),
+            proxy: Some(vec![web_rule()]),
+            ..Default::default()
+        })
+        .unwrap();
+        T { c, ing, web }
+    }
+
+    /// `node`'s agent, with `other`'s EndpointRecord features known.
+    fn agent(
+        t: &mut T,
+        me: &(Bytes32, KeyPair),
+        other: Bytes32,
+        features: &[&str],
+    ) -> (
+        Arc<Node>,
+        Arc<Dataplane>,
+        mpsc::UnboundedReceiver<Vec<u8>>,
+        tempfile::TempDir,
+    ) {
+        let (n, dir) = testnode::node(&mut t.c, me.0, me.1.clone());
+        let r = wp::EndpointRecord {
+            node_id: Some(crypto::k32(&other)),
+            features: Some(features.iter().map(|f| f.to_string()).collect()),
+            ..Default::default()
+        };
+        n.records.lock().endpoints.insert(other, (r, Vec::new()));
+        let (dp, rx) = Dataplane::for_test(&n);
+        (n, dp, rx, dir)
+    }
+
+    fn proxy_addr(dp: &Dataplane) -> [u8; 4] {
+        match dp.proxy.addrs.read().first() {
+            Some(IpAddr::V4(a)) => a.octets(),
+            _ => panic!("no IPv4 proxy address"),
+        }
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<Vec<u8>>) -> Vec<Vec<u8>> {
+        let mut v = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            v.push(p);
+        }
+        v
+    }
+
+    fn counters(p: &Proxy) -> Counters {
+        p.counters
+            .lock()
+            .values()
+            .next()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn ingress_proxies_a_client_flow_and_its_replies() {
+        let mut t = net();
+        let web = t.web.0;
+        let ing = t.ing.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &ing, web, &[FEATURE]);
+        let pa = proxy_addr(&dp);
+        // A client's SYN the kernel captured.
+        let syn = tcp4(CLIENT, pa, 5555, 8080, tcpf::SYN);
+        assert!(dp.proxy.is_capture(&dp, &packet::parse(&syn).unwrap()));
+        dp.outbound(syn);
+        assert_eq!(
+            n.metrics.tun_rx.load(Ordering::Relaxed),
+            0,
+            "kept out of overlay counters"
+        );
+        let q = n.e2e.queued_for_test(&web);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].0, ftype::PROXY);
+        let sent = packet::parse(&q[0].1).unwrap();
+        // Translated: from this node (a source port of its own) to web:80.
+        assert_eq!(sent.flow.src, IpAddr::from(ING));
+        assert_eq!(sent.flow.dst, IpAddr::from(WEB));
+        assert_eq!(sent.flow.dport, 80);
+        let sport = sent.flow.sport;
+
+        // The target's reply goes back to the client from the proxy address.
+        let reply = tcp4(WEB, ING, 80, sport, tcpf::SYN | tcpf::ACK);
+        dp.proxy.from_peer(&n, &dp, &web, reply);
+        let out = drain(&mut tun);
+        assert_eq!(out.len(), 1);
+        let back = packet::parse(&out[0]).unwrap();
+        assert_eq!((back.flow.src, back.flow.sport), (IpAddr::from(pa), 8080));
+        assert_eq!(
+            (back.flow.dst, back.flow.dport),
+            (IpAddr::from(CLIENT), 5555)
+        );
+
+        // The client's next packet follows the flow.
+        dp.outbound(tcp4(CLIENT, pa, 5555, 8080, tcpf::ACK));
+        assert_eq!(n.e2e.queued_for_test(&web).len(), 2);
+
+        let c = counters(&dp.proxy);
+        assert_eq!(
+            (c.flows, c.to_target_packets, c.to_client_packets, c.refused),
+            (1, 2, 1, 0)
+        );
+        let m = dp.proxy.metrics();
+        assert_eq!(m.len(), 1);
+        assert!(m[0].ingress);
+        assert_eq!(m[0].active, 1);
+
+        let s = status(&n);
+        assert_eq!(s["rules"][0]["name"], "web");
+        assert_eq!(s["rules"][0]["target"][0], "tag:web");
+        assert!(
+            s["rules"][0]["status"]
+                .as_str()
+                .unwrap()
+                .starts_with("not listening")
+        );
+        assert_eq!(s["flows"][0]["side"], "ingress");
+        assert_eq!(s["flows"][0]["client"], "203.0.113.5:5555");
+        assert_eq!(s["flows"][0]["target"], "10.7.0.3:80");
+        assert_eq!(s["counters"][0]["flows"], 1);
+        assert!(n.alarms.lock().contains_key("proxy_unsupported"));
+    }
+
+    #[tokio::test]
+    async fn ingress_refusals() {
+        let mut t = net();
+        let web = t.web.0;
+        let ing = t.ing.clone();
+        // The target runs a webjetd without proxy support.
+        let (n, dp, mut tun, _d) = agent(&mut t, &ing, web, &[]);
+        let pa = proxy_addr(&dp);
+        dp.outbound(tcp4(CLIENT, pa, 5555, 8080, tcpf::SYN));
+        assert!(n.e2e.queued_for_test(&web).is_empty());
+        assert_eq!(counters(&dp.proxy).refused, 1);
+        // Only a SYN starts a flow.
+        dp.outbound(tcp4(CLIENT, pa, 5556, 8080, tcpf::ACK));
+        assert_eq!(counters(&dp.proxy).refused, 1);
+        // A source address that only an overlay node could have.
+        let spoofed = tcp4([10, 7, 0, 9], pa, 5557, 8080, tcpf::SYN);
+        assert!(dp.proxy.is_capture(&dp, &packet::parse(&spoofed).unwrap()));
+        dp.outbound(spoofed);
+        assert_eq!(counters(&dp.proxy).refused, 2);
+        // Not a listen port: not a capture at all.
+        let other = tcp4(CLIENT, pa, 5558, 9090, tcpf::SYN);
+        assert!(!dp.proxy.is_capture(&dp, &packet::parse(&other).unwrap()));
+        assert!(
+            drain(&mut tun)
+                .iter()
+                .all(|p| packet::parse(p).unwrap().icmp.is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn ingress_policy_denies_the_target() {
+        let mut t = net();
+        t.c.set_policy(policy(vec![])).unwrap();
+        let web = t.web.0;
+        let ing = t.ing.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &ing, web, &[FEATURE]);
+        let pa = proxy_addr(&dp);
+        dp.outbound(tcp4(CLIENT, pa, 5555, 8080, tcpf::SYN));
+        assert!(n.e2e.queued_for_test(&web).is_empty());
+        let out = drain(&mut tun);
+        assert_eq!(out.len(), 1);
+        assert_eq!(packet::parse(&out[0]).unwrap().icmp, Some(IcmpKind::Error));
+        assert_eq!(counters(&dp.proxy).refused, 1);
+    }
+
+    #[tokio::test]
+    async fn target_admits_the_ingress_rule_and_answers() {
+        let mut t = net();
+        let ing = t.ing.0;
+        let web = t.web.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &web, ing, &[FEATURE]);
+        let syn = tcp4(ING, WEB, 40000, 80, tcpf::SYN);
+        dp.proxy.from_peer(&n, &dp, &ing, syn.clone());
+        assert_eq!(drain(&mut tun), vec![syn], "written to the tun interface");
+        // The local reply goes back to the ingress in a PROXY frame.
+        let reply = tcp4(WEB, ING, 80, 40000, tcpf::SYN | tcpf::ACK);
+        let parsed = packet::parse(&reply).unwrap();
+        assert!(dp.proxy.from_local(&n, &reply, &parsed));
+        let q = n.e2e.queued_for_test(&ing);
+        assert_eq!(q, vec![(ftype::PROXY, reply)]);
+        // Unrelated local traffic isn't proxy traffic.
+        let other = tcp4(WEB, ING, 22, 40000, tcpf::SYN | tcpf::ACK);
+        assert!(
+            !dp.proxy
+                .from_local(&n, &other, &packet::parse(&other).unwrap())
+        );
+        let c = counters(&dp.proxy);
+        assert_eq!(
+            (c.flows, c.to_target_packets, c.to_client_packets),
+            (1, 1, 1)
+        );
+        assert_eq!(status(&n)["flows"][0]["side"], "target");
+
+        // A policy change that drops the ingress closes the flow.
+        t.c.set_policy(policy(vec![])).unwrap();
+        testnode::sync(&mut t.c, &n);
+        dp.refresh();
+        assert_eq!(dp.proxy.table.lock().ct.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn target_refusals() {
+        let mut t = net();
+        let ing = t.ing.0;
+        let web = t.web.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &web, ing, &[FEATURE]);
+        // No rule of the ingress has target port 22.
+        dp.proxy
+            .from_peer(&n, &dp, &ing, tcp4(ING, WEB, 40000, 22, tcpf::SYN));
+        // A client's own address, but the rule doesn't keep them.
+        dp.proxy
+            .from_peer(&n, &dp, &ing, tcp4(CLIENT, WEB, 40001, 80, tcpf::SYN));
+        // Not addressed to this node or a LAN it serves.
+        dp.proxy.from_peer(
+            &n,
+            &dp,
+            &ing,
+            tcp4(ING, [10, 7, 0, 99], 40002, 80, tcpf::SYN),
+        );
+        // From a node that isn't in the tree.
+        dp.proxy
+            .from_peer(&n, &dp, &[9; 32], tcp4(ING, WEB, 40003, 80, tcpf::SYN));
+        assert!(drain(&mut tun).is_empty());
+        let refused: u64 = dp.proxy.counters.lock().values().map(|c| c.refused).sum();
+        assert_eq!(refused, 3);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn rule_warnings() {
+        let mut t = net();
+        // The selector picks no node.
+        t.c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&t.ing.0)),
+            proxy: Some(vec![wp::ProxyRule {
+                target: Some(vec!["tag:nobody".into()]),
+                ..web_rule()
+            }]),
+            ..Default::default()
+        })
+        .unwrap();
+        let web = t.web.0;
+        let ing = t.ing.clone();
+        let (n, _dp, _tun, _d) = agent(&mut t, &ing, web, &[FEATURE]);
+        let s = status(&n);
+        let w = s["rules"][0]["warnings"][0].as_str().unwrap();
+        assert!(w.contains("pick no other data node"), "{w}");
+        assert!(n.alarms.lock().contains_key("proxy_rule"));
+
+        // A target address behind no node or gateway.
+        t.c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&t.ing.0)),
+            proxy: Some(vec![wp::ProxyRule {
+                target: Some(vec!["192.0.2.80".into()]),
+                ..web_rule()
+            }]),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut t.c, &n);
+        n.dataplane.get().unwrap().refresh();
+        let s = status(&n);
+        let w = s["rules"][0]["warnings"][0].as_str().unwrap();
+        assert!(w.contains("no node or gateway has 192.0.2.80"), "{w}");
+    }
+
+    #[test]
+    fn helpers() {
+        assert_eq!(endpoint(&"10.0.0.1".parse().unwrap(), 80), "10.0.0.1:80");
+        assert_eq!(endpoint(&"fd00::1".parse().unwrap(), 80), "[fd00::1]:80");
+    }
+}

@@ -404,3 +404,207 @@ pub fn limit_opt(n: &Node, name: &str) -> Option<u64> {
 pub fn limit(n: &Node, name: &str) -> u64 {
     limit_opt(n, name).unwrap_or(1).max(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnode::{self, Cluster};
+    use webjet_core::testutil::NodeSpec;
+    use webjet_proto::Transport;
+
+    fn lv(name: &str, value: u64) -> wp::LimitValue {
+        wp::LimitValue {
+            name: Some(name.into()),
+            value,
+        }
+    }
+
+    #[test]
+    fn limits_resolve_node_override_network_default() {
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &["tag:big"]);
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        // Built-in defaults; unset ones are None, or 1 through `limit`.
+        assert_eq!(limit(&n, "circuits_global"), 50_000);
+        assert_eq!(limit_opt(&n, "relay_capacity_mbps"), None);
+        assert_eq!(limit(&n, "relay_capacity_mbps"), 1);
+
+        c.set_network(wp::NetworkConfig {
+            limits: Some(Box::new(wp::Limits {
+                defaults: Some(vec![lv("circuits_global", 100), lv("lookups_per_sec", 7)]),
+                overrides: Some(vec![wp::LimitOverride {
+                    select: Some(vec!["tag:big".into()]),
+                    values: Some(vec![lv("circuits_global", 200)]),
+                }]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut c, &n);
+        assert_eq!(limit(&n, "circuits_global"), 200, "override for the tag");
+        assert_eq!(limit(&n, "lookups_per_sec"), 7, "network value");
+
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&me)),
+            limits: Some(vec![lv("circuits_global", 300)]),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut c, &n);
+        assert_eq!(limit(&n, "circuits_global"), 300, "node scope wins");
+    }
+
+    #[test]
+    fn relay_load_and_capacity() {
+        let mut c = Cluster::new();
+        let (me, kp) = c.enroll(NodeSpec {
+            name: "relay",
+            ip: "10.7.0.3",
+            roles: &[wp::Role::Data, wp::Role::Relay],
+            ..Default::default()
+        });
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        // Estimated, never below 100 Mbit/s.
+        assert_eq!(relay_load(&n).capacity_mbps, 100);
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&me)),
+            limits: Some(vec![
+                lv("relay_capacity_mbps", 40),
+                lv("circuits_global", 10),
+            ]),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut c, &n);
+        let l = relay_load(&n);
+        assert_eq!((l.capacity_mbps, l.util_pct, l.circuits_pct), (40, 0, 0));
+        sample_load(&n);
+    }
+
+    #[test]
+    fn counters() {
+        let m = Counters::default();
+        m.tun_in(100);
+        m.tun_in(50);
+        m.tun_out(10);
+        m.rule_hit("web", true);
+        m.rule_hit("web", true);
+        m.rule_hit("web", false);
+        assert_eq!(m.tun_rx.load(Ordering::Relaxed), 2);
+        assert_eq!(m.tun_rx_bytes.load(Ordering::Relaxed), 150);
+        assert_eq!(m.tun_tx_bytes.load(Ordering::Relaxed), 10);
+        let hits = m.rule_hits.lock();
+        assert_eq!(hits[&("web".to_string(), true)], 2);
+        assert_eq!(hits[&("web".to_string(), false)], 1);
+    }
+
+    #[tokio::test]
+    async fn report_is_signed_and_complete() {
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &[]);
+        let (peer, _) = c.data_node("peer", "10.7.0.3", &[]);
+        let (n, _d) = testnode::node(&mut c, me, kp.clone());
+        n.metrics.rule_hit("web", true);
+        n.metrics.acl_denied.fetch_add(3, Ordering::Relaxed);
+        n.metrics.tun_in(1500);
+        n.alarm("clock", "warning", "test".into());
+        let (hop, _rx) = n.test_hop(peer, Transport::TcpTls);
+        hop.tx_bytes.store(1000, Ordering::Relaxed);
+
+        let raw = build_report(&n);
+        let v = crypto::open_envelope(&raw).unwrap();
+        assert_eq!((v.ty, v.signer), (mt::METRIC_REPORT, kp.public()));
+        let r: wp::MetricReport = v.decode().unwrap();
+        assert_eq!(crypto::opt_k32(&r.node_id), me);
+        assert_eq!(r.report_seq, 1);
+        let links = r.links.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(crypto::opt_k32(&links[0].peer), peer);
+        assert_eq!((links[0].payload_tx, links[0].wire_tx), (1000, 1000));
+        let hits = r.rule_hits.unwrap();
+        assert_eq!(hits[0].rule_id.as_deref(), Some("web"));
+        assert_eq!(hits[0].flows, 1);
+        let lim = r.limit_hits.unwrap();
+        assert!(
+            lim.iter()
+                .any(|c| c.name.as_deref() == Some("acl_denied") && c.value == 3)
+        );
+        assert_eq!(r.tun.unwrap().rx_bytes, 1500);
+        assert_eq!(r.alarms.unwrap()[0].name.as_deref(), Some("clock"));
+        assert_eq!(r.compression.unwrap().len(), 2);
+        // The sequence number goes up per report.
+        let raw = build_report(&n);
+        let r: wp::MetricReport = crypto::open_envelope(&raw).unwrap().decode().unwrap();
+        assert_eq!(r.report_seq, 2);
+
+        let text = local_openmetrics(&n);
+        assert!(text.ends_with("# EOF\n"), "{text}");
+        for series in [
+            "webjet_rule_flows",
+            "webjet_limit_hits",
+            "webjet_tun_bytes",
+            "webjet_alarm",
+        ] {
+            assert!(text.contains(series), "{series} missing:\n{text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn route_figures_come_from_source_circuits() {
+        use crate::circuit::{Entry, Kind, LocalCircuit};
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &[]);
+        let (peer, _) = c.data_node("peer", "10.7.0.3", &[]);
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        let rid = crypto::route_id(&me, &peer, &[]);
+        let circuit = |label: u32, source: bool, rtt: Option<f64>| {
+            let mut probes = webjet_core::routing::LinkStats::default();
+            if let Some(ms) = rtt {
+                probes.on_sent_at(1, 0, now_ms());
+                probes.on_ack_at(1, (ms * 1000.0) as u64, now_ms());
+            }
+            Arc::new(LocalCircuit {
+                peer,
+                label,
+                next: peer,
+                out_label: parking_lot::Mutex::new(Some(label)),
+                hops: vec![],
+                route_id: rid,
+                is_source: source,
+                created: std::time::Instant::now(),
+                probes: parking_lot::Mutex::new(probes),
+                e2e_rtt_ms: parking_lot::Mutex::new(None),
+                last_rx: parking_lot::Mutex::new(std::time::Instant::now()),
+            })
+        };
+        let mut t = crate::circuit::Table::default();
+        for (label, src, rtt) in [
+            (1, true, Some(20.0)),
+            (2, true, None),
+            (3, false, Some(5.0)),
+        ] {
+            t.entries.insert(
+                (peer, label),
+                Entry {
+                    kind: Kind::Local(circuit(label, src, rtt)),
+                    created: std::time::Instant::now(),
+                },
+            );
+        }
+        // The session sends on circuit 1, with 4 switches so far.
+        let sessions = HashMap::from([(peer, (Some(1), 4))]);
+        let e = route_e2e(&t, &sessions);
+        assert_eq!(e.len(), 1);
+        let f = &e[&rid];
+        assert_eq!((f.rtt_ms, f.selected, f.switches), (20, 1, 4));
+        // A session on another circuit: this one is "not selected" (2);
+        // no session at all: 0.
+        assert_eq!(
+            route_e2e(&t, &HashMap::from([(peer, (Some(9), 0))]))[&rid].selected,
+            2
+        );
+        assert_eq!(route_e2e(&t, &HashMap::new())[&rid].selected, 0);
+        drop(n);
+    }
+}

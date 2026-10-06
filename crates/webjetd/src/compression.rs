@@ -200,3 +200,160 @@ pub fn rpc_frame(n: &Node, peer: &Bytes32, secret: bool, msg: Vec<u8>) -> (u8, V
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testnode::{self, Cluster};
+    use webjet_core::compress::algo;
+    use webjet_core::frames::ftype;
+
+    const PEER: Bytes32 = [7; 32];
+
+    fn setup() -> (Cluster, std::sync::Arc<Node>, tempfile::TempDir) {
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &[]);
+        let (n, dir) = testnode::node(&mut c, me, kp);
+        (c, n, dir)
+    }
+
+    fn advertise(n: &Node, features: &[&str]) {
+        let r = wp::EndpointRecord {
+            node_id: Some(webjet_core::crypto::k32(&PEER)),
+            features: Some(features.iter().map(|f| f.to_string()).collect()),
+            ..Default::default()
+        };
+        n.records.lock().endpoints.insert(PEER, (r, Vec::new()));
+    }
+
+    /// Compressible control payload of `len` bytes.
+    fn payload(len: usize) -> Vec<u8> {
+        b"webjet control message "
+            .iter()
+            .copied()
+            .cycle()
+            .take(len)
+            .collect()
+    }
+
+    #[test]
+    fn settings_follow_the_tree() {
+        let (mut c, n, _d) = setup();
+        // Built-in: control zstd, data off.
+        assert!(!refresh(&n));
+        assert!(mine(&n).control_on() && !mine(&n).data_on());
+
+        c.set_network(wp::NetworkConfig {
+            transport: Some(Box::new(wp::TransportConfig {
+                compression: Some(Box::new(wp::CompressionConfig {
+                    control: algo::OFF,
+                    data: algo::LZ4,
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut c, &n);
+        assert!(refresh(&n));
+        assert!(!refresh(&n), "unchanged the second time");
+        assert!(!mine(&n).control_on() && mine(&n).data_on());
+    }
+
+    #[test]
+    fn only_peers_that_advertise_get_compressed_messages() {
+        let (_c, n, _d) = setup();
+        assert!(!control_to(&n, &PEER), "unknown peer");
+        advertise(&n, &[]);
+        assert!(!control_to(&n, &PEER));
+        assert!(!data_to(&n, &PEER));
+        advertise(&n, &[FEATURE_ZSTD, FEATURE_LZ4]);
+        assert!(control_to(&n, &PEER));
+        // Data compression is off here, whatever the peer has.
+        assert!(!data_to(&n, &PEER));
+    }
+
+    #[test]
+    fn control_records_roundtrip() {
+        let (_c, n, _d) = setup();
+        advertise(&n, &[FEATURE_ZSTD]);
+        let body = payload(4000);
+        let record = hop::encode_record(rec::CONTROL, &body);
+        let out = control_record(&n, &PEER, record.clone());
+        assert_eq!(out[0], rec::CONTROL_ZSTD);
+        assert!(out.len() < record.len() / 4);
+        assert_eq!(control_payload(&n, &out[4..]).unwrap(), body);
+
+        let ctl = &n.metrics.compression.control;
+        assert_eq!(ctl.tx_messages.load(Ordering::Relaxed), 1);
+        assert_eq!(ctl.tx_raw_bytes.load(Ordering::Relaxed), 4000);
+        assert_eq!(ctl.rx_messages.load(Ordering::Relaxed), 1);
+        assert_eq!(ctl.rx_raw_bytes.load(Ordering::Relaxed), 4000);
+
+        // Garbage counts as an error.
+        assert!(control_payload(&n, b"not zstd").is_none());
+        assert_eq!(ctl.rx_errors.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn control_records_left_alone() {
+        let (_c, n, _d) = setup();
+        let big = hop::encode_record(rec::CONTROL, &payload(4000));
+        // The peer doesn't take zstd.
+        assert_eq!(control_record(&n, &PEER, big.clone()), big);
+        advertise(&n, &[FEATURE_ZSTD]);
+        // Too short to be worth it.
+        let small = hop::encode_record(rec::CONTROL, &payload(compress::MIN_CONTROL - 1));
+        assert_eq!(control_record(&n, &PEER, small.clone()), small);
+        // Not a control record.
+        let relay = hop::encode_record(rec::RELAY, &payload(4000));
+        assert_eq!(control_record(&n, &PEER, relay.clone()), relay);
+        // Incompressible: sent as it is and counted as skipped.
+        let noise: Vec<u8> = (0..4000).map(|_| rand::random()).collect();
+        let rnd = hop::encode_record(rec::CONTROL, &noise);
+        assert_eq!(control_record(&n, &PEER, rnd.clone()), rnd);
+        let ctl = &n.metrics.compression.control;
+        assert_eq!(ctl.tx_skipped.load(Ordering::Relaxed), 1);
+        assert_eq!(ctl.tx_messages.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn rpc_frames() {
+        let (_c, n, _d) = setup();
+        advertise(&n, &[FEATURE_ZSTD]);
+        let msg = payload(4000);
+        let (ty, c) = rpc_frame(&n, &PEER, false, msg.clone());
+        assert_eq!(ty, ftype::RPC_ZSTD);
+        assert_eq!(compress::zstd_decompress(&c, MAX_RECORD).unwrap(), msg);
+        // Secrets are never compressed.
+        assert_eq!(
+            rpc_frame(&n, &PEER, true, msg.clone()),
+            (ftype::RPC, msg.clone())
+        );
+        let short = payload(10);
+        assert_eq!(
+            rpc_frame(&n, &PEER, false, short.clone()),
+            (ftype::RPC, short)
+        );
+    }
+
+    #[test]
+    fn secret_bodies() {
+        assert!(secret_rpc(&RpcBody::PskInfo(Box::default())));
+        assert!(secret_rpc(&RpcBody::CamouflageSecret(Box::default())));
+        assert!(secret_rpc(&RpcBody::RaftRpc(Box::default())));
+        assert!(!secret_rpc(&RpcBody::GetPsk(Box::default())));
+        assert!(!secret_rpc(&RpcBody::SubmitOp(Box::default())));
+    }
+
+    #[test]
+    fn report_has_both_planes() {
+        let c = Counters::default();
+        c.data.sent(1000, 400);
+        let r = c.report();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].plane.as_deref(), Some("control"));
+        assert_eq!(r[1].plane.as_deref(), Some("data"));
+        assert_eq!((r[1].tx_raw_bytes, r[1].tx_wire_bytes), (1000, 400));
+    }
+}

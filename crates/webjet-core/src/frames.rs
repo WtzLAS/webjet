@@ -335,3 +335,114 @@ mod tests {
         assert_eq!(h.tls.len(), 300);
     }
 }
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
+    proptest! {
+        /// Sealed frames open to the same payload, carry their header in
+        /// the clear, and any changed byte makes them fail to open.
+        #[test]
+        fn seal_open_and_tamper(
+            key in any::<[u8; 32]>(),
+            ty in any::<u8>().prop_filter("not a handshake", |t| *t != ftype::HANDSHAKE),
+            key_id in any::<u32>(),
+            counter in any::<u64>(),
+            payload in proptest::collection::vec(any::<u8>(), 0..600),
+            flip in any::<usize>(),
+            bit in 0u8..8,
+        ) {
+            let k = SessionKey::new(key);
+            let f = k.seal(ty, key_id, counter, &payload).unwrap();
+            prop_assert_eq!(f.len(), OVERHEAD + payload.len());
+            prop_assert_eq!(parse_header(&f), Some(FrameHeader { ty, key_id, counter }));
+            prop_assert_eq!(k.open(&f).unwrap(), payload);
+            let mut bad = f.clone();
+            let i = flip % bad.len();
+            bad[i] ^= 1 << bit;
+            prop_assert!(k.open(&bad).is_none(), "byte {} changed", i);
+            // Another key opens nothing.
+            let mut other = key;
+            other[0] ^= 1;
+            prop_assert!(SessionKey::new(other).open(&f).is_none());
+            // Truncated frames are rejected, never a panic.
+            prop_assert!(k.open(&f[..f.len().min(OVERHEAD - 1)]).is_none());
+        }
+
+        #[test]
+        fn relay_header_roundtrip(
+            circuit in any::<u32>(),
+            hop_limit in any::<u8>(),
+            ecn in any::<u8>(),
+            body in proptest::collection::vec(any::<u8>(), 0..64),
+        ) {
+            let f = [relay_header(circuit, hop_limit, ecn).as_slice(), &body].concat();
+            let (c, h, e, b) = parse_relay(&f).unwrap();
+            prop_assert_eq!((c, h, e, b), (circuit, hop_limit.min(63), ecn & 3, &body[..]));
+        }
+
+        #[test]
+        fn handshake_roundtrip(
+            initiator in any::<bool>(),
+            nonce in any::<[u8; 16]>(),
+            flight in any::<u16>(),
+            tls in proptest::collection::vec(any::<u8>(), 0..5000),
+        ) {
+            let f = handshake_frame(initiator, &nonce, flight, &tls);
+            // Padded to a size bucket.
+            prop_assert!(f.len() >= 22 + tls.len());
+            prop_assert!([256, 512, 1024, 1500, 2048, 4096, 8192, 16384].contains(&f.len()));
+            let h = parse_handshake(&f).unwrap();
+            prop_assert_eq!((h.initiator, h.nonce, h.flight, h.tls), (initiator, nonce, flight, &tls[..]));
+            prop_assert_eq!(parse_header(&f).unwrap().ty, ftype::HANDSHAKE);
+        }
+
+        #[test]
+        fn parsers_take_any_bytes(f in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = parse_header(&f);
+            let _ = parse_handshake(&f);
+            let _ = parse_relay(&f);
+            let _ = SessionKey::new([1; 32]).open(&f);
+        }
+
+        /// The bitmap window accepts exactly what a set of seen counters
+        /// and a sliding lower bound accept (RFC 6479).
+        #[test]
+        fn replay_window_matches_a_model(
+            ops in proptest::collection::vec(
+                prop_oneof![
+                    // Mostly near the top, sometimes far ahead or far behind.
+                    8 => (0u64..64).prop_map(|d| (true, d)),
+                    2 => (0u64..3 * WINDOW).prop_map(|d| (true, d)),
+                    3 => (0u64..64).prop_map(|d| (false, d)),
+                    1 => (0u64..3 * WINDOW).prop_map(|d| (false, d)),
+                ],
+                1..400,
+            ),
+        ) {
+            let mut w = ReplayWindow::default();
+            let mut seen: BTreeSet<u64> = BTreeSet::new();
+            let mut top: Option<u64> = None;
+            let base = 10 * WINDOW;
+            for (ahead, d) in ops {
+                let t = top.unwrap_or(base);
+                let c = if ahead { t + d } else { t.saturating_sub(d) };
+                let expect = match top {
+                    None => true,
+                    Some(t) => !seen.contains(&c) && (c > t || t - c < WINDOW),
+                };
+                prop_assert_eq!(w.check(c), expect, "check {}", c);
+                prop_assert_eq!(w.mark(c), expect, "mark {}", c);
+                if expect {
+                    seen.insert(c);
+                    top = Some(top.map_or(c, |t| t.max(c)));
+                }
+                // Marking twice never succeeds.
+                prop_assert!(!w.mark(c));
+            }
+        }
+    }
+}

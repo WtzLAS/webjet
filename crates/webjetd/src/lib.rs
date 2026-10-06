@@ -28,6 +28,8 @@ pub mod rpc;
 pub mod service;
 pub mod state;
 pub mod tasks;
+#[cfg(test)]
+pub(crate) mod testnode;
 pub mod transport;
 #[cfg(windows)]
 pub mod winsec;
