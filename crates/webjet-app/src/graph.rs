@@ -97,10 +97,9 @@ impl Graph {
     }
 
     /// Build the graph for a drawing area of `area` pixels. With the graph
-    /// shown before (`previous`), an unchanged graph keeps its picture and a
-    /// changed one (or one for an area of another size) is laid out
-    /// starting from it, so a link coming or going doesn't reshuffle every
-    /// node.
+    /// shown before (`previous`), every node keeps its place and new ones
+    /// are put next to their neighbors (`keep`); only a graph with nothing
+    /// to continue from is laid out.
     pub fn build(s: &Snapshot, area: (f32, f32), previous: Option<&Graph>) -> Graph {
         let mut g = Graph::shape(s, area);
         if !g.keep(previous) {
@@ -182,47 +181,76 @@ impl Graph {
         }
     }
 
-    /// Without the layout: take the positions of the graph shown before
-    /// (new vertices go between their neighbors). True when that is the
-    /// picture to keep: the same graph for an area of about the same size.
-    /// Otherwise the caller lays it out (`lay_out`), which can take a while
-    /// for a large graph, so the app does it in the background and shows
-    /// this one meanwhile.
+    /// Without the layout: take the positions of the graph shown before, so
+    /// a refresh never moves a node that is already on the screen, whatever
+    /// changed (links coming and going, labels, the area's size: positions
+    /// are fractions of the area, so the picture stretches with it). New
+    /// vertices are put into free room next to their neighbors (`place`);
+    /// vertices that went away leave a gap. Only "Re-layout" lays out the
+    /// whole picture again.
+    ///
+    /// The graph keeps the area the picture was laid out for. False when
+    /// there is no picture to continue (none before, or none of its nodes
+    /// left): then the caller lays it out (`lay_out`), which can take a
+    /// while for a large graph, so the app does it in the background.
     pub fn keep(&mut self, previous: Option<&Graph>) -> bool {
         let Some(p) = previous else {
             return false;
         };
-        let close = |a: f32, b: f32| (a - b).abs() <= 0.1 * b.max(1.0);
-        if self.same_shape(p) && close(p.area.0, self.area.0) && close(p.area.1, self.area.1) {
-            self.area = p.area;
-            for (v, o) in self.vertices.iter_mut().zip(&p.vertices) {
-                (v.x, v.y) = (o.x, o.y);
-            }
-            return true;
-        }
-        let old: Vec<Option<(f32, f32)>> = self
+        let (aw, ah) = (
+            f64::from(self.area.0.max(100.0)),
+            f64::from(self.area.1.max(100.0)),
+        );
+        let mut at: Vec<Option<P>> = self
             .vertices
             .iter()
-            .map(|v| p.index(&v.id).map(|i| (p.vertices[i].x, p.vertices[i].y)))
+            .map(|v| {
+                p.index(&v.id).map(|i| {
+                    let o = &p.vertices[i];
+                    (f64::from(o.x) * aw, f64::from(o.y) * ah)
+                })
+            })
             .collect();
-        for (i, v) in self.vertices.iter_mut().enumerate() {
-            let near: Vec<(f32, f32)> = self
-                .edges
-                .iter()
-                .filter(|e| e.a == i || e.b == i)
-                .filter_map(|e| old[e.other(i)])
-                .collect();
-            (v.x, v.y) = old[i].unwrap_or_else(|| {
-                if near.is_empty() {
-                    (0.5, 0.5)
-                } else {
-                    let n = near.len() as f32;
-                    let s = near.iter().fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
-                    (s.0 / n, s.1 / n)
-                }
-            });
+        if at.iter().all(Option::is_none) {
+            return false;
         }
-        false
+        let items: Vec<Item> = self
+            .vertices
+            .iter()
+            .map(|v| {
+                let (w, h, circle) = vertex_box(&v.label(), v.infra());
+                Item {
+                    w,
+                    h,
+                    circle,
+                    start: None,
+                }
+            })
+            .collect();
+        let n = self.vertices.len();
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for e in &self.edges {
+            adj[e.a].push(e.b);
+            adj[e.b].push(e.a);
+        }
+        // New vertices one by one: first the one with the most neighbors
+        // already placed, so a new group grows from where it is attached.
+        loop {
+            let next = (0..n).filter(|&i| at[i].is_none()).max_by_key(|&i| {
+                let placed = adj[i].iter().filter(|&&j| at[j].is_some()).count();
+                (placed, std::cmp::Reverse(i))
+            });
+            let Some(i) = next else { break };
+            at[i] = Some(place(i, &items, &at, &adj, (aw, ah)));
+        }
+        for (v, a) in self.vertices.iter_mut().zip(&at) {
+            if let Some((x, y)) = a {
+                v.x = (x / aw) as f32;
+                v.y = (y / ah) as f32;
+            }
+        }
+        self.area = p.area;
+        true
     }
 
     /// Compute the layout for `self.area`, continuing from `previous`
@@ -252,21 +280,6 @@ impl Graph {
             v.x = x;
             v.y = y;
         }
-    }
-
-    /// The same vertices (by id and label, in the same order) and edges.
-    fn same_shape(&self, other: &Graph) -> bool {
-        self.vertices.len() == other.vertices.len()
-            && self
-                .vertices
-                .iter()
-                .zip(&other.vertices)
-                .all(|(a, b)| a.id == b.id && a.label() == b.label())
-            && self
-                .edges
-                .iter()
-                .map(|e| (e.a, e.b))
-                .eq(other.edges.iter().map(|e| (e.a, e.b)))
     }
 
     pub fn index(&self, id: &str) -> Option<usize> {
@@ -947,6 +960,110 @@ fn hits_box(a: P, b: P, r: (f64, f64, f64, f64)) -> bool {
         }
     }
     true
+}
+
+/// Room left between a placed vertex's box and the others, in pixels.
+const PLACE_GAP: f64 = 10.0;
+/// What a crossing or a link through a label costs a placed vertex, in
+/// pixels of link length.
+const PLACE_CROSSING: f64 = 80.0;
+/// Distance between the rings `place` tries, in pixels.
+const PLACE_STEP: f64 = 20.0;
+
+/// Where a new vertex `i` goes in a picture that stays as it is (pixel
+/// positions `at`, None for the vertices not placed yet): on rings around
+/// the middle of its placed neighbors (the area's middle for a vertex
+/// without any), at the nearest distance where its box overlaps no placed
+/// box. Among the spots on that ring the cheapest wins: short links, few
+/// crossings and labels in the way, room around it. Spots inside the area
+/// come first.
+fn place(i: usize, items: &[Item], at: &[Option<P>], adj: &[Vec<usize>], area: P) -> P {
+    let placed: Vec<(usize, P)> = at
+        .iter()
+        .enumerate()
+        .filter(|&(j, _)| j != i)
+        .filter_map(|(j, p)| p.map(|p| (j, p)))
+        .collect();
+    let near: Vec<(usize, P)> = adj[i]
+        .iter()
+        .filter_map(|&j| at[j].map(|p| (j, p)))
+        .collect();
+    // Links between placed vertices, which the new ones should not cross.
+    let links: Vec<(P, P)> = placed
+        .iter()
+        .flat_map(|&(a, pa)| {
+            adj[a]
+                .iter()
+                .filter(move |&&b| b > a)
+                .filter_map(move |&b| at[b].map(|pb| (pa, pb)))
+        })
+        .collect();
+    let rect = |j: usize, p: P, gap: f64| {
+        let (l, t, r, b) = items[j].extent();
+        (p.0 + l - gap, p.1 + t - gap, p.0 + r + gap, p.1 + b + gap)
+    };
+    let overlap = |a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)| {
+        a.2.min(b.2) > a.0.max(b.0) && a.3.min(b.3) > a.1.max(b.1)
+    };
+    let free = |p: P| {
+        let mine = rect(i, p, PLACE_GAP);
+        placed.iter().all(|&(j, q)| !overlap(mine, rect(j, q, 0.0)))
+    };
+    let inside = |p: P| {
+        let r = rect(i, p, 0.0);
+        r.0 >= 0.0 && r.1 >= 0.0 && r.2 <= area.0 && r.3 <= area.1
+    };
+    // A typical link: room for a label beside another (as in `layout`).
+    let mut widths: Vec<f64> = items.iter().map(|it| f64::from(it.w)).collect();
+    widths.sort_by(f64::total_cmp);
+    let ideal = (widths[widths.len() / 2] + 50.0).clamp(120.0, 260.0);
+    let cost = |p: P| {
+        let mine = rect(i, p, 0.0);
+        let mut c = 0.0;
+        let mut bad = links.iter().filter(|&&(a, b)| hits_box(a, b, mine)).count();
+        for &(k, q) in &near {
+            c += (p.0 - q.0).hypot(p.1 - q.1);
+            bad += links.iter().filter(|&&(a, b)| crosses(p, q, a, b)).count();
+            bad += placed
+                .iter()
+                .filter(|&&(j, pj)| j != k && hits_box(p, q, rect(j, pj, 0.0)))
+                .count();
+        }
+        let room = placed
+            .iter()
+            .map(|&(_, q)| (p.0 - q.0).hypot(p.1 - q.1))
+            .fold(f64::MAX, f64::min);
+        c + PLACE_CROSSING * bad as f64 - room.min(ideal)
+    };
+    let anchor = if near.is_empty() {
+        (area.0 / 2.0, area.1 / 2.0)
+    } else {
+        let k = near.len() as f64;
+        (
+            near.iter().map(|(_, q)| q.0).sum::<f64>() / k,
+            near.iter().map(|(_, q)| q.1).sum::<f64>() / k,
+        )
+    };
+    let far = 1.5 * area.0.max(area.1) + ideal;
+    for strict in [true, false] {
+        let mut r = if near.len() == 1 { 0.6 * ideal } else { 0.0 };
+        while r <= far {
+            let steps = ((std::f64::consts::TAU * r / PLACE_STEP).ceil() as usize).max(1);
+            let best = (0..steps)
+                .map(|s| {
+                    let a = std::f64::consts::TAU * s as f64 / steps as f64;
+                    (anchor.0 + r * a.cos(), anchor.1 + r * a.sin())
+                })
+                .filter(|&p| (!strict || inside(p)) && free(p))
+                .map(|p| (cost(p), p))
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, p)) = best {
+                return p;
+            }
+            r += PLACE_STEP;
+        }
+    }
+    anchor
 }
 
 /// What the layout minimizes. `of(pos, vs)` sums the parts that moving the
@@ -1815,13 +1932,18 @@ mod tests {
     }
 
     #[test]
-    fn a_refresh_keeps_the_picture() {
+    fn a_refresh_never_moves_a_node() {
         let s = snap();
         let a = Graph::build(&s, (800.0, 420.0), None);
         let b = Graph::build(&s, (800.0, 420.0), Some(&a));
         assert_eq!(a, b, "same graph, same picture");
-        // A new link: the layout continues from the old picture.
-        let mut s2 = s;
+        let at = |g: &Graph, id: &str| {
+            let v = &g.vertices[g.index(id).expect("vertex")];
+            (v.x, v.y)
+        };
+        // A link comes, another goes, a label changes, the area is resized:
+        // nobody moves.
+        let mut s2 = s.clone();
         if let Ok(t) = &mut s2.topology {
             t.edges.push(TopoEdge {
                 a: "c".into(),
@@ -1829,16 +1951,121 @@ mod tests {
                 kind: "attachment".into(),
                 ..Default::default()
             });
+            t.edges
+                .retain(|e| (e.a.as_str(), e.b.as_str()) != ("b", "a"));
+            t.edges
+                .retain(|e| (e.a.as_str(), e.b.as_str()) != ("a", "b"));
+            t.nodes[0].software = Some("0.9.0".into());
         }
-        let c = Graph::build(&s2, (800.0, 420.0), Some(&a));
-        assert_eq!(c.edges.len(), a.edges.len() + 1);
-        let moved: f32 = a
-            .vertices
-            .iter()
-            .zip(&c.vertices)
-            .map(|(p, q)| (p.x - q.x).hypot(p.y - q.y))
-            .fold(0.0, f32::max);
-        assert!(moved < 0.5, "nodes moved by {moved}");
+        let c = Graph::build(&s2, (1200.0, 300.0), Some(&a));
+        let ix = |id: &str| c.index(id).expect("vertex");
+        assert!(c.edge(ix("c"), ix("d")).is_some() && c.edge(ix("a"), ix("b")).is_none());
+        assert_eq!(c.area, a.area, "the area the picture was made for");
+        for v in &a.vertices {
+            assert_eq!(at(&c, &v.id), (v.x, v.y), "{} moved", v.name);
+        }
+        // A node going away leaves the others where they were.
+        if let Ok(t) = &mut s2.topology {
+            t.nodes.retain(|n| n.id != "d");
+        }
+        let d = Graph::build(&s2, (800.0, 420.0), Some(&c));
+        assert_eq!(d.vertices.len(), a.vertices.len() - 1);
+        for v in &d.vertices {
+            assert_eq!((v.x, v.y), at(&a, &v.id), "{} moved", v.name);
+        }
+        // Nothing left of the old picture: laid out afresh.
+        let other = Snapshot {
+            topology: Ok(Topology {
+                nodes: vec![TopoNode {
+                    id: "x".into(),
+                    name: "other".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut e = Graph::shape(&other, (800.0, 420.0));
+        assert!(!e.keep(Some(&a)));
+    }
+
+    #[test]
+    fn new_nodes_go_next_to_their_neighbors_into_free_room() {
+        let area = (800.0, 420.0);
+        let s = snap();
+        let a = Graph::build(&s, area, None);
+        let mut s2 = s.clone();
+        if let Ok(t) = &mut s2.topology {
+            let link = |x: &str, y: &str| TopoEdge {
+                a: x.into(),
+                b: y.into(),
+                kind: "attachment".into(),
+                ..Default::default()
+            };
+            for (id, name) in [
+                ("e", "node-05"),
+                ("f", "node-06"),
+                ("g", "node-07"),
+                ("h", "node-08"),
+                ("i", "node-09"),
+            ] {
+                t.nodes.push(TopoNode {
+                    id: id.into(),
+                    name: name.into(),
+                    data: true,
+                    software: Some("0.8.0".into()),
+                    ..Default::default()
+                });
+            }
+            // Three attached to the relay, one to two nodes (one of them
+            // new), one alone.
+            for x in ["e", "f", "g"] {
+                t.edges.push(link(x, "a"));
+            }
+            t.edges.push(link("h", "c"));
+            t.edges.push(link("h", "e"));
+        }
+        let g = Graph::build(&s2, area, Some(&a));
+        assert_eq!(g.vertices.len(), a.vertices.len() + 5);
+        for v in &a.vertices {
+            let n = &g.vertices[g.index(&v.id).expect("kept")];
+            assert_eq!((n.x, n.y), (v.x, v.y), "{} moved", v.name);
+        }
+        let px = |v: &Vertex| (f64::from(v.x * area.0), f64::from(v.y * area.1));
+        let rect = |v: &Vertex| {
+            let (w, h, circle) = vertex_box(&v.label(), v.infra());
+            let it = Item {
+                w,
+                h,
+                circle,
+                start: None,
+            };
+            let (l, t, r, b) = it.extent();
+            let p = px(v);
+            (p.0 + l, p.1 + t, p.0 + r, p.1 + b)
+        };
+        let new = ["e", "f", "g", "h", "i"];
+        for id in new {
+            let v = &g.vertices[g.index(id).expect("placed")];
+            let r = rect(v);
+            assert!(
+                r.0 >= 0.0 && r.1 >= 0.0 && r.2 <= f64::from(area.0) && r.3 <= f64::from(area.1),
+                "{} inside the area: {r:?}",
+                v.name
+            );
+            for o in g.vertices.iter().filter(|o| o.id != v.id) {
+                let q = rect(o);
+                let overlap = r.2.min(q.2) > r.0.max(q.0) && r.3.min(q.3) > r.1.max(q.1);
+                assert!(!overlap, "{} overlaps {}", v.name, o.name);
+            }
+            for e in g.edges_of(g.index(id).expect("placed")) {
+                let (p, q) = (px(&g.vertices[e.a]), px(&g.vertices[e.b]));
+                let len = (p.0 - q.0).hypot(p.1 - q.1);
+                assert!(len < 320.0, "{}: a link of {len} px", v.name);
+            }
+        }
+        // The same input, the same picture.
+        assert_eq!(g, Graph::build(&s2, area, Some(&a)));
     }
 
     #[test]

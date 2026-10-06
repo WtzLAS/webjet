@@ -131,19 +131,24 @@ isn't available.
   Simulated annealing (small parts) or a local search of moves and swaps
   (large ones) lowers it. Overlapping labels are then pushed apart, the
   parts are packed in rows, largest first, and the whole is scaled to fit.
-  When nodes or links come or go, or the area changes size, the new layout
-  starts from the picture shown, unless that ends up much worse than
-  starting over. Layout runs in the background; until it is done the graph
-  shows the nodes at their old places. The same network always gets the
-  same picture.
+  The whole picture is laid out only once: for the first snapshot (again
+  when the drawing area is first measured, if no node was moved yet) and
+  when you press *Re-layout*. After that, nodes never move by themselves:
+  when links come or go, labels change or the window is resized, every node
+  stays where it is (the picture stretches with the area). A new node is put
+  next to its neighbors, at the nearest free spot, preferring short links
+  without crossings and labels in the way; a node that goes away leaves a
+  gap. Only when none of the shown nodes is left (another network) is the
+  graph laid out afresh. A full layout runs in the background; until it is
+  done the graph shows the nodes at their old places. The same network
+  always gets the same picture.
 
   The graph moves: drag the background (or scroll with two fingers) to move
   the picture, and use the mouse wheel, ⌘/Ctrl + scroll or the − / + buttons
   to zoom around the pointer. *Fit* goes back to the whole picture. Drag a
   node to place it; a short press without moving selects it. Placed nodes
-  stay where you put them across refreshes until *Re-layout*, which also
-  resets the zoom and lays the graph out from scratch for the area's
-  current size. The circuit area
+  stay where you put them until *Re-layout*, which also resets the zoom and
+  lays the graph out from scratch for the area's current size. The circuit area
   below lists this agent's circuits, with ★ on the one a session sends on.
   Selecting a circuit draws its path in the graph and shows its hops, state,
   round trip, probes, and its route's traffic and drops. With no circuit
@@ -256,7 +261,9 @@ tab's layout at several window sizes and drags its three separators.
 overlap. The layout itself is tested in `graph::tests` (the network from a
 bug report at several area sizes: no overlapping labels, at most a few
 crossings and edges through labels; a 40-node network; continuing from an
-old picture). `WEBJET_LAYOUT_SVG=<dir> cargo test -p webjet-app --lib
+old picture; refreshes never moving a node and new nodes going into free
+room next to their neighbors). `refreshes_do_not_move_the_nodes` checks the
+same through the app's refresh path. `WEBJET_LAYOUT_SVG=<dir> cargo test -p webjet-app --lib
 graph::tests` writes the test pictures as SVG files to look at.
 `config_tab_is_for_admins` types into the configuration editor (checked as
 typed, undo), switches to a remote node's configuration with unapplied

@@ -628,7 +628,8 @@ impl WebjetApp {
             );
         let hint = muted(
             "Drag the background to move the picture, drag a node to place it · scroll to move, \
-             mouse wheel or ⌘/Ctrl + scroll to zoom",
+             mouse wheel or ⌘/Ctrl + scroll to zoom · nodes stay where they are, new ones \
+             appear next to their links; Re-layout arranges the whole picture again",
         )
         .text_xs();
         let moved = self.pinned.len();
@@ -669,7 +670,7 @@ impl WebjetApp {
                     } else {
                         "Re-layout".to_string()
                     },
-                    moved > 0,
+                    true,
                     theme::RAISED,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {

@@ -111,6 +111,8 @@ pub struct WebjetApp {
     layout_job: Option<(Graph, Graph)>,
     /// Counts layouts started, so only the latest is shown.
     layout_seq: u64,
+    /// A layout is running in the background.
+    laying_out: bool,
     accounts_on_disk: Vec<String>,
     /// The default account in the key directory (`webjetctl network account use`).
     default_account: Option<String>,
@@ -203,6 +205,7 @@ impl WebjetApp {
             refreshing: false,
             layout_job: None,
             layout_seq: 0,
+            laying_out: false,
             accounts_on_disk,
             default_account,
             chosen,
@@ -316,6 +319,7 @@ impl WebjetApp {
             return;
         };
         self.layout_seq += 1;
+        self.laying_out = true;
         let seq = self.layout_seq;
         let job = cx.background_executor().spawn(async move {
             g.lay_out(Some(&previous));
@@ -325,7 +329,12 @@ impl WebjetApp {
             let g = job.await;
             let _ = this.update(cx, |app, cx| {
                 if app.layout_seq == seq {
-                    app.graph = g;
+                    app.laying_out = false;
+                    // Onto the graph shown now: a refresh that came
+                    // meanwhile may have changed it.
+                    let mut now = app.graph.clone();
+                    now.area = g.area;
+                    app.graph = if now.keep(Some(&g)) { now } else { g };
                     app.graph.pin(&app.pinned);
                     cx.notify();
                 }
@@ -355,12 +364,24 @@ impl WebjetApp {
         self.traffic.push(now_ms(), sum.tx_bytes, sum.rx_bytes);
         let [_, _, w, h] = self.graph_bounds.get();
         let mut g = Graph::shape(&s, (w, h));
-        if self.graph.vertices.is_empty() {
-            // The first picture: lay it out right away.
+        // Nodes never move by themselves: a refresh keeps every node where
+        // it is and places new ones next to their neighbors (`keep`). Only
+        // "Re-layout" and the cases below lay the whole picture out.
+        let unmeasured = crate::graph::DEFAULT_AREA;
+        if self.graph.vertices.is_empty() || !g.keep(Some(&self.graph)) {
+            // The first picture, or nothing left of the old one (another
+            // network): lay it out right away.
             g.lay_out(None);
-        } else if !g.keep(Some(&self.graph)) {
-            // Shown at the old places until the layout is done.
-            self.layout_job = Some((g.clone(), self.graph.clone()));
+        } else if g.area == unmeasured
+            && (w, h) != unmeasured
+            && self.pinned.is_empty()
+            && !self.laying_out
+        {
+            // The picture was made before the Nodes tab was first shown and
+            // the graph area measured: lay it out once for its real size.
+            let mut job = g.clone();
+            job.area = (w, h);
+            self.layout_job = Some((job, self.graph.clone()));
         }
         self.graph = g;
         self.graph.pin(&self.pinned);
@@ -1830,5 +1851,87 @@ mod tests {
             cx.debug_bounds("config-admins-only").is_some(),
             "members are told it's for admins"
         );
+    }
+
+    /// Refreshes with links coming and going and a new node joining never
+    /// move a node already in the picture; only Re-layout does.
+    #[gpui::test]
+    fn refreshes_do_not_move_the_nodes(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        cx.simulate_resize(size(px(1280.), px(820.)));
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        view.update(cx, |app, _| {
+            app.signed_in = Some(si);
+            app.tab = Tab::Nodes;
+            app.loaded(snap.clone());
+        });
+        frame(cx);
+        // Made before the area was measured: laid out once for its size.
+        view.update(cx, |app, cx| {
+            app.loaded(snap.clone());
+            app.start_layout(cx);
+        });
+        frame(cx);
+        let places = |app: &WebjetApp| -> BTreeMap<String, (f32, f32)> {
+            app.graph
+                .vertices
+                .iter()
+                .map(|v| (v.id.clone(), (v.x, v.y)))
+                .collect()
+        };
+        let before = view.update(cx, |app, _| {
+            let [_, _, w, h] = app.graph_bounds.get();
+            assert_eq!(app.graph.area, (w, h), "laid out for the measured area");
+            places(app)
+        });
+        let mut changed = snap.clone();
+        if let Ok(t) = &mut changed.topology {
+            let first = t.edges.remove(0);
+            let a = first.a.clone();
+            t.nodes.push(model::TopoNode {
+                id: "ffff0000".into(),
+                name: "node-new".into(),
+                data: true,
+                ..Default::default()
+            });
+            t.edges.push(model::TopoEdge {
+                a: "ffff0000".into(),
+                b: a,
+                kind: "attachment".into(),
+                ..Default::default()
+            });
+        }
+        for s in [changed.clone(), snap.clone(), changed] {
+            view.update(cx, |app, cx| {
+                app.loaded(s);
+                app.start_layout(cx);
+            });
+            frame(cx);
+            view.update(cx, |app, _| {
+                let now = places(app);
+                for (id, p) in &before {
+                    assert_eq!(now.get(id), Some(p), "{id} moved");
+                }
+            });
+        }
+        view.update(cx, |app, _| {
+            assert!(
+                app.graph.index("ffff0000").is_some(),
+                "the new node is shown"
+            );
+        });
     }
 }
