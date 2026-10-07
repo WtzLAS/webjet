@@ -147,65 +147,9 @@ impl Graph {
         Some((c * pen, 100 - max_load.min(100)))
     }
 
-    /// Dijkstra avoiding `banned_nodes` and `banned_edges`, with a relay-count cap.
-    fn shortest(
-        &self,
-        src: &Bytes32,
-        dst: &Bytes32,
-        banned_nodes: &BTreeSet<Bytes32>,
-        banned_edges: &BTreeSet<(Bytes32, Bytes32)>,
-    ) -> Option<Vec<Bytes32>> {
-        #[derive(PartialEq)]
-        struct St(f64, Vec<Bytes32>);
-        impl Eq for St {}
-        impl PartialOrd for St {
-            fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.cmp(o))
-            }
-        }
-        impl Ord for St {
-            fn cmp(&self, o: &Self) -> std::cmp::Ordering {
-                o.0.partial_cmp(&self.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
-        }
-        let mut best: HashMap<(Bytes32, usize), f64> = HashMap::new();
-        let mut heap = BinaryHeap::new();
-        heap.push(St(0.0, vec![*src]));
-        while let Some(St(c, path)) = heap.pop() {
-            let Some(&n) = path.last() else { continue };
-            if n == *dst {
-                return Some(path);
-            }
-            let relays_used = path.len() - 1;
-            for (m, ec) in self.edges(&n, src, dst) {
-                if banned_nodes.contains(&m) || banned_edges.contains(&(n, m)) || path.contains(&m)
-                {
-                    continue;
-                }
-                let is_relay = m != *dst;
-                if is_relay {
-                    if relays_used + 1 > MAX_RELAYS {
-                        continue;
-                    }
-                    match self.relays.get(&m).map(|r| r.load) {
-                        Some(l) if load_penalty(l).is_none() => continue,
-                        None => continue,
-                        _ => {}
-                    }
-                }
-                let nc = c + ec;
-                let key = (m, path.len());
-                if best.get(&key).is_some_and(|b| *b <= nc) {
-                    continue;
-                }
-                best.insert(key, nc);
-                let mut p = path.clone();
-                p.push(m);
-                heap.push(St(nc, p));
-            }
-        }
-        None
+    /// The cheapest path from `src` to `dst` (src first).
+    fn shortest(&self, src: &Bytes32, dst: &Bytes32) -> Option<Vec<Bytes32>> {
+        self.shortest_from(src, src, dst, &BTreeSet::new(), &BTreeSet::new(), 0)
     }
 
     /// Yen's k shortest loop-free paths from `src` to `dst` (§11.4). If the
@@ -214,7 +158,7 @@ impl Graph {
     pub fn k_paths(&self, src: &Bytes32, dst: &Bytes32, k: usize) -> Vec<Path> {
         let mut a: Vec<Vec<Bytes32>> = Vec::new();
         let mut b: Vec<(f64, Vec<Bytes32>)> = Vec::new();
-        let Some(first) = self.shortest(src, dst, &BTreeSet::new(), &BTreeSet::new()) else {
+        let Some(first) = self.shortest(src, dst) else {
             return Vec::new();
         };
         a.push(first);
@@ -267,6 +211,15 @@ impl Graph {
         out
     }
 
+    /// Dijkstra from `from` (`src` itself, or a spur node of Yen's search
+    /// reached after `prefix_relays` relays) to `dst`, avoiding
+    /// `banned_nodes` and `banned_edges`, through relays that take more
+    /// load, with at most [`MAX_RELAYS`] relays in all. Edges are those of
+    /// a search from `src` (see [`Graph::edges`]). The path starts at `from`.
+    ///
+    /// Costs are kept per (node, relays so far): under the relay cap a
+    /// cheaper way to a node with more relays doesn't make a dearer one
+    /// with fewer useless.
     fn shortest_from(
         &self,
         src: &Bytes32,
@@ -276,25 +229,34 @@ impl Graph {
         banned_edges: &BTreeSet<(Bytes32, Bytes32)>,
         prefix_relays: usize,
     ) -> Option<Vec<Bytes32>> {
-        if from == src {
-            return self.shortest(src, dst, banned_nodes, banned_edges);
+        /// Ordered cheapest first for the max-heap.
+        struct St(f64, Vec<Bytes32>);
+        impl PartialEq for St {
+            fn eq(&self, o: &Self) -> bool {
+                self.cmp(o).is_eq()
+            }
         }
-        // Treat `from` as the start but keep edge semantics of the full search.
-        let mut best: HashMap<Bytes32, f64> = HashMap::new();
-        let mut frontier: Vec<(f64, Vec<Bytes32>)> = vec![(0.0, vec![*from])];
-        let mut found: Option<(f64, Vec<Bytes32>)> = None;
-        while let Some(idx) = frontier
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.0.total_cmp(&b.1.0))
-            .map(|(i, _)| i)
-        {
-            let (c, path) = frontier.swap_remove(idx);
+        impl Eq for St {}
+        impl PartialOrd for St {
+            fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(o))
+            }
+        }
+        impl Ord for St {
+            fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+                o.0.total_cmp(&self.0)
+            }
+        }
+        let mut best: HashMap<(Bytes32, usize), f64> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+        heap.push(St(0.0, vec![*from]));
+        while let Some(St(c, path)) = heap.pop() {
             let Some(&n) = path.last() else { continue };
             if n == *dst {
-                found = Some((c, path));
-                break;
+                return Some(path);
             }
+            // Relays on the path once `m` is added (`src` isn't one).
+            let relays = prefix_relays + path.len();
             for (m, ec) in self.edges(&n, src, dst) {
                 if banned_nodes.contains(&m)
                     || banned_edges.contains(&(n, m))
@@ -303,7 +265,6 @@ impl Graph {
                 {
                     continue;
                 }
-                let relays = prefix_relays + path.len();
                 if m != *dst
                     && (relays > MAX_RELAYS
                         || self
@@ -315,16 +276,17 @@ impl Graph {
                     continue;
                 }
                 let nc = c + ec;
-                if best.get(&m).is_some_and(|b| *b <= nc) {
+                let key = (m, relays);
+                if best.get(&key).is_some_and(|b| *b <= nc) {
                     continue;
                 }
-                best.insert(m, nc);
+                best.insert(key, nc);
                 let mut p = path.clone();
                 p.push(m);
-                frontier.push((nc, p));
+                heap.push(St(nc, p));
             }
         }
-        found.map(|f| f.1)
+        None
     }
 }
 
@@ -795,6 +757,25 @@ mod tests {
         g.attachments
             .insert(id(200), [(id(3), 5.0)].into_iter().collect());
         g
+    }
+
+    /// Under the relay cap the cheapest way to a relay can be a dead end:
+    /// the search keeps the dearer way with fewer relays too.
+    #[test]
+    fn relay_cap_keeps_a_dearer_shorter_way() {
+        let mut g = Graph::default();
+        for (a, b) in [(1, 2), (2, 3), (3, 4)] {
+            g.relays.entry(id(a)).or_default().links.insert(id(b), 1.0);
+            g.relays.entry(id(b)).or_default().links.insert(id(a), 1.0);
+        }
+        g.attachments
+            .insert(id(100), [(id(1), 1.0), (id(3), 50.0)].into_iter().collect());
+        g.attachments
+            .insert(id(200), [(id(4), 1.0)].into_iter().collect());
+        // 1-2-3-4 is cheaper to 3 but four relays; 3-4 is the only way.
+        let p = g.k_paths(&id(100), &id(200), 3);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].hops, vec![id(3), id(4)]);
     }
 
     #[test]

@@ -7,8 +7,7 @@ use rustls::crypto::{
     CryptoProvider, WebPkiSupportedAlgorithms, aws_lc_rs, verify_tls13_signature_with_raw_key,
 };
 use rustls::pki_types::{
-    CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, SubjectPublicKeyInfoDer,
-    UnixTime,
+    CertificateDer, PrivatePkcs8KeyDer, ServerName, SubjectPublicKeyInfoDer, UnixTime,
 };
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::sign::CertifiedKey;
@@ -81,11 +80,8 @@ pub fn certified_key(kp: &KeyPair) -> anyhow::Result<Arc<CertifiedKey>> {
 
 fn new_certified_key(kp: &KeyPair) -> anyhow::Result<Arc<CertifiedKey>> {
     let der = kp.pkcs8_der();
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der.to_vec()));
-    let signer = aws_lc_rs::sign::any_eddsa_type(match &key {
-        PrivateKeyDer::Pkcs8(k) => k,
-        _ => unreachable!(),
-    })?;
+    let key = PrivatePkcs8KeyDer::from(der.to_vec());
+    let signer = aws_lc_rs::sign::any_eddsa_type(&key)?;
     let spki = CertificateDer::from(spki_der(&kp.public()));
     Ok(Arc::new(CertifiedKey::new(vec![spki], signer)))
 }
@@ -314,12 +310,10 @@ pub fn server_config(
     trust: Arc<dyn PeerTrust>,
     expected: Option<Bytes32>,
     alpn: &[&[u8]],
-    allow_enroll: bool,
 ) -> anyhow::Result<Arc<rustls::ServerConfig>> {
-    let verifier: Arc<dyn ClientCertVerifier> = Arc::new(OptionalClient {
-        inner: TrustedClient { trust, expected },
-        optional: allow_enroll,
-    });
+    // Client certificates are mandatory (the verifier's default):
+    // enrollment has its own config, `enroll_server_config`.
+    let verifier: Arc<dyn ClientCertVerifier> = Arc::new(TrustedClient { trust, expected });
     let mut c = rustls::ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_client_cert_verifier(verifier)
@@ -330,53 +324,6 @@ pub fn server_config(
     c.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     c.send_tls13_tickets = 0;
     Ok(Arc::new(c))
-}
-
-/// Wraps [`TrustedClient`], optionally allowing clients without a
-/// certificate (only for the enrollment ALPN; the caller enforces that).
-#[derive(Debug)]
-struct OptionalClient {
-    inner: TrustedClient,
-    optional: bool,
-}
-
-impl ClientCertVerifier for OptionalClient {
-    fn client_auth_mandatory(&self) -> bool {
-        !self.optional
-    }
-    fn root_hint_subjects(&self) -> &[DistinguishedName] {
-        &[]
-    }
-    fn verify_client_cert(
-        &self,
-        e: &CertificateDer<'_>,
-        i: &[CertificateDer<'_>],
-        now: UnixTime,
-    ) -> Result<ClientCertVerified, Error> {
-        self.inner.verify_client_cert(e, i, now)
-    }
-    fn verify_tls12_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        self.inner.verify_tls12_signature(m, c, d)
-    }
-    fn verify_tls13_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        self.inner.verify_tls13_signature(m, c, d)
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![SignatureScheme::ED25519]
-    }
-    fn requires_raw_public_keys(&self) -> bool {
-        true
-    }
 }
 
 /// Server side of the enrollment endpoint: no client certificate (§8).
@@ -427,8 +374,7 @@ mod tests {
         let a = KeyPair::generate();
         let b = KeyPair::generate();
         let cc = client_config(&a, vec![b.public()], Arc::new(TrustAll), ALPN_E2E).unwrap();
-        let sc =
-            server_config(&b, Arc::new(TrustAll), Some(a.public()), &[ALPN_E2E], false).unwrap();
+        let sc = server_config(&b, Arc::new(TrustAll), Some(a.public()), &[ALPN_E2E]).unwrap();
         let mut c = rustls::ClientConnection::new(cc, server_name()).unwrap();
         let mut s = rustls::ServerConnection::new(sc).unwrap();
         for _ in 0..10 {
@@ -473,7 +419,7 @@ mod tests {
         let b = KeyPair::generate();
         let other = KeyPair::generate();
         let cc = client_config(&a, vec![other.public()], Arc::new(TrustAll), ALPN_HOP).unwrap();
-        let sc = server_config(&b, Arc::new(TrustAll), None, &[ALPN_HOP], false).unwrap();
+        let sc = server_config(&b, Arc::new(TrustAll), None, &[ALPN_HOP]).unwrap();
         let mut c = rustls::ClientConnection::new(cc, server_name()).unwrap();
         let mut s = rustls::ServerConnection::new(sc).unwrap();
         let mut failed = false;

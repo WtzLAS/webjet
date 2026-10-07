@@ -266,7 +266,7 @@ pub async fn accept_tls(
     let cfg = if is_enroll {
         tls::enroll_server_config(kp)?
     } else {
-        tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)?
+        tls::server_config(kp, trust, None, &[tls::ALPN_HOP])?
     };
     let tls = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -337,7 +337,7 @@ pub async fn accept_kcp(
 ) -> Result<Established> {
     // The endpoint's handshake slot is held until the handshake ends.
     let _slot = c.handshake;
-    let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)?;
+    let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP])?;
     let tls = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         tokio_rustls::TlsAcceptor::from(cfg).accept(c.stream),

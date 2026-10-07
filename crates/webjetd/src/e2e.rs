@@ -612,7 +612,7 @@ fn on_handshake(n: &Arc<Node>, c: &Arc<LocalCircuit>, frame: &[u8]) -> Result<()
     }
     // Binding to the circuit (§9.4.2 step 4): the TLS identity must be the
     // circuit's signed source.
-    let cfg = tls::server_config(&n.kp, trust(n), Some(s.peer_key), &[tls::ALPN_E2E], false)?;
+    let cfg = tls::server_config(&n.kp, trust(n), Some(s.peer_key), &[tls::ALPN_E2E])?;
     let conn = rustls::ServerConnection::new(cfg)?;
     i.hs = Some(Handshake {
         nonce: h.nonce,

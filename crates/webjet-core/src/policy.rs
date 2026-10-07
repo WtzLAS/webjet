@@ -6,7 +6,6 @@ use crate::types::{parse_net, valid_name, valid_tag};
 use anyhow::{Result, anyhow, bail};
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::IpAddr;
 use webjet_proto as wp;
 
@@ -232,22 +231,11 @@ impl Selector {
     }
 }
 
-/// Whether any of `sels` picks the subject, the way a rule's `src` does.
-/// Used by the network configuration's `select` lists (§6.18).
+/// Whether any of `sels` picks the subject, the way a rule's `src` does
+/// (and only an enrolled one, as for a rule whose `dst` is `*`). Used by
+/// the network configuration's `select` lists (§6.18).
 pub fn selects(sels: &[Selector], s: &Subject) -> bool {
-    let pol = Policy {
-        version: 0,
-        default: Decision::Deny,
-        rules: vec![Rule {
-            id: "select".into(),
-            action: Decision::Allow,
-            src: sels.to_vec(),
-            dst: vec![Selector::Any],
-            ports: PortSet::all(),
-        }],
-        tests: vec![],
-    };
-    pol.evaluate(s, Dest::Node(s), 6, 1).decision == Decision::Allow
+    s.enrolled && sels.iter().any(|x| x.matches_node(s))
 }
 
 /// What the policy needs to know about a node.
@@ -575,64 +563,7 @@ fn parse_test_port(s: &str) -> Result<(u8, u16)> {
     Ok((proto, port.parse()?))
 }
 
-// ---------------------------------------------------------------- compiled per-node tables (§14.4)
-
-#[derive(Clone, Debug, Default)]
-pub struct Compiled {
-    pub version: u64,
-    /// Flows others may start to me, by source node.
-    pub inbound: HashMap<Bytes32, PortSet>,
-    /// Flows I may start, by destination node.
-    pub outbound: HashMap<Bytes32, PortSet>,
-    /// For gateways: per source node, per published prefix I serve.
-    pub subnet_in: HashMap<Bytes32, Vec<(IpNet, PortSet)>>,
-}
-
-impl Compiled {
-    pub fn build(
-        policy: &Policy,
-        me: &Subject,
-        others: &[Subject],
-        my_prefixes: &[IpNet],
-    ) -> Compiled {
-        let mut c = Compiled {
-            version: policy.version,
-            ..Default::default()
-        };
-        for o in others {
-            if o.node_id == me.node_id {
-                continue;
-            }
-            let i = policy.allowed(o, Dest::Node(me));
-            if !i.is_empty() {
-                c.inbound.insert(o.node_id, i);
-            }
-            let out = policy.allowed(me, Dest::Node(o));
-            if !out.is_empty() {
-                c.outbound.insert(o.node_id, out);
-            }
-            if !my_prefixes.is_empty() {
-                let v: Vec<(IpNet, PortSet)> = my_prefixes
-                    .iter()
-                    .map(|p| (*p, policy.allowed_prefix(o, p)))
-                    .filter(|(_, s)| !s.is_empty())
-                    .collect();
-                if !v.is_empty() {
-                    c.subnet_in.insert(o.node_id, v);
-                }
-            }
-        }
-        c
-    }
-
-    /// Pair reachability (§14.4): some flow allowed in either direction, or
-    /// the peer may reach one of my prefixes.
-    pub fn may_talk(&self, peer: &Bytes32) -> bool {
-        self.inbound.contains_key(peer)
-            || self.outbound.contains_key(peer)
-            || self.subnet_in.contains_key(peer)
-    }
-}
+// ---------------------------------------------------------------- pair reachability (§14.4)
 
 /// Pair reachability evaluated directly (relays, §11.5): `a` and `b` may
 /// talk if any flow is allowed in either direction, or either may reach a
@@ -856,8 +787,10 @@ expect = "deny"
         }
     }
 
+    /// `allowed` (the port set a pair may use) agrees with evaluating each
+    /// flow.
     #[test]
-    fn compiled_agrees_with_direct() {
+    fn allowed_agrees_with_evaluate() {
         let p = policy();
         let nodes = vec![
             subj(1, &["tag:admin"]),
@@ -866,11 +799,11 @@ expect = "deny"
             subj(4, &["tag:laptop"]),
         ];
         for me in &nodes {
-            let c = Compiled::build(&p, me, &nodes, &[]);
             for o in &nodes {
                 if o.node_id == me.node_id {
                     continue;
                 }
+                let allowed = p.allowed(o, Dest::Node(me));
                 for (proto, port) in [
                     (PROTO_TCP, 22u16),
                     (PROTO_TCP, 80),
@@ -880,10 +813,7 @@ expect = "deny"
                 ] {
                     let direct =
                         p.evaluate(o, Dest::Node(me), proto, port).decision == Decision::Allow;
-                    let comp = c
-                        .inbound
-                        .get(&o.node_id)
-                        .is_some_and(|s| s.contains(proto, port));
+                    let comp = allowed.contains(proto, port);
                     assert_eq!(direct, comp, "{:?} -> {:?} {proto}/{port}", o.tags, me.tags);
                 }
             }
@@ -1065,6 +995,28 @@ mod prop {
             // `allowed` is the set of flows `evaluate` admits.
             let allowed = pol.allowed(&s, Dest::Node(&d));
             prop_assert_eq!(allowed.contains(proto, port), v.decision == Decision::Allow);
+        }
+
+        /// `selects` picks what a one-rule policy with those sources and
+        /// destination `*` allows.
+        #[test]
+        fn selects_is_a_rule_source(pol in policy(), s in subject()) {
+            for r in &pol.rules {
+                let one = Policy {
+                    version: 0,
+                    default: Decision::Deny,
+                    rules: vec![Rule {
+                        id: "select".into(),
+                        action: Decision::Allow,
+                        src: r.src.clone(),
+                        dst: vec![Selector::Any],
+                        ports: PortSet::all(),
+                    }],
+                    tests: vec![],
+                };
+                let want = one.evaluate(&s, Dest::Node(&s), PROTO_TCP, 1).decision == Decision::Allow;
+                prop_assert_eq!(selects(&r.src, &s), want);
+            }
         }
 
         /// Set operations agree with the predicate model.
