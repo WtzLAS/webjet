@@ -108,9 +108,8 @@ impl Version {
         }
         if let Some(p) = pre
             && (p.len() > 32
-                || p.split('.').any(|id| {
-                    id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric())
-                }))
+                || p.split('.')
+                    .any(|id| id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric())))
         {
             return None;
         }

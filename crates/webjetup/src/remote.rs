@@ -203,7 +203,7 @@ pub fn setup(
     want: Option<bool>,
     enrolled_now: bool,
 ) -> Result<()> {
-    let text = std::fs::read_to_string(&l.config).unwrap_or_default();
+    let text = system::read_config(l)?;
     if !sys.dry && !agent_supports(l) {
         // An agent from before 0.9.0 would refuse the whole file.
         if let Some(new) = with_remote(&text, None)? {

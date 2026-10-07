@@ -89,32 +89,76 @@ impl Sys {
         set_mode(p, if private { 0o700 } else { 0o755 })
     }
 
+    /// Replace `p` with `contents` atomically (a temporary file, synced, then
+    /// renamed over it): a crash leaves the old file or the new one, never a
+    /// truncated one. A symbolic link is followed, so its target changes.
     pub fn write(&self, p: &Path, contents: &str, mode: u32) -> Result<()> {
         self.say(&format!("write {}", p.display()));
         if self.dry {
             return Ok(());
         }
-        std::fs::write(p, contents).with_context(|| format!("write {}", p.display()))?;
-        set_mode(p, mode)
+        let p = if p.is_symlink() {
+            std::fs::canonicalize(p).with_context(|| format!("resolve {}", p.display()))?
+        } else {
+            p.to_path_buf()
+        };
+        let (Some(dir), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else {
+            bail!("can't write {}", p.display());
+        };
+        // The new file is root's: keep the owner the old one had.
+        #[cfg(unix)]
+        let owner = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(&p).ok().map(|m| (m.uid(), m.gid()))
+        };
+        webjet_release::write_atomic(dir, name, contents.as_bytes(), mode)?;
+        #[cfg(unix)]
+        if let Some((uid, gid)) = owner {
+            std::os::unix::fs::chown(&p, Some(uid), Some(gid))
+                .with_context(|| format!("chown {}", p.display()))?;
+        }
+        set_mode(&p, mode)?;
+        sync_dir(dir);
+        Ok(())
     }
 
-    /// Put `src` at `dest`, replacing it even while it runs: copy next to it,
-    /// then rename over it (on Windows, move a running file aside first).
+    /// Put `src` at `dest`, replacing it even while it runs: copy next to it
+    /// (synced, so a crash never leaves an empty program), then rename over
+    /// it. On Windows a running file can't be replaced, only renamed: it is
+    /// moved aside first, and back if the replacement fails.
     pub fn install_file(&self, src: &Path, dest: &Path, mode: u32) -> Result<()> {
         self.say(&format!("install {}", dest.display()));
         if self.dry {
             return Ok(());
         }
         let tmp = dest.with_extension("webjetup-new");
-        std::fs::copy(src, &tmp).with_context(|| format!("copy to {}", tmp.display()))?;
-        set_mode(&tmp, mode)?;
-        if cfg!(windows) && dest.exists() {
-            let old = dest.with_extension("webjetup-old");
-            let _ = std::fs::remove_file(&old);
-            std::fs::rename(dest, &old)
-                .with_context(|| format!("move {} aside", dest.display()))?;
+        let res = (|| -> Result<()> {
+            copy_synced(src, &tmp)?;
+            set_mode(&tmp, mode)?;
+            let aside = if cfg!(windows) && dest.exists() {
+                let old = aside_path(dest)?;
+                std::fs::rename(dest, &old)
+                    .with_context(|| format!("move {} aside", dest.display()))?;
+                Some(old)
+            } else {
+                None
+            };
+            if let Err(e) = std::fs::rename(&tmp, dest) {
+                if let Some(old) = aside {
+                    let _ = std::fs::rename(old, dest);
+                }
+                return Err(e).with_context(|| format!("replace {}", dest.display()));
+            }
+            Ok(())
+        })();
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
-        std::fs::rename(&tmp, dest).with_context(|| format!("replace {}", dest.display()))
+        res?;
+        if let Some(dir) = dest.parent() {
+            sync_dir(dir);
+        }
+        Ok(())
     }
 
     pub fn remove_file(&self, p: &Path) -> Result<()> {
@@ -141,6 +185,58 @@ impl Sys {
             return Ok(());
         }
         std::fs::remove_dir_all(p).with_context(|| format!("remove {}", p.display()))
+    }
+}
+
+/// Copy `src` to `dest` (replacing it) and flush it to disk.
+fn copy_synced(src: &Path, dest: &Path) -> Result<()> {
+    let mut from = std::fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
+    let mut to =
+        std::fs::File::create(dest).with_context(|| format!("create {}", dest.display()))?;
+    std::io::copy(&mut from, &mut to).with_context(|| format!("copy to {}", dest.display()))?;
+    to.sync_all()
+        .with_context(|| format!("sync {}", dest.display()))
+}
+
+/// Where [`Sys::install_file`] moves a file aside on Windows. A file moved
+/// aside before may still run (the upgrade helper's own program, put back
+/// by a rollback while it runs) and then can't be removed or replaced: use
+/// the next free name instead. Leftovers go on a later install.
+fn aside_path(dest: &Path) -> Result<PathBuf> {
+    for i in 0..10 {
+        let old = if i == 0 {
+            dest.with_extension("webjetup-old")
+        } else {
+            dest.with_extension(format!("webjetup-old{i}"))
+        };
+        if old.symlink_metadata().is_err() || std::fs::remove_file(&old).is_ok() {
+            return Ok(old);
+        }
+    }
+    bail!(
+        "can't move {} aside: earlier copies are still in use",
+        dest.display()
+    )
+}
+
+/// Flush a directory's entries (a rename in it) to disk, where that exists.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// webjetd.toml's text, `""` when there is none yet. Any other error is
+/// returned: an edit must never start from an empty file because the real
+/// one couldn't be read, and then replace it.
+pub fn read_config(l: &Layout) -> Result<String> {
+    match std::fs::read_to_string(&l.config) {
+        Ok(t) => Ok(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e).with_context(|| format!("read {}", l.config.display())),
     }
 }
 
@@ -483,9 +579,15 @@ pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
             .service_file
             .clone()
             .unwrap_or_else(|| PathBuf::from("/etc/systemd/system/webjetd.service"));
-        if !unit.exists() {
-            let tss = query("getent", &["group", "tss"]).is_some();
-            sys.write(&unit, &systemd_unit(l, tss), 0o644)?;
+        // Rewrite an outdated unit (daemon-reload follows), as the plist on
+        // macOS: each release's unit is the one it was tested with.
+        let tss = query("getent", &["group", "tss"]).is_some();
+        let want = systemd_unit(l, tss);
+        if std::fs::read_to_string(&unit).ok().as_deref() != Some(want.as_str()) {
+            if unit.exists() {
+                println!("    updating {}", unit.display());
+            }
+            sys.write(&unit, &want, 0o644)?;
         }
         if !have("systemctl") {
             println!(
@@ -911,6 +1013,93 @@ mod tests {
                 0o755
             );
         }
+    }
+
+    #[test]
+    fn install_file_leaves_nothing_behind_on_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let sys = Sys { dry: false };
+        let dest = d.path().join("prog");
+        std::fs::write(&dest, "v1").unwrap();
+        assert!(
+            sys.install_file(&d.path().join("missing"), &dest, 0o755)
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "v1");
+        assert!(!dest.with_extension("webjetup-new").exists());
+        // A destination that can't be replaced (a directory here) keeps
+        // its content and leaves no temporary file.
+        let src = d.path().join("new");
+        std::fs::write(&src, "v2").unwrap();
+        let dir = d.path().join("dir");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("x"), "x").unwrap();
+        assert!(sys.install_file(&src, &dir, 0o755).is_err());
+        assert!(dir.join("x").exists());
+        assert!(!dir.with_extension("webjetup-new").exists());
+    }
+
+    #[test]
+    fn aside_names_skip_files_still_in_use() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("webjetup.exe");
+        assert_eq!(
+            aside_path(&dest).unwrap(),
+            d.path().join("webjetup.webjetup-old")
+        );
+        // A leftover that can be removed is reused.
+        std::fs::write(d.path().join("webjetup.webjetup-old"), "x").unwrap();
+        assert_eq!(
+            aside_path(&dest).unwrap(),
+            d.path().join("webjetup.webjetup-old")
+        );
+        assert!(!d.path().join("webjetup.webjetup-old").exists());
+        // One that can't (a non-empty directory stands in for a running
+        // program) is skipped.
+        std::fs::create_dir(d.path().join("webjetup.webjetup-old")).unwrap();
+        std::fs::write(d.path().join("webjetup.webjetup-old/x"), "x").unwrap();
+        assert_eq!(
+            aside_path(&dest).unwrap(),
+            d.path().join("webjetup.webjetup-old1")
+        );
+    }
+
+    #[test]
+    fn writes_replace_the_file_and_follow_links() {
+        let d = tempfile::tempdir().unwrap();
+        let sys = Sys { dry: false };
+        let p = d.path().join("webjetd.toml");
+        std::fs::write(&p, "old").unwrap();
+        sys.write(&p, "new", 0o644).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "new");
+        assert_eq!(
+            std::fs::read_dir(d.path()).unwrap().count(),
+            1,
+            "no temporary file left"
+        );
+        #[cfg(unix)]
+        {
+            let link = d.path().join("link.toml");
+            std::os::unix::fs::symlink(&p, &link).unwrap();
+            sys.write(&link, "via link", 0o644).unwrap();
+            assert!(link.is_symlink());
+            assert_eq!(std::fs::read_to_string(&p).unwrap(), "via link");
+        }
+    }
+
+    #[test]
+    fn config_reads_fail_unless_the_file_is_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let mut l = Layout::system();
+        l.config = d.path().join("webjetd.toml");
+        assert_eq!(read_config(&l).unwrap(), "");
+        std::fs::write(&l.config, "[log]\n").unwrap();
+        assert_eq!(read_config(&l).unwrap(), "[log]\n");
+        std::fs::write(&l.config, [0xff, 0xfe, 0x00]).unwrap();
+        assert!(
+            read_config(&l).is_err(),
+            "not UTF-8: refused, not treated as empty"
+        );
     }
 
     #[test]

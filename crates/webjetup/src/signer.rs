@@ -160,7 +160,7 @@ fn adopt_key(sys: &Sys, l: &Layout) -> Result<()> {
 pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
     println!("==> Signer service ({SIGNER_SERVICE})");
     adopt_key(sys, l)?;
-    let text = std::fs::read_to_string(&l.config).unwrap_or_default();
+    let text = system::read_config(l)?;
     if let Some(new) = with_signer_socket(&text, &l.signer_socket)? {
         if let Some(old) = configured_socket(&text) {
             println!("    replacing signer_socket = {}", old.display());
