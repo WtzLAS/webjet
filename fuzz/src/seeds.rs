@@ -167,10 +167,11 @@ pub fn for_target(name: &str) -> Vec<Vec<u8>> {
         }
         "hop_record" => {
             let ctl =
-                hop::encode_record(hop::rec::CONTROL, &wp::HopControl::default().encode_bytes());
+                hop::encode_record(hop::rec::CONTROL, &wp::HopControl::default().encode_bytes())
+                    .unwrap_or_default();
             let big = wp::HopControl::default().encode_bytes().repeat(50);
             let z = compress::zstd_compress(&big).unwrap_or_default();
-            let zr = hop::encode_record(hop::rec::CONTROL_ZSTD, &z);
+            let zr = hop::encode_record(hop::rec::CONTROL_ZSTD, &z).unwrap_or_default();
             vec![
                 [ctl.clone(), zr].concat(),
                 pair(&[hop::rec::RELAY], b"relay"),

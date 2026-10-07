@@ -108,6 +108,8 @@ pub struct HopQueue {
     /// (§17.2, §17.7).
     pub below: Duration,
     control_budget: usize,
+    /// Bytes waiting in the control lane.
+    control_bytes: usize,
 }
 
 impl Default for HopQueue {
@@ -128,6 +130,7 @@ impl HopQueue {
             stats: Stats::default(),
             below: Duration::ZERO,
             control_budget: 0,
+            control_bytes: 0,
         }
     }
 
@@ -143,7 +146,14 @@ impl HopQueue {
     }
 
     pub fn push_control(&mut self, data: Vec<u8>) {
+        self.control_bytes += data.len();
         self.control.push_back(data);
+    }
+
+    /// Bytes waiting in the control lane (it has no cap of its own: the
+    /// caller decides what a peer that stops reading costs).
+    pub fn control_bytes(&self) -> usize {
+        self.control_bytes
     }
 
     pub fn push(&mut self, item: Item) -> Result<(), Dropped> {
@@ -173,6 +183,7 @@ impl HopQueue {
             && let Some(c) = self.control.pop_front()
         {
             self.control_budget += c.len();
+            self.control_bytes = self.control_bytes.saturating_sub(c.len());
             return Some(c);
         }
         self.control_budget = 0;

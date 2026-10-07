@@ -101,6 +101,9 @@ pub fn send_oneway(n: &Arc<Node>, peer: &Bytes32, body: RpcBody) {
     crate::e2e::send(n, peer, ty, &msg, 0);
 }
 
+/// Inbound RPCs handled at once (each in its own task).
+pub const MAX_INBOUND: usize = 256;
+
 pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
     let (Some(id), Some(&kind)) = (webjet_core::bytes::be_u64(payload, 0), payload.get(8)) else {
         return;
@@ -112,9 +115,16 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
     match kind {
         RESPONSE => deliver(from, id, body),
         REQUEST | ONEWAY => {
+            // Over the limit the request is dropped: callers retransmit,
+            // and Raft retries on its own.
+            let Ok(slot) = n.rpc_tasks.clone().try_acquire_owned() else {
+                tracing::debug!(peer = %n.name_of(from), "too many inbound RPCs: dropped one");
+                return;
+            };
             let n = n.clone();
             let from = *from;
             tokio::spawn(async move {
+                let _slot = slot;
                 let reply = match (body, n.controller.get()) {
                     // Remote upgrades (§19.8) reach every node, not only
                     // controllers.

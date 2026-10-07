@@ -5,7 +5,7 @@
 use crate::node::Node;
 use ipnet::IpNet;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -253,7 +253,13 @@ impl Dataplane {
         // The local resolver (§11.10.1).
         if self.resolver.read().contains(&dst) {
             n.metrics.tun_in(p.len());
+            // A bounded number at once; past it the query is dropped and
+            // the client asks again.
+            let Ok(slot) = n.dns_tasks.clone().try_acquire_owned() else {
+                return;
+            };
             tokio::spawn(async move {
+                let _slot = slot;
                 if let Some(reply) = crate::dns::handle(&n, &p).await
                     && let Some(dp) = n.dataplane.get()
                 {
@@ -694,6 +700,19 @@ impl Dataplane {
         };
         *self.my_ips.write() = my_ips;
         *self.resolver.write() = resolver.clone();
+        // Sticky gateway choices for prefixes no node publishes any more.
+        {
+            let s = n.store.read();
+            let published: HashSet<IpNet> = s
+                .view()
+                .nodes
+                .values()
+                .filter(|x| x.valid)
+                .flat_map(|x| x.routes.iter().map(|g| g.published))
+                .collect();
+            drop(s);
+            self.gw_choice.lock().retain(|p, _| published.contains(p));
+        }
         // Gateway serving (§11.9.2): local config ∩ grants, LAN interface up.
         let mut serving = Vec::new();
         for r in &n.cfg.gateway.route {

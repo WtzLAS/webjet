@@ -53,6 +53,9 @@ pub struct SyncState {
     /// Relay side: edge peers' subscriptions: node → (subscriber hops, until).
     subs: Mutex<HashMap<Bytes32, Vec<(u64, Instant)>>>,
     lookup_rate: Mutex<HashMap<u64, (Instant, u32)>>,
+    /// Per hop: sync requests (GetOffline, GetBuckets, GetBucketIndex,
+    /// GetLeaves) answered in the current second.
+    sync_rate: Mutex<HashMap<u64, (Instant, u32)>>,
     /// Last published own records, to republish on change.
     pub last_endpoint: Mutex<Option<(Vec<wp::EndpointAddr>, u64)>>,
     /// The links (neighbor, rtt, loss) last advertised, and when.
@@ -200,7 +203,34 @@ pub fn push_head(n: &Arc<Node>) {
     }
 }
 
+/// Sync requests a hop may make per second. A walk asks for 512 leaves
+/// per GetLeaves, so this covers a tree of about half a million leaves in
+/// one second; past it requests are dropped (the asker's walk times out
+/// and starts over).
+const SYNC_REQUESTS_PER_SEC: u32 = 1000;
+
+/// Count a sync request from `hop`; false when it is over the rate.
+fn sync_allowed(n: &Node, hop: &Hop) -> bool {
+    let mut r = n.sync.sync_rate.lock();
+    let e = r.entry(hop.id).or_insert((Instant::now(), 0));
+    if e.0.elapsed() > Duration::from_secs(1) {
+        *e = (Instant::now(), 0);
+    }
+    e.1 += 1;
+    e.1 <= SYNC_REQUESTS_PER_SEC
+}
+
 pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
+    if matches!(
+        m,
+        HopMsg::GetOffline(_)
+            | HopMsg::GetBuckets(_)
+            | HopMsg::GetBucketIndex(_)
+            | HopMsg::GetLeaves(_)
+    ) && !sync_allowed(n, hop)
+    {
+        bail!("sync request rate exceeded");
+    }
     match m {
         HopMsg::HeadAnnounce(a) => on_head(n, hop, *a),
         HopMsg::GetOffline(_) => {
@@ -958,10 +988,12 @@ fn renew_watch(n: &Arc<Node>) {
     // Past WATCH_FOR without a new request the subscriptions lapse.
     let ttl = (WATCH_FOR + WATCH_RENEW).as_secs() as u32;
     for chunk in ids.chunks(64) {
-        let msg = crate::node::ctl(HopMsg::Lookup(Box::new(wp::Lookup {
+        let Some(msg) = crate::node::ctl(HopMsg::Lookup(Box::new(wp::Lookup {
             node_ids: Some(chunk.iter().map(crypto::k32).collect()),
             subscribe_ttl_s: ttl,
-        })));
+        }))) else {
+            continue;
+        };
         for h in &relays {
             h.send_raw_control(msg.clone());
         }
@@ -1348,6 +1380,8 @@ pub async fn run(n: Arc<Node>) {
             });
             let live: HashSet<u64> = n.hops.lock().keys().copied().collect();
             n.sync.head_rx.lock().retain(|h, _| live.contains(h));
+            n.sync.lookup_rate.lock().retain(|h, _| live.contains(h));
+            n.sync.sync_rate.lock().retain(|h, _| live.contains(h));
         }
     }
 }

@@ -313,6 +313,9 @@ fn reverse_in_rewrite(name: &str, f: &wp::ForwardZone) -> bool {
     ptr_to_ip(name).is_some_and(|ip| grants(f).iter().any(|g| g.published.contains(&ip)))
 }
 
+/// DNS queries from the tun interface answered at once.
+pub const MAX_INFLIGHT: usize = 512;
+
 /// Forward a query to the zone's servers over the overlay (§11.10.4) and
 /// rewrite LAN addresses to published ones (§11.10.5).
 async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Message> {
@@ -360,15 +363,26 @@ async fn forward(n: &Arc<Node>, q: &Message, f: &wp::ForwardZone) -> Option<Mess
         {
             continue;
         }
+        // Only the server's answer to this query counts: anything else
+        // arriving on the socket (another source, another id) is skipped
+        // until the deadline.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         let mut buf = vec![0u8; 4096];
-        let Ok(Ok((len, _))) =
-            tokio::time::timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await
-        else {
-            continue;
+        let resp = loop {
+            let Ok(Ok((len, from))) =
+                tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await
+            else {
+                break None;
+            };
+            if from != SocketAddr::new(srv, 53) {
+                continue;
+            }
+            match Message::from_vec(&buf[..len]) {
+                Ok(r) if r.metadata.id == out.metadata.id => break Some(r),
+                _ => continue,
+            }
         };
-        let Ok(resp) = Message::from_vec(&buf[..len]) else {
-            continue;
-        };
+        let Some(resp) = resp else { continue };
         return Some(fix_forwarded(resp, q, &gs, ptr_orig.as_ref()));
     }
     None

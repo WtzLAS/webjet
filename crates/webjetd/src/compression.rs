@@ -148,7 +148,8 @@ pub fn control_record(n: &Node, peer: &Bytes32, record: Vec<u8>) -> Vec<u8> {
     match compress::zstd_compress(payload) {
         Some(c) => {
             n.metrics.compression.control.sent(payload.len(), c.len());
-            hop::encode_record(rec::CONTROL_ZSTD, &c)
+            // Smaller than the record it replaces, so it fits.
+            hop::encode_record(rec::CONTROL_ZSTD, &c).unwrap_or(record)
         }
         None => {
             n.metrics.compression.control.skipped();
@@ -281,7 +282,7 @@ mod tests {
         let (_c, n, _d) = setup();
         advertise(&n, &[FEATURE_ZSTD]);
         let body = payload(4000);
-        let record = hop::encode_record(rec::CONTROL, &body);
+        let record = hop::encode_record(rec::CONTROL, &body).unwrap();
         let out = control_record(&n, &PEER, record.clone());
         assert_eq!(out[0], rec::CONTROL_ZSTD);
         assert!(out.len() < record.len() / 4);
@@ -301,19 +302,19 @@ mod tests {
     #[test]
     fn control_records_left_alone() {
         let (_c, n, _d) = setup();
-        let big = hop::encode_record(rec::CONTROL, &payload(4000));
+        let big = hop::encode_record(rec::CONTROL, &payload(4000)).unwrap();
         // The peer doesn't take zstd.
         assert_eq!(control_record(&n, &PEER, big.clone()), big);
         advertise(&n, &[FEATURE_ZSTD]);
         // Too short to be worth it.
-        let small = hop::encode_record(rec::CONTROL, &payload(compress::MIN_CONTROL - 1));
+        let small = hop::encode_record(rec::CONTROL, &payload(compress::MIN_CONTROL - 1)).unwrap();
         assert_eq!(control_record(&n, &PEER, small.clone()), small);
         // Not a control record.
-        let relay = hop::encode_record(rec::RELAY, &payload(4000));
+        let relay = hop::encode_record(rec::RELAY, &payload(4000)).unwrap();
         assert_eq!(control_record(&n, &PEER, relay.clone()), relay);
         // Incompressible: sent as it is and counted as skipped.
         let noise: Vec<u8> = (0..4000).map(|_| rand::random()).collect();
-        let rnd = hop::encode_record(rec::CONTROL, &noise);
+        let rnd = hop::encode_record(rec::CONTROL, &noise).unwrap();
         assert_eq!(control_record(&n, &PEER, rnd.clone()), rnd);
         let ctl = &n.metrics.compression.control;
         assert_eq!(ctl.tx_skipped.load(Ordering::Relaxed), 1);

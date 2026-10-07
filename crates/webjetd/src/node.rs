@@ -71,12 +71,25 @@ const DIAL_RACE: Duration = Duration::from_secs(2);
 
 static HOP_IDS: AtomicU64 = AtomicU64::new(1);
 
-/// An encoded hop record carrying a control message.
-pub fn ctl(msg: HopMsg) -> Vec<u8> {
-    hop::encode_record(
-        rec::CONTROL,
-        &wp::HopControl { msg: Some(msg) }.encode_bytes(),
-    )
+/// Control bytes a hop may have waiting for its writer. A peer that stops
+/// reading (while its keepalives keep the hop up) would otherwise make us
+/// queue answers, floods and acks without bound; past this the hop goes.
+const CONTROL_QUEUE_MAX: usize = 32 << 20;
+/// How long one write to a hop may take before the hop counts as dead.
+const WRITE_DEADLINE: Duration = HOP_DEAD;
+
+/// An encoded hop record carrying a control message; `None` (logged) when
+/// the message is over the record limit and can't be sent.
+pub fn ctl(msg: HopMsg) -> Option<Vec<u8>> {
+    let body = wp::HopControl { msg: Some(msg) }.encode_bytes();
+    let r = hop::encode_record(rec::CONTROL, &body);
+    if r.is_none() {
+        tracing::warn!(
+            bytes = body.len(),
+            "control message over the record limit, not sent"
+        );
+    }
+    r
 }
 
 /// Offset of the relay header's hop-limit/ECN byte inside an encoded record.
@@ -121,7 +134,9 @@ pub struct Hop {
 
 impl Hop {
     pub fn send_control(&self, msg: HopMsg) {
-        let _ = self.ctl_tx.send(ctl(msg));
+        if let Some(r) = ctl(msg) {
+            let _ = self.ctl_tx.send(r);
+        }
     }
 
     pub fn send_raw_control(&self, bytes: Vec<u8>) {
@@ -130,7 +145,10 @@ impl Hop {
 
     /// Queue a relay frame; returns false when the hop is congested/closed.
     pub fn send_relay(&self, flow: u64, frame: Vec<u8>) -> bool {
-        let frame = hop::encode_record(rec::RELAY, &frame);
+        let Some(frame) = hop::encode_record(rec::RELAY, &frame) else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
         match self.tx.try_send(Out::Relay { flow, frame }) {
             Ok(()) => true,
             Err(_) => {
@@ -263,6 +281,10 @@ pub struct Node {
     pub seq: AtomicU64,
     /// Hop handshakes in progress per source IP (§16.2).
     pub hop_handshakes: crate::transport::HandshakeGate,
+    /// Inbound RPCs being handled, and DNS queries being answered: each is
+    /// its own task, bounded so a flood can't spawn without limit.
+    pub rpc_tasks: Arc<tokio::sync::Semaphore>,
+    pub dns_tasks: Arc<tokio::sync::Semaphore>,
     #[cfg(feature = "anytls")]
     pub anytls_acceptor: Mutex<
         Option<(
@@ -335,6 +357,8 @@ impl Node {
             metrics: crate::metrics::Counters::default(),
             seq: AtomicU64::new(now_ms()),
             hop_handshakes: crate::transport::HandshakeGate::default(),
+            rpc_tasks: Arc::new(tokio::sync::Semaphore::new(crate::rpc::MAX_INBOUND)),
+            dns_tasks: Arc::new(tokio::sync::Semaphore::new(crate::dns::MAX_INFLIGHT)),
             #[cfg(feature = "anytls")]
             anytls_acceptor: Mutex::new(None),
             me_weak: OnceLock::new(),
@@ -443,7 +467,7 @@ impl Node {
     }
 
     pub fn broadcast_control(&self, msg: HopMsg, except: Option<u64>) {
-        let bytes = ctl(msg);
+        let Some(bytes) = ctl(msg) else { return };
         for h in self.hops.lock().values() {
             if Some(h.id) != except && h.alive() && !h.restricted {
                 h.send_raw_control(bytes.clone());
@@ -886,6 +910,10 @@ async fn writer(
                 }
             }
         }
+        if q.control_bytes() > CONTROL_QUEUE_MAX {
+            tracing::info!(peer = %n.name_of(&hop.peer), "hop's control backlog over its limit: closing it");
+            break;
+        }
         if tune_at.elapsed() > Duration::from_secs(1) {
             // The raw RTT (§11.2), not one inflated by this queue; the cap
             // follows a KCP hop's bandwidth estimate (§17.2).
@@ -912,11 +940,10 @@ async fn writer(
             // Padding for the first packets of the session (§9.7.4).
             if let Some(plan) = pad_budget.plan(pkt_no, item.len()) {
                 let pad: usize = plan.iter().map(|x| x.1).sum();
-                if pad > 0 {
-                    batch.extend_from_slice(&hop::encode_record(
-                        rec::PAD,
-                        &vec![0u8; pad.min(4096)],
-                    ));
+                if pad > 0
+                    && let Some(r) = hop::encode_record(rec::PAD, &vec![0u8; pad.min(4096)])
+                {
+                    batch.extend_from_slice(&r);
                 }
             } else if pkt_no > 64 {
                 pad_budget.stop = 0;
@@ -936,11 +963,18 @@ async fn writer(
         }
         hop.tx_bytes
             .fetch_add(batch.len() as u64, Ordering::Relaxed);
-        if w.write_all(&batch).await.is_err() || w.flush().await.is_err() {
+        // A peer that stops reading must not hold the writer (and what it
+        // has queued) forever.
+        let wrote = tokio::time::timeout(WRITE_DEADLINE, async {
+            w.write_all(&batch).await?;
+            w.flush().await
+        })
+        .await;
+        if !matches!(wrote, Ok(Ok(()))) {
             break;
         }
     }
-    let _ = w.shutdown().await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), w.shutdown()).await;
     n.hop_down(&hop);
 }
 

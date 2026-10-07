@@ -93,12 +93,14 @@ impl ReplayCache {
         }
     }
 
-    /// Returns false if the nonce was already seen.
+    /// Returns false if the nonce was already seen, or if the cache is full
+    /// of nonces still inside the window: evicting one of those would let
+    /// it be replayed, so a full cache refuses instead (fails closed).
     pub fn check_and_insert(&self, nonce: [u8; 16], now: u64) -> bool {
         let mut g = self.seen.lock();
         let Seen { map, order } = &mut *g;
         while let Some((n, t)) = order.front().copied() {
-            if t + 2 * SKEW_PSK_GATE < now || order.len() > self.cap {
+            if t + 2 * SKEW_PSK_GATE < now {
                 order.pop_front();
                 if map.get(&n) == Some(&t) {
                     map.remove(&n);
@@ -107,7 +109,7 @@ impl ReplayCache {
                 break;
             }
         }
-        if map.contains_key(&nonce) {
+        if map.contains_key(&nonce) || order.len() >= self.cap {
             return false;
         }
         map.insert(nonce, now);
@@ -302,6 +304,21 @@ mod tests {
         let mut bad = tcp_preamble(3, &[3; 32]);
         bad[40] ^= 1;
         assert_eq!(check_tcp_preamble(&bad, &e, &rc), None);
+    }
+
+    #[test]
+    fn a_full_replay_cache_refuses_instead_of_forgetting() {
+        let rc = ReplayCache::new(2);
+        let t = 1_000_000;
+        assert!(rc.check_and_insert([1; 16], t));
+        assert!(rc.check_and_insert([2; 16], t));
+        // Full of live nonces: a new one is refused, and the old ones are
+        // still remembered (evicting them would let them be replayed).
+        assert!(!rc.check_and_insert([3; 16], t));
+        assert!(!rc.check_and_insert([1; 16], t));
+        // Once they're out of the window there's room again.
+        let later = t + 2 * SKEW_PSK_GATE + 1;
+        assert!(rc.check_and_insert([3; 16], later));
     }
 
     #[test]

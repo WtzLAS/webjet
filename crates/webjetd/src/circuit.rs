@@ -8,7 +8,7 @@
 use crate::node::{Hop, Node};
 use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -236,11 +236,28 @@ pub struct Table {
     pub refused: BTreeMap<String, u64>,
     /// Keyed by (next neighbor, the label we sent in CircuitOpen).
     pending: HashMap<(Bytes32, u32), PendingOpen>,
+    /// Setup nonces seen in the last [`NONCE_WINDOW`], and in arrival
+    /// order, so expiring them looks only at the old end.
     nonces: HashMap<[u8; 16], Instant>,
+    nonce_order: VecDeque<([u8; 16], Instant)>,
     /// Circuit setups per source node in the current second.
     setup_rate: HashMap<Bytes32, (Instant, u32)>,
     /// Circuits ending here, by end-to-end peer (an index into `entries`).
     by_peer: HashMap<Bytes32, Vec<Arc<LocalCircuit>>>,
+    /// What the circuit limits count, kept as entries come and go instead
+    /// of scanning the table per setup: forward transit circuits, and per
+    /// source node (and whether they end here) the circuits it opened.
+    transit: usize,
+    per_source: HashMap<(Bytes32, bool), usize>,
+}
+
+/// What an entry counts against the per-source limit: (source, ends here).
+fn source_of(kind: &Kind) -> Option<(Bytes32, bool)> {
+    match kind {
+        Kind::Transit(x) if x.forward => Some((x.src, false)),
+        Kind::Local(c) if !c.is_source => Some((c.peer, true)),
+        _ => None,
+    }
 }
 
 impl Table {
@@ -269,7 +286,7 @@ impl Table {
     /// Add a circuit ending here under `(c.next, c.label)`.
     fn insert_local(&mut self, c: Arc<LocalCircuit>) {
         self.by_peer.entry(c.peer).or_default().push(c.clone());
-        self.entries.insert(
+        self.insert_entry(
             (c.next, c.label),
             Entry {
                 kind: Kind::Local(c),
@@ -278,11 +295,67 @@ impl Table {
         );
     }
 
+    /// Record a setup nonce; false if it was seen within [`NONCE_WINDOW`].
+    fn fresh_nonce(&mut self, nonce: [u8; 16], now: Instant) -> bool {
+        while let Some((old, at)) = self.nonce_order.front().copied() {
+            if now.duration_since(at) < NONCE_WINDOW {
+                break;
+            }
+            self.nonce_order.pop_front();
+            if self.nonces.get(&old) == Some(&at) {
+                self.nonces.remove(&old);
+            }
+        }
+        if self.nonces.contains_key(&nonce) {
+            return false;
+        }
+        self.nonces.insert(nonce, now);
+        self.nonce_order.push_back((nonce, now));
+        true
+    }
+
+    /// Count a setup from `src` against `circuit_setups_per_sec`; false
+    /// when it is over.
+    fn setup_allowed(&mut self, src: &Bytes32, rate: u32, now: Instant) -> bool {
+        self.setup_rate
+            .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(1));
+        let r = self.setup_rate.entry(*src).or_insert((now, 0));
+        r.1 += 1;
+        r.1 <= rate
+    }
+
+    /// Every entry goes in here, so the counts stay right.
+    fn insert_entry(&mut self, key: (Bytes32, u32), e: Entry) {
+        self.count(&e.kind, true);
+        if let Some(old) = self.entries.insert(key, e) {
+            self.count(&old.kind, false);
+        }
+    }
+
+    fn count(&mut self, kind: &Kind, add: bool) {
+        if matches!(kind, Kind::Transit(t) if t.forward) {
+            self.transit = if add {
+                self.transit + 1
+            } else {
+                self.transit.saturating_sub(1)
+            };
+        }
+        if let Some(k) = source_of(kind) {
+            let c = self.per_source.entry(k).or_insert(0);
+            *c = if add { *c + 1 } else { c.saturating_sub(1) };
+            if *c == 0 {
+                self.per_source.remove(&k);
+            }
+        }
+    }
+
     pub fn transit_count(&self) -> usize {
-        self.entries
-            .values()
-            .filter(|e| matches!(&e.kind, Kind::Transit(t) if t.forward))
-            .count()
+        self.transit
+    }
+
+    /// Circuits `src` has open through or to this node (`to_me`).
+    fn source_count(&self, src: &Bytes32, to_me: bool) -> usize {
+        self.per_source.get(&(*src, to_me)).copied().unwrap_or(0)
     }
 
     fn route(
@@ -312,6 +385,7 @@ impl Table {
 
     fn remove_entry(&mut self, key: &(Bytes32, u32)) -> Option<Entry> {
         let e = self.entries.remove(key)?;
+        self.count(&e.kind, false);
         if let Kind::Local(c) = &e.kind
             && let Some(v) = self.by_peer.get_mut(&c.peer)
         {
@@ -437,32 +511,19 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
 
 // ---------------------------------------------------------------- control messages
 
-/// Count a circuit setup from `src` and check it against the limits
-/// (§16.2): setups per second and circuits per source node, plus, for
-/// transit circuits, the global count. Circuits that end here count too, or
-/// any trusted peer could open them without bound.
+/// How long a circuit setup's nonce is remembered against replays.
+const NONCE_WINDOW: Duration = Duration::from_secs(300);
+
+/// Check a circuit setup from `src` against the circuit limits (§16.2):
+/// circuits per source node, plus, for transit circuits, the global count.
+/// Circuits that end here count too, or any trusted peer could open them
+/// without bound. (The setup rate is checked in [`on_open`], before the
+/// setup's nonce is recorded.)
 fn admit(n: &Arc<Node>, src: &Bytes32, to_me: bool) -> Option<&'static str> {
     let per_src = limit(n, "circuits_per_source") as usize;
     let global = limit(n, "circuits_global") as usize;
-    let rate = limit(n, "circuit_setups_per_sec") as u32;
-    let mut t = n.circuits.lock();
-    let now = Instant::now();
-    t.setup_rate
-        .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(1));
-    let r = t.setup_rate.entry(*src).or_insert((now, 0));
-    r.1 += 1;
-    if r.1 > rate {
-        return Some("rate");
-    }
-    let count_src = t
-        .entries
-        .values()
-        .filter(|e| match &e.kind {
-            Kind::Transit(x) => !to_me && x.forward && x.src == *src,
-            Kind::Local(c) => to_me && !c.is_source && c.peer == *src,
-        })
-        .count();
-    if count_src >= per_src {
+    let t = n.circuits.lock();
+    if t.source_count(src, to_me) >= per_src {
         Some("per_source")
     } else if !to_me && t.transit_count() >= global {
         Some("global")
@@ -525,15 +586,23 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         bail!("circuit refused: {why}");
     }
     {
+        // The rate first: a source over it records no nonces, so it can't
+        // grow the replay set either.
+        let rate = limit(n, "circuit_setups_per_sec") as u32;
         let mut t = n.circuits.lock();
         let now = Instant::now();
-        t.nonces
-            .retain(|_, at| now.duration_since(*at) < Duration::from_secs(300));
-        if t.nonces.insert(nonce, now).is_some() {
-            t.refuse("replay");
+        let why = if !t.setup_allowed(&src, rate, now) {
+            Some("rate")
+        } else if !t.fresh_nonce(nonce, now) {
+            Some("replay")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            t.refuse(why);
             drop(t);
-            refuse("replay");
-            bail!("replayed circuit setup");
+            refuse(why);
+            bail!("circuit setup refused: {why}");
         }
     }
     if dst == n.me {
@@ -653,7 +722,7 @@ async fn extend(n: &Arc<Node>, hop: &Arc<Hop>, x: Extend) -> Result<()> {
         t.route(&rid, &src, &dst, &hops);
         let now = Instant::now();
         // Forward: frames from `from` with in_label go to next (label unknown yet).
-        t.entries.insert(
+        t.insert_entry(
             (from, in_label),
             Entry {
                 kind: Kind::Transit(Transit {
@@ -669,7 +738,7 @@ async fn extend(n: &Arc<Node>, hop: &Arc<Hop>, x: Extend) -> Result<()> {
             },
         );
         // Reverse: frames from next with back_label go to `from` with the opener's label.
-        t.entries.insert(
+        t.insert_entry(
             (next, back_label),
             Entry {
                 kind: Kind::Transit(Transit {
@@ -1195,6 +1264,58 @@ mod tests {
             }]),
             ..Default::default()
         }
+    }
+
+    fn transit(src: Bytes32, forward: bool) -> Entry {
+        Entry {
+            kind: Kind::Transit(Transit {
+                out_neighbor: [9; 32],
+                out_label: None,
+                route_id: [0; 32],
+                src,
+                forward,
+                pair: ([9; 32], 1),
+                last: Instant::now(),
+            }),
+            created: Instant::now(),
+        }
+    }
+
+    /// The limits' counts follow inserts, replacements and removals.
+    #[test]
+    fn circuit_counts_follow_the_table() {
+        let mut t = Table::default();
+        let (a, b) = ([1; 32], [2; 32]);
+        t.insert_entry((b, 1), transit(a, true));
+        t.insert_entry((b, 2), transit(a, false));
+        t.insert_entry((b, 3), transit(b, true));
+        assert_eq!(t.transit_count(), 2);
+        assert_eq!(t.source_count(&a, false), 1);
+        assert_eq!(t.source_count(&b, false), 1);
+        assert_eq!(t.source_count(&a, true), 0);
+        // Replacing an entry under the same key doesn't count twice.
+        t.insert_entry((b, 1), transit(a, true));
+        assert_eq!(t.source_count(&a, false), 1);
+        t.remove_entry(&(b, 1));
+        t.remove_entry(&(b, 2));
+        assert_eq!(t.source_count(&a, false), 0);
+        assert_eq!(t.transit_count(), 1);
+        assert!(!t.per_source.contains_key(&(a, false)));
+    }
+
+    #[test]
+    fn setup_nonces_and_rate() {
+        let mut t = Table::default();
+        let now = Instant::now();
+        assert!(t.fresh_nonce([1; 16], now));
+        assert!(!t.fresh_nonce([1; 16], now), "replay");
+        assert!(t.fresh_nonce([1; 16], now + NONCE_WINDOW), "expired");
+        assert_eq!(t.nonces.len(), 1);
+        let src = [3; 32];
+        assert!(t.setup_allowed(&src, 2, now));
+        assert!(t.setup_allowed(&src, 2, now));
+        assert!(!t.setup_allowed(&src, 2, now));
+        assert!(t.setup_allowed(&src, 2, now + Duration::from_secs(2)));
     }
 
     /// Source `s`, relay `r`, destination `d`; everything allowed.

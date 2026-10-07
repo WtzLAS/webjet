@@ -64,13 +64,19 @@ pub async fn read_record<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8
     Ok((h[0], b))
 }
 
-pub fn encode_record(ty: u8, payload: &[u8]) -> Vec<u8> {
+/// A record as it goes on the wire: `type[1] || len[3] || payload`.
+/// `None` when the payload is over [`MAX_RECORD`]: the peer would refuse
+/// it and drop the hop (past 16 MiB the length wouldn't even fit).
+pub fn encode_record(ty: u8, payload: &[u8]) -> Option<Vec<u8>> {
+    if payload.len() > MAX_RECORD {
+        return None;
+    }
     let len = payload.len() as u32;
     let mut v = Vec::with_capacity(4 + payload.len());
     v.push(ty);
     v.extend_from_slice(&len.to_be_bytes()[1..]);
     v.extend_from_slice(payload);
-    v
+    Some(v)
 }
 
 pub async fn write_record<W: AsyncWrite + Unpin>(
@@ -78,7 +84,9 @@ pub async fn write_record<W: AsyncWrite + Unpin>(
     ty: u8,
     payload: &[u8],
 ) -> std::io::Result<()> {
-    w.write_all(&encode_record(ty, payload)).await
+    let rec = encode_record(ty, payload)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "record too large"))?;
+    w.write_all(&rec).await
 }
 
 /// Socket options for every TCP hop (§17.4): no Nagle delay, BBR where
@@ -327,6 +335,8 @@ pub async fn accept_kcp(
     kp: &KeyPair,
     trust: Arc<dyn PeerTrust>,
 ) -> Result<Established> {
+    // The endpoint's handshake slot is held until the handshake ends.
+    let _slot = c.handshake;
     let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP], false)?;
     let tls = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -412,6 +422,15 @@ mod tests {
         e.keys.insert(4, [4; 32]);
         e.current = 4;
         Arc::new(parking_lot::RwLock::new(e))
+    }
+
+    #[test]
+    fn records_over_the_limit_are_not_encoded() {
+        let r = encode_record(rec::CONTROL, &[1; MAX_RECORD]).unwrap();
+        assert_eq!(r.len(), 4 + MAX_RECORD);
+        assert!(encode_record(rec::CONTROL, &vec![1; MAX_RECORD + 1]).is_none());
+        // Past 16 MiB the length wouldn't fit: never mis-framed.
+        assert!(encode_record(rec::RELAY, &vec![0; 1 << 24]).is_none());
     }
 
     #[tokio::test]

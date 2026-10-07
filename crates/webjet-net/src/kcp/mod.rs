@@ -127,13 +127,40 @@ pub struct KcpConn {
     pub peer: SocketAddr,
     pub gate: GateResult,
     pub stats: Arc<KcpStats>,
+    /// An accepted session counts against [`MAX_HANDSHAKING`] until this
+    /// is dropped: hold it until the TLS handshake is done.
+    pub handshake: Option<HandshakeSlot>,
 }
+
+/// One of the endpoint's [`MAX_HANDSHAKING`] slots for accepted sessions
+/// whose TLS handshake hasn't finished.
+pub struct HandshakeSlot(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for HandshakeSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Accepted sessions still in their TLS handshake, across all sources.
+/// The per-IP limit alone doesn't hold: source addresses can be spoofed
+/// by anyone with the network PSK.
+pub const MAX_HANDSHAKING: usize = 256;
+/// Sessions an endpoint keeps at once (dialed and accepted).
+pub const MAX_SESSIONS: usize = 8192;
+/// The largest datagram a peer sends: a sealed OPEN (kind, conv, ts,
+/// nonce) carrying the largest FEC shard, plus the most padding. Anything
+/// larger is dropped before it is decrypted or copied.
+pub const MAX_DATAGRAM: usize =
+    crate::gate::UDP_OVERHEAD + 2 + (1 + 4 + 8 + 16) + fec::HDR + fec::MAX_SHARD + 96;
 
 /// A datagram for a session (`kind || body`) and when the socket gave it to us.
 type Arrived = (Instant, Vec<u8>);
 
 struct SessionHandle {
     tx: mpsc::Sender<Arrived>,
+    /// Tells this session from a later one under the same (peer, conv).
+    id: u64,
 }
 
 pub struct UdpEndpoint {
@@ -153,6 +180,8 @@ pub struct UdpEndpoint {
     /// Where arriving connectivity checks are reported (the punch module).
     pub punch_events: Mutex<Option<mpsc::Sender<PunchEvent>>>,
     pongs: Mutex<(Instant, u32)>,
+    /// Accepted sessions whose TLS handshake is still running.
+    handshaking: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl UdpEndpoint {
@@ -180,6 +209,7 @@ impl UdpEndpoint {
             per_ip_limit: std::sync::atomic::AtomicU32::new(5),
             punch_events: Mutex::new(None),
             pongs: Mutex::new((Instant::now(), 0)),
+            handshaking: Arc::default(),
         });
         let e2 = ep.clone();
         tokio::spawn(async move { e2.recv_loop().await });
@@ -256,6 +286,11 @@ impl UdpEndpoint {
                     continue;
                 }
             };
+            // Larger than anything a peer sends: not worth a decryption,
+            // and it must not reach a session's buffers.
+            if n > MAX_DATAGRAM {
+                continue;
+            }
             let at = Instant::now();
             let Some((gate, inner)) = self.obfs.open(&buf[..n], &self.epochs.read()) else {
                 continue;
@@ -290,13 +325,17 @@ impl UdpEndpoint {
             if ts.abs_diff(now_ms()) > SKEW_PSK_GATE {
                 continue;
             }
+            // Room for one more session, counted across all sources.
+            let Some(slot) = self.handshake_slot() else {
+                continue;
+            };
             if !self.replay.check_and_insert(nonce, now_ms()) {
                 continue;
             }
             if !self.admit_ip(from.ip()) {
                 continue;
             }
-            let (stream, tx, stats) = self.clone().spawn_session(from, conv);
+            let (stream, tx, stats, id) = self.clone().spawn_session(from, conv);
             let mut d = vec![K_OPEN];
             d.extend_from_slice(body);
             let _ = tx.try_send((at, d));
@@ -307,11 +346,33 @@ impl UdpEndpoint {
                     peer: from,
                     gate,
                     stats,
+                    handshake: Some(slot),
                 })
                 .is_err()
             {
-                self.sessions.lock().remove(&key);
+                self.forget_session(key, id);
             }
+        }
+    }
+
+    /// A handshake slot for one more accepted session, unless the endpoint
+    /// has [`MAX_HANDSHAKING`] handshakes running or [`MAX_SESSIONS`]
+    /// sessions.
+    fn handshake_slot(&self) -> Option<HandshakeSlot> {
+        if self.sessions.lock().len() >= MAX_SESSIONS {
+            return None;
+        }
+        let prev = self.handshaking.fetch_add(1, Ordering::Relaxed);
+        let slot = HandshakeSlot(self.handshaking.clone());
+        (prev < MAX_HANDSHAKING).then_some(slot)
+    }
+
+    /// Remove a session's entry, if it is still that session's: the same
+    /// (peer, conv) may already belong to a newer one.
+    fn forget_session(&self, key: (SocketAddr, u32), id: u64) {
+        let mut s = self.sessions.lock();
+        if s.get(&key).is_some_and(|h| h.id == id) {
+            s.remove(&key);
         }
     }
 
@@ -330,13 +391,14 @@ impl UdpEndpoint {
     /// Dial a peer: returns a byte stream over KCP.
     pub fn dial(self: &Arc<Self>, to: SocketAddr) -> KcpConn {
         let conv = rand::random::<u32>() | 1;
-        let (stream, _tx, stats) = self.clone().spawn_session_inner(to, conv, true);
+        let (stream, _tx, stats, _) = self.clone().spawn_session_inner(to, conv, true);
         let gate = GateResult::Normal(self.epochs.read().current);
         KcpConn {
             stream,
             peer: to,
             gate,
             stats,
+            handshake: None,
         }
     }
 
@@ -344,7 +406,7 @@ impl UdpEndpoint {
         self: Arc<Self>,
         peer: SocketAddr,
         conv: u32,
-    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>) {
+    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
         self.spawn_session_inner(peer, conv, false)
     }
 
@@ -353,20 +415,22 @@ impl UdpEndpoint {
         peer: SocketAddr,
         conv: u32,
         dialer: bool,
-    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>) {
+    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
+        static SESSION_IDS: AtomicU64 = AtomicU64::new(1);
+        let id = SESSION_IDS.fetch_add(1, Ordering::Relaxed);
         let (user, inner) = tokio::io::duplex(DUPLEX);
         let (tx, rx) = mpsc::channel(4096);
         self.sessions
             .lock()
-            .insert((peer, conv), SessionHandle { tx: tx.clone() });
+            .insert((peer, conv), SessionHandle { tx: tx.clone(), id });
         let stats = Arc::new(KcpStats::default());
         let st = stats.clone();
         tokio::spawn(async move {
             let ep = self.clone();
             run_session(ep, peer, conv, dialer, inner, rx, st).await;
-            self.sessions.lock().remove(&(peer, conv));
+            self.forget_session((peer, conv), id);
         });
-        (user, tx, stats)
+        (user, tx, stats, id)
     }
 }
 
@@ -778,7 +842,7 @@ async fn run_session(
                             }
                         }
                         Inbound::RawAck { held, acks } => {
-                            let _ = kcp.input(acks, us(at), held);
+                            let _ = kcp.input_control(acks, us(at), held);
                         }
                         Inbound::Loss { received, expected, raw_ack } => {
                             peer_raw_ack = raw_ack;
@@ -948,7 +1012,7 @@ pub mod fuzzing {
                     received, expected, ..
                 } => enc.adapt(Inbound::loss(received, expected)),
                 Inbound::RawAck { held, acks } => {
-                    let _ = kcp.input(acks, t, held);
+                    let _ = kcp.input_control(acks, t, held);
                 }
                 Inbound::Ignore => continue,
             }
@@ -1412,6 +1476,49 @@ mod tests {
         for t in [pull_a, pull_b] {
             t.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn accepted_sessions_are_bounded_across_sources() {
+        let ep = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        let slots: Vec<_> = (0..MAX_HANDSHAKING)
+            .map(|_| ep.handshake_slot().expect("a free slot"))
+            .collect();
+        assert!(ep.handshake_slot().is_none(), "all slots taken");
+        assert_eq!(ep.handshaking.load(Ordering::Relaxed), MAX_HANDSHAKING);
+        drop(slots);
+        assert_eq!(ep.handshaking.load(Ordering::Relaxed), 0);
+        assert!(ep.handshake_slot().is_some());
+    }
+
+    #[tokio::test]
+    async fn an_old_session_leaves_its_successor_alone() {
+        let ep = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        let key: (SocketAddr, u32) = ("127.0.0.1:9".parse().unwrap(), 7);
+        let (tx, _rx) = mpsc::channel(1);
+        ep.sessions.lock().insert(key, SessionHandle { tx, id: 2 });
+        ep.forget_session(key, 1);
+        assert!(
+            ep.sessions.lock().contains_key(&key),
+            "a newer session's entry"
+        );
+        ep.forget_session(key, 2);
+        assert!(!ep.sessions.lock().contains_key(&key));
+    }
+
+    #[test]
+    fn the_largest_datagram_a_peer_sends_fits_the_cap() {
+        // An OPEN with a full FEC shard and the most padding.
+        let shard = vec![0u8; fec::MAX_SHARD + fec::HDR];
+        let inner = shard_frame(false, 1, &shard);
+        let o = UdpObfs::new(&[1; 32]);
+        o.set_epochs(&epochs().read());
+        let d = o.seal(1, &inner, 95).unwrap();
+        assert!(d.len() <= MAX_DATAGRAM, "{} > {MAX_DATAGRAM}", d.len());
     }
 
     #[tokio::test]

@@ -26,6 +26,13 @@ use webjet_proto::{self as wp, RpcBody};
 pub const MAX_REQUEST: usize = 4 << 20;
 /// Connections served at once; more are answered with an error and closed.
 pub const MAX_CONNECTIONS: usize = 64;
+/// How long a connection may sit without sending a whole request, and how
+/// long a reply may take to be read. The socket is open to every local
+/// user and the [`MAX_CONNECTIONS`] slots are shared, so one that never
+/// finishes a request or never reads its replies must not keep a slot.
+/// (Clients send one request per connection and read the answer at once.)
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What a control command may do, given that every local user can send it
 /// (see the module docs and `ipc::Access::Everyone`).
@@ -92,12 +99,19 @@ pub async fn serve(n: Arc<Node>) -> Result<()> {
             let (r, mut w) = tokio::io::split(s);
             let Ok(_slot) = slot else {
                 let busy = json!({"ok": false, "error": "too many control connections"});
-                let _ = w.write_all(format!("{busy}\n").as_bytes()).await;
+                let _ = tokio::time::timeout(
+                    WRITE_TIMEOUT,
+                    w.write_all(format!("{busy}\n").as_bytes()),
+                )
+                .await;
                 return;
             };
             let mut r = BufReader::new(r);
             loop {
-                let reply = match read_request(&mut r).await {
+                let Ok(req) = tokio::time::timeout(IDLE_TIMEOUT, read_request(&mut r)).await else {
+                    break;
+                };
+                let reply = match req {
                     Ok(Some(line)) => match serde_json::from_slice::<Value>(&line) {
                         Ok(req) => match handle(&n2, req).await {
                             Ok(v) => json!({"ok": true, "result": v}),
@@ -108,13 +122,20 @@ pub async fn serve(n: Arc<Node>) -> Result<()> {
                     Ok(None) => break,
                     Err(e) => {
                         let reply = json!({"ok": false, "error": format!("bad request: {e}")});
-                        let _ = w.write_all(format!("{reply}\n").as_bytes()).await;
+                        let _ = tokio::time::timeout(
+                            WRITE_TIMEOUT,
+                            w.write_all(format!("{reply}\n").as_bytes()),
+                        )
+                        .await;
                         break;
                     }
                 };
                 let mut out = serde_json::to_vec(&reply).unwrap_or_default();
                 out.push(b'\n');
-                if w.write_all(&out).await.is_err() {
+                if !matches!(
+                    tokio::time::timeout(WRITE_TIMEOUT, w.write_all(&out)).await,
+                    Ok(Ok(()))
+                ) {
                     break;
                 }
             }

@@ -313,7 +313,10 @@ pub fn hop_record(data: &[u8]) {
         }
         let (ty, payload) = split(data);
         let ty = ty.first().copied().unwrap_or(hop::rec::CONTROL);
-        let enc = hop::encode_record(ty, payload);
+        let Some(enc) = hop::encode_record(ty, payload) else {
+            assert!(payload.len() > hop::MAX_RECORD, "a record within the limit encodes");
+            return;
+        };
         let mut r = enc.as_slice();
         match hop::read_record(&mut r).await {
             Ok((t, b)) => assert_eq!((t, b.as_slice()), (ty, payload), "record round trip"),

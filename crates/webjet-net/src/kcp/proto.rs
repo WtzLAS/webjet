@@ -97,6 +97,8 @@ pub enum Error {
     Conv(u32),
     /// An unknown command.
     Cmd(u8),
+    /// A data segment longer than the MSS.
+    Oversize(usize),
 }
 
 #[derive(Debug, Default)]
@@ -333,11 +335,13 @@ impl Kcp {
             }
             seg.xmit += 1;
             if timeout {
-                seg.rto += seg.rto / 2;
+                // Back off, but never past RTO_MAX: an unbounded backoff
+                // would put the dead-link verdict minutes away.
+                seg.rto = seg.rto.saturating_add(seg.rto / 2).min(RTO_MAX);
             } else {
                 seg.fastack = 0;
             }
-            seg.resendts = current.wrapping_add(seg.rto.max(rx_rto.min(seg.rto)));
+            seg.resendts = current.wrapping_add(seg.rto);
             seg.ts = current;
             seg.sent_us = now_us;
             spent += OVERHEAD + seg.data.len();
@@ -402,6 +406,28 @@ impl Kcp {
     /// `held` is how long the peer kept the data it acknowledges here
     /// before answering (zero when unknown); it is not the path's.
     pub fn input(&mut self, pkt: &[u8], arrived_us: u64, held: Duration) -> Result<(), Error> {
+        self.input_inner(pkt, arrived_us, held, true)
+    }
+
+    /// Like [`Kcp::input`], for a packet that may carry only
+    /// acknowledgements and window probes (RAW_ACK, sent outside FEC):
+    /// data in it is refused.
+    pub fn input_control(
+        &mut self,
+        pkt: &[u8],
+        arrived_us: u64,
+        held: Duration,
+    ) -> Result<(), Error> {
+        self.input_inner(pkt, arrived_us, held, false)
+    }
+
+    fn input_inner(
+        &mut self,
+        pkt: &[u8],
+        arrived_us: u64,
+        held: Duration,
+        data_allowed: bool,
+    ) -> Result<(), Error> {
         if pkt.len() < OVERHEAD {
             return Err(Error::Truncated);
         }
@@ -426,8 +452,15 @@ impl Kcp {
             if conv != self.conv {
                 return Err(Error::Conv(conv));
             }
-            if !matches!(cmd, CMD_PUSH | CMD_ACK | CMD_WASK | CMD_WINS) {
+            if !matches!(cmd, CMD_PUSH | CMD_ACK | CMD_WASK | CMD_WINS)
+                || (cmd == CMD_PUSH && !data_allowed)
+            {
                 return Err(Error::Cmd(cmd));
+            }
+            // A segment never carries more than one MSS: a larger one is
+            // the peer padding our buffers, not data we sent for.
+            if len > self.mss {
+                return Err(Error::Oversize(len));
             }
             self.rmt_wnd = wnd;
             // An acknowledgement's own segment before its `una`, so the
@@ -732,6 +765,53 @@ mod tests {
         seg[4] = CMD_PUSH;
         seg[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(k.input(&seg, 0, Duration::ZERO), Err(Error::Truncated));
+    }
+
+    #[test]
+    fn oversized_segments_and_data_in_control_packets_are_refused() {
+        let mut k = Kcp::new(5, MTU);
+        let mss = k.mss();
+        let push = |len: usize| {
+            let mut seg = vec![0u8; OVERHEAD];
+            seg[..4].copy_from_slice(&5u32.to_le_bytes());
+            seg[4] = CMD_PUSH;
+            seg[20..24].copy_from_slice(&(len as u32).to_le_bytes());
+            seg.extend(std::iter::repeat_n(7u8, len));
+            seg
+        };
+        assert_eq!(
+            k.input(&push(mss + 1), 0, Duration::ZERO),
+            Err(Error::Oversize(mss + 1))
+        );
+        assert!(k.rcv_buf.is_empty() && k.rcv_queue.is_empty());
+        // RAW_ACK may carry acknowledgements, never data.
+        assert_eq!(
+            k.input_control(&push(10), 0, Duration::ZERO),
+            Err(Error::Cmd(CMD_PUSH))
+        );
+        assert!(k.recv().is_none());
+        k.input(&push(mss), 0, Duration::ZERO).unwrap();
+        assert_eq!(drain(&mut k).len(), mss);
+    }
+
+    /// A segment's retransmission timeout backs off to RTO_MAX and no
+    /// further, so a dead path is noticed in minutes, not hours.
+    #[test]
+    fn retransmission_backoff_is_capped() {
+        let mut k = Kcp::new(5, MTU);
+        k.send(b"lost", 0);
+        let mut out = Output::default();
+        let mut now_ms: u64 = 0;
+        for _ in 0..DEAD_LINK {
+            out.clear();
+            k.flush(now_ms * 1000, usize::MAX, &mut out);
+            let seg = &k.snd_buf[0];
+            assert!(seg.rto <= RTO_MAX, "rto {}", seg.rto);
+            now_ms += u64::from(seg.rto) + 1;
+        }
+        assert!(k.is_dead());
+        // 20 transmissions, each wait at most a minute.
+        assert!(now_ms <= u64::from(DEAD_LINK) * u64::from(RTO_MAX) + 1000);
     }
 
     /// Sequence numbers and clocks wrap (49-day ms clock, u32 sn).
