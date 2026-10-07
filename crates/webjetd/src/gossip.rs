@@ -1515,6 +1515,177 @@ pub fn topology(n: &Node) -> serde_json::Value {
 }
 
 #[cfg(test)]
+mod walk_tests {
+    use super::*;
+    use crate::node::TestHopRx;
+    use crate::testnode::{self, Cluster};
+    use webjet_core::merkle::kind;
+    use webjet_proto::AccountOp;
+
+    /// Two nodes, `behind` holding an older tree than `ahead`, joined by a
+    /// test hop each way.
+    struct Pair {
+        behind: Arc<Node>,
+        ahead: Arc<Node>,
+        to_ahead: (Arc<Hop>, TestHopRx),
+        to_behind: (Arc<Hop>, TestHopRx),
+        _dirs: (tempfile::TempDir, tempfile::TempDir),
+    }
+
+    /// The network changes between the two trees: nodes enrolled (new
+    /// leaves in many buckets), one renamed (a changed leaf), one revoked
+    /// (its node configuration leaf removed).
+    fn pair() -> Pair {
+        let mut c = Cluster::new();
+        let (a, ka) = c.data_node("a", "10.7.0.2", &[]);
+        let (b, kb) = c.data_node("b", "10.7.0.3", &[]);
+        let gone = c.data_node("gone", "10.7.0.4", &[]).0;
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&gone)),
+            limits: Some(vec![wp::LimitValue {
+                name: Some("circuits_global".into()),
+                value: 7,
+            }]),
+            ..Default::default()
+        })
+        .unwrap();
+        let (behind, d1) = testnode::node(&mut c, a, ka);
+        for i in 0..40 {
+            c.data_node(&format!("n{i}"), &format!("10.7.1.{}", i + 1), &[]);
+        }
+        c.admin_op(AccountOp::RenameNode(Box::new(wp::RenameNode {
+            node_id: Some(crypto::k32(&b)),
+            name: Some("b2".into()),
+        })))
+        .unwrap();
+        c.admin_op(AccountOp::TombstoneNode(Box::new(wp::TombstoneNode {
+            node_id: Some(crypto::k32(&gone)),
+            reason: None,
+        })))
+        .unwrap();
+        let (ahead, d2) = testnode::node(&mut c, b, kb);
+        let to_ahead = behind.test_hop(b, Transport::TcpTls);
+        let to_behind = ahead.test_hop(a, Transport::TcpTls);
+        Pair {
+            behind,
+            ahead,
+            to_ahead,
+            to_behind,
+            _dirs: (d1, d2),
+        }
+    }
+
+    /// Deliver control messages both ways until neither side sends more;
+    /// `tamper` may change what `ahead` sends. Returns `behind`'s errors.
+    async fn pump(p: &mut Pair, tamper: impl Fn(&mut HopMsg)) -> Vec<String> {
+        let mut errors = Vec::new();
+        loop {
+            let up = p.to_ahead.1.control();
+            let mut down = p.to_behind.1.control();
+            if up.is_empty() && down.is_empty() {
+                return errors;
+            }
+            for m in up {
+                handle(&p.ahead, &p.to_behind.0, m).await.unwrap();
+            }
+            for mut m in down.drain(..) {
+                tamper(&mut m);
+                if let Err(e) = handle(&p.behind, &p.to_ahead.0, m).await {
+                    errors.push(e.to_string());
+                }
+            }
+        }
+    }
+
+    fn announce(n: &Node) -> HopMsg {
+        head_msg(n).expect("a head")
+    }
+
+    #[tokio::test]
+    async fn a_walk_brings_a_node_up_to_the_newer_tree() {
+        let mut p = pair();
+        let (old, new) = (
+            p.behind.store.read().tree().clone(),
+            p.ahead.store.read().tree().clone(),
+        );
+        // The trees differ in every way a walk handles.
+        assert!(
+            old.iter()
+                .any(|(path, e)| e.kind == kind::NODE_CONFIG && new.get_by_path(path).is_none()),
+            "a leaf to remove"
+        );
+        assert!(old.len() + 30 < new.len(), "leaves to fetch");
+        let m = announce(&p.ahead);
+        handle(&p.behind, &p.to_ahead.0, m).await.unwrap();
+        assert_eq!(pump(&mut p, |_| {}).await, Vec::<String>::new());
+        let (b, a) = (p.behind.store.read(), p.ahead.store.read());
+        assert_eq!(b.tree().clone().root(), a.tree().clone().root());
+        assert_eq!(
+            b.head().map(|h| h.head.version),
+            a.head().map(|h| h.head.version)
+        );
+        assert!(p.behind.sync.walk.lock().is_none(), "the walk is over");
+    }
+
+    /// A peer that sends leaves other than the signed tree's only fails
+    /// the walk: nothing is installed.
+    #[tokio::test]
+    async fn wrong_leaves_install_nothing() {
+        let mut p = pair();
+        let root = |n: &Node| n.store.read().tree().clone().root();
+        let before = root(&p.behind);
+        let m = announce(&p.ahead);
+        handle(&p.behind, &p.to_ahead.0, m).await.unwrap();
+        let errors = pump(&mut p, |m| {
+            if let HopMsg::Leaves(l) = m
+                && let Some(x) = l.leaves.as_mut().and_then(|v| v.first_mut())
+                && let Some(b) = x.bytes.as_mut()
+            {
+                let mid = b.len() / 2;
+                b[mid] ^= 1;
+            }
+        })
+        .await;
+        assert!(!errors.is_empty(), "the walk failed");
+        assert_eq!(root(&p.behind), before);
+        assert!(p.behind.sync.walk.lock().is_none());
+    }
+
+    /// Bucket hashes that don't add up to the signed root end the walk
+    /// before anything else is asked for.
+    #[tokio::test]
+    async fn buckets_must_match_the_signed_root() {
+        let mut p = pair();
+        let m = announce(&p.ahead);
+        handle(&p.behind, &p.to_ahead.0, m).await.unwrap();
+        let errors = pump(&mut p, |m| {
+            if let HopMsg::Buckets(b) = m
+                && let Some(h) = b.hashes.as_mut().and_then(|v| v.first_mut())
+            {
+                *h = crypto::k32(&[0xee; 32]);
+            }
+        })
+        .await;
+        assert_eq!(errors, ["buckets don't match the signed root"]);
+        assert!(p.to_ahead.1.control().is_empty(), "nothing more asked");
+    }
+
+    /// A peer behind us gets our head, so it walks toward us.
+    #[tokio::test]
+    async fn a_peer_behind_gets_our_head() {
+        let mut p = pair();
+        let m = announce(&p.behind);
+        handle(&p.ahead, &p.to_behind.0, m).await.unwrap();
+        let sent = p.to_behind.1.control();
+        let ours = p.ahead.store.read().head().map(|h| h.raw.clone());
+        assert!(
+            matches!(&sent[..], [HopMsg::HeadAnnounce(a)] if a.head == ours),
+            "{sent:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::node::Records;
