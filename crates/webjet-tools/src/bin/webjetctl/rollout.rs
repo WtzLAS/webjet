@@ -156,17 +156,28 @@ pub(crate) async fn upgrade_nodes(
     }
     let a = load_account(cli).await?;
     let mut done: Vec<Value> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    // A node that can't take the request (offline, no helper, remote
+    // upgrades off, refused) is left as it is; the rollout goes on.
+    let mut skip = |t: &upgrade::Target, why: String| {
+        eprintln!("  {}: skipped: {why}", t.name);
+        skipped.push(json!({"name": t.name, "node_id": hex::encode(t.id), "result": "skipped", "reason": why}));
+    };
     for (i, stage) in stages.iter().enumerate() {
         let mut waiting: Vec<(&upgrade::Target, String)> = Vec::new();
         for t in stage {
-            let st = call(cli, Request::UpgradeStatus { node: Some(t.id) })
-                .await
-                .map_err(|e| {
-                    anyhow!(
-                        "{}: {e:#} (nodes before 0.9.0 can't be upgraded remotely: upgrade them with webjetup)",
-                        t.name
-                    )
-                })?;
+            let st = match call(cli, Request::UpgradeStatus { node: Some(t.id) }).await {
+                Ok(st) => st,
+                Err(e) => {
+                    skip(
+                        t,
+                        format!(
+                            "{e:#} (offline? nodes before 0.9.0 can't be upgraded remotely: upgrade them with webjetup)"
+                        ),
+                    );
+                    continue;
+                }
+            };
             if upgrade::progress(&st, &tag, "-") == upgrade::Progress::Done {
                 if !cli.json {
                     println!(
@@ -179,21 +190,27 @@ pub(crate) async fn upgrade_nodes(
                 continue;
             }
             if st["remote"].as_bool() == Some(false) {
-                bail!(
-                    "{}: remote upgrades are turned off there ([upgrade] remote = false); stopped",
-                    t.name
+                skip(
+                    t,
+                    "remote upgrades are turned off there ([upgrade] remote = false)".into(),
                 );
+                continue;
             }
             if st["helper"].as_bool() != Some(true) {
-                bail!(
-                    "{}: no upgrade helper installed there (webjetup install sets it up); stopped",
-                    t.name
+                skip(
+                    t,
+                    "no upgrade helper installed there (webjetup install sets it up)".into(),
                 );
+                continue;
             }
             let req = upgrade::sign_request(&a.kp, &a.id, &t.id, &tag, &files, now_ms());
-            let r = call(cli, Request::Upgrade { request: req })
-                .await
-                .map_err(|e| anyhow!("{}: {e:#}; stopped", t.name))?;
+            let r = match call(cli, Request::Upgrade { request: req }).await {
+                Ok(r) => r,
+                Err(e) => {
+                    skip(t, format!("{e:#}"));
+                    continue;
+                }
+            };
             let id = r["id"].as_str().unwrap_or_default().to_string();
             if !cli.json {
                 println!(
@@ -244,10 +261,19 @@ pub(crate) async fn upgrade_nodes(
             waiting = still;
         }
     }
+    let mut text = format!("{} node(s) run {tag}.", done.len());
+    if !skipped.is_empty() {
+        let names: Vec<&str> = skipped.iter().filter_map(|v| v["name"].as_str()).collect();
+        text += &format!(
+            "\n{} node(s) skipped, left as they are: {}. Fix the cause and run the same command again.",
+            skipped.len(),
+            names.join(", ")
+        );
+    }
     report(
         cli,
-        format!("{} node(s) run {tag}.", done.len()),
-        json!({"version": tag, "nodes": done}),
+        text,
+        json!({"version": tag, "nodes": done, "skipped": skipped}),
     );
     Ok(())
 }

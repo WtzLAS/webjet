@@ -16,7 +16,7 @@
 #      node upgrade: to a newer release (a second build of this checkout
 #      with the patch version raised); a "release" whose agent reports the
 #      wrong version is rolled back; nothing older is sent; opted out
-#      (--no-remote-upgrade) it is refused
+#      (--no-remote-upgrade) it is skipped and the rollout goes on
 #   7. webjetup nuke --dry-run changes nothing; nuke removes everything
 #
 #   docker/webjetup-test.sh          # run
@@ -231,8 +231,10 @@ until on_host 'webjetctl local status' >/dev/null 2>&1; do
     i=$((i + 1))
     [ $i -lt 30 ] || fail "webjetd didn't come back after opting out"
 done
-U upgrade "v$BAD" laptop >/tmp/$P-off.txt 2>&1 && fail "an opted-out node must refuse"
-grep -q "turned off" /tmp/$P-off.txt || { cat /tmp/$P-off.txt; fail "opted out: wrong error"; }
+# Skipped with a note; the rollout goes on (here: nothing else to do).
+U upgrade "v$BAD" laptop >/tmp/$P-off.txt 2>&1 || { cat /tmp/$P-off.txt; fail "an opted-out node must be skipped, not stop the rollout"; }
+grep -q "laptop: skipped: .*turned off" /tmp/$P-off.txt || { cat /tmp/$P-off.txt; fail "opted out: wrong note"; }
+grep -q "1 node(s) skipped" /tmp/$P-off.txt || { cat /tmp/$P-off.txt; fail "opted out: not in the summary"; }
 on_host 'webjetup status' | grep -q "remote    off" || fail "status should say remote upgrades are off"
 
 echo "== 7. nuke"
