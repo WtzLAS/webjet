@@ -263,7 +263,7 @@ impl UdpObfs {
 /// a random length so they don't share one size.
 pub fn small_packet_padding(len: usize) -> usize {
     if len < 200 {
-        (rand::random::<u8>() % 96) as usize
+        (rand::random::<u8>() % 32) as usize
     } else {
         (rand::random::<u8>() % 16) as usize
     }

@@ -377,6 +377,29 @@ moved to aws-lc's (the same library rustls uses); the AEAD is now most of
 the remaining cost. The KCP gate (`webjet_net::gate`) still uses RustCrypto's
 XChaCha20-Poly1305, which aws-lc-rs doesn't offer.
 
+## Probe traffic
+
+What a node sends and receives only to measure links and circuits: hop
+keepalives (§11.2: from the dialer only, every 2 s for 30 s then every 5 s,
+each answered) and end-to-end probes (§11.4: from the circuit's source only,
+1 s until measured, then 5 s on the circuit in use and 15 s on a backup;
+only while the session was used in the last minute). Unit tests check the
+cadence with the agent's own tasks: `probe_traffic::keepalives_per_hop`,
+`probe_traffic::probe_record_sizes` and
+`e2e::handshake_tests::probe_traffic_on_an_idle_circuit`.
+`probe_traffic::wire::wire_cost` (ignored by default) runs two agents (edge
+and relay: hop writer/reader/keepalive, path loop, session timers) over a
+real UDP+KCP+FEC+TLS and TCP+TLS hop on loopback through a counting proxy
+and prints bytes and packets per second:
+
+```sh
+cargo test -p webjetd --lib probe_traffic -- --ignored --nocapture
+```
+
+`WEBJET_PROBE_SECS` sets the measured window (default 30 s). An idle KCP
+hop measured ≈ 2.5 datagrams/s and ≈ 480 B/s each way (with IP/UDP
+headers) before 0.10.2, ≈ 0.4–0.7 datagrams/s and ≈ 130–150 B/s after.
+
 ## Docker image
 
 The root `Dockerfile` has a `runtime` target (default, the deployment image)

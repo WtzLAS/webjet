@@ -26,6 +26,8 @@ pub mod nat;
 pub mod node;
 pub mod paths;
 pub mod platform;
+#[cfg(test)]
+mod probe_traffic;
 pub mod proxy;
 pub mod punch;
 pub mod rpc;

@@ -13,6 +13,12 @@ table Keepalive {
     echo_us: uint64;          // sender's monotonic microseconds, echoed back
     wall_ms: uint64;
     digest: Key32;            // optional
+    // Bit 0: the sender keeps the hop alive for both ends (§11.2); the
+    // receiver sends no keepalives of its own while they keep coming.
+    flags: ubyte;
+    // Now and then, with flag bit 0: where the sender sees the receiver
+    // (§11.7), which no longer learns it from acks of its own keepalives.
+    observed_addr: SockAddr;
 }
 
 table KeepaliveAck {
@@ -20,6 +26,9 @@ table KeepaliveAck {
     echo_us: uint64;
     wall_ms: uint64;
     observed_addr: SockAddr;  // where the responder saw the sender's packets (§11.7)
+    // The responder's store digest (edge nodes), when it sends no
+    // keepalives of its own to carry it.
+    digest: Key32;
 }
 
 table Digest { digest: Key32; }
@@ -116,7 +125,22 @@ table HopControl { msg: HopMsg; }
 
 // ---------------------------------------------------------------- end-to-end payloads (§9.4.3, §11.7)
 
-table Probe { route_id: Key32; probe_seq: uint64; sent_at_us: uint64; }
+// An end-to-end probe (§11.4); a PROBE_ACK answers it. Nodes up to 0.10.1
+// send route_id and probe_seq and answer by echoing the probe as it came.
+// Newer nodes send route_tag (the route id's first 8 bytes, little-endian)
+// and tell probes apart by sent_at_us; their answer repeats the probe's
+// fields and adds reply_at_us. A probe may echo the last answer its sender
+// got (echo_us = that answer's reply_at_us, held_us = how long it waited
+// here), so the answering end measures the round trip as well.
+table Probe {
+    route_id: Key32;
+    probe_seq: uint64;
+    sent_at_us: uint64;
+    route_tag: uint64;
+    reply_at_us: uint64;
+    echo_us: uint64;
+    held_us: uint32;
+}
 
 table PunchOffer {
     candidates: [SockAddr];

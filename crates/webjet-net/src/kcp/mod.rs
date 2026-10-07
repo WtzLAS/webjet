@@ -53,8 +53,23 @@ const K_OPEN: u8 = 2;
 const K_PUNCH: u8 = 3;
 const K_STATS: u8 = 4;
 const K_RAW_ACK: u8 = 5;
+/// An FEC shard with acknowledgements in front of it, outside FEC like a
+/// RAW_ACK: `held_us[4] || acks_len[2] || acks || shard`.
+const K_SHARD_ACK: u8 = 6;
 /// STATS flag: this end takes RAW_ACK datagrams.
 const STATS_RAW_ACK: u8 = 1;
+/// STATS flag: this end takes SHARD_ACK datagrams.
+const STATS_SHARD_ACK: u8 = 2;
+/// How long a lone acknowledgement waits for data to ride along with
+/// (the peer subtracts the wait from its round trips). Well under KCP's
+/// smallest retransmission timeout.
+const ACK_HOLD: Duration = Duration::from_millis(10);
+/// An acknowledgement packet this small (one segment, or two) may wait;
+/// more means data is flowing and the sender needs them now.
+const ACK_HOLD_MAX: usize = 2 * proto::OVERHEAD;
+/// Loss feedback (STATS) goes every second while there is loss or there
+/// was some within this long, otherwise this often.
+const STATS_QUIET: Duration = Duration::from_secs(10);
 const PUNCH_PING: u8 = 1;
 const PUNCH_PONG: u8 = 2;
 /// PONGs sent per second at most (a captured PING replayed with a forged
@@ -659,17 +674,25 @@ enum Inbound<'a> {
     /// An FEC shard (from a SHARD, or an OPEN after its timestamp and nonce).
     Shard(&'a [u8]),
     /// The peer's loss feedback: of the datagrams we sent, how many it
-    /// received before FEC recovery, and whether it takes RAW_ACK.
+    /// received before FEC recovery, and whether it takes RAW_ACK and
+    /// SHARD_ACK.
     Loss {
         received: u64,
         expected: u64,
         raw_ack: bool,
+        shard_ack: bool,
     },
     /// KCP acknowledgements sent outside FEC, and how long the peer held
     /// them after the acknowledged data reached its socket.
     RawAck {
         held: Duration,
         acks: &'a [u8],
+    },
+    /// A RAW_ACK and an FEC shard in one datagram.
+    ShardAck {
+        held: Duration,
+        acks: &'a [u8],
+        shard: &'a [u8],
     },
     Ignore,
 }
@@ -700,6 +723,8 @@ fn inbound(d: &[u8]) -> Inbound<'_> {
                     expected: exp,
                     // 0.6 and earlier send no flags.
                     raw_ack: body.get(8).is_some_and(|f| f & STATS_RAW_ACK != 0),
+                    // 0.10.1 and earlier take no SHARD_ACK.
+                    shard_ack: body.get(8).is_some_and(|f| f & STATS_SHARD_ACK != 0),
                 }
             } else {
                 Inbound::Ignore
@@ -711,6 +736,15 @@ fn inbound(d: &[u8]) -> Inbound<'_> {
             )),
             acks: &body[4..],
         },
+        K_SHARD_ACK if body.len() >= 6 => {
+            let held =
+                Duration::from_micros(u64::from(webjet_core::bytes::be_u32(body, 0).unwrap_or(0)));
+            let n = usize::from(u16::from_be_bytes([body[4], body[5]]));
+            match (body.get(6..6 + n), body.get(6 + n..)) {
+                (Some(acks), Some(shard)) => Inbound::ShardAck { held, acks, shard },
+                _ => Inbound::Ignore,
+            }
+        }
         _ => Inbound::Ignore,
     }
 }
@@ -723,7 +757,21 @@ fn stats_frame(conv: u32, received: u64, expected: u64) -> Vec<u8> {
     inner.extend_from_slice(&conv.to_be_bytes());
     inner.extend_from_slice(&(received.min(u64::from(u32::MAX)) as u32).to_be_bytes());
     inner.extend_from_slice(&(expected.min(u64::from(u32::MAX)) as u32).to_be_bytes());
-    inner.push(STATS_RAW_ACK);
+    inner.push(STATS_RAW_ACK | STATS_SHARD_ACK);
+    inner
+}
+
+/// A SHARD_ACK datagram (before sealing): acknowledgements riding with a
+/// shard that was going out anyway.
+fn shard_ack_frame(conv: u32, held: Duration, acks: &[u8], shard: &[u8]) -> Vec<u8> {
+    let mut inner = Vec::with_capacity(11 + acks.len() + shard.len());
+    inner.push(K_SHARD_ACK);
+    inner.extend_from_slice(&conv.to_be_bytes());
+    let us = u32::try_from(held.as_micros()).unwrap_or(u32::MAX);
+    inner.extend_from_slice(&us.to_be_bytes());
+    inner.extend_from_slice(&(acks.len() as u16).to_be_bytes());
+    inner.extend_from_slice(acks);
+    inner.extend_from_slice(shard);
     inner
 }
 
@@ -818,9 +866,22 @@ async fn run_session(
     // The peer takes acknowledgements outside FEC and the pacer (it said so
     // in its STATS).
     let mut peer_raw_ack = false;
+    // It takes acknowledgements riding in front of a shard (SHARD_ACK).
+    let mut peer_shard_ack = false;
     // When the newest datagram whose segments this flush acknowledges
     // reached the socket: the peer subtracts how long we held them.
     let mut acked_arrival: Option<Instant> = None;
+    // A small acknowledgement waiting (at most ACK_HOLD) for a shard to
+    // ride with: (the KCP packet, when what it acknowledges arrived, when
+    // it was made).
+    let mut held_ack: Option<(Vec<u8>, Instant, Instant)> = None;
+    // Loss counts not yet reported, when STATS last went, when there was
+    // last loss, and whether one went at all (the first goes at once: it
+    // tells the peer which datagrams we take).
+    let mut unreported = (0u64, 0u64);
+    let mut stats_reported_at = Instant::now();
+    let mut last_loss_at: Option<Instant> = None;
+    let mut stats_reported = false;
     let mut user_buf = vec![0u8; 16 * 1024];
     let mut user_open = true;
     // Received bytes on their way to the user. While a slow reader hasn't
@@ -882,8 +943,16 @@ async fn run_session(
                         Inbound::RawAck { held, acks } => {
                             let _ = kcp.input_control(acks, us(at), held);
                         }
-                        Inbound::Loss { received, expected, raw_ack } => {
+                        Inbound::ShardAck { held, acks, shard } => {
+                            let _ = kcp.input_control(acks, us(at), held);
+                            for pkt in dec.push(shard) {
+                                let _ = kcp.input(&pkt, us(at), Duration::ZERO);
+                                acked_arrival = Some(acked_arrival.map_or(at, |t| t.max(at)));
+                            }
+                        }
+                        Inbound::Loss { received, expected, raw_ack, shard_ack } => {
                             peer_raw_ack = raw_ack;
+                            peer_shard_ack = shard_ack;
                             stats.meas.lock().tx.add(received, expected);
                             enc.adapt(Inbound::loss(received, expected));
                             stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
@@ -959,14 +1028,23 @@ async fn run_session(
         pacer.refill(now, rate);
         out.clear();
         kcp.flush(us(now), pacer.budget(), &mut out);
-        let held = acked_arrival
-            .take()
-            .map_or(Duration::ZERO, |t| now.duration_since(t));
+        let arrival = acked_arrival.take().unwrap_or(now);
+        // Acknowledgements go at once and on their own (RAW_ACK), so the
+        // peer's RTT never includes our send backlog (§11.2); a lone small
+        // one may wait ACK_HOLD for a shard to ride with (SHARD_ACK).
+        let raw = peer_raw_ack && opened;
+        let hold = raw && peer_shard_ack;
+        if raw && !out.control.is_empty() {
+            if let Some((p, at, _)) = held_ack.take() {
+                seal_and_send(raw_ack_frame(conv, now.duration_since(at), &p)).await;
+            }
+            if hold && out.control.len() == 1 && out.control[0].len() <= ACK_HOLD_MAX {
+                held_ack = out.control.pop().map(|p| (p, arrival, now));
+            }
+        }
         for p in out.control.drain(..) {
-            if peer_raw_ack && opened {
-                // At once and on their own, so the peer's RTT never
-                // includes our send backlog (§11.2).
-                seal_and_send(raw_ack_frame(conv, held, &p)).await;
+            if raw {
+                seal_and_send(raw_ack_frame(conv, now.duration_since(arrival), &p)).await;
                 continue;
             }
             for s in enc.push(&p) {
@@ -975,19 +1053,44 @@ async fn run_session(
             }
             fec_flush_at.get_or_insert(now + Duration::from_millis(15));
         }
+        // A held acknowledgement rides with the first shard it fits in
+        // front of without making the datagram larger than a full one.
+        let send_shard = |s: Vec<u8>, held_ack: &mut Option<(Vec<u8>, Instant, Instant)>| {
+            let fits = held_ack
+                .as_ref()
+                .is_some_and(|(p, _, _)| s.len() + p.len() + 6 <= KCP_MTU + 2 + fec::HDR);
+            match held_ack.take() {
+                Some((p, at, _)) if fits => {
+                    shard_ack_frame(conv, Instant::now().duration_since(at), &p, &s)
+                }
+                other => {
+                    *held_ack = other;
+                    shard_frame(opened, conv, &s)
+                }
+            }
+        };
         for p in out.data.drain(..) {
             for s in enc.push(&p) {
                 pacer.spend(s.len());
-                seal_and_send(shard_frame(opened, conv, &s)).await;
+                let d = send_shard(s, &mut held_ack);
+                seal_and_send(d).await;
             }
             fec_flush_at.get_or_insert(now + Duration::from_millis(15));
         }
         if fec_flush_at.is_some_and(|t| now >= t) {
             for s in enc.flush() {
                 pacer.spend(s.len());
-                seal_and_send(shard_frame(opened, conv, &s)).await;
+                let d = send_shard(s, &mut held_ack);
+                seal_and_send(d).await;
             }
             fec_flush_at = None;
+        }
+        if held_ack
+            .as_ref()
+            .is_some_and(|(_, _, made)| now.duration_since(*made) >= ACK_HOLD)
+            && let Some((p, at, _)) = held_ack.take()
+        {
+            seal_and_send(raw_ack_frame(conv, now.duration_since(at), &p)).await;
         }
         stats
             .fec_parity_tx
@@ -998,13 +1101,26 @@ async fn run_session(
             kcp.backlog_age(us(now)).as_micros() as u64,
             Ordering::Relaxed,
         );
-        // Loss feedback for the peer's FEC (§17.6).
+        // Loss feedback for the peer's FEC (§17.6): every second while
+        // there is loss (and for STATS_QUIET after it), else every
+        // STATS_QUIET.
         if now.duration_since(stats_sent_at) > Duration::from_secs(1) {
             // Line loss before FEC recovery, counted from shard group gaps.
             let (received, expected) = dec.take_loss();
             stats.meas.lock().rx.add(received, expected);
-            if expected > 0 {
-                seal_and_send(stats_frame(conv, received, expected)).await;
+            if received < expected {
+                last_loss_at = Some(now);
+            }
+            unreported.0 += received;
+            unreported.1 += expected;
+            let lossy = last_loss_at.is_some_and(|t| now.duration_since(t) < STATS_QUIET);
+            let due =
+                !stats_reported || lossy || now.duration_since(stats_reported_at) >= STATS_QUIET;
+            if unreported.1 > 0 && due {
+                seal_and_send(stats_frame(conv, unreported.0, unreported.1)).await;
+                unreported = (0, 0);
+                stats_reported_at = now;
+                stats_reported = true;
             }
             stats_sent_at = now;
         }
@@ -1017,6 +1133,9 @@ async fn run_session(
         let busy = kcp.wait_snd() > 0 || fec_flush_at.is_some() || !pending.is_empty();
         let now = Instant::now();
         wake = now + if busy { BUSY_TICK } else { IDLE_TICK };
+        if let Some((_, _, made)) = &held_ack {
+            wake = wake.min(*made + ACK_HOLD);
+        }
     }
 }
 
@@ -1064,6 +1183,12 @@ pub mod fuzzing {
                 } => enc.adapt(Inbound::loss(received, expected)),
                 Inbound::RawAck { held, acks } => {
                     let _ = kcp.input_control(acks, t, held);
+                }
+                Inbound::ShardAck { held, acks, shard } => {
+                    let _ = kcp.input_control(acks, t, held);
+                    for pkt in dec.push(shard) {
+                        let _ = kcp.input(&pkt, t, Duration::ZERO);
+                    }
                 }
                 Inbound::Ignore => continue,
             }
@@ -1129,7 +1254,8 @@ mod tests {
             Inbound::Loss {
                 received: 90,
                 expected: 100,
-                raw_ack: true
+                raw_ack: true,
+                shard_ack: true
             }
         );
         assert!((Inbound::loss(90, 100) - 0.1).abs() < 1e-9);
@@ -1139,7 +1265,8 @@ mod tests {
             Inbound::Loss {
                 received: 90,
                 expected: 100,
-                raw_ack: false
+                raw_ack: false,
+                shard_ack: false
             }
         );
         // More received than expected is no loss, nothing expected no report.
@@ -1149,7 +1276,8 @@ mod tests {
             Inbound::Loss {
                 received: 100,
                 expected: 100,
-                raw_ack: true
+                raw_ack: true,
+                shard_ack: true
             }
         );
         assert_eq!(Inbound::loss(100, 100), 0.0);
@@ -1167,6 +1295,20 @@ mod tests {
             }
         );
         assert_eq!(inbound(&[K_RAW_ACK, 0, 0]), Inbound::Ignore);
+        let both = shard_ack_frame(7, Duration::from_micros(99), b"acks", b"shard");
+        assert_eq!(
+            inbound(&[&[K_SHARD_ACK][..], &both[5..]].concat()),
+            Inbound::ShardAck {
+                held: Duration::from_micros(99),
+                acks: b"acks",
+                shard: b"shard"
+            }
+        );
+        // An acknowledgement length past the end carries nothing.
+        assert_eq!(
+            inbound(&[K_SHARD_ACK, 0, 0, 0, 0, 0, 9, 1]),
+            Inbound::Ignore
+        );
         assert_eq!(inbound(&[]), Inbound::Ignore);
         assert_eq!(inbound(&[99, 1]), Inbound::Ignore);
     }

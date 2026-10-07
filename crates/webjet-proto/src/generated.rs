@@ -39,6 +39,10 @@ mod root {
             pub wall_ms: u64,
             /// The field `digest` in the table `Keepalive`
             pub digest: ::core::option::Option<self::Key32>,
+            /// The field `flags` in the table `Keepalive`
+            pub flags: u8,
+            /// The field `observed_addr` in the table `Keepalive`
+            pub observed_addr: ::core::option::Option<self::SockAddr>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -49,6 +53,8 @@ mod root {
                     echo_us: 0,
                     wall_ms: 0,
                     digest: ::core::default::Default::default(),
+                    flags: 0,
+                    observed_addr: ::core::default::Default::default(),
                 }
             }
         }
@@ -67,13 +73,17 @@ mod root {
                 field_echo_us: impl ::planus::WriteAsDefault<u64, u64>,
                 field_wall_ms: impl ::planus::WriteAsDefault<u64, u64>,
                 field_digest: impl ::planus::WriteAsOptional<self::Key32>,
+                field_flags: impl ::planus::WriteAsDefault<u8, u8>,
+                field_observed_addr: impl ::planus::WriteAsOptional<self::SockAddr>,
             ) -> ::planus::Offset<Self> {
                 let prepared_seq = field_seq.prepare(builder, &0);
                 let prepared_echo_us = field_echo_us.prepare(builder, &0);
                 let prepared_wall_ms = field_wall_ms.prepare(builder, &0);
                 let prepared_digest = field_digest.prepare(builder);
+                let prepared_flags = field_flags.prepare(builder, &0);
+                let prepared_observed_addr = field_observed_addr.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                let mut table_writer: ::planus::table_writer::TableWriter<16> =
                     ::core::default::Default::default();
                 if prepared_seq.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -86,6 +96,12 @@ mod root {
                 }
                 if prepared_digest.is_some() {
                     table_writer.write_entry::<self::Key32>(3);
+                }
+                if prepared_observed_addr.is_some() {
+                    table_writer.write_entry::<self::SockAddr>(5);
+                }
+                if prepared_flags.is_some() {
+                    table_writer.write_entry::<u8>(4);
                 }
 
                 unsafe {
@@ -101,6 +117,14 @@ mod root {
                         }
                         if let ::core::option::Option::Some(prepared_digest) = prepared_digest {
                             object_writer.write::<_, _, 32>(&prepared_digest);
+                        }
+                        if let ::core::option::Option::Some(prepared_observed_addr) =
+                            prepared_observed_addr
+                        {
+                            object_writer.write::<_, _, 24>(&prepared_observed_addr);
+                        }
+                        if let ::core::option::Option::Some(prepared_flags) = prepared_flags {
+                            object_writer.write::<_, _, 1>(&prepared_flags);
                         }
                     });
                 }
@@ -132,7 +156,15 @@ mod root {
         impl ::planus::WriteAsOffset<Keepalive> for Keepalive {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<Keepalive> {
-                Keepalive::create(builder, self.seq, self.echo_us, self.wall_ms, self.digest)
+                Keepalive::create(
+                    builder,
+                    self.seq,
+                    self.echo_us,
+                    self.wall_ms,
+                    self.digest,
+                    self.flags,
+                    self.observed_addr,
+                )
             }
         }
 
@@ -223,6 +255,48 @@ mod root {
         }
 
         impl<T0, T1, T2, T3> KeepaliveBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`flags` field](Keepalive#structfield.flags).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn flags<T4>(self, value: T4) -> KeepaliveBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsDefault<u8, u8>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                KeepaliveBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`flags` field](Keepalive#structfield.flags) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn flags_as_default(
+                self,
+            ) -> KeepaliveBuilder<(T0, T1, T2, T3, ::planus::DefaultValue)> {
+                self.flags(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> KeepaliveBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`observed_addr` field](Keepalive#structfield.observed_addr).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn observed_addr<T5>(self, value: T5) -> KeepaliveBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsOptional<self::SockAddr>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                KeepaliveBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`observed_addr` field](Keepalive#structfield.observed_addr) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn observed_addr_as_null(self) -> KeepaliveBuilder<(T0, T1, T2, T3, T4, ())> {
+                self.observed_addr(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> KeepaliveBuilder<(T0, T1, T2, T3, T4, T5)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [Keepalive].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<Keepalive>
@@ -238,8 +312,10 @@ mod root {
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
                 T3: ::planus::WriteAsOptional<self::Key32>,
+                T4: ::planus::WriteAsDefault<u8, u8>,
+                T5: ::planus::WriteAsOptional<self::SockAddr>,
             > ::planus::WriteAs<::planus::Offset<Keepalive>>
-            for KeepaliveBuilder<(T0, T1, T2, T3)>
+            for KeepaliveBuilder<(T0, T1, T2, T3, T4, T5)>
         {
             type Prepared = ::planus::Offset<Keepalive>;
 
@@ -254,8 +330,10 @@ mod root {
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
                 T3: ::planus::WriteAsOptional<self::Key32>,
+                T4: ::planus::WriteAsDefault<u8, u8>,
+                T5: ::planus::WriteAsOptional<self::SockAddr>,
             > ::planus::WriteAsOptional<::planus::Offset<Keepalive>>
-            for KeepaliveBuilder<(T0, T1, T2, T3)>
+            for KeepaliveBuilder<(T0, T1, T2, T3, T4, T5)>
         {
             type Prepared = ::planus::Offset<Keepalive>;
 
@@ -273,12 +351,14 @@ mod root {
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
                 T3: ::planus::WriteAsOptional<self::Key32>,
-            > ::planus::WriteAsOffset<Keepalive> for KeepaliveBuilder<(T0, T1, T2, T3)>
+                T4: ::planus::WriteAsDefault<u8, u8>,
+                T5: ::planus::WriteAsOptional<self::SockAddr>,
+            > ::planus::WriteAsOffset<Keepalive> for KeepaliveBuilder<(T0, T1, T2, T3, T4, T5)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<Keepalive> {
-                let (v0, v1, v2, v3) = &self.0;
-                Keepalive::create(builder, v0, v1, v2, v3)
+                let (v0, v1, v2, v3, v4, v5) = &self.0;
+                Keepalive::create(builder, v0, v1, v2, v3, v4, v5)
             }
         }
 
@@ -310,6 +390,20 @@ mod root {
             pub fn digest(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
                 self.0.access(3, "Keepalive", "digest")
             }
+
+            /// Getter for the [`flags` field](Keepalive#structfield.flags).
+            #[inline]
+            pub fn flags(&self) -> ::planus::Result<u8> {
+                ::core::result::Result::Ok(self.0.access(4, "Keepalive", "flags")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`observed_addr` field](Keepalive#structfield.observed_addr).
+            #[inline]
+            pub fn observed_addr(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::SockAddrRef<'a>>> {
+                self.0.access(5, "Keepalive", "observed_addr")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for KeepaliveRef<'a> {
@@ -320,6 +414,12 @@ mod root {
                 f.field("wall_ms", &self.wall_ms());
                 if let ::core::option::Option::Some(field_digest) = self.digest().transpose() {
                     f.field("digest", &field_digest);
+                }
+                f.field("flags", &self.flags());
+                if let ::core::option::Option::Some(field_observed_addr) =
+                    self.observed_addr().transpose()
+                {
+                    f.field("observed_addr", &field_observed_addr);
                 }
                 f.finish()
             }
@@ -335,6 +435,8 @@ mod root {
                     echo_us: ::core::convert::TryInto::try_into(value.echo_us()?)?,
                     wall_ms: ::core::convert::TryInto::try_into(value.wall_ms()?)?,
                     digest: value.digest()?.map(::core::convert::Into::into),
+                    flags: ::core::convert::TryInto::try_into(value.flags()?)?,
+                    observed_addr: value.observed_addr()?.map(::core::convert::Into::into),
                 })
             }
         }
@@ -415,7 +517,7 @@ mod root {
         /// The table `KeepaliveAck` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `KeepaliveAck` in the file `schema/wire.fbs:18`
+        /// * Table `KeepaliveAck` in the file `schema/wire.fbs:24`
         #[derive(
             Clone,
             Debug,
@@ -436,6 +538,8 @@ mod root {
             pub wall_ms: u64,
             /// The field `observed_addr` in the table `KeepaliveAck`
             pub observed_addr: ::core::option::Option<self::SockAddr>,
+            /// The field `digest` in the table `KeepaliveAck`
+            pub digest: ::core::option::Option<self::Key32>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -446,6 +550,7 @@ mod root {
                     echo_us: 0,
                     wall_ms: 0,
                     observed_addr: ::core::default::Default::default(),
+                    digest: ::core::default::Default::default(),
                 }
             }
         }
@@ -464,13 +569,15 @@ mod root {
                 field_echo_us: impl ::planus::WriteAsDefault<u64, u64>,
                 field_wall_ms: impl ::planus::WriteAsDefault<u64, u64>,
                 field_observed_addr: impl ::planus::WriteAsOptional<self::SockAddr>,
+                field_digest: impl ::planus::WriteAsOptional<self::Key32>,
             ) -> ::planus::Offset<Self> {
                 let prepared_seq = field_seq.prepare(builder, &0);
                 let prepared_echo_us = field_echo_us.prepare(builder, &0);
                 let prepared_wall_ms = field_wall_ms.prepare(builder, &0);
                 let prepared_observed_addr = field_observed_addr.prepare(builder);
+                let prepared_digest = field_digest.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                let mut table_writer: ::planus::table_writer::TableWriter<14> =
                     ::core::default::Default::default();
                 if prepared_seq.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -483,6 +590,9 @@ mod root {
                 }
                 if prepared_observed_addr.is_some() {
                     table_writer.write_entry::<self::SockAddr>(3);
+                }
+                if prepared_digest.is_some() {
+                    table_writer.write_entry::<self::Key32>(4);
                 }
 
                 unsafe {
@@ -500,6 +610,9 @@ mod root {
                             prepared_observed_addr
                         {
                             object_writer.write::<_, _, 24>(&prepared_observed_addr);
+                        }
+                        if let ::core::option::Option::Some(prepared_digest) = prepared_digest {
+                            object_writer.write::<_, _, 32>(&prepared_digest);
                         }
                     });
                 }
@@ -537,6 +650,7 @@ mod root {
                     self.echo_us,
                     self.wall_ms,
                     self.observed_addr,
+                    self.digest,
                 )
             }
         }
@@ -630,6 +744,26 @@ mod root {
         }
 
         impl<T0, T1, T2, T3> KeepaliveAckBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`digest` field](KeepaliveAck#structfield.digest).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn digest<T4>(self, value: T4) -> KeepaliveAckBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsOptional<self::Key32>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                KeepaliveAckBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`digest` field](KeepaliveAck#structfield.digest) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn digest_as_null(self) -> KeepaliveAckBuilder<(T0, T1, T2, T3, ())> {
+                self.digest(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> KeepaliveAckBuilder<(T0, T1, T2, T3, T4)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [KeepaliveAck].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<KeepaliveAck>
@@ -645,8 +779,9 @@ mod root {
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
                 T3: ::planus::WriteAsOptional<self::SockAddr>,
+                T4: ::planus::WriteAsOptional<self::Key32>,
             > ::planus::WriteAs<::planus::Offset<KeepaliveAck>>
-            for KeepaliveAckBuilder<(T0, T1, T2, T3)>
+            for KeepaliveAckBuilder<(T0, T1, T2, T3, T4)>
         {
             type Prepared = ::planus::Offset<KeepaliveAck>;
 
@@ -661,8 +796,9 @@ mod root {
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
                 T3: ::planus::WriteAsOptional<self::SockAddr>,
+                T4: ::planus::WriteAsOptional<self::Key32>,
             > ::planus::WriteAsOptional<::planus::Offset<KeepaliveAck>>
-            for KeepaliveAckBuilder<(T0, T1, T2, T3)>
+            for KeepaliveAckBuilder<(T0, T1, T2, T3, T4)>
         {
             type Prepared = ::planus::Offset<KeepaliveAck>;
 
@@ -680,12 +816,13 @@ mod root {
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
                 T3: ::planus::WriteAsOptional<self::SockAddr>,
-            > ::planus::WriteAsOffset<KeepaliveAck> for KeepaliveAckBuilder<(T0, T1, T2, T3)>
+                T4: ::planus::WriteAsOptional<self::Key32>,
+            > ::planus::WriteAsOffset<KeepaliveAck> for KeepaliveAckBuilder<(T0, T1, T2, T3, T4)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<KeepaliveAck> {
-                let (v0, v1, v2, v3) = &self.0;
-                KeepaliveAck::create(builder, v0, v1, v2, v3)
+                let (v0, v1, v2, v3, v4) = &self.0;
+                KeepaliveAck::create(builder, v0, v1, v2, v3, v4)
             }
         }
 
@@ -723,6 +860,12 @@ mod root {
             ) -> ::planus::Result<::core::option::Option<self::SockAddrRef<'a>>> {
                 self.0.access(3, "KeepaliveAck", "observed_addr")
             }
+
+            /// Getter for the [`digest` field](KeepaliveAck#structfield.digest).
+            #[inline]
+            pub fn digest(&self) -> ::planus::Result<::core::option::Option<self::Key32Ref<'a>>> {
+                self.0.access(4, "KeepaliveAck", "digest")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for KeepaliveAckRef<'a> {
@@ -735,6 +878,9 @@ mod root {
                     self.observed_addr().transpose()
                 {
                     f.field("observed_addr", &field_observed_addr);
+                }
+                if let ::core::option::Option::Some(field_digest) = self.digest().transpose() {
+                    f.field("digest", &field_digest);
                 }
                 f.finish()
             }
@@ -750,6 +896,7 @@ mod root {
                     echo_us: ::core::convert::TryInto::try_into(value.echo_us()?)?,
                     wall_ms: ::core::convert::TryInto::try_into(value.wall_ms()?)?,
                     observed_addr: value.observed_addr()?.map(::core::convert::Into::into),
+                    digest: value.digest()?.map(::core::convert::Into::into),
                 })
             }
         }
@@ -830,7 +977,7 @@ mod root {
         /// The table `Digest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Digest` in the file `schema/wire.fbs:25`
+        /// * Table `Digest` in the file `schema/wire.fbs:34`
         #[derive(
             Clone,
             Debug,
@@ -1092,7 +1239,7 @@ mod root {
         /// The table `HeadAnnounce` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `HeadAnnounce` in the file `schema/wire.fbs:28`
+        /// * Table `HeadAnnounce` in the file `schema/wire.fbs:37`
         #[derive(
             Clone,
             Debug,
@@ -1412,7 +1559,7 @@ mod root {
         /// The table `GetLog` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetLog` in the file `schema/wire.fbs:37`
+        /// * Table `GetLog` in the file `schema/wire.fbs:46`
         #[derive(
             Clone,
             Debug,
@@ -1674,7 +1821,7 @@ mod root {
         /// The table `GetSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetSnapshot` in the file `schema/wire.fbs:38`
+        /// * Table `GetSnapshot` in the file `schema/wire.fbs:47`
         #[derive(
             Clone,
             Debug,
@@ -1940,7 +2087,7 @@ mod root {
         /// The table `SnapshotReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SnapshotReply` in the file `schema/wire.fbs:39`
+        /// * Table `SnapshotReply` in the file `schema/wire.fbs:48`
         #[derive(
             Clone,
             Debug,
@@ -2257,7 +2404,7 @@ mod root {
         /// The table `LogLeaf` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogLeaf` in the file `schema/wire.fbs:43`
+        /// * Table `LogLeaf` in the file `schema/wire.fbs:52`
         #[derive(
             Clone,
             Debug,
@@ -2653,7 +2800,7 @@ mod root {
         /// The table `LogRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRecord` in the file `schema/wire.fbs:44`
+        /// * Table `LogRecord` in the file `schema/wire.fbs:53`
         #[derive(
             Clone,
             Debug,
@@ -3432,7 +3579,7 @@ mod root {
         /// The table `LogReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogReply` in the file `schema/wire.fbs:57`
+        /// * Table `LogReply` in the file `schema/wire.fbs:66`
         #[derive(
             Clone,
             Debug,
@@ -3859,7 +4006,7 @@ mod root {
         /// The table `GetOffline` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetOffline` in the file `schema/wire.fbs:64`
+        /// * Table `GetOffline` in the file `schema/wire.fbs:73`
         #[derive(
             Clone,
             Debug,
@@ -4129,7 +4276,7 @@ mod root {
         /// The table `OfflineItems` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OfflineItems` in the file `schema/wire.fbs:65`
+        /// * Table `OfflineItems` in the file `schema/wire.fbs:74`
         #[derive(
             Clone,
             Debug,
@@ -4406,7 +4553,7 @@ mod root {
         /// The table `GetBuckets` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetBuckets` in the file `schema/wire.fbs:69`
+        /// * Table `GetBuckets` in the file `schema/wire.fbs:78`
         #[derive(
             Clone,
             Debug,
@@ -4672,7 +4819,7 @@ mod root {
         /// The table `Buckets` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Buckets` in the file `schema/wire.fbs:70`
+        /// * Table `Buckets` in the file `schema/wire.fbs:79`
         #[derive(
             Clone,
             Debug,
@@ -4988,7 +5135,7 @@ mod root {
         /// The table `GetBucketIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetBucketIndex` in the file `schema/wire.fbs:71`
+        /// * Table `GetBucketIndex` in the file `schema/wire.fbs:80`
         #[derive(
             Clone,
             Debug,
@@ -5303,7 +5450,7 @@ mod root {
         /// The table `LeafIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafIndex` in the file `schema/wire.fbs:72`
+        /// * Table `LeafIndex` in the file `schema/wire.fbs:81`
         #[derive(
             Clone,
             Debug,
@@ -5617,7 +5764,7 @@ mod root {
         /// The table `BucketIndex` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `BucketIndex` in the file `schema/wire.fbs:73`
+        /// * Table `BucketIndex` in the file `schema/wire.fbs:82`
         #[derive(
             Clone,
             Debug,
@@ -5946,7 +6093,7 @@ mod root {
         /// The table `GetLeaves` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetLeaves` in the file `schema/wire.fbs:74`
+        /// * Table `GetLeaves` in the file `schema/wire.fbs:83`
         #[derive(
             Clone,
             Debug,
@@ -6267,7 +6414,7 @@ mod root {
         /// The table `LeafData` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafData` in the file `schema/wire.fbs:75`
+        /// * Table `LeafData` in the file `schema/wire.fbs:84`
         #[derive(
             Clone,
             Debug,
@@ -6619,7 +6766,7 @@ mod root {
         /// The table `Leaves` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Leaves` in the file `schema/wire.fbs:76`
+        /// * Table `Leaves` in the file `schema/wire.fbs:85`
         #[derive(
             Clone,
             Debug,
@@ -6941,7 +7088,7 @@ mod root {
         /// The table `NotAvailable` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NotAvailable` in the file `schema/wire.fbs:77`
+        /// * Table `NotAvailable` in the file `schema/wire.fbs:86`
         #[derive(
             Clone,
             Debug,
@@ -7208,7 +7355,7 @@ mod root {
         /// The table `Records` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Records` in the file `schema/wire.fbs:81`
+        /// * Table `Records` in the file `schema/wire.fbs:90`
         #[derive(
             Clone,
             Debug,
@@ -7480,7 +7627,7 @@ mod root {
         /// The table `Lookup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Lookup` in the file `schema/wire.fbs:83`
+        /// * Table `Lookup` in the file `schema/wire.fbs:92`
         #[derive(
             Clone,
             Debug,
@@ -7798,7 +7945,7 @@ mod root {
         /// The table `CircuitOpen` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitOpen` in the file `schema/wire.fbs:87`
+        /// * Table `CircuitOpen` in the file `schema/wire.fbs:96`
         #[derive(
             Clone,
             Debug,
@@ -8110,7 +8257,7 @@ mod root {
         /// The table `CircuitAccept` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitAccept` in the file `schema/wire.fbs:88`
+        /// * Table `CircuitAccept` in the file `schema/wire.fbs:97`
         #[derive(
             Clone,
             Debug,
@@ -8422,7 +8569,7 @@ mod root {
         /// The table `CircuitRefuse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitRefuse` in the file `schema/wire.fbs:89`
+        /// * Table `CircuitRefuse` in the file `schema/wire.fbs:98`
         #[derive(
             Clone,
             Debug,
@@ -8737,7 +8884,7 @@ mod root {
         /// The table `CircuitClose` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitClose` in the file `schema/wire.fbs:91`
+        /// * Table `CircuitClose` in the file `schema/wire.fbs:100`
         #[derive(
             Clone,
             Debug,
@@ -9000,7 +9147,7 @@ mod root {
         /// The union `HopMsg` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `HopMsg` in the file `schema/wire.fbs:93`
+        /// * Union `HopMsg` in the file `schema/wire.fbs:102`
         #[derive(
             Clone,
             Debug,
@@ -10094,7 +10241,7 @@ mod root {
         /// The table `HopControl` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `HopControl` in the file `schema/wire.fbs:115`
+        /// * Table `HopControl` in the file `schema/wire.fbs:124`
         #[derive(
             Clone,
             Debug,
@@ -10370,7 +10517,7 @@ mod root {
         /// The table `Probe` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Probe` in the file `schema/wire.fbs:119`
+        /// * Table `Probe` in the file `schema/wire.fbs:135`
         #[derive(
             Clone,
             Debug,
@@ -10389,6 +10536,14 @@ mod root {
             pub probe_seq: u64,
             /// The field `sent_at_us` in the table `Probe`
             pub sent_at_us: u64,
+            /// The field `route_tag` in the table `Probe`
+            pub route_tag: u64,
+            /// The field `reply_at_us` in the table `Probe`
+            pub reply_at_us: u64,
+            /// The field `echo_us` in the table `Probe`
+            pub echo_us: u64,
+            /// The field `held_us` in the table `Probe`
+            pub held_us: u32,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -10398,6 +10553,10 @@ mod root {
                     route_id: ::core::default::Default::default(),
                     probe_seq: 0,
                     sent_at_us: 0,
+                    route_tag: 0,
+                    reply_at_us: 0,
+                    echo_us: 0,
+                    held_us: 0,
                 }
             }
         }
@@ -10415,12 +10574,20 @@ mod root {
                 field_route_id: impl ::planus::WriteAsOptional<self::Key32>,
                 field_probe_seq: impl ::planus::WriteAsDefault<u64, u64>,
                 field_sent_at_us: impl ::planus::WriteAsDefault<u64, u64>,
+                field_route_tag: impl ::planus::WriteAsDefault<u64, u64>,
+                field_reply_at_us: impl ::planus::WriteAsDefault<u64, u64>,
+                field_echo_us: impl ::planus::WriteAsDefault<u64, u64>,
+                field_held_us: impl ::planus::WriteAsDefault<u32, u32>,
             ) -> ::planus::Offset<Self> {
                 let prepared_route_id = field_route_id.prepare(builder);
                 let prepared_probe_seq = field_probe_seq.prepare(builder, &0);
                 let prepared_sent_at_us = field_sent_at_us.prepare(builder, &0);
+                let prepared_route_tag = field_route_tag.prepare(builder, &0);
+                let prepared_reply_at_us = field_reply_at_us.prepare(builder, &0);
+                let prepared_echo_us = field_echo_us.prepare(builder, &0);
+                let prepared_held_us = field_held_us.prepare(builder, &0);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<10> =
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
                     ::core::default::Default::default();
                 if prepared_route_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -10430,6 +10597,18 @@ mod root {
                 }
                 if prepared_sent_at_us.is_some() {
                     table_writer.write_entry::<u64>(2);
+                }
+                if prepared_route_tag.is_some() {
+                    table_writer.write_entry::<u64>(3);
+                }
+                if prepared_reply_at_us.is_some() {
+                    table_writer.write_entry::<u64>(4);
+                }
+                if prepared_echo_us.is_some() {
+                    table_writer.write_entry::<u64>(5);
+                }
+                if prepared_held_us.is_some() {
+                    table_writer.write_entry::<u32>(6);
                 }
 
                 unsafe {
@@ -10445,6 +10624,21 @@ mod root {
                             prepared_sent_at_us
                         {
                             object_writer.write::<_, _, 8>(&prepared_sent_at_us);
+                        }
+                        if let ::core::option::Option::Some(prepared_route_tag) = prepared_route_tag
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_route_tag);
+                        }
+                        if let ::core::option::Option::Some(prepared_reply_at_us) =
+                            prepared_reply_at_us
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_reply_at_us);
+                        }
+                        if let ::core::option::Option::Some(prepared_echo_us) = prepared_echo_us {
+                            object_writer.write::<_, _, 8>(&prepared_echo_us);
+                        }
+                        if let ::core::option::Option::Some(prepared_held_us) = prepared_held_us {
+                            object_writer.write::<_, _, 4>(&prepared_held_us);
                         }
                     });
                 }
@@ -10476,7 +10670,16 @@ mod root {
         impl ::planus::WriteAsOffset<Probe> for Probe {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<Probe> {
-                Probe::create(builder, self.route_id, self.probe_seq, self.sent_at_us)
+                Probe::create(
+                    builder,
+                    self.route_id,
+                    self.probe_seq,
+                    self.sent_at_us,
+                    self.route_tag,
+                    self.reply_at_us,
+                    self.echo_us,
+                    self.held_us,
+                )
             }
         }
 
@@ -10547,6 +10750,94 @@ mod root {
         }
 
         impl<T0, T1, T2> ProbeBuilder<(T0, T1, T2)> {
+            /// Setter for the [`route_tag` field](Probe#structfield.route_tag).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn route_tag<T3>(self, value: T3) -> ProbeBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2) = self.0;
+                ProbeBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`route_tag` field](Probe#structfield.route_tag) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn route_tag_as_default(
+                self,
+            ) -> ProbeBuilder<(T0, T1, T2, ::planus::DefaultValue)> {
+                self.route_tag(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3> ProbeBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`reply_at_us` field](Probe#structfield.reply_at_us).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn reply_at_us<T4>(self, value: T4) -> ProbeBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                ProbeBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`reply_at_us` field](Probe#structfield.reply_at_us) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn reply_at_us_as_default(
+                self,
+            ) -> ProbeBuilder<(T0, T1, T2, T3, ::planus::DefaultValue)> {
+                self.reply_at_us(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> ProbeBuilder<(T0, T1, T2, T3, T4)> {
+            /// Setter for the [`echo_us` field](Probe#structfield.echo_us).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn echo_us<T5>(self, value: T5) -> ProbeBuilder<(T0, T1, T2, T3, T4, T5)>
+            where
+                T5: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4) = self.0;
+                ProbeBuilder((v0, v1, v2, v3, v4, value))
+            }
+
+            /// Sets the [`echo_us` field](Probe#structfield.echo_us) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn echo_us_as_default(
+                self,
+            ) -> ProbeBuilder<(T0, T1, T2, T3, T4, ::planus::DefaultValue)> {
+                self.echo_us(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5> ProbeBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`held_us` field](Probe#structfield.held_us).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn held_us<T6>(self, value: T6) -> ProbeBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsDefault<u32, u32>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                ProbeBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`held_us` field](Probe#structfield.held_us) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn held_us_as_default(
+                self,
+            ) -> ProbeBuilder<(T0, T1, T2, T3, T4, T5, ::planus::DefaultValue)> {
+                self.held_us(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> ProbeBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [Probe].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<Probe>
@@ -10561,7 +10852,12 @@ mod root {
                 T0: ::planus::WriteAsOptional<self::Key32>,
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
-            > ::planus::WriteAs<::planus::Offset<Probe>> for ProbeBuilder<(T0, T1, T2)>
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u32, u32>,
+            > ::planus::WriteAs<::planus::Offset<Probe>>
+            for ProbeBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<Probe>;
 
@@ -10575,7 +10871,12 @@ mod root {
                 T0: ::planus::WriteAsOptional<self::Key32>,
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
-            > ::planus::WriteAsOptional<::planus::Offset<Probe>> for ProbeBuilder<(T0, T1, T2)>
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u32, u32>,
+            > ::planus::WriteAsOptional<::planus::Offset<Probe>>
+            for ProbeBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<Probe>;
 
@@ -10592,12 +10893,16 @@ mod root {
                 T0: ::planus::WriteAsOptional<self::Key32>,
                 T1: ::planus::WriteAsDefault<u64, u64>,
                 T2: ::planus::WriteAsDefault<u64, u64>,
-            > ::planus::WriteAsOffset<Probe> for ProbeBuilder<(T0, T1, T2)>
+                T3: ::planus::WriteAsDefault<u64, u64>,
+                T4: ::planus::WriteAsDefault<u64, u64>,
+                T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u32, u32>,
+            > ::planus::WriteAsOffset<Probe> for ProbeBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<Probe> {
-                let (v0, v1, v2) = &self.0;
-                Probe::create(builder, v0, v1, v2)
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                Probe::create(builder, v0, v1, v2, v3, v4, v5, v6)
             }
         }
 
@@ -10623,6 +10928,30 @@ mod root {
             pub fn sent_at_us(&self) -> ::planus::Result<u64> {
                 ::core::result::Result::Ok(self.0.access(2, "Probe", "sent_at_us")?.unwrap_or(0))
             }
+
+            /// Getter for the [`route_tag` field](Probe#structfield.route_tag).
+            #[inline]
+            pub fn route_tag(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(3, "Probe", "route_tag")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`reply_at_us` field](Probe#structfield.reply_at_us).
+            #[inline]
+            pub fn reply_at_us(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(4, "Probe", "reply_at_us")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`echo_us` field](Probe#structfield.echo_us).
+            #[inline]
+            pub fn echo_us(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(self.0.access(5, "Probe", "echo_us")?.unwrap_or(0))
+            }
+
+            /// Getter for the [`held_us` field](Probe#structfield.held_us).
+            #[inline]
+            pub fn held_us(&self) -> ::planus::Result<u32> {
+                ::core::result::Result::Ok(self.0.access(6, "Probe", "held_us")?.unwrap_or(0))
+            }
         }
 
         impl<'a> ::core::fmt::Debug for ProbeRef<'a> {
@@ -10633,6 +10962,10 @@ mod root {
                 }
                 f.field("probe_seq", &self.probe_seq());
                 f.field("sent_at_us", &self.sent_at_us());
+                f.field("route_tag", &self.route_tag());
+                f.field("reply_at_us", &self.reply_at_us());
+                f.field("echo_us", &self.echo_us());
+                f.field("held_us", &self.held_us());
                 f.finish()
             }
         }
@@ -10646,6 +10979,10 @@ mod root {
                     route_id: value.route_id()?.map(::core::convert::Into::into),
                     probe_seq: ::core::convert::TryInto::try_into(value.probe_seq()?)?,
                     sent_at_us: ::core::convert::TryInto::try_into(value.sent_at_us()?)?,
+                    route_tag: ::core::convert::TryInto::try_into(value.route_tag()?)?,
+                    reply_at_us: ::core::convert::TryInto::try_into(value.reply_at_us()?)?,
+                    echo_us: ::core::convert::TryInto::try_into(value.echo_us()?)?,
+                    held_us: ::core::convert::TryInto::try_into(value.held_us()?)?,
                 })
             }
         }
@@ -10722,7 +11059,7 @@ mod root {
         /// The table `PunchOffer` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PunchOffer` in the file `schema/wire.fbs:121`
+        /// * Table `PunchOffer` in the file `schema/wire.fbs:145`
         #[derive(
             Clone,
             Debug,
@@ -11049,7 +11386,7 @@ mod root {
         /// The table `PunchGo` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PunchGo` in the file `schema/wire.fbs:126`
+        /// * Table `PunchGo` in the file `schema/wire.fbs:150`
         #[derive(
             Clone,
             Debug,
@@ -11311,7 +11648,7 @@ mod root {
         /// The table `PskEpoch` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PskEpoch` in the file `schema/wire.fbs:130`
+        /// * Table `PskEpoch` in the file `schema/wire.fbs:154`
         #[derive(
             Clone,
             Debug,
@@ -11618,7 +11955,7 @@ mod root {
         /// The table `GetPsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetPsk` in the file `schema/wire.fbs:131`
+        /// * Table `GetPsk` in the file `schema/wire.fbs:155`
         #[derive(
             Clone,
             Debug,
@@ -11876,7 +12213,7 @@ mod root {
         /// The table `PskInfo` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PskInfo` in the file `schema/wire.fbs:132`
+        /// * Table `PskInfo` in the file `schema/wire.fbs:156`
         #[derive(
             Clone,
             Debug,
@@ -12196,7 +12533,7 @@ mod root {
         /// The table `GetCamouflage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetCamouflage` in the file `schema/wire.fbs:133`
+        /// * Table `GetCamouflage` in the file `schema/wire.fbs:157`
         #[derive(
             Clone,
             Debug,
@@ -12407,7 +12744,7 @@ mod root {
         /// The table `CamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CamouflageSecret` in the file `schema/wire.fbs:134`
+        /// * Table `CamouflageSecret` in the file `schema/wire.fbs:158`
         #[derive(
             Clone,
             Debug,
@@ -12741,7 +13078,7 @@ mod root {
         /// The table `SubmitOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitOp` in the file `schema/wire.fbs:135`
+        /// * Table `SubmitOp` in the file `schema/wire.fbs:159`
         #[derive(
             Clone,
             Debug,
@@ -13003,7 +13340,7 @@ mod root {
         /// The table `SubmitResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitResult` in the file `schema/wire.fbs:136`
+        /// * Table `SubmitResult` in the file `schema/wire.fbs:160`
         #[derive(
             Clone,
             Debug,
@@ -13360,7 +13697,7 @@ mod root {
         /// The table `MetricUpload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricUpload` in the file `schema/wire.fbs:137`
+        /// * Table `MetricUpload` in the file `schema/wire.fbs:161`
         #[derive(
             Clone,
             Debug,
@@ -13627,7 +13964,7 @@ mod root {
         /// The table `RpcAck` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RpcAck` in the file `schema/wire.fbs:138`
+        /// * Table `RpcAck` in the file `schema/wire.fbs:162`
         #[derive(
             Clone,
             Debug,
@@ -13936,7 +14273,7 @@ mod root {
         /// The table `RaftRpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftRpc` in the file `schema/wire.fbs:139`
+        /// * Table `RaftRpc` in the file `schema/wire.fbs:163`
         #[derive(
             Clone,
             Debug,
@@ -14198,7 +14535,7 @@ mod root {
         /// The table `RedeemRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemRequest` in the file `schema/wire.fbs:140`
+        /// * Table `RedeemRequest` in the file `schema/wire.fbs:164`
         #[derive(
             Clone,
             Debug,
@@ -14465,7 +14802,7 @@ mod root {
         /// The table `OfflineSubmit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OfflineSubmit` in the file `schema/wire.fbs:141`
+        /// * Table `OfflineSubmit` in the file `schema/wire.fbs:165`
         #[derive(
             Clone,
             Debug,
@@ -14742,7 +15079,7 @@ mod root {
         /// The table `SubmitRoot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SubmitRoot` in the file `schema/wire.fbs:142`
+        /// * Table `SubmitRoot` in the file `schema/wire.fbs:166`
         #[derive(
             Clone,
             Debug,
@@ -15008,7 +15345,7 @@ mod root {
         /// The table `GetControllerStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetControllerStatus` in the file `schema/wire.fbs:143`
+        /// * Table `GetControllerStatus` in the file `schema/wire.fbs:167`
         #[derive(
             Clone,
             Debug,
@@ -15238,7 +15575,7 @@ mod root {
         /// The table `GetCertRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetCertRequest` in the file `schema/wire.fbs:145`
+        /// * Table `GetCertRequest` in the file `schema/wire.fbs:169`
         #[derive(
             Clone,
             Debug,
@@ -15449,7 +15786,7 @@ mod root {
         /// The table `CertRequestReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CertRequestReply` in the file `schema/wire.fbs:146`
+        /// * Table `CertRequestReply` in the file `schema/wire.fbs:170`
         #[derive(
             Clone,
             Debug,
@@ -15781,7 +16118,7 @@ mod root {
         /// The table `ControllerStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerStatus` in the file `schema/wire.fbs:147`
+        /// * Table `ControllerStatus` in the file `schema/wire.fbs:171`
         #[derive(
             Clone,
             Debug,
@@ -16490,7 +16827,7 @@ mod root {
         /// The union `RpcBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RpcBody` in the file `schema/wire.fbs:159`
+        /// * Union `RpcBody` in the file `schema/wire.fbs:183`
         #[derive(
             Clone,
             Debug,
@@ -17820,7 +18157,7 @@ mod root {
         /// The table `Rpc` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Rpc` in the file `schema/wire.fbs:185`
+        /// * Table `Rpc` in the file `schema/wire.fbs:209`
         #[derive(
             Clone,
             Debug,
@@ -18090,7 +18427,7 @@ mod root {
         /// The table `RaftVote` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVote` in the file `schema/wire.fbs:189`
+        /// * Table `RaftVote` in the file `schema/wire.fbs:213`
         #[derive(
             Clone,
             Debug,
@@ -18502,7 +18839,7 @@ mod root {
         /// The table `RaftVoteResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:196`
+        /// * Table `RaftVoteResponse` in the file `schema/wire.fbs:220`
         #[derive(
             Clone,
             Debug,
@@ -18884,7 +19221,7 @@ mod root {
         /// The table `RaftAppend` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppend` in the file `schema/wire.fbs:198`
+        /// * Table `RaftAppend` in the file `schema/wire.fbs:222`
         #[derive(
             Clone,
             Debug,
@@ -19364,7 +19701,7 @@ mod root {
         /// The table `RaftAppendResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:206`
+        /// * Table `RaftAppendResponse` in the file `schema/wire.fbs:230`
         #[derive(
             Clone,
             Debug,
@@ -19805,7 +20142,7 @@ mod root {
         /// The table `RaftSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:213`
+        /// * Table `RaftSnapshot` in the file `schema/wire.fbs:237`
         #[derive(
             Clone,
             Debug,
@@ -20219,7 +20556,7 @@ mod root {
         /// The table `RaftSnapshotResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:220`
+        /// * Table `RaftSnapshotResponse` in the file `schema/wire.fbs:244`
         #[derive(
             Clone,
             Debug,
@@ -20554,7 +20891,7 @@ mod root {
         /// The table `RaftForward` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForward` in the file `schema/wire.fbs:223`
+        /// * Table `RaftForward` in the file `schema/wire.fbs:247`
         #[derive(
             Clone,
             Debug,
@@ -20870,7 +21207,7 @@ mod root {
         /// The table `RaftForwardResult` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:224`
+        /// * Table `RaftForwardResult` in the file `schema/wire.fbs:248`
         #[derive(
             Clone,
             Debug,
@@ -21307,7 +21644,7 @@ mod root {
         /// The table `RaftTimeoutNow` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:225`
+        /// * Table `RaftTimeoutNow` in the file `schema/wire.fbs:249`
         #[derive(
             Clone,
             Debug,
@@ -21570,7 +21907,7 @@ mod root {
         /// The union `RaftBody` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `RaftBody` in the file `schema/wire.fbs:227`
+        /// * Union `RaftBody` in the file `schema/wire.fbs:251`
         #[derive(
             Clone,
             Debug,
@@ -22167,7 +22504,7 @@ mod root {
         /// The table `RaftMessage` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RaftMessage` in the file `schema/wire.fbs:239`
+        /// * Table `RaftMessage` in the file `schema/wire.fbs:263`
         #[derive(
             Clone,
             Debug,
@@ -22536,7 +22873,7 @@ mod root {
         /// The table `PendingEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:242`
+        /// * Table `PendingEnrollment` in the file `schema/wire.fbs:266`
         #[derive(
             Clone,
             Debug,
@@ -23031,7 +23368,7 @@ mod root {
         /// The table `OpSeq` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpSeq` in the file `schema/wire.fbs:250`
+        /// * Table `OpSeq` in the file `schema/wire.fbs:274`
         #[derive(
             Clone,
             Debug,
@@ -23344,7 +23681,7 @@ mod root {
         /// The table `MemberSince` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MemberSince` in the file `schema/wire.fbs:252`
+        /// * Table `MemberSince` in the file `schema/wire.fbs:276`
         #[derive(
             Clone,
             Debug,
@@ -23656,7 +23993,7 @@ mod root {
         /// The table `ControllerSnapshot` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:254`
+        /// * Table `ControllerSnapshot` in the file `schema/wire.fbs:278`
         #[derive(
             Clone,
             Debug,
@@ -25059,7 +25396,7 @@ mod root {
         /// The table `EnrollRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollRequest` in the file `schema/wire.fbs:275`
+        /// * Table `EnrollRequest` in the file `schema/wire.fbs:299`
         #[derive(
             Clone,
             Debug,
@@ -25478,7 +25815,7 @@ mod root {
         /// The table `MerkleProof` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MerkleProof` in the file `schema/wire.fbs:282`
+        /// * Table `MerkleProof` in the file `schema/wire.fbs:306`
         #[derive(
             Clone,
             Debug,
@@ -25799,7 +26136,7 @@ mod root {
         /// The table `EnrollResponse` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollResponse` in the file `schema/wire.fbs:284`
+        /// * Table `EnrollResponse` in the file `schema/wire.fbs:308`
         #[derive(
             Clone,
             Debug,
@@ -26754,7 +27091,7 @@ mod root {
         /// The table `EnrollmentTicket` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:301`
+        /// * Table `EnrollmentTicket` in the file `schema/wire.fbs:325`
         #[derive(
             Clone,
             Debug,
@@ -27263,7 +27600,7 @@ mod root {
         /// The table `UpgradeNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeNode` in the file `schema/wire.fbs:311`
+        /// * Table `UpgradeNode` in the file `schema/wire.fbs:335`
         #[derive(
             Clone,
             Debug,
@@ -27529,7 +27866,7 @@ mod root {
         /// The table `GetUpgradeStatus` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GetUpgradeStatus` in the file `schema/wire.fbs:312`
+        /// * Table `GetUpgradeStatus` in the file `schema/wire.fbs:336`
         #[derive(
             Clone,
             Debug,
@@ -27812,7 +28149,7 @@ mod root {
         /// The table `UpgradeReply` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeReply` in the file `schema/wire.fbs:313`
+        /// * Table `UpgradeReply` in the file `schema/wire.fbs:337`
         #[derive(
             Clone,
             Debug,

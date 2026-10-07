@@ -21,8 +21,6 @@ pub const REJECT_AFTER: Duration = Duration::from_secs(180);
 pub const OLD_KEY_GRACE: Duration = Duration::from_secs(10);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 const HS_GIVE_UP: Duration = Duration::from_secs(30);
-/// Largest probe echoed back (§11.4); an encoded `Probe` is 66 bytes.
-const PROBE_ECHO_MAX: usize = 128;
 
 struct SendKey {
     /// Shared so frames are sealed outside the session lock.
@@ -798,9 +796,11 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, buf: Vec<u8>, at: usize, e
             i.hs = None;
         }
     }
-    *s.last_used.lock() = Instant::now();
     s.rx_packets.fetch_add(1, Ordering::Relaxed);
+    // Probes don't count as use: otherwise the two ends' probes would keep
+    // each other's session (and its probing) alive for good.
     if h.ty != ftype::PROBE && h.ty != ftype::PROBE_ACK {
+        *s.last_used.lock() = Instant::now();
         c.live.rx.fetch_add(1, Ordering::Relaxed);
     }
     // Compressed payloads (§9.8) are accepted whatever this node's settings.
@@ -852,15 +852,7 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, buf: Vec<u8>, at: usize, e
                 dp.proxy.from_peer(n, dp, &c.peer, p);
             }
         }
-        ftype::PROBE => {
-            // Echo the probe, bounded so a reply is never large. A probe
-            // encodes to 66 bytes; the old bound of 64 cut every probe, so
-            // no circuit was ever measured (rtt 0, loss → 1, circuits closed
-            // as dead, path choice blind).
-            let mut reply = plain;
-            reply.truncate(PROBE_ECHO_MAX);
-            send_on(n, &s, c, ftype::PROBE_ACK, &reply);
-        }
+        ftype::PROBE => crate::paths::on_probe(n, &s, c, &plain),
         ftype::PROBE_ACK => crate::paths::on_probe_ack(n, c, &plain),
         ftype::PUNCH_OFFER | ftype::PUNCH_GO => crate::punch::on_message(n, &c.peer, ty, &plain),
         ftype::RPC => crate::rpc::on_frame(n, &c.peer, &plain),
@@ -1257,27 +1249,155 @@ mod handshake_tests {
         assert!(!a.established());
         assert!(!a.handshaking(), "no stale handshake state");
     }
+
+    /// Relay frames of one end-to-end frame type, and their bytes as hop
+    /// records (4-byte record header included).
+    #[derive(Default, Debug, Clone, Copy, PartialEq)]
+    struct Count {
+        frames: u64,
+        bytes: u64,
+    }
+
+    /// Probe traffic on one circuit, run by the agent's own path loop
+    /// (`paths::run`) on both ends for `secs` seconds of (paused) time,
+    /// with `data_every` a DATA packet each way if given. Returns what each
+    /// end sent: (PROBE, PROBE_ACK) from src, then from dst.
+    async fn probe_run(
+        l: &mut Link,
+        secs: u64,
+        data_every: Option<Duration>,
+    ) -> [(Count, Count); 2] {
+        let mut out = [(Count::default(), Count::default()); 2];
+        let start = tokio::time::Instant::now();
+        let mut next_data = start;
+        while start.elapsed() < Duration::from_secs(secs) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if let Some(every) = data_every
+                && tokio::time::Instant::now() >= next_data
+            {
+                next_data += every;
+                send(
+                    &l.sn,
+                    &l.d,
+                    ftype::DATA,
+                    &ping([10, 7, 0, 2], [10, 7, 0, 4]),
+                    0,
+                );
+                send(
+                    &l.dn,
+                    &l.s,
+                    ftype::DATA,
+                    &ping([10, 7, 0, 4], [10, 7, 0, 2]),
+                    0,
+                );
+            }
+            let (up, down) = (l.rs.relay(), l.rd.relay());
+            for (i, sent) in [(0, &up), (1, &down)] {
+                for f in sent.iter() {
+                    let c = match f.get(frames::RELAY_HEADER) {
+                        Some(&ftype::PROBE) => &mut out[i].0,
+                        Some(&ftype::PROBE_ACK) => &mut out[i].1,
+                        _ => continue,
+                    };
+                    c.frames += 1;
+                    c.bytes += 4 + f.len() as u64;
+                }
+            }
+            for f in up {
+                circuit::on_relay_frame(&l.dn, &l.hd, relabel(&f, l.d_in));
+            }
+            for f in down {
+                circuit::on_relay_frame(&l.sn, &l.hs, relabel(&f, l.s_in));
+            }
+            // Circuit setups for trial paths etc. go unanswered.
+            let _ = (l.rs.control(), l.rd.control());
+            let _ = (delivered(&mut l.tun_s), delivered(&mut l.tun_d));
+        }
+        out
+    }
+
+    /// The end-to-end probe cadence (§11.4) as the path loop runs it: the
+    /// source probes for both ends (every second for the first answers,
+    /// then every 5 s on the circuit in use) and the destination only
+    /// answers; a circuit with traffic both ways isn't probed, and neither
+    /// is one whose session has gone unused for a minute (probes don't count
+    /// as use). Prints the per-circuit rates (`--nocapture`).
+    #[tokio::test(start_paused = true)]
+    async fn probe_traffic_on_an_idle_circuit() {
+        let mut l = link().await;
+        send(
+            &l.sn,
+            &l.d,
+            ftype::DATA,
+            &ping([10, 7, 0, 2], [10, 7, 0, 4]),
+            0,
+        );
+        pump(&mut l, pass, pass).await;
+        assert!(session(&l.sn, &l.d).established() && session(&l.dn, &l.s).established());
+        let tasks = [
+            tokio::spawn(crate::paths::run(l.sn.clone())),
+            tokio::spawn(crate::paths::run(l.dn.clone())),
+        ];
+        let idle = probe_run(&mut l, 50, None).await;
+        // A minute without use (the session's clock is the real one, not
+        // the test's paused one, so set it back).
+        for (n, peer) in [(&l.sn, &l.d), (&l.dn, &l.s)] {
+            *session(n, peer).last_used.lock() = Instant::now() - Duration::from_secs(61);
+        }
+        let unused = probe_run(&mut l, 30, None).await;
+        let busy = probe_run(&mut l, 60, Some(Duration::from_millis(100))).await;
+        assert!(
+            session(&l.dn, &l.s).last_used.lock().elapsed() < Duration::from_secs(1),
+            "data counts as use"
+        );
+        for t in tasks {
+            t.abort();
+        }
+        for (what, secs, r) in [
+            ("idle, in use", 50, idle),
+            ("idle, unused past 60 s", 30, unused),
+            ("10 packets/s each way", 60, busy),
+        ] {
+            println!("one circuit, {what}, {secs} s:");
+            for (end, (p, a)) in ["src", "dst"].iter().zip(r) {
+                println!(
+                    "  {end} sent {} probes ({} B), {} answers ({} B): {:.2} frames/s, {:.1} B/s",
+                    p.frames,
+                    p.bytes,
+                    a.frames,
+                    a.bytes,
+                    (p.frames + a.frames) as f64 / secs as f64,
+                    (p.bytes + a.bytes) as f64 / secs as f64,
+                );
+            }
+        }
+        let [(sp, sa), (dp, da)] = idle;
+        // The source probes: three a second apart, then one every 5 s.
+        let warm = crate::circuit::PROBE_WARMUP;
+        let expected = warm + (50 - warm) / 5;
+        assert!(
+            sp.frames.abs_diff(expected) <= 1,
+            "{sp:?}, expected {expected}"
+        );
+        assert_eq!(da.frames, sp.frames, "each answered");
+        // The destination probes at most until the source's first probe.
+        assert!(dp.frames <= 1 && sa.frames == dp.frames, "{dp:?} {sa:?}");
+        // Compact probes: no 32-byte route id.
+        assert!(sp.bytes / sp.frames < 100, "{sp:?}");
+        // A minute after the last use, probing stops.
+        let [(p1, _), (p2, _)] = unused;
+        assert!(p1.frames + p2.frames <= 3, "{p1:?} {p2:?}");
+        // Busy: the traffic shows the circuit works; no probes.
+        for (p, a) in busy {
+            assert!(p.frames <= 2 && a.frames <= 2, "{p:?} {a:?}");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use webjet_proto::{self as wp, Decodable, Encodable};
-
-    /// A probe must survive the echo bound, or no circuit is ever measured.
-    #[test]
-    fn probe_survives_echo() {
-        let p = wp::Probe {
-            route_id: Some(crypto::k32(&[0xff; 32])),
-            probe_seq: u64::MAX,
-            sent_at_us: u64::MAX,
-        };
-        let mut echo = p.encode_bytes();
-        echo.truncate(PROBE_ECHO_MAX);
-        let back = wp::Probe::decode_bytes(&echo).unwrap();
-        assert_eq!(back.probe_seq, u64::MAX);
-        assert_eq!(back.route_id, p.route_id);
-    }
+    use webjet_proto as wp;
 
     /// Per-packet cost of the data path through an established session on
     /// a relayed circuit: `send` (seal, pick circuit and hop, relay header,

@@ -60,8 +60,17 @@ pub struct Live {
     /// The path's cost composed from its links (§11.4); `None` while a link
     /// isn't known. Refreshed every second by the path loop.
     pub path_cost: Mutex<Option<f64>>,
-    /// The first probe sent since the last frame received.
-    pub(crate) probe_pending: Mutex<Option<Instant>>,
+    /// The first probe sent since the last frame received. Probe timing
+    /// is on tokio's clock, so tests can run it in paused time.
+    pub(crate) probe_pending: Mutex<Option<tokio::time::Instant>>,
+    /// When this end probes next (§11.4).
+    pub(crate) next_probe: Mutex<Option<tokio::time::Instant>>,
+    /// The other end does the probing and echoes our answers (§11.4): we
+    /// only answer, and hear from it at least every [`PASSIVE_SILENCE`].
+    pub(crate) passive: std::sync::atomic::AtomicBool,
+    /// The last probe answer that carried the peer's `reply_at_us`, and
+    /// when it came: echoed with the next probe.
+    pub(crate) last_reply: Mutex<Option<(u64, Instant)>>,
     /// Out of the table (closed): senders holding it on to choose again.
     pub removed: std::sync::atomic::AtomicBool,
 }
@@ -72,6 +81,25 @@ pub const BUSY_FRAMES: u64 = 3;
 /// A probe unanswered this long, with nothing else received meanwhile,
 /// makes a circuit unusable until it answers again.
 const UNANSWERED: Duration = Duration::from_secs(3);
+/// How often a circuit is probed (§11.4): every second until it has been
+/// measured or while a probe is unanswered, then every [`PROBE_PRIMARY`]
+/// when the session uses it and every [`PROBE_BACKUP`] when it doesn't.
+pub const PROBE_FAST: Duration = Duration::from_secs(1);
+pub const PROBE_PRIMARY: Duration = Duration::from_secs(5);
+pub const PROBE_BACKUP: Duration = Duration::from_secs(15);
+/// Probe answers before a circuit is probed at the slow rate.
+pub const PROBE_WARMUP: u64 = 3;
+/// A passive end that hears nothing for this long counts the circuit as
+/// unanswered: the prober would have probed (and retried) by now.
+pub const PASSIVE_SILENCE: Duration = Duration::from_secs(20);
+
+/// The route tag new probes carry instead of the route id: its first 8
+/// bytes, little-endian.
+pub fn route_tag(route_id: &Bytes32) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&route_id[..8]);
+    u64::from_le_bytes(b)
+}
 
 impl LocalCircuit {
     pub fn direct(&self) -> bool {
@@ -110,7 +138,33 @@ impl LocalCircuit {
         self.live
             .probe_pending
             .lock()
-            .get_or_insert_with(Instant::now);
+            .get_or_insert_with(tokio::time::Instant::now);
+    }
+
+    /// When the next probe is due after one sent now: soon while the
+    /// circuit isn't measured or a probe is unanswered, else at the slow
+    /// rate for its use. Asked before the probe is marked sent.
+    pub fn probe_interval(&self, primary: bool) -> Duration {
+        let warming = self.probes.lock().samples < PROBE_WARMUP;
+        let pending = self.live.probe_pending.lock().is_some();
+        if warming || pending {
+            PROBE_FAST
+        } else if primary {
+            PROBE_PRIMARY
+        } else {
+            PROBE_BACKUP
+        }
+    }
+
+    /// Whether a probe is due at `now`: its time has come, or the last one
+    /// has gone unanswered for a probe interval (retried every second).
+    pub fn probe_due(&self, now: tokio::time::Instant) -> bool {
+        self.live.next_probe.lock().is_none_or(|t| now >= t)
+            || self
+                .live
+                .probe_pending
+                .lock()
+                .is_some_and(|at| now.duration_since(at) >= PROBE_FAST)
     }
 
     /// A frame came in on this circuit.

@@ -610,6 +610,19 @@ impl LinkStats {
         Some(rtt)
     }
 
+    /// A round trip measured without a probe of our own (the other end
+    /// echoed our answer to its probe, §11.4).
+    pub fn on_rtt(&mut self, rtt: f64, now_us: u64, now_ms: u64) {
+        if self.raw {
+            return;
+        }
+        self.rtt_sample(rtt, rtt, now_us);
+        self.samples += 1;
+        self.loss *= 0.9;
+        self.record(0.0, 1.0);
+        self.history.observe(rtt, self.rttvar_ms, now_ms);
+    }
+
     /// What the transport underneath measured (§11.2): the mean and lowest
     /// RTT of its samples, and the loss fraction over `packets` packets.
     /// From the first RTT on, the link is measured this way only.

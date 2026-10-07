@@ -22,7 +22,21 @@ use webjet_net::kcp::{KcpStats, UdpEndpoint};
 use webjet_net::tls::PeerTrust;
 use webjet_proto::{self as wp, Decodable, Encodable, HopMsg, Transport};
 
+/// Keepalive interval (§11.2) while a hop is new or unsettled, and once
+/// it is stable ([`KEEPALIVE_SLOW`]).
 pub const KEEPALIVE: Duration = Duration::from_secs(2);
+pub const KEEPALIVE_SLOW: Duration = Duration::from_secs(5);
+/// How long a hop stays on the fast interval after it comes up.
+const KEEPALIVE_SETTLE: Duration = Duration::from_secs(30);
+/// Loss (short-term) above which a hop counts as unsettled.
+const KEEPALIVE_LOSSY: f64 = 0.01;
+/// Keepalive flag: the sender keeps the hop alive for both ends.
+pub const KA_ONE_SIDED: u8 = 1;
+/// A receiving end that hears no keepalive this long sends its own again.
+const PEER_KEEPS_FOR: Duration = Duration::from_secs(12);
+/// Every this many keepalives, a one-sided sender tells the other end
+/// where it sees it.
+const KA_OBSERVED_EVERY: u64 = 12;
 pub const HOP_DEAD: Duration = Duration::from_secs(15);
 /// How long `best_hop`'s choice is reused. Link costs move at keepalive
 /// pace (2 s), so 1 s changes nothing a peer would notice.
@@ -133,6 +147,9 @@ pub struct Hop {
     pub peer_digest: Mutex<Option<Bytes32>>,
     pub keepalive_seq: AtomicU64,
     pub queue_delay_us: AtomicU64,
+    /// When the peer's last one-sided keepalive came (§11.2): while they
+    /// keep coming, this end sends none of its own.
+    pub peer_keeps: Mutex<Option<Instant>>,
 }
 
 impl Hop {
@@ -609,6 +626,7 @@ impl Node {
                         peer_digest: Mutex::new(None),
                         keepalive_seq: AtomicU64::new(0),
                         queue_delay_us: AtomicU64::new(0),
+                        peer_keeps: Mutex::new(None),
                     });
                     hops.insert(hop.id, hop.clone());
                     drop(hops);
@@ -1068,8 +1086,37 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
     n.hop_down(&hop);
 }
 
-async fn keepalive(n: Arc<Node>, hop: Arc<Hop>) {
-    let mut t = tokio::time::interval(KEEPALIVE);
+/// The keepalive interval for `hop` now: fast for its first
+/// [`KEEPALIVE_SETTLE`] (`age`), while it is lossy, or when the last
+/// keepalive went unanswered; else [`KEEPALIVE_SLOW`].
+fn keepalive_interval(hop: &Hop, age: Duration, answered: bool) -> Duration {
+    let unsettled = age < KEEPALIVE_SETTLE || !answered || hop.stats.lock().loss > KEEPALIVE_LOSSY;
+    if unsettled { KEEPALIVE } else { KEEPALIVE_SLOW }
+}
+
+/// Whether this end sends keepalives on `hop` (§11.2): the dialer always
+/// does, for both ends; the accepting end only when no one-sided
+/// keepalive has come (the peer is older) a few seconds into the hop, or
+/// when they stopped.
+fn sends_keepalives(hop: &Hop, age: Duration) -> bool {
+    if hop.outbound {
+        return true;
+    }
+    match *hop.peer_keeps.lock() {
+        Some(t) => t.elapsed() > PEER_KEEPS_FOR,
+        None => age >= 2 * KEEPALIVE,
+    }
+}
+
+pub(crate) async fn keepalive(n: Arc<Node>, hop: Arc<Hop>) {
+    // Ticks every second; keepalives go at their own interval, the
+    // transport's figures are read every KEEPALIVE.
+    let mut t = tokio::time::interval(Duration::from_secs(1));
+    let start = tokio::time::Instant::now();
+    let mut metered_at: Option<tokio::time::Instant> = None;
+    // When the last keepalive went (on both clocks: the answer's arrival
+    // is recorded in `last_rx`, a std one).
+    let mut last_sent: Option<(tokio::time::Instant, Instant)> = None;
     loop {
         t.tick().await;
         if !hop.alive() {
@@ -1080,41 +1127,82 @@ async fn keepalive(n: Arc<Node>, hop: Arc<Hop>) {
             n.hop_down(&hop);
             break;
         }
-        let seq = hop.keepalive_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let us = n.started.elapsed().as_micros() as u64;
-        // What the transport measured since the last keepalive: from the
+        let now = tokio::time::Instant::now();
+        // What the transport measured since the last reading: from the
         // link's traffic, or from the keepalives themselves when it's idle.
-        let raw = hop.meter.as_ref().map(|m| m.take());
-        {
-            let mut st = hop.stats.lock();
-            if let Some(r) = raw {
-                st.on_raw(r.rtt_ms, r.loss, r.packets, us, now_ms());
+        if metered_at.is_none_or(|at| now + Duration::from_millis(500) >= at + KEEPALIVE) {
+            metered_at = Some(now);
+            if let Some(r) = hop.meter.as_ref().map(|m| m.take()) {
+                hop.stats
+                    .lock()
+                    .on_raw(r.rtt_ms, r.loss, r.packets, us, now_ms());
             }
-            st.on_sent(seq, us);
         }
+        let age = now.duration_since(start);
+        // Half a tick early is close enough.
+        let due = last_sent.is_none_or(|(at, std_at)| {
+            let answered = *hop.last_rx.lock() >= std_at;
+            now + Duration::from_millis(500) >= at + keepalive_interval(&hop, age, answered)
+        });
+        if !due || !sends_keepalives(&hop, age) {
+            continue;
+        }
+        last_sent = Some((now, Instant::now()));
+        let seq = hop.keepalive_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        hop.stats.lock().on_sent(seq, us);
         let digest = if n.is_relay() || n.is_controller() {
             None
         } else {
             Some(crypto::k32(&n.store.read().digest()))
+        };
+        let (flags, observed_addr) = if hop.outbound {
+            let tell = seq % KA_OBSERVED_EVERY == 1;
+            (
+                KA_ONE_SIDED,
+                tell.then(|| wp::SockAddr::from_sock(hop.remote)),
+            )
+        } else {
+            (0, None)
         };
         hop.send_control(HopMsg::Keepalive(Box::new(wp::Keepalive {
             seq,
             echo_us: us,
             wall_ms: now_ms(),
             digest,
+            flags,
+            observed_addr,
         })));
     }
 }
 
-async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
+pub(crate) async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
     match m {
         HopMsg::Keepalive(k) => {
+            let one_sided = k.flags & KA_ONE_SIDED != 0 && !hop.outbound;
+            // With no keepalives of our own, the ack carries our digest,
+            // and our clock offset and observed address come from theirs.
+            let digest = (one_sided && !(n.is_relay() || n.is_controller()))
+                .then(|| crypto::k32(&n.store.read().digest()));
             hop.send_control(HopMsg::KeepaliveAck(Box::new(wp::KeepaliveAck {
                 seq: k.seq,
                 echo_us: k.echo_us,
                 wall_ms: now_ms(),
                 observed_addr: Some(wp::SockAddr::from_sock(hop.remote)),
+                digest,
             })));
+            if one_sided {
+                *hop.peer_keeps.lock() = Some(Instant::now());
+                let srtt = hop.stats.lock().srtt_ms;
+                if srtt > 0.0 {
+                    // Sent half a round trip ago (§18.6).
+                    let then = now_ms() as i64 - (srtt / 2.0) as i64;
+                    *hop.clock_offset.lock() = Some(k.wall_ms as i64 - then);
+                }
+                if let Some(o) = k.observed_addr.and_then(|o| o.to_sock()) {
+                    *hop.observed.lock() = Some(o);
+                }
+            }
             if let Some(d) = k.digest {
                 crate::gossip::on_digest(n, hop, d.to_bytes());
             }
@@ -1128,6 +1216,9 @@ async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> 
             }
             if let Some(o) = a.observed_addr.and_then(|o| o.to_sock()) {
                 *hop.observed.lock() = Some(o);
+            }
+            if let Some(d) = a.digest {
+                crate::gossip::on_digest(n, hop, d.to_bytes());
             }
         }
         HopMsg::Digest(d) => {
@@ -1184,6 +1275,16 @@ impl Node {
     /// Register a hop to `peer` without a connection: what it sends is read
     /// from the returned receivers.
     pub(crate) fn test_hop(&self, peer: Bytes32, transport: Transport) -> (Arc<Hop>, TestHopRx) {
+        self.test_hop_dir(peer, transport, true)
+    }
+
+    /// [`Node::test_hop`] as the dialer (`outbound`) or the accepting end.
+    pub(crate) fn test_hop_dir(
+        &self,
+        peer: Bytes32,
+        transport: Transport,
+        outbound: bool,
+    ) -> (Arc<Hop>, TestHopRx) {
         let (tx, data) = mpsc::channel::<Out>(1024);
         let (ctl_tx, ctl) = mpsc::unbounded_channel::<Vec<u8>>();
         let peer_key = self
@@ -1200,7 +1301,7 @@ impl Node {
             peer_key,
             transport,
             remote: "192.0.2.1:443".parse().expect("address"),
-            outbound: true,
+            outbound,
             restricted: false,
             created: Instant::now(),
             tx,
@@ -1219,6 +1320,7 @@ impl Node {
             peer_digest: Mutex::new(None),
             keepalive_seq: AtomicU64::new(0),
             queue_delay_us: AtomicU64::new(0),
+            peer_keeps: Mutex::new(None),
         });
         self.hops.lock().insert(hop.id, hop.clone());
         self.forget_best_hop(&peer);

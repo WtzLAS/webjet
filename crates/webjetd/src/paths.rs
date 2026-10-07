@@ -7,14 +7,17 @@
 //! session sends on the circuit with the best cost.
 
 use crate::circuit::{self, LocalCircuit};
+use crate::e2e::Session;
 use crate::node::Node;
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::frames::ftype;
 use webjet_core::routing::{Path, spread_pick};
+use webjet_core::types::now_ms;
 use webjet_proto::{self as wp, Decodable, Encodable};
 
 const K_PATHS: usize = 4;
@@ -131,34 +134,134 @@ pub fn on_established(n: &Arc<Node>, peer: &Bytes32) {
     crate::punch::maybe_start(n, peer);
 }
 
+fn now_us(n: &Node) -> u64 {
+    n.started.elapsed().as_micros() as u64
+}
+
+/// A probe arrived (§11.4): answer it. A probe in the new format comes
+/// from the circuit's source, which does the probing for both ends: this
+/// end stops probing and takes its round trip from the answer the probe
+/// echoes.
+pub fn on_probe(n: &Arc<Node>, s: &Session, c: &Arc<LocalCircuit>, payload: &[u8]) {
+    let Ok(p) = wp::Probe::decode_bytes(payload) else {
+        return;
+    };
+    let now = now_us(n);
+    let reply = if let Some(id) = p.route_id {
+        // 0.10.1 and earlier: the answer must look like the echo they expect.
+        if opt_k32(&Some(id)) != c.route_id {
+            return;
+        }
+        wp::Probe {
+            route_id: Some(id),
+            probe_seq: p.probe_seq,
+            sent_at_us: p.sent_at_us,
+            ..Default::default()
+        }
+    } else {
+        if p.route_tag != circuit::route_tag(&c.route_id) {
+            return;
+        }
+        if !c.is_source {
+            c.live.passive.store(true, Ordering::Relaxed);
+            *c.live.next_probe.lock() = None;
+        }
+        if p.echo_us != 0 {
+            let rtt_us = now
+                .saturating_sub(p.echo_us)
+                .saturating_sub(u64::from(p.held_us));
+            let rtt = rtt_us as f64 / 1000.0;
+            c.probes.lock().on_rtt(rtt, now, now_ms());
+            *c.e2e_rtt_ms.lock() = Some(rtt);
+        }
+        wp::Probe {
+            route_tag: p.route_tag,
+            sent_at_us: p.sent_at_us,
+            reply_at_us: now,
+            ..Default::default()
+        }
+    };
+    crate::e2e::send_on(n, s, c, ftype::PROBE_ACK, &reply.encode_bytes());
+}
+
 pub fn on_probe_ack(n: &Arc<Node>, c: &Arc<LocalCircuit>, payload: &[u8]) {
     let Ok(p) = wp::Probe::decode_bytes(payload) else {
         return;
     };
-    if opt_k32(&p.route_id) != c.route_id {
+    let ours = match p.route_id {
+        Some(_) => opt_k32(&p.route_id) == c.route_id,
+        None => p.route_tag == circuit::route_tag(&c.route_id),
+    };
+    if !ours {
         return;
     }
-    let now_us = n.started.elapsed().as_micros() as u64;
-    let rtt = c.probes.lock().on_ack(p.probe_seq, now_us);
+    let seq = if p.probe_seq != 0 {
+        p.probe_seq
+    } else {
+        p.sent_at_us
+    };
+    let rtt = c.probes.lock().on_ack(seq, now_us(n));
     if let Some(rtt) = rtt {
         *c.e2e_rtt_ms.lock() = Some(rtt);
     }
+    if p.reply_at_us != 0 {
+        *c.live.last_reply.lock() = Some((p.reply_at_us, Instant::now()));
+    }
 }
 
-fn send_probe(n: &Arc<Node>, c: &Arc<LocalCircuit>, seq: u64) {
+/// Probe `c` (§11.4). The source sends the compact format, echoing the
+/// last answer it got so the other end measures too; the other end, until
+/// it hears such a probe (from a node that has it), the old one.
+fn send_probe(n: &Arc<Node>, c: &Arc<LocalCircuit>) {
     let Some(s) = n.e2e.get(&c.peer) else { return };
     if !s.established() {
         return;
     }
-    let us = n.started.elapsed().as_micros() as u64;
-    c.probes.lock().on_sent(seq, us);
+    let us = now_us(n);
+    c.probes.lock().on_sent(us, us);
     c.on_probe_sent();
-    let p = wp::Probe {
-        route_id: Some(crypto::k32(&c.route_id)),
-        probe_seq: seq,
-        sent_at_us: us,
+    let p = if c.is_source {
+        let (echo_us, held_us) = c.live.last_reply.lock().take().map_or((0, 0), |(at, got)| {
+            (
+                at,
+                u32::try_from(got.elapsed().as_micros()).unwrap_or(u32::MAX),
+            )
+        });
+        wp::Probe {
+            route_tag: circuit::route_tag(&c.route_id),
+            sent_at_us: us,
+            echo_us,
+            held_us,
+            ..Default::default()
+        }
+    } else {
+        wp::Probe {
+            route_id: Some(crypto::k32(&c.route_id)),
+            probe_seq: us,
+            sent_at_us: us,
+            ..Default::default()
+        }
     };
     crate::e2e::send_on(n, &s, c, ftype::PROBE, &p.encode_bytes());
+}
+
+/// Whether this end probes `c` now (§11.4), and if so when next: never
+/// while the other end probes for both (unless it has gone quiet), not
+/// while the circuit is busy, and at the circuit's rate otherwise.
+fn probe_now(c: &LocalCircuit, busy: bool, primary: bool, now: tokio::time::Instant) -> bool {
+    if c.live.passive.load(Ordering::Relaxed) {
+        if c.last_rx.lock().elapsed() < circuit::PASSIVE_SILENCE {
+            return false;
+        }
+        // The prober went quiet: probe ourselves again.
+        c.live.passive.store(false, Ordering::Relaxed);
+    }
+    if busy || !c.probe_due(now) {
+        return false;
+    }
+    let next = c.probe_interval(primary);
+    *c.live.next_probe.lock() = Some(now + next);
+    true
 }
 
 /// The cost of the path `me → relays → peer` from its links' measurements
@@ -220,13 +323,16 @@ pub async fn run(n: Arc<Node>) {
             }
             let circs = n.circuits.lock().local_circuits(&s.peer);
             let g = graph.get_or_insert_with(|| crate::gossip::graph(&n));
+            let primary = s.primary();
+            let now = tokio::time::Instant::now();
             for c in &circs {
                 *c.live.path_cost.lock() = path_cost(&n, g, &s.peer, &c.relays_from_me());
                 // A circuit carrying traffic both ways needs no probe: the
                 // traffic shows it works, and a probe would only measure the
                 // queue in front of it.
-                if !c.busy() {
-                    send_probe(&n, c, seq);
+                let busy = c.busy();
+                if probe_now(c, busy, primary == Some(c.label), now) {
+                    send_probe(&n, c);
                 }
             }
             // Keep a backup (§11.4 step 4), and every TRIAL_EVERY try the best
@@ -513,6 +619,7 @@ mod tests {
                 route_id: Some(crypto::k32(&route)),
                 probe_seq: seq,
                 sent_at_us: 0,
+                ..Default::default()
             }
             .encode_bytes()
         };
@@ -618,7 +725,7 @@ mod tests {
         assert_eq!(c.cost(), 25.0, "links win over a probe stuck behind data");
         c.on_probe_sent();
         assert_eq!(c.cost(), 25.0, "just sent");
-        *c.live.probe_pending.lock() = Some(Instant::now() - Duration::from_secs(4));
+        *c.live.probe_pending.lock() = Some(tokio::time::Instant::now() - Duration::from_secs(4));
         assert_eq!(c.cost(), f64::INFINITY, "unanswered");
         c.on_received();
         assert_eq!(c.cost(), 25.0, "answered");
