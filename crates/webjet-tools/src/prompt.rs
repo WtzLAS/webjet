@@ -7,22 +7,30 @@ use anyhow::{Result, bail};
 use std::io::{BufRead, IsTerminal, Write};
 use zeroize::Zeroizing;
 
+/// A passphrase, wiped from memory when dropped.
+pub type Passphrase = Zeroizing<String>;
+
 /// Read a passphrase from `$var`, or ask for it.
-pub fn passphrase(var: &str, prompt: &str) -> Result<String> {
+pub fn passphrase(var: &str, prompt: &str) -> Result<Passphrase> {
     if let Ok(p) = std::env::var(var) {
-        return Ok(p);
+        return Ok(Zeroizing::new(p));
     }
     let p = ask(prompt)?;
     if p.is_empty() {
         bail!("empty passphrase");
     }
-    Ok(p.to_string())
+    Ok(p)
 }
 
 /// Read a new passphrase from `$var`, or ask for it twice: with the input
-/// hidden, a typo would otherwise lock the key away.
-pub fn new_passphrase(var: &str, prompt: &str) -> Result<String> {
+/// hidden, a typo would otherwise lock the key away. Never empty, also not
+/// from `$var`.
+pub fn new_passphrase(var: &str, prompt: &str) -> Result<Passphrase> {
     if let Ok(p) = std::env::var(var) {
+        let p = Zeroizing::new(p);
+        if p.is_empty() {
+            bail!("{var} is set but empty: a new passphrase can't be empty");
+        }
         return Ok(p);
     }
     if !std::io::stdin().is_terminal() {
@@ -36,7 +44,7 @@ pub fn new_passphrase(var: &str, prompt: &str) -> Result<String> {
         }
         let again = ask("repeat it")?;
         if *first == *again {
-            return Ok(first.to_string());
+            return Ok(first);
         }
         eprintln!("The passphrases don't match; try again.");
     }
@@ -48,7 +56,8 @@ fn ask(prompt: &str) -> Result<Zeroizing<String>> {
         masked(prompt)
     } else {
         eprint!("{prompt}: ");
-        let mut s = Zeroizing::new(String::new());
+        // Room for any sane line: growing would leave copies behind.
+        let mut s = Zeroizing::new(String::with_capacity(1024));
         std::io::stdin().lock().read_line(&mut s)?;
         // The piped line isn't echoed; end the prompt's line ourselves.
         eprintln!();
@@ -108,7 +117,8 @@ fn masked(prompt: &str) -> Result<Zeroizing<String>> {
     let mut err = std::io::stderr();
     write!(err, "{prompt}: ")?;
     err.flush()?;
-    let mut line = Zeroizing::new(String::new());
+    // Room for any sane passphrase: growing would leave copies behind.
+    let mut line = Zeroizing::new(String::with_capacity(1024));
     let outcome = {
         let _raw = RawMode::enable()?;
         loop {

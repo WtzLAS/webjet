@@ -805,8 +805,14 @@ fn base_dir(file: &Path) -> PathBuf {
 /// file it is in (kept until the caller applied it), or `None` when nothing
 /// changed.
 fn edit_text(text: &str, name: &str) -> Result<Option<(ConfigFile, PathBuf)>> {
-    let dir = std::env::temp_dir().join(format!("webjetctl-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
+    // A new directory with a random name, only ours (0700): in a shared
+    // temp directory another user could otherwise prepare the path and
+    // swap the file between the editor and the signature. Kept when the
+    // caller needs the file afterwards.
+    let dir = tempfile::Builder::new()
+        .prefix("webjetctl-")
+        .tempdir()?
+        .keep();
     let path = dir.join(name);
     std::fs::write(&path, text)?;
     let editor = std::env::var("VISUAL")
@@ -2122,7 +2128,7 @@ async fn network_camouflage(cli: &Cli, cmd: &CamouflageCmd) -> Result<()> {
                     .join("\n")
             );
             write_public(cert_out, pem.as_bytes())?;
-            write_private(key_out, &key)?;
+            webjet_tools::write_secret(key_out, &key)?;
             report(
                 cli,
                 format!(
@@ -2197,9 +2203,12 @@ async fn network_controller(cli: &Cli, cmd: &ControllerCmd) -> Result<()> {
                 },
             );
             let r = call(cli, Request::Snapshot { request: req }).await?;
-            let snap = webjetd::state::unb64(r["snapshot"].as_str().unwrap_or(""))?;
+            // It holds the PSKs and the camouflage key: wiped after use.
+            let snap = zeroize::Zeroizing::new(webjetd::state::unb64(
+                r["snapshot"].as_str().unwrap_or(""),
+            )?);
             let pass = new_passphrase("WEBJET_BACKUP_PASSPHRASE", "passphrase for the snapshot")?;
-            write_private(out, &seal(&pass, &snap)?)?;
+            webjet_tools::write_secret(out, &seal(&pass, &snap)?)?;
             report(
                 cli,
                 format!(

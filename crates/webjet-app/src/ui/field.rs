@@ -1,6 +1,8 @@
 //! A small single-line text field: typing, backspace, paste, and masking
 //! for passphrases. Enough for the app's forms without a widget library.
 
+use zeroize::Zeroizing;
+
 use gpui::{
     App, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, SharedString, Window, div,
     prelude::*, px, rgb,
@@ -8,7 +10,8 @@ use gpui::{
 
 pub struct Field {
     focus: FocusHandle,
-    text: String,
+    /// A secret field's text is wiped when it is replaced or dropped.
+    text: Zeroizing<String>,
     placeholder: SharedString,
     secret: bool,
 }
@@ -17,7 +20,8 @@ impl Field {
     pub fn new(cx: &mut Context<Self>, placeholder: &str, secret: bool) -> Field {
         Field {
             focus: cx.focus_handle(),
-            text: String::new(),
+            // Room for any sane passphrase: growing would leave copies behind.
+            text: Zeroizing::new(String::with_capacity(if secret { 256 } else { 0 })),
             placeholder: placeholder.to_string().into(),
             secret,
         }
@@ -28,7 +32,8 @@ impl Field {
     }
 
     pub fn set_text(&mut self, t: &str, cx: &mut Context<Self>) {
-        self.text = t.to_string();
+        self.text.clear();
+        self.text.push_str(t);
         cx.notify();
     }
 
@@ -57,7 +62,7 @@ impl Field {
                 }
             }
             "c" if cmd && !self.secret => {
-                cx.write_to_clipboard(ClipboardItem::new_string(self.text.clone()))
+                cx.write_to_clipboard(ClipboardItem::new_string(self.text.to_string()))
             }
             _ => {
                 if cmd {
@@ -90,7 +95,7 @@ impl Render for Field {
                 rgb(super::theme::TEXT),
             )
         } else {
-            (self.text.clone(), rgb(super::theme::TEXT))
+            (self.text.to_string(), rgb(super::theme::TEXT))
         };
         div()
             .track_focus(&self.focus)

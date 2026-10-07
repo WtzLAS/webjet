@@ -337,4 +337,21 @@ fn backup_and_restore() {
     .unwrap();
     let msg = fails(w, &root("d", &["restore", "--from", "short.bak"]));
     assert!(msg.contains("damaged backup"), "{msg}");
+    // Keys already there are only replaced with --force.
+    ok(w, &root("e", &["init"]));
+    let other = root_key(w, "e");
+    let msg = fails(w, &root("e", &["restore", "--from", "keys.bak"]));
+    assert!(msg.contains("holds keys already"), "{msg}");
+    assert_eq!(root_key(w, "e"), other);
+    ok(w, &root("e", &["restore", "--from", "keys.bak", "--force"]));
+    assert_eq!(root_key(w, "e"), rk);
+}
+
+#[test]
+fn new_passphrases_are_never_empty() {
+    let d = tempfile::tempdir().unwrap();
+    let w = d.path();
+    let msg = fails_with(w, "", BACKUP_PASS, &root("a", &["init"]));
+    assert!(msg.contains("can't be empty"), "{msg}");
+    assert!(!w.join("a/root.key.enc").exists());
 }

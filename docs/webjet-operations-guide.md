@@ -1098,7 +1098,7 @@ For an admin, `webjetctl root admin revoke` takes the same options, plus `--revo
 
 **When:** the offline computer, or the medium holding a backup of the root keys, is lost, broken or stolen. References: §5.
 
-**If the keys are only lost** (broken disk, lost computer whose passphrase is safe): restore them from the backup onto a new offline computer. `restore` asks for the backup's passphrase and a new passphrase for the restored keys.
+**If the keys are only lost** (broken disk, lost computer whose passphrase is safe): restore them from the backup onto a new offline computer. `restore` asks for the backup's passphrase and a new passphrase for the restored keys. It refuses a directory that already holds keys (it names the backup's root key); `--force` replaces them.
 ```
 [offline]  webjetctl root --dir ./webjet-root restore --from /media/usb1/root-backup.enc
 [offline]  webjetctl root show                     # compare with the keys you know

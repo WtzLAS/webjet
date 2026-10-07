@@ -7667,6 +7667,7 @@ dependencies = [
  "webjet-proto",
  "webjet-tools",
  "webjetd",
+ "zeroize",
 ]
 
 [[package]]

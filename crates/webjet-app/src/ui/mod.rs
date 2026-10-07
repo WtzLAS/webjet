@@ -416,15 +416,16 @@ impl WebjetApp {
             self.sign_in_error = Some("not connected to webjetd yet".into());
             return;
         };
-        let pass = self.passphrase.read(cx).text().to_string();
+        let pass = zeroize::Zeroizing::new(self.passphrase.read(cx).text().to_string());
         match client::sign_in(&self.keys, &name, &pass, snap) {
             Ok(s) => {
                 self.signed_in = Some(s);
                 self.sign_in_error = None;
-                self.passphrase.update(cx, |f, cx| f.clear(cx));
             }
             Err(e) => self.sign_in_error = Some(format!("{e:#}")),
         }
+        // Not kept around either way: a retry is typed again.
+        self.passphrase.update(cx, |f, cx| f.clear(cx));
         cx.notify();
     }
 

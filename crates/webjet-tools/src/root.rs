@@ -26,6 +26,9 @@ pub enum RootCmd {
     Restore {
         #[arg(long)]
         from: PathBuf,
+        /// Replace keys that are in the directory already.
+        #[arg(long)]
+        force: bool,
     },
     /// Print the public keys.
     Show,
@@ -237,17 +240,27 @@ fn init(dir: &Path) -> Result<()> {
 }
 
 /// `webjetctl root restore`: both keys from a backup, under a new passphrase.
-fn restore(dir: &Path, from: &Path) -> Result<()> {
+/// Keys already in `dir` are replaced only with `force`: restoring the
+/// wrong backup would otherwise destroy them.
+fn restore(dir: &Path, from: &Path, force: bool) -> Result<()> {
     let pass = passphrase("WEBJET_BACKUP_PASSPHRASE", "backup passphrase")?;
     let plain = unseal(&pass, &read(from)?)?;
     if plain.len() != 64 {
         bail!("damaged backup");
     }
+    let root = keypair_from(&plain[..32])?;
+    let emergency = keypair_from(&plain[32..])?;
+    if !force && (root_path(dir).exists() || emergency_path(dir).exists()) {
+        bail!(
+            "{} holds keys already; the backup's root key is {} \
+             (--force replaces them; back them up first if they matter)",
+            dir.display(),
+            crypto::key_b64(&root.public())
+        );
+    }
     let newpass = new_passphrase("WEBJET_ROOT_PASSPHRASE", "new passphrase for the root keys")?;
     write_private(&root_path(dir), &seal(&newpass, &plain[..32])?)?;
     write_private(&emergency_path(dir), &seal(&newpass, &plain[32..])?)?;
-    let root = keypair_from(&plain[..32])?;
-    let emergency = keypair_from(&plain[32..])?;
     write_public(
         &dir.join("emergency.cert"),
         &emergency_cert(&root, &emergency),
@@ -298,12 +311,13 @@ pub fn run(dir: &Path, cmd: RootCmd) -> Result<()> {
         RootCmd::Backup { out } => {
             let k = load_keys(dir)?;
             let pass = new_passphrase("WEBJET_BACKUP_PASSPHRASE", "passphrase for the backup")?;
-            let mut plain = k.root.seed().to_vec();
+            let mut plain = Zeroizing::new(Vec::with_capacity(64));
+            plain.extend_from_slice(&k.root.seed()[..]);
             plain.extend_from_slice(&k.emergency.seed()[..]);
-            write_private(&out, &seal(&pass, &plain)?)?;
+            write_secret(&out, &seal(&pass, &plain)?)?;
             println!("backup written to {}", out.display());
         }
-        RootCmd::Restore { from } => restore(dir, &from)?,
+        RootCmd::Restore { from, force } => restore(dir, &from, force)?,
         RootCmd::Show => {
             let k = load_keys(dir)?;
             println!("root key:      {}", crypto::key_b64(&k.root.public()));
