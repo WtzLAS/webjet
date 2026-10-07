@@ -488,6 +488,12 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
         );
         c
     };
+    // Until it's accepted, any way out of here (an error, a refusal, the
+    // caller giving up on this future) takes the circuit out of the table.
+    let unopened = Unopened {
+        n,
+        key: (next, c.label),
+    };
     let hop = n
         .best_hop(&next)
         .ok_or_else(|| anyhow!("hop to the first neighbor went away"))?;
@@ -495,23 +501,30 @@ pub async fn open(n: &Arc<Node>, peer: Bytes32, hops: Vec<Bytes32>) -> Result<Ar
         setup: Some(raw),
         label: c.label,
     })));
-    let res = tokio::time::timeout(OPEN_TIMEOUT, rx).await;
-    let out = match res {
+    let out = match tokio::time::timeout(OPEN_TIMEOUT, rx).await {
         Ok(Ok(Ok(out))) => out,
-        Ok(Ok(Err(reason))) => {
-            n.circuits.lock().remove_entry(&(next, c.label));
-            bail!("circuit refused: {reason}");
-        }
-        _ => {
-            let mut t = n.circuits.lock();
-            t.pending.remove(&(next, c.label));
-            t.remove_entry(&(next, c.label));
-            bail!("circuit setup timed out");
-        }
+        Ok(Ok(Err(reason))) => bail!("circuit refused: {reason}"),
+        _ => bail!("circuit setup timed out"),
     };
+    std::mem::forget(unopened);
     *c.out_label.lock() = Some(out);
     tracing::debug!(peer = %n.name_of(&peer), hops = hops.len(), "circuit open");
     Ok(c)
+}
+
+/// A source circuit being opened: dropped before it is accepted, it takes
+/// the circuit and its pending open out of the table.
+struct Unopened<'a> {
+    n: &'a Node,
+    key: (Bytes32, u32),
+}
+
+impl Drop for Unopened<'_> {
+    fn drop(&mut self) {
+        let mut t = self.n.circuits.lock();
+        t.pending.remove(&self.key);
+        t.remove_entry(&self.key);
+    }
 }
 
 // ---------------------------------------------------------------- control messages
@@ -1734,6 +1747,113 @@ mod tests {
         let e = e.to_string();
         assert!(e.contains("rate"), "{e}");
         assert!(sn.circuits.lock().entries.is_empty());
+    }
+
+    /// Wait for the source's CircuitOpen to its first neighbor.
+    async fn sent_open(rx: &mut TestHopRx) -> wp::CircuitOpen {
+        loop {
+            if let Some(HopMsg::CircuitOpen(o)) = rx.control().pop() {
+                return *o;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// A caller that gives up on `open` (its task cancelled) leaves no
+    /// circuit or pending open behind.
+    #[tokio::test]
+    async fn a_cancelled_open_leaves_nothing() {
+        let mut t = net();
+        let (sn, _dir) = testnode::node(&mut t.c, t.s.0, t.s.1.clone());
+        let (_hr, mut rr) = sn.test_hop(t.r.0, Transport::TcpTls);
+        let n2 = sn.clone();
+        let (peer, relay) = (t.d.0, t.r.0);
+        let opening = tokio::spawn(async move { open(&n2, peer, vec![relay]).await });
+        sent_open(&mut rr).await;
+        assert_eq!(sn.circuits.lock().entries.len(), 1);
+        opening.abort();
+        let _ = opening.await;
+        let tb = sn.circuits.lock();
+        assert!(tb.entries.is_empty() && tb.pending.is_empty());
+    }
+
+    /// A hop going down fails the opens waiting on it at once.
+    #[tokio::test]
+    async fn a_lost_neighbor_fails_waiting_opens() {
+        let mut t = net();
+        let (sn, _dir) = testnode::node(&mut t.c, t.s.0, t.s.1.clone());
+        let (_hr, mut rr) = sn.test_hop(t.r.0, Transport::TcpTls);
+        let n2 = sn.clone();
+        let (peer, relay) = (t.d.0, t.r.0);
+        let opening = tokio::spawn(async move { open(&n2, peer, vec![relay]).await });
+        sent_open(&mut rr).await;
+        close_with_neighbor(&sn, &t.r.0);
+        let r = tokio::time::timeout(Duration::from_secs(1), opening)
+            .await
+            .expect("failed at once, not after OPEN_TIMEOUT")
+            .unwrap();
+        assert!(r.is_err());
+        let tb = sn.circuits.lock();
+        assert!(tb.entries.is_empty() && tb.pending.is_empty());
+    }
+
+    /// `sweep` closes transit circuits idle past TRANSIT_IDLE and drops
+    /// opens unanswered past PENDING_TIMEOUT; live ones stay.
+    #[tokio::test]
+    async fn sweep_reaps_idle_circuits_and_stale_opens() {
+        let mut t = net();
+        let (rn, _dir) = testnode::node(&mut t.c, t.r.0, t.r.1.clone());
+        let (hs, mut rs) = rn.test_hop(t.s.0, Transport::TcpTls);
+        let (hd, mut rd) = rn.test_hop(t.d.0, Transport::TcpTls);
+        on_open(
+            &rn,
+            &hs,
+            open_msg(&t.s.1, &setup(&t.s, &t.d.0, &[t.r.0]), 7),
+        )
+        .await
+        .unwrap();
+        let o = only(rd.control());
+        let HopMsg::CircuitOpen(o) = o else { panic!() };
+        // Answered: both directions in the table, nothing pending.
+        on_accept(
+            &rn,
+            &hd,
+            wp::CircuitAccept {
+                label: o.label,
+                peer_label: 70,
+            },
+        );
+        let _ = rs.control();
+        assert_eq!(rn.circuits.lock().entries.len(), 2);
+        sweep(&rn);
+        assert_eq!(rn.circuits.lock().entries.len(), 2, "fresh circuits stay");
+        // A second setup the destination never answers.
+        on_open(
+            &rn,
+            &hs,
+            open_msg(&t.s.1, &setup(&t.s, &t.d.0, &[t.r.0]), 8),
+        )
+        .await
+        .unwrap();
+        let old = Instant::now() - TRANSIT_IDLE - Duration::from_secs(1);
+        {
+            let mut tb = rn.circuits.lock();
+            assert_eq!(tb.pending.len(), 1);
+            for p in tb.pending.values_mut() {
+                p.at = old;
+            }
+            for e in tb.entries.values_mut() {
+                e.created = old;
+                if let Kind::Transit(x) = &mut e.kind {
+                    x.last = old;
+                }
+            }
+        }
+        sweep(&rn);
+        let tb = rn.circuits.lock();
+        assert!(tb.pending.is_empty(), "stale open dropped");
+        assert!(tb.entries.is_empty(), "idle circuits closed");
+        assert_eq!(tb.transit_count(), 0);
     }
 
     #[test]
