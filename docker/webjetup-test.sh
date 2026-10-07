@@ -36,6 +36,7 @@ TAG=v$VERSION
 # whose files are this version's (its agent reports the wrong version).
 NEXT=$(echo "$VERSION" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
 BAD=$(echo "$VERSION" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 2}')
+# A plain-http test server: the containers set WEBJET_ALLOW_HTTP=1.
 REPO=http://forge.test/webj8/webjet
 
 cleanup() {
@@ -113,7 +114,7 @@ docker network create --subnet 172.32.0.0/24 "$NET" >/dev/null
 docker run -d --name "$P-forge" --network "$NET" --ip "$FORGE_IP" -v "$P-www:/www:ro" -w /www python:3-alpine python -m http.server 80 >/dev/null
 
 echo "== controller"
-ADMIN_ENV="-e WEBJET_ROOT_PASSPHRASE=root-pass -e WEBJET_ACCOUNT_PASSPHRASE=acct-pass -e WEBJET_KEYS=/admin/keys"
+ADMIN_ENV="-e WEBJET_ALLOW_HTTP=1 -e WEBJET_ROOT_PASSPHRASE=root-pass -e WEBJET_ACCOUNT_PASSPHRASE=acct-pass -e WEBJET_KEYS=/admin/keys"
 # shellcheck disable=SC2086
 docker run --rm -v "$P-admin:/admin" $ADMIN_ENV "$IMG" sh -ec '
     webjetctl root --dir /admin/root init >/dev/null
@@ -146,7 +147,7 @@ T=$(W network node enroll --owner infra --name laptop --ip 10.7.0.20 --roles dat
 echo "== systemd host"
 docker run -d --name "$P-host" --hostname laptop --network "$NET" --ip "$HOST_IP" \
     --add-host "forge.test:$FORGE_IP" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-    --tmpfs /run --tmpfs /run/lock "$HOSTIMG" >/dev/null
+    -e WEBJET_ALLOW_HTTP=1 --tmpfs /run --tmpfs /run/lock "$HOSTIMG" >/dev/null
 i=0
 until on_host 'systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"'; do
     sleep 0.5

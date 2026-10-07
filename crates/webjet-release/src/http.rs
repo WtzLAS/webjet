@@ -10,13 +10,16 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The official repository; builds can override it with `WEBJETUP_REPO`.
 pub const DEFAULT_REPO: &str = match option_env!("WEBJETUP_REPO") {
     Some(r) => r,
     None => "https://forgejo.wolf109909.top/webj8/webjet",
 };
+
+/// Set to `1` to allow a repository on plain `http://` (test setups).
+pub const ALLOW_HTTP_ENV: &str = "WEBJET_ALLOW_HTTP";
 
 /// A repository's web and API base URLs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,13 +31,35 @@ pub struct Repo {
 }
 
 impl Repo {
+    /// An `https://host/owner/repo` URL. Plain `http://` only with
+    /// `WEBJET_ALLOW_HTTP=1`: over http, anyone on the path could change the
+    /// release files and the checksums published next to them.
     pub fn parse(url: &str) -> Result<Repo> {
+        let allow = std::env::var(ALLOW_HTTP_ENV).is_ok_and(|v| v.trim() == "1");
+        Self::parse_with(url, allow)
+    }
+
+    /// Like [`Repo::parse`], also accepting `http://`: for a URL root chose
+    /// already (the remote upgrade helper's `trust.json`, written when
+    /// `webjetup` allowed it), whose downloads are checked against
+    /// checksums the admin signed.
+    pub fn parse_pinned(url: &str) -> Result<Repo> {
+        Self::parse_with(url, true)
+    }
+
+    fn parse_with(url: &str, allow_http: bool) -> Result<Repo> {
         let web = url.trim().trim_end_matches('/');
         let (scheme, rest) = web
             .split_once("://")
             .ok_or_else(|| anyhow!("repository URL {url:?} has no scheme"))?;
-        if scheme != "https" && scheme != "http" {
-            bail!("repository URL {url:?} must use http or https");
+        match scheme {
+            "https" => {}
+            "http" if allow_http => {}
+            "http" => bail!(
+                "repository URL {url:?} uses plain http, where release files and their checksums \
+                 can be changed in transit: use https (or set {ALLOW_HTTP_ENV}=1 to allow it)"
+            ),
+            _ => bail!("repository URL {url:?} must use https"),
         }
         let mut parts = rest.split('/');
         let host = parts
@@ -85,6 +110,24 @@ pub struct ReleaseInfo {
     pub draft: bool,
 }
 
+/// The server answered 404: the release or file isn't published.
+#[derive(Debug)]
+pub struct NotFound(pub String);
+
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: not found", self.0)
+    }
+}
+
+impl std::error::Error for NotFound {}
+
+/// Whether `e` (or what it wraps) is a [`NotFound`]: the release or file
+/// isn't published, as opposed to a network failure.
+pub fn is_not_found(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<NotFound>())
+}
+
 /// How a failed attempt ends: try again, or give up now.
 enum Failure {
     Retry(anyhow::Error),
@@ -99,14 +142,28 @@ impl From<anyhow::Error> for Failure {
 
 const ATTEMPTS: u32 = 4;
 
-/// Run `f` up to [`ATTEMPTS`] times, waiting 1, 2, 4 s between tries.
-fn retry<T>(mut f: impl FnMut() -> std::result::Result<T, Failure>) -> Result<T> {
+/// How long one request may take at most.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Run `f` up to [`ATTEMPTS`] times, waiting 1, 2, 4 s between tries, and
+/// never starting a try after `deadline`.
+fn retry<T>(
+    deadline: Option<Instant>,
+    mut f: impl FnMut() -> std::result::Result<T, Failure>,
+) -> Result<T> {
     let mut attempt = 1;
     loop {
         match f() {
             Ok(v) => return Ok(v),
             Err(Failure::Final(e)) => return Err(e),
             Err(Failure::Retry(e)) if attempt >= ATTEMPTS => return Err(e),
+            Err(Failure::Retry(e))
+                if deadline.is_some_and(|d| {
+                    Instant::now() + Duration::from_secs(1 << (attempt - 1)) >= d
+                }) =>
+            {
+                return Err(e.context("out of time for the downloads"));
+            }
             Err(Failure::Retry(e)) => {
                 eprintln!("    {e:#}; retrying");
                 std::thread::sleep(Duration::from_secs(1 << (attempt - 1)));
@@ -123,6 +180,8 @@ fn classic_kx_groups() -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
 
 pub struct Client {
     agent: ureq::Agent,
+    /// No request runs past this (see [`Client::with_deadline`]).
+    deadline: Option<Instant>,
 }
 
 impl Default for Client {
@@ -149,28 +208,62 @@ impl Client {
             .tls_config(tls)
             .proxy(ureq::Proxy::try_from_env())
             .timeout_connect(Some(Duration::from_secs(20)))
-            .timeout_global(Some(Duration::from_secs(900)))
+            .timeout_global(Some(REQUEST_TIMEOUT))
             .user_agent(format!("webjetup/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .new_agent();
-        Client { agent }
+        Client {
+            agent,
+            deadline: None,
+        }
     }
 
-    /// GET with a few retries for network errors (resets, timeouts); HTTP
-    /// errors like 404 are final.
-    fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>> {
-        retry(|| {
-            self.agent.get(url).call().map_err(|e| match e {
-                ureq::Error::StatusCode(404) => Failure::Final(anyhow!("{url}: not found")),
+    /// Every request, retries included, ends within `limit` from now (the
+    /// remote upgrade helper runs under a service manager's time limit).
+    #[must_use]
+    pub fn with_deadline(mut self, limit: Duration) -> Client {
+        self.deadline = Some(Instant::now() + limit);
+        self
+    }
+
+    /// One GET. Network errors (resets, timeouts) and 5xx may be retried;
+    /// other HTTP errors like 404 are final.
+    fn get_once(
+        &self,
+        url: &str,
+    ) -> std::result::Result<ureq::http::Response<ureq::Body>, Failure> {
+        let mut timeout = REQUEST_TIMEOUT;
+        if let Some(d) = self.deadline {
+            timeout = timeout.min(d.saturating_duration_since(Instant::now()));
+            if timeout.is_zero() {
+                return Err(Failure::Final(anyhow!(
+                    "{url}: out of time for the downloads"
+                )));
+            }
+        }
+        self.agent
+            .get(url)
+            .config()
+            .timeout_global(Some(timeout))
+            .build()
+            .call()
+            .map_err(|e| match e {
+                ureq::Error::StatusCode(404) => Failure::Final(NotFound(url.to_string()).into()),
                 ureq::Error::StatusCode(c) if c < 500 => Failure::Final(anyhow!("{url}: HTTP {c}")),
                 e => Failure::Retry(anyhow!("{url}: {e}")),
             })
-        })
+    }
+
+    /// GET with a few retries (see [`Client::get_once`]).
+    fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>> {
+        retry(self.deadline, || self.get_once(url))
     }
 
     pub fn text(&self, url: &str) -> Result<String> {
-        retry(|| {
-            let mut r = self.get(url).map_err(Failure::Final)?;
+        // One retry loop around request and body: a body that breaks off
+        // asks again.
+        retry(self.deadline, || {
+            let mut r = self.get_once(url)?;
             r.body_mut()
                 .read_to_string()
                 .map_err(|e| Failure::Retry(anyhow!("{url}: {e}")))
@@ -180,8 +273,8 @@ impl Client {
     /// Download `url` into `dest`, returning the file's SHA-256.
     pub fn download(&self, url: &str, dest: &Path) -> Result<String> {
         // A connection that drops mid-file starts the download over.
-        retry(|| {
-            let resp = self.get(url).map_err(Failure::Final)?;
+        retry(self.deadline, || {
+            let resp = self.get_once(url)?;
             let mut reader = resp.into_body().into_reader();
             let mut file = std::fs::File::create(dest)
                 .with_context(|| format!("create {}", dest.display()))
@@ -209,7 +302,7 @@ impl Client {
     /// "not found" counts; other errors are left to the download.
     pub fn check_release(&self, repo: &Repo, tag: &str) -> Result<()> {
         match self.get(&format!("{}/releases/tags/{tag}", repo.api)) {
-            Err(e) if e.to_string().ends_with(": not found") => {
+            Err(e) if is_not_found(&e) => {
                 bail!(
                     "there is no release {tag} at {} (see `webjetup list`)",
                     repo.web
@@ -303,12 +396,17 @@ mod tests {
         assert!(Repo::parse("https://forgejo.example.net/webjet").is_err());
         assert!(Repo::parse("ftp://h/o/r").is_err());
         assert!(Repo::parse(DEFAULT_REPO).is_ok());
+        // Plain http only where explicitly allowed.
+        assert!(Repo::parse_with("http://h/o/r", false).is_err());
+        assert!(Repo::parse_with("http://h/o/r", true).is_ok());
+        assert!(Repo::parse_pinned("http://h/o/r").is_ok());
+        assert!(Repo::parse_pinned("ftp://h/o/r").is_err());
     }
 
     #[test]
     fn retries_network_errors_but_not_final_ones() {
         let mut calls = 0;
-        let r: Result<u32> = retry(|| {
+        let r: Result<u32> = retry(None, || {
             calls += 1;
             if calls < 2 {
                 Err(Failure::Retry(anyhow!("reset")))
@@ -318,12 +416,22 @@ mod tests {
         });
         assert_eq!((r.unwrap(), calls), (7, 2));
         let mut calls = 0;
-        let r: Result<u32> = retry(|| {
+        let r: Result<u32> = retry(None, || {
             calls += 1;
-            Err(Failure::Final(anyhow!("not found")))
+            Err(Failure::Final(NotFound("u".into()).into()))
+        });
+        let e = r.unwrap_err();
+        assert!(is_not_found(&e) && is_not_found(&e.context("more")));
+        assert!(!is_not_found(&anyhow!("host not found")));
+        assert_eq!(calls, 1, "a 404 is not retried");
+        // No try starts after the deadline.
+        let mut calls = 0;
+        let r: Result<u32> = retry(Some(Instant::now() + Duration::from_millis(500)), || {
+            calls += 1;
+            Err(Failure::Retry(anyhow!("reset")))
         });
         assert!(r.is_err());
-        assert_eq!(calls, 1, "a 404 is not retried");
+        assert_eq!(calls, 1, "the 1 s wait would end after the deadline");
     }
 
     #[test]

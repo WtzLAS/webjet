@@ -35,6 +35,14 @@ use webjet_release::{self as rel, HelperStatus, UpgradeState};
 /// How long the new agent has to come up and report its version.
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long the downloads may take, retries included. With installing and
+/// the health checks of the new and (on a rollback) the old agent, the
+/// helper stays well within systemd's `TimeoutStartSec` ([`HELPER_TIMEOUT`]).
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+/// systemd's limit for one run of the helper.
+const HELPER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
 /// Request ids the helper has used, with their expiry (in the spool).
 const USED_FILE: &str = "used.json";
 /// The programs before the last upgrade (in the spool).
@@ -121,9 +129,10 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart={bin} apply-upgrade
-TimeoutStartSec=30min
+TimeoutStartSec={limit}s
 ",
-        bin = l.program(SELF).display()
+        bin = l.program(SELF).display(),
+        limit = HELPER_TIMEOUT.as_secs()
     )
 }
 
@@ -561,7 +570,7 @@ pub fn apply(sys: &Sys, l: &Layout) -> Result<()> {
             now,
         )?;
         mark_used(l, &plan.id, plan.expires_at, now)?;
-        Ok((plan, Repo::parse(&trust.repo)?))
+        Ok((plan, Repo::parse_pinned(&trust.repo)?))
     })();
     let (plan, repo) = match checked {
         Ok(x) => x,
@@ -610,7 +619,7 @@ enum Outcome {
 fn upgrade(sys: &Sys, l: &Layout, repo: &Repo, plan: &rel::Plan) -> Result<(), Outcome> {
     let stage = tempfile::tempdir().map_err(|e| Outcome::Failed(e.into()))?;
     let fetch = || -> Result<PathBuf> {
-        let c = Client::new();
+        let c = Client::new().with_deadline(DOWNLOAD_TIMEOUT);
         let archive = c.fetch_pinned(
             repo,
             &plan.version,

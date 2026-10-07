@@ -44,7 +44,7 @@ pub fn pin_release(repo: &str, tag: &str) -> Result<(Vec<wp::UpgradeFile>, Vec<&
                     });
                 }
             }
-            Err(e) if format!("{e:#}").contains("not found") => missing.push(t),
+            Err(e) if http::is_not_found(&e) => missing.push(t),
             Err(e) => return Err(e),
         }
     }

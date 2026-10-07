@@ -47,6 +47,7 @@ FORGE_IP=$SUBNET.5
 HOSTIMG=$P-systemd
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 TAG=v$VERSION
+# A plain-http test server: the containers set WEBJET_ALLOW_HTTP=1.
 REPO=http://forge.test/webj8/webjet
 if [ -n "${RELEASE:-}" ]; then
     TAG=$RELEASE
@@ -138,7 +139,7 @@ for h in $HOSTS; do
     docker run -d --name "$P-$h" --hostname "$h" --network "$NET" --ip "$(ip_of "$h")" \
         --add-host "forge.test:$FORGE_IP" ${WEBJET_TEST_DNS:+--dns "$WEBJET_TEST_DNS"} \
         --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --tmpfs /run --tmpfs /run/lock "$HOSTIMG" >/dev/null
+        -e WEBJET_ALLOW_HTTP=1 --tmpfs /run --tmpfs /run/lock "$HOSTIMG" >/dev/null
 done
 for h in $HOSTS; do wait_for "$h" 'systemctl is-system-running | grep -qE "running|degraded"' "systemd did not boot on $h"; done
 install() { on "$1" "curl -fsSL $REPO/releases/download/$TAG/install.sh | WEBJET_REPO=$REPO sh -s -- $2" >/dev/null; }
