@@ -55,6 +55,7 @@ const PREVIOUS_DIR: &str = "previous";
 /// next run finishes an upgrade that was cut short ([`recover`]).
 const INSTALLING_FILE: &str = "installing.json";
 /// Held while a helper runs (in the spool; Unix).
+#[cfg(unix)]
 const LOCK_FILE: &str = "helper.lock";
 
 // ---------------------------------------------------------------- configuration
