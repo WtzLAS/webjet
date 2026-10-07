@@ -11,6 +11,7 @@ use webjet_proto::{self as wp, Transport};
 use zeroize::Zeroizing;
 
 pub mod config;
+pub mod ops;
 pub mod prompt;
 pub mod root;
 pub mod upgrade;
@@ -327,6 +328,46 @@ impl Account {
             op,
         ))
     }
+
+    /// Take the account ID the network holds this key under, given the
+    /// agent's `accounts` list. After `network account rekey` (or a
+    /// root-signed key change) the new key's `.pub` still carries the random
+    /// ID `keygen` gave it; the network's ID is used instead and written
+    /// back to `<name>.pub` (best effort). `None` when nothing changed.
+    pub fn adopt_network_id(&mut self, accounts: &serde_json::Value) -> Option<Adopted> {
+        let key = crypto::key_b64(&self.kp.public());
+        let held = accounts
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|x| x["key"].as_str() == Some(key.as_str()))?;
+        let id = held["id"].as_str().and_then(crypto::parse_hex32)?;
+        if id == self.id {
+            return None;
+        }
+        self.id = id;
+        let path = self.dir.join(format!("{}.pub", self.name));
+        let saved = AccountPub::load(&path)
+            .and_then(|mut p| {
+                p.account_id = hex::encode(id);
+                write_public(&path, &serde_json::to_vec_pretty(&p)?)
+            })
+            .is_ok();
+        Some(Adopted {
+            name: held["name"].as_str().unwrap_or("?").to_string(),
+            path,
+            saved,
+        })
+    }
+}
+
+/// What [`Account::adopt_network_id`] changed.
+pub struct Adopted {
+    /// The network's name for the account.
+    pub name: String,
+    /// The `.pub` file, and whether it now holds the network's ID.
+    pub path: std::path::PathBuf,
+    pub saved: bool,
 }
 
 // ---------------------------------------------------------------- account public files

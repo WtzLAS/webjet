@@ -535,27 +535,14 @@ async fn load_account(cli: &Cli) -> Result<Account> {
     let Ok(accts) = call(cli, Request::Accounts).await else {
         return Ok(a);
     };
-    let key = crypto::key_b64(&a.kp.public());
-    let held = accts
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|x| x["key"].as_str() == Some(key.as_str()));
-    if let Some(x) = held
-        && let Some(id) = x["id"].as_str().and_then(crypto::parse_hex32)
-        && id != a.id
+    if let Some(x) = a.adopt_network_id(&accts)
+        && x.saved
     {
-        a.id = id;
-        let path = dir.join(format!("{name}.pub"));
-        let mut p = AccountPub::load(&path)?;
-        p.account_id = hex::encode(id);
-        if write_public(&path, &serde_json::to_vec_pretty(&p)?).is_ok() {
-            eprintln!(
-                "note: this key belongs to account {}; {} updated with its account ID",
-                x["name"].as_str().unwrap_or("?"),
-                path.display()
-            );
-        }
+        eprintln!(
+            "note: this key belongs to account {}; {} updated with its account ID",
+            x.name,
+            x.path.display()
+        );
     }
     Ok(a)
 }
@@ -1327,22 +1314,12 @@ async fn network(cli: &Cli, cmd: &NetworkCmd) -> Result<()> {
         } => {
             let a = load_account(cli).await?;
             let st = call(cli, Request::Status).await?;
-            let cur = st["psk_epoch"].as_u64().unwrap_or(0) as u16;
-            let r = submit(
-                cli,
-                a.sign(AccountOp::RotatePsk(Box::new(wp::RotatePsk {
-                    epoch_id: cur.wrapping_add(1),
-                })))?,
-            )
-            .await?;
+            let (next, op) = ops::rotate_psk(&a, ops::psk_epoch(&st)?)?;
+            let r = submit(cli, op).await?;
             report(
                 cli,
-                format!(
-                    "PSK rotated to epoch {} (entry {})",
-                    cur.wrapping_add(1),
-                    r["index"]
-                ),
-                json!({"psk_epoch": cur.wrapping_add(1), "entry": entry(&r)}),
+                format!("PSK rotated to epoch {next} (entry {})", r["index"]),
+                json!({"psk_epoch": next, "entry": entry(&r)}),
             );
         }
         NetworkCmd::Camouflage { cmd } => network_camouflage(cli, cmd).await?,
@@ -1781,14 +1758,7 @@ async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
         NodeCmd::Rename { name, new_name } => {
             let a = load_account(cli).await?;
             let id = node_id(cli, name).await?;
-            let r = submit(
-                cli,
-                a.sign(AccountOp::RenameNode(Box::new(wp::RenameNode {
-                    node_id: Some(crypto::k32(&id)),
-                    name: Some(new_name.clone()),
-                })))?,
-            )
-            .await?;
+            let r = submit(cli, ops::rename_node(&a, &id, new_name)?).await?;
             report(
                 cli,
                 format!("{name} is now {new_name} (entry {})", r["index"]),
@@ -1798,14 +1768,7 @@ async fn network_node(cli: &Cli, cmd: &NodeCmd) -> Result<()> {
         NodeCmd::Revoke { name, reason } => {
             let a = load_account(cli).await?;
             let id = node_id(cli, name).await?;
-            let r = submit(
-                cli,
-                a.sign(AccountOp::TombstoneNode(Box::new(wp::TombstoneNode {
-                    node_id: Some(crypto::k32(&id)),
-                    reason: reason.clone(),
-                })))?,
-            )
-            .await?;
+            let r = submit(cli, ops::revoke_node(&a, &id, reason.as_deref())?).await?;
             report(
                 cli,
                 format!("{name} revoked (entry {})", r["index"]),
@@ -2195,14 +2158,8 @@ async fn network_controller(cli: &Cli, cmd: &ControllerCmd) -> Result<()> {
         }
         ControllerCmd::Snapshot { out } => {
             let a = load_account(cli).await?;
-            let req = a.kp.sign_obj(
-                wp::msg_type::SNAPSHOT_REQUEST,
-                &wp::SnapshotRequest {
-                    account_id: Some(crypto::k32(&a.id)),
-                    issued_at: now_ms(),
-                },
-            );
-            let r = call(cli, Request::Snapshot { request: req }).await?;
+            let request = ops::snapshot_request(&a);
+            let r = call(cli, Request::Snapshot { request }).await?;
             // It holds the PSKs and the camouflage key: wiped after use.
             let snap = zeroize::Zeroizing::new(webjetd::state::unb64(
                 r["snapshot"].as_str().unwrap_or(""),

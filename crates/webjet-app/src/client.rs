@@ -9,7 +9,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use webjet_core::crypto;
-use webjet_proto::{self as wp, AccountOp};
 use webjetd::control::Request;
 
 /// Where the agent's control channel is (same defaults as `webjetctl`).
@@ -169,7 +168,7 @@ pub fn sign_in(keys: &Path, name: &str, passphrase: &str, snapshot: &Snapshot) -
     if name.is_empty() {
         bail!("choose an account");
     }
-    let account = webjet_tools::Account::unlock(keys, name, passphrase).map_err(|e| {
+    let mut account = webjet_tools::Account::unlock(keys, name, passphrase).map_err(|e| {
         // The most common failure, worded for people.
         if e.to_string().contains("wrong passphrase") {
             anyhow!("wrong passphrase for {name}")
@@ -177,6 +176,14 @@ pub fn sign_in(keys: &Path, name: &str, passphrase: &str, snapshot: &Snapshot) -
             e
         }
     })?;
+    // A replaced key's `.pub` names the ID `keygen` made up: the network's
+    // ID for this key counts (as in webjetctl).
+    let held: Vec<Value> = snapshot
+        .accounts
+        .iter()
+        .map(|a| serde_json::json!({"id": a.id, "key": a.key, "name": a.name}))
+        .collect();
+    account.adopt_network_id(&Value::Array(held));
     let session = Session::new(
         snapshot,
         name,
@@ -190,29 +197,21 @@ fn node_id(n: &Node) -> Result<webjet_core::crypto::Bytes32> {
     crypto::parse_hex32(&n.id).ok_or_else(|| anyhow!("bad node id {}", n.id))
 }
 
-/// The operations the app offers, built and signed the way `webjetctl` does.
+/// The operations the app offers: the ones `webjetctl` signs
+/// (`webjet_tools::ops`), from the app's node records and text fields.
 pub mod ops {
     use super::*;
+    use webjet_tools::ops;
 
     pub fn rename(a: &webjet_tools::Account, n: &Node, new_name: &str) -> Result<Vec<u8>> {
-        if !crate::model::valid_node_name(new_name) {
-            bail!("node names are 1–32 characters of a-z, 0-9 and -");
-        }
-        a.sign(AccountOp::RenameNode(Box::new(wp::RenameNode {
-            node_id: Some(crypto::k32(&node_id(n)?)),
-            name: Some(new_name.to_string()),
-        })))
+        ops::rename_node(a, &node_id(n)?, new_name)
     }
 
     pub fn revoke(a: &webjet_tools::Account, n: &Node, reason: &str) -> Result<Vec<u8>> {
-        let reason = (!reason.trim().is_empty()).then(|| reason.trim().to_string());
-        a.sign(AccountOp::TombstoneNode(Box::new(wp::TombstoneNode {
-            node_id: Some(crypto::k32(&node_id(n)?)),
-            reason,
-        })))
+        ops::revoke_node(a, &node_id(n)?, Some(reason))
     }
 
-    /// Replace a node's tags (admin).
+    /// Replace a node's tags (admin): a comma- or space-separated list.
     pub fn set_tags(a: &webjet_tools::Account, n: &Node, tags: &str) -> Result<Vec<u8>> {
         let list: Vec<String> = tags
             .split([',', ' '])
@@ -220,38 +219,14 @@ pub mod ops {
             .filter(|t| !t.is_empty())
             .map(String::from)
             .collect();
-        let tags = webjet_tools::tags(&list)?;
-        a.sign(AccountOp::UpdateNode(Box::new(wp::UpdateNode {
-            node_id: Some(crypto::k32(&node_id(n)?)),
-            set_tags: true,
-            tags: Some(tags),
-            ..Default::default()
-        })))
+        ops::set_tags(a, &node_id(n)?, &list)
     }
 
-    /// A request to read the operation log (admins): up to `limit` entries
-    /// before index `before` (0 = the newest). Read-only, so it uses no
-    /// operation sequence number.
-    pub fn log_request(a: &webjet_tools::Account, before: u64, limit: u32) -> Vec<u8> {
-        a.kp.sign_obj(
-            wp::msg_type::LOG_REQUEST,
-            &wp::LogRequest {
-                account_id: Some(crypto::k32(&a.id)),
-                issued_at: webjet_core::types::now_ms(),
-                before,
-                limit,
-            },
-        )
-    }
+    pub use ops::log_request;
 
     /// Advance the PSK epoch (admin, §7.6).
     pub fn rotate_psk(a: &webjet_tools::Account, current_epoch: u64) -> Result<Vec<u8>> {
-        let next = u16::try_from(current_epoch)
-            .unwrap_or(u16::MAX)
-            .wrapping_add(1);
-        a.sign(AccountOp::RotatePsk(Box::new(wp::RotatePsk {
-            epoch_id: next,
-        })))
+        Ok(ops::rotate_psk(a, current_epoch)?.1)
     }
 }
 
@@ -259,6 +234,7 @@ pub mod ops {
 mod tests {
     use super::*;
     use webjet_core::crypto::KeyPair;
+    use webjet_proto as wp;
 
     fn account(dir: &Path) -> webjet_tools::Account {
         let kp = KeyPair::generate();
@@ -350,6 +326,32 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(e.contains("isn't in this network"), "{e}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// After `network account rekey` the new key's `.pub` carries a random
+    /// ID: signing in finds the account by its key and fixes the `.pub`.
+    #[test]
+    fn sign_in_after_a_rekey_uses_the_network_id() {
+        let d = tmp();
+        let a = account(&d);
+        let network_id = [9u8; 32];
+        let snap = Snapshot {
+            accounts: vec![Account {
+                id: hex::encode(network_id),
+                name: "bob".into(),
+                admin: true,
+                valid: true,
+                key: crypto::key_b64(&a.kp.public()),
+                version: 2,
+            }],
+            ..Default::default()
+        };
+        let s = sign_in(&d, "bob", "pw", &snap).unwrap();
+        assert_eq!(s.account.id, network_id);
+        assert!(s.session.is_admin());
+        let p = webjet_tools::AccountPub::load(&d.join("bob.pub")).unwrap();
+        assert_eq!(p.id().unwrap(), network_id);
         let _ = std::fs::remove_dir_all(d);
     }
 
