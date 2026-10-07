@@ -27,7 +27,7 @@ use crate::node::Node;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use webjet_core::crypto::{self, Bytes32};
 use webjet_core::frames::ftype;
@@ -80,9 +80,12 @@ struct PeerState {
     last: Option<(Instant, String)>,
 }
 
-fn table() -> &'static Mutex<HashMap<Bytes32, PeerState>> {
-    static T: OnceLock<Mutex<HashMap<Bytes32, PeerState>>> = OnceLock::new();
-    T.get_or_init(|| Mutex::new(HashMap::new()))
+/// Each peer's punching state; one per node (`Node::punch`).
+#[derive(Default)]
+pub struct Table(Mutex<HashMap<Bytes32, PeerState>>);
+
+fn table(n: &Node) -> &Mutex<HashMap<Bytes32, PeerState>> {
+    &n.punch.0
 }
 
 fn has_direct_udp(n: &Node, peer: &Bytes32) -> bool {
@@ -149,7 +152,7 @@ pub fn maybe_start(n: &Arc<Node>, peer: &Bytes32) {
         return;
     }
     let now = Instant::now();
-    let mut t = table().lock();
+    let mut t = table(n).lock();
     let st = t.entry(*peer).or_default();
     if st
         .attempt
@@ -235,7 +238,7 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
                 .collect();
             let predict = should_predict(n, peer);
             let try_ok = should_try(n, peer);
-            let mut t = table().lock();
+            let mut t = table(n).lock();
             let st = t.entry(*peer).or_default();
             let ours = st.attempt.as_ref().map(|a| (a.nonce, a.initiator));
             match ours {
@@ -285,7 +288,7 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
             };
             let go = g.nonce.map(|x| x.to_bytes());
             let start = {
-                let mut t = table().lock();
+                let mut t = table(n).lock();
                 match t.get_mut(peer).and_then(|s| s.attempt.as_mut()) {
                     Some(a) if Some(a.nonce) == go && !a.initiator && !a.probing => {
                         a.probing = true;
@@ -341,7 +344,7 @@ fn spawn_probes(n: &Arc<Node>, peer: Bytes32, wait: Duration) {
         let t0 = Instant::now();
         let mut last_predict: Option<Instant> = None;
         while t0.elapsed() < WINDOW {
-            let snapshot = table()
+            let snapshot = table(&n)
                 .lock()
                 .get(&peer)
                 .and_then(|s| s.attempt.as_ref())
@@ -384,14 +387,14 @@ fn spawn_probes(n: &Arc<Node>, peer: Bytes32, wait: Duration) {
         }
         // No answer to any check: a peer from before checks were answered,
         // or answers were lost. The lower id dials everything at once.
-        let state = table()
+        let state = table(&n)
             .lock()
             .get(&peer)
             .and_then(|s| s.attempt.as_ref())
             .map(|a| (a.validated.is_some() || a.dialing, a.theirs.clone()));
         match state {
             Some((false, theirs)) if n.me < peer && !has_direct_udp(&n, &peer) => {
-                mark_dialing(&peer);
+                mark_dialing(&n, &peer);
                 let tries = theirs
                     .into_iter()
                     .map(|c| dial(n.clone(), peer, c, "blind"));
@@ -414,8 +417,8 @@ fn spawn_probes(n: &Arc<Node>, peer: Bytes32, wait: Duration) {
     });
 }
 
-fn mark_dialing(peer: &Bytes32) -> bool {
-    let mut t = table().lock();
+fn mark_dialing(n: &Node, peer: &Bytes32) -> bool {
+    let mut t = table(n).lock();
     match t.get_mut(peer).and_then(|s| s.attempt.as_mut()) {
         Some(a) if !a.dialing => {
             a.dialing = true;
@@ -427,7 +430,7 @@ fn mark_dialing(peer: &Bytes32) -> bool {
 
 /// End the attempt; `None` = success (backoff reset).
 fn finish(n: &Node, peer: &Bytes32, failure: Option<String>) {
-    let mut t = table().lock();
+    let mut t = table(n).lock();
     let Some(st) = t.get_mut(peer) else { return };
     if st.attempt.take().is_none() {
         return;
@@ -473,7 +476,7 @@ fn on_check(n: &Arc<Node>, ev: PunchEvent) {
     if !crate::nat::dialable(n, &ev.from) {
         return;
     }
-    let mut t = table().lock();
+    let mut t = table(n).lock();
     let Some((peer, a)) = t.iter_mut().find_map(|(p, s)| {
         s.attempt
             .as_mut()
@@ -513,7 +516,7 @@ fn on_check(n: &Arc<Node>, ev: PunchEvent) {
                 return;
             }
         }
-        if mark_dialing(&peer) && !dial(n.clone(), peer, ev.from, how).await {
+        if mark_dialing(&n, &peer) && !dial(n.clone(), peer, ev.from, how).await {
             finish(&n, &peer, Some(format!("dial to {} failed", ev.from)));
         }
     });
@@ -521,7 +524,7 @@ fn on_check(n: &Arc<Node>, ev: PunchEvent) {
 
 /// Punch state per peer, for `local sessions`.
 pub fn status(n: &Node) -> serde_json::Value {
-    let t = table().lock();
+    let t = table(n).lock();
     let mut out = serde_json::Map::new();
     for (peer, s) in t.iter() {
         out.insert(
@@ -573,7 +576,7 @@ pub async fn run(n: Arc<Node>) {
                     _ => continue,
                 };
                 if active(&n, &id) {
-                    if let Some(st) = table().lock().get_mut(&id) {
+                    if let Some(st) = table(&n).lock().get_mut(&id) {
                         st.next_try = Some(Instant::now());
                     }
                     maybe_start(&n, &id);
@@ -586,7 +589,7 @@ pub async fn run(n: Arc<Node>) {
                     }
                 }
                 // Forget peers without sessions.
-                table().lock().retain(|p, s| s.attempt.is_some() || n.e2e.get(p).is_some());
+                table(&n).lock().retain(|p, s| s.attempt.is_some() || n.e2e.get(p).is_some());
             }
         }
     }
@@ -595,6 +598,192 @@ pub async fn run(n: Arc<Node>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testnode::{self, Cluster};
+
+    /// Two nodes that may talk, as (lower id, higher id).
+    fn pair() -> (Arc<Node>, Arc<Node>, Vec<tempfile::TempDir>) {
+        let mut c = Cluster::new();
+        let a = c.data_node("a", "10.7.0.2", &[]);
+        let b = c.data_node("b", "10.7.0.3", &[]);
+        c.set_policy(wp::Policy {
+            default_action: wp::Action::Allow,
+            ..Default::default()
+        })
+        .expect("policy");
+        let (an, d1) = testnode::node(&mut c, a.0, a.1);
+        let (bn, d2) = testnode::node(&mut c, b.0, b.1);
+        let (lo, hi) = if an.me < bn.me { (an, bn) } else { (bn, an) };
+        (lo, hi, vec![d1, d2])
+    }
+
+    fn offer(nonce: [u8; 16], cands: &[&str]) -> Vec<u8> {
+        wp::PunchOffer {
+            candidates: Some(
+                cands
+                    .iter()
+                    .map(|c| wp::SockAddr::from_sock(c.parse().expect("address")))
+                    .collect(),
+            ),
+            nonce: Some(wp::Id16::from_bytes(&nonce)),
+        }
+        .encode_bytes()
+    }
+
+    fn go(nonce: [u8; 16]) -> Vec<u8> {
+        wp::PunchGo {
+            nonce: Some(wp::Id16::from_bytes(&nonce)),
+        }
+        .encode_bytes()
+    }
+
+    /// (nonce, initiator, probing, candidates) of the attempt with `peer`.
+    fn attempt(n: &Node, peer: &Bytes32) -> Option<([u8; 16], bool, bool, Vec<SocketAddr>)> {
+        table(n)
+            .lock()
+            .get(peer)
+            .and_then(|s| s.attempt.as_ref())
+            .map(|a| (a.nonce, a.initiator, a.probing, a.theirs.clone()))
+    }
+
+    #[tokio::test]
+    async fn an_offer_is_answered_and_go_starts_the_responder() {
+        let (lo, hi, _d) = pair();
+        let nonce = [5; 16];
+        on_message(
+            &lo,
+            &hi.me,
+            ftype::PUNCH_OFFER,
+            &offer(nonce, &["198.51.100.7:4000"]),
+        );
+        let (n1, initiator, probing, theirs) = attempt(&lo, &hi.me).expect("an attempt");
+        assert_eq!((n1, initiator, probing), (nonce, false, false));
+        assert_eq!(theirs, ["198.51.100.7:4000".parse::<SocketAddr>().unwrap()]);
+        // The same offer again changes nothing.
+        on_message(
+            &lo,
+            &hi.me,
+            ftype::PUNCH_OFFER,
+            &offer(nonce, &["198.51.100.8:1"]),
+        );
+        assert_eq!(attempt(&lo, &hi.me).expect("kept").3, theirs);
+        // GO for another nonce is ignored; for ours it starts the checks.
+        on_message(&lo, &hi.me, ftype::PUNCH_GO, &go([6; 16]));
+        assert!(!attempt(&lo, &hi.me).expect("kept").2);
+        on_message(&lo, &hi.me, ftype::PUNCH_GO, &go(nonce));
+        assert!(attempt(&lo, &hi.me).expect("kept").2, "probing");
+        let name = lo.name_of(&hi.me);
+        assert_eq!(status(&lo)["peers"][name]["running"]["initiator"], false);
+    }
+
+    /// Both sides offered at once: the lower id's attempt goes on, the
+    /// higher id answers it.
+    #[tokio::test]
+    async fn simultaneous_offers_settle_on_the_lower_ids_attempt() {
+        let (lo, hi, _d) = pair();
+        let start = |n: &Node, peer: Bytes32, nonce: [u8; 16]| {
+            table(n).lock().entry(peer).or_default().attempt = Some(Attempt {
+                nonce,
+                initiator: true,
+                theirs: Vec::new(),
+                prflx: 0,
+                validated: None,
+                started: Instant::now(),
+                probing: false,
+                dialing: false,
+                predict: false,
+            });
+        };
+        let (mine_lo, mine_hi) = ([1; 16], [2; 16]);
+        start(&lo, hi.me, mine_lo);
+        start(&hi, lo.me, mine_hi);
+        on_message(
+            &lo,
+            &hi.me,
+            ftype::PUNCH_OFFER,
+            &offer(mine_hi, &["198.51.100.7:4000"]),
+        );
+        on_message(
+            &hi,
+            &lo.me,
+            ftype::PUNCH_OFFER,
+            &offer(mine_lo, &["198.51.100.9:4000"]),
+        );
+        let (n_lo, init_lo, ..) = attempt(&lo, &hi.me).expect("lower");
+        let (n_hi, init_hi, ..) = attempt(&hi, &lo.me).expect("higher");
+        assert_eq!((n_lo, init_lo), (mine_lo, true));
+        assert_eq!((n_hi, init_hi), (mine_lo, false));
+    }
+
+    /// Checks: a PING from an address the peer didn't offer adds it (up to
+    /// MAX_PRFLX), first; a PONG validates the address it came from.
+    #[tokio::test]
+    async fn checks_add_peer_reflexive_candidates_and_validate() {
+        let (lo, hi, _d) = pair();
+        let nonce = [5; 16];
+        on_message(
+            &lo,
+            &hi.me,
+            ftype::PUNCH_OFFER,
+            &offer(nonce, &["198.51.100.7:4000"]),
+        );
+        for port in 0..MAX_PRFLX as u16 + 2 {
+            on_check(
+                &lo,
+                PunchEvent {
+                    from: SocketAddr::new([203, 0, 113, 1].into(), 5000 + port),
+                    token: nonce,
+                    pong: false,
+                },
+            );
+        }
+        let theirs = attempt(&lo, &hi.me).expect("attempt").3;
+        assert_eq!(theirs.len(), 1 + MAX_PRFLX);
+        assert_eq!(theirs.last(), Some(&"198.51.100.7:4000".parse().unwrap()));
+        // A check for another attempt is ignored.
+        on_check(
+            &lo,
+            PunchEvent {
+                from: "203.0.113.9:1".parse().unwrap(),
+                token: [9; 16],
+                pong: true,
+            },
+        );
+        assert!(
+            table(&lo).lock()[&hi.me]
+                .attempt
+                .as_ref()
+                .unwrap()
+                .validated
+                .is_none()
+        );
+        on_check(
+            &lo,
+            PunchEvent {
+                from: "198.51.100.7:4000".parse().unwrap(),
+                token: nonce,
+                pong: true,
+            },
+        );
+        let validated = table(&lo).lock()[&hi.me]
+            .attempt
+            .as_ref()
+            .and_then(|a| a.validated);
+        assert_eq!(validated, Some("198.51.100.7:4000".parse().unwrap()));
+    }
+
+    /// Each node keeps its own attempts (two nodes in one process).
+    #[tokio::test]
+    async fn attempts_are_per_node() {
+        let (lo, hi, _d) = pair();
+        on_message(
+            &lo,
+            &hi.me,
+            ftype::PUNCH_OFFER,
+            &offer([5; 16], &["198.51.100.7:4000"]),
+        );
+        assert!(attempt(&lo, &hi.me).is_some());
+        assert!(table(&hi).lock().is_empty());
+    }
 
     #[test]
     fn prediction_covers_ports_near_public_candidates_only() {

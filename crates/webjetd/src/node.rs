@@ -287,6 +287,8 @@ pub struct Node {
     pub seq: AtomicU64,
     /// Hop handshakes in progress per source IP (§16.2).
     pub hop_handshakes: crate::transport::HandshakeGate,
+    /// Hole-punching attempts per peer (§11.7).
+    pub punch: crate::punch::Table,
     /// Inbound RPCs being handled, and DNS queries being answered: each is
     /// its own task, bounded so a flood can't spawn without limit.
     pub rpc_tasks: Arc<tokio::sync::Semaphore>,
@@ -364,6 +366,7 @@ impl Node {
             metrics: crate::metrics::Counters::default(),
             seq: AtomicU64::new(now_ms()),
             hop_handshakes: crate::transport::HandshakeGate::default(),
+            punch: Default::default(),
             rpc_tasks: Arc::new(tokio::sync::Semaphore::new(crate::rpc::MAX_INBOUND)),
             dns_tasks: Arc::new(tokio::sync::Semaphore::new(crate::dns::MAX_INFLIGHT)),
             #[cfg(feature = "anytls")]
