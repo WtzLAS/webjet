@@ -73,21 +73,7 @@ pub mod windows {
     }
 
     fn signer_main(_args: Vec<OsString>) {
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let tx = std::sync::Mutex::new(Some(tx));
-        let handler = move |ev| -> ServiceControlHandlerResult {
-            match ev {
-                ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
-                    if let Some(t) = tx.lock().ok().and_then(|mut g| g.take()) {
-                        let _ = t.send(());
-                    }
-                    ServiceControlHandlerResult::NoError
-                }
-                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
-                _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        };
-        let Ok(h) = service_control_handler::register(SIGNER_SERVICE_NAME, handler) else {
+        let Some((h, rx)) = register(SIGNER_SERVICE_NAME) else {
             return;
         };
         let Some((key, socket)) = SIGNER.get().cloned() else {
@@ -128,6 +114,32 @@ pub mod windows {
         Ok(())
     }
 
+    /// Register `name`'s control handler with the service control manager.
+    /// The receiver fires on Stop, Shutdown or Preshutdown.
+    fn register(
+        name: &str,
+    ) -> Option<(
+        service_control_handler::ServiceStatusHandle,
+        tokio::sync::oneshot::Receiver<()>,
+    )> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let tx = std::sync::Mutex::new(Some(tx));
+        let handler = move |ev| -> ServiceControlHandlerResult {
+            match ev {
+                ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
+                    if let Some(t) = tx.lock().ok().and_then(|mut g| g.take()) {
+                        let _ = t.send(());
+                    }
+                    ServiceControlHandlerResult::NoError
+                }
+                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+                _ => ServiceControlHandlerResult::NotImplemented,
+            }
+        };
+        let h = service_control_handler::register(name, handler).ok()?;
+        Some((h, rx))
+    }
+
     fn status(
         state: ServiceState,
         accept: ServiceControlAccept,
@@ -146,21 +158,7 @@ pub mod windows {
     }
 
     fn service_main(_args: Vec<OsString>) {
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let tx = std::sync::Mutex::new(Some(tx));
-        let handler = move |ev| -> ServiceControlHandlerResult {
-            match ev {
-                ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
-                    if let Some(t) = tx.lock().ok().and_then(|mut g| g.take()) {
-                        let _ = t.send(());
-                    }
-                    ServiceControlHandlerResult::NoError
-                }
-                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
-                _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        };
-        let Ok(h) = service_control_handler::register(SERVICE_NAME, handler) else {
+        let Some((h, rx)) = register(SERVICE_NAME) else {
             return;
         };
         let _ = h.set_service_status(status(
