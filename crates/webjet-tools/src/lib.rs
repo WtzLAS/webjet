@@ -26,6 +26,28 @@ pub fn read(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).with_context(|| format!("read {}", path.display()))
 }
 
+/// Write a secret to a path the user chose (`--out`, `--key-out`): the file
+/// is replaced atomically and readable by its owner only (0600 on Unix), and,
+/// unlike [`write_private`], the directory it is in is left as it is (it may
+/// be `/tmp`, the current directory or a USB stick). A directory that
+/// doesn't exist yet is created private. On Windows the file gets the
+/// directory's permissions.
+pub fn write_secret(path: &Path, data: &[u8]) -> Result<()> {
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    if !dir.exists() {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        webjetd::state::restrict_dir(dir);
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("{} is not a file name", path.display()))?;
+    webjet_release::write_atomic(dir, name, data, 0o600)
+}
+
 pub fn write_public(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(d) = path.parent()
         && !d.as_os_str().is_empty()
@@ -37,22 +59,80 @@ pub fn write_public(path: &Path, data: &[u8]) -> Result<()> {
 
 // ---------------------------------------------------------------- passphrase-encrypted key files
 
-const MAGIC: &[u8; 4] = b"WJE1";
+// `WJE1`: magic, salt (16), nonce (12), ciphertext; Argon2id with the
+// parameters below, which were the argon2 crate's defaults when the format
+// was made (pinned here: a crate update must never change them).
+// `WJE2`: magic, m_cost, t_cost, p_cost (u32 little-endian each), salt,
+// nonce, ciphertext: the parameters travel with the file.
+const MAGIC_V1: &[u8; 4] = b"WJE1";
+const MAGIC_V2: &[u8; 4] = b"WJE2";
+
+/// Argon2id parameters (memory in KiB, passes, lanes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KdfParams {
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+}
+
+/// What `WJE1` files were made with (19 MiB, 2 passes, 1 lane).
+const KDF_V1: KdfParams = KdfParams {
+    m_cost: 19 * 1024,
+    t_cost: 2,
+    p_cost: 1,
+};
+
+/// What new files are made with: 64 MiB, 3 passes, 1 lane (key files are
+/// opened rarely, and an offline guess should cost what it can).
+const KDF_NEW: KdfParams = KdfParams {
+    m_cost: 64 * 1024,
+    t_cost: 3,
+    p_cost: 1,
+};
+
+impl KdfParams {
+    /// Derive the file key, refusing parameters no webjet tool writes (a
+    /// damaged or hostile file must not make us allocate gigabytes).
+    fn derive(self, pass: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+        if !(8 * 1024..=1024 * 1024).contains(&self.m_cost)
+            || !(1..=16).contains(&self.t_cost)
+            || !(1..=8).contains(&self.p_cost)
+        {
+            bail!("unsupported key file parameters {self:?}");
+        }
+        let params = argon2::Params::new(self.m_cost, self.t_cost, self.p_cost, Some(32))
+            .map_err(|e| anyhow!("argon2: {e}"))?;
+        let mut key = Zeroizing::new([0u8; 32]);
+        argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+            .hash_password_into(pass.as_bytes(), salt, &mut key[..])
+            .map_err(|e| anyhow!("argon2: {e}"))?;
+        Ok(key)
+    }
+}
 
 /// Encrypt secret bytes with a passphrase (Argon2id + ChaCha20-Poly1305).
 pub fn seal(pass: &str, plain: &[u8]) -> Result<Vec<u8>> {
+    seal_with(KDF_NEW, pass, plain)
+}
+
+fn seal_with(kdf: KdfParams, pass: &str, plain: &[u8]) -> Result<Vec<u8>> {
     use chacha20poly1305::aead::{Aead, KeyInit};
     let salt: [u8; 16] = rand::random();
     let nonce: [u8; 12] = rand::random();
-    let mut key = Zeroizing::new([0u8; 32]);
-    argon2::Argon2::default()
-        .hash_password_into(pass.as_bytes(), &salt, &mut key[..])
-        .map_err(|e| anyhow!("argon2: {e}"))?;
+    let key = kdf.derive(pass, &salt)?;
     let c = chacha20poly1305::ChaCha20Poly1305::new((&*key).into());
     let ct = c
         .encrypt((&nonce).into(), plain)
         .map_err(|_| anyhow!("encrypt"))?;
-    let mut out = MAGIC.to_vec();
+    let mut out = if kdf == KDF_V1 {
+        MAGIC_V1.to_vec()
+    } else {
+        let mut v = MAGIC_V2.to_vec();
+        for x in [kdf.m_cost, kdf.t_cost, kdf.p_cost] {
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        v
+    };
     out.extend_from_slice(&salt);
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
@@ -61,14 +141,28 @@ pub fn seal(pass: &str, plain: &[u8]) -> Result<Vec<u8>> {
 
 pub fn unseal(pass: &str, data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     use chacha20poly1305::aead::{Aead, KeyInit};
-    if data.len() < 32 + 16 || &data[..4] != MAGIC {
-        bail!("not an encrypted webjet key file");
+    let bad = || anyhow!("not an encrypted webjet key file");
+    let (kdf, rest) = match data.get(..4) {
+        Some(m) if m == MAGIC_V1 => (KDF_V1, &data[4..]),
+        Some(m) if m == MAGIC_V2 => {
+            let u = |i: usize| -> Result<u32> {
+                let b = data.get(4 + 4 * i..8 + 4 * i).ok_or_else(bad)?;
+                Ok(u32::from_le_bytes(b.try_into().map_err(|_| bad())?))
+            };
+            let kdf = KdfParams {
+                m_cost: u(0)?,
+                t_cost: u(1)?,
+                p_cost: u(2)?,
+            };
+            (kdf, data.get(16..).ok_or_else(bad)?)
+        }
+        _ => bail!(bad()),
+    };
+    if rest.len() < 28 + 16 {
+        bail!(bad());
     }
-    let (salt, nonce, ct) = (&data[4..20], &data[20..32], &data[32..]);
-    let mut key = Zeroizing::new([0u8; 32]);
-    argon2::Argon2::default()
-        .hash_password_into(pass.as_bytes(), salt, &mut key[..])
-        .map_err(|e| anyhow!("argon2: {e}"))?;
+    let (salt, nonce, ct) = (&rest[..16], &rest[16..28], &rest[28..]);
+    let key = kdf.derive(pass, salt)?;
     let c = chacha20poly1305::ChaCha20Poly1305::new((&*key).into());
     let pt = c
         .decrypt(
@@ -682,8 +776,68 @@ mod tests {
     #[test]
     fn seal_roundtrip() {
         let s = seal("pw", b"secret").unwrap();
+        assert_eq!(&s[..4], b"WJE2");
         assert_eq!(&unseal("pw", &s).unwrap()[..], b"secret");
         assert!(unseal("other", &s).is_err());
+        // Old files still open.
+        let old = seal_with(KDF_V1, "pw", b"secret").unwrap();
+        assert_eq!(&old[..4], b"WJE1");
+        assert_eq!(&unseal("pw", &old).unwrap()[..], b"secret");
+        // Truncated or foreign data is refused, not a panic.
+        for bad in [
+            &s[..10],
+            &s[..40],
+            &old[..30],
+            b"WJE3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(unseal("pw", bad).is_err());
+        }
+    }
+
+    #[test]
+    fn wje1_parameters_are_what_old_files_were_made_with() {
+        // WJE1 files were sealed with `Argon2::default()` of argon2 0.5/0.6.
+        let mut want = [0u8; 32];
+        argon2::Argon2::default()
+            .hash_password_into(b"pw", b"0123456789abcdef", &mut want)
+            .unwrap();
+        assert_eq!(*KDF_V1.derive("pw", b"0123456789abcdef").unwrap(), want);
+    }
+
+    #[test]
+    fn hostile_parameters_are_refused() {
+        let mut s = seal("pw", b"secret").unwrap();
+        // 4 TiB of memory.
+        s[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        let e = unseal("pw", &s).unwrap_err().to_string();
+        assert!(e.contains("unsupported"), "{e}");
+    }
+
+    #[test]
+    fn secrets_leave_the_directory_alone() {
+        let d = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let f = d.path().join("snap.wj");
+            write_secret(&f, b"x").unwrap();
+            write_secret(&f, b"y").unwrap();
+            assert_eq!(std::fs::read(&f).unwrap(), b"y");
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&f), 0o600);
+            assert_eq!(mode(d.path()), 0o755, "the directory keeps its permissions");
+            // A directory it creates is private.
+            let g = d.path().join("new/key.pem");
+            write_secret(&g, b"k").unwrap();
+            assert_eq!(mode(&d.path().join("new")), 0o700);
+        }
+        #[cfg(not(unix))]
+        {
+            let f = d.path().join("snap.wj");
+            write_secret(&f, b"x").unwrap();
+            assert_eq!(std::fs::read(&f).unwrap(), b"x");
+        }
     }
     #[test]
     fn seed_addr() {

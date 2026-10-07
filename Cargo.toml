@@ -55,3 +55,9 @@ lz4_flex = { version = "0.14", default-features = false, features = ["safe-encod
 unwrap_used = "warn"
 expect_used = "warn"
 
+# Key files take Argon2id with 64 MiB; unoptimized, opening one in a debug
+# build or a test takes seconds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
