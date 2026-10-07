@@ -58,6 +58,9 @@ pub mod theme {
 }
 
 const REFRESH: Duration = Duration::from_secs(2);
+/// Graphs up to this many nodes are first laid out at once; larger ones in
+/// the background (`start_layout`).
+const SYNC_LAYOUT_MAX: usize = 40;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -102,7 +105,8 @@ pub struct WebjetApp {
     rt: Arc<tokio::runtime::Runtime>,
     client: Client,
     keys: PathBuf,
-    snapshot: Option<Snapshot>,
+    /// Shared, so a frame takes a reference instead of copying it all.
+    snapshot: Option<Rc<Snapshot>>,
     load_error: Option<String>,
     /// A snapshot is being fetched: the periodic refresh waits for it.
     refreshing: bool,
@@ -147,6 +151,9 @@ pub struct WebjetApp {
     graph_bounds: Rc<Cell<[f32; 4]>>,
     // Merkle tab
     merkle: Option<Result<Rc<Merkle>, String>>,
+    /// The tree version `merkle` was fetched at: it is fetched again only
+    /// when the tree changed (it is the whole state).
+    merkle_version: Option<u64>,
     names: Names,
     leaf_filter: Entity<Field>,
     op_filter: Entity<Field>,
@@ -174,6 +181,8 @@ pub struct WebjetApp {
     proxy_selected: Option<String>,
     // Metrics tab
     families: Rc<Vec<Family>>,
+    /// A hash of the metrics text `families` was parsed from.
+    families_of: Option<u64>,
     metric_filter: Entity<Field>,
     family: Option<String>,
     metrics_all: bool,
@@ -235,6 +244,7 @@ impl WebjetApp {
                 crate::graph::DEFAULT_AREA.1,
             ])),
             merkle: None,
+            merkle_version: None,
             names: Names::default(),
             leaf_filter: cx.new(|cx| Field::new(cx, "find: name, kind, signer, hash", false)),
             op_filter: cx.new(|cx| Field::new(cx, "filter: operation, signer, index", false)),
@@ -260,6 +270,7 @@ impl WebjetApp {
             proxy_shown: Rc::new(Vec::new()),
             proxy_selected: None,
             families: Rc::new(Vec::new()),
+            families_of: None,
             metric_filter: cx.new(|cx| Field::new(cx, "filter: name, help, label value", false)),
             family: None,
             metrics_all: false,
@@ -289,7 +300,12 @@ impl WebjetApp {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let client = self.client.clone();
         let all = self.metrics_all;
-        let merkle = self.tab == Tab::Merkle;
+        // The tree only when the tab shows it and it may have changed.
+        let current = self.snapshot.as_ref().and_then(|s| s.status.tree_version);
+        let merkle = self.tab == Tab::Merkle
+            && !(current.is_some()
+                && current == self.merkle_version
+                && matches!(self.merkle, Some(Ok(_))));
         if merkle && self.log.is_none() {
             self.fetch_log(0, cx);
         }
@@ -370,8 +386,13 @@ impl WebjetApp {
         let unmeasured = crate::graph::DEFAULT_AREA;
         if self.graph.vertices.is_empty() || !g.keep(Some(&self.graph)) {
             // The first picture, or nothing left of the old one (another
-            // network): lay it out right away.
-            g.lay_out(None);
+            // network): lay it out right away if small, else in the
+            // background (a large one would freeze the window meanwhile).
+            if g.vertices.len() <= SYNC_LAYOUT_MAX {
+                g.lay_out(None);
+            } else {
+                self.layout_job = Some((g.clone(), Graph::default()));
+            }
         } else if g.area == unmeasured
             && (w, h) != unmeasured
             && self.pinned.is_empty()
@@ -388,22 +409,33 @@ impl WebjetApp {
         // The tree is large: it lives here, not in the snapshot cloned
         // for every frame.
         if let Some(m) = s.merkle.take() {
+            self.merkle_version = s.status.tree_version;
             self.merkle = Some(m.map(|w| {
                 self.names = Names::new(&s, Some(&w));
                 Rc::new(Merkle::new(w, &self.names))
             }));
         }
-        self.families = Rc::new(match &s.metrics {
-            Ok(t) => openmetrics::parse(t),
-            Err(_) => Vec::new(),
+        // Parsed only when the text changed.
+        let of = s.metrics.as_ref().ok().map(|t| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
         });
+        if of.is_none() || of != self.families_of {
+            self.families = Rc::new(match &s.metrics {
+                Ok(t) => openmetrics::parse(t),
+                Err(_) => Vec::new(),
+            });
+            self.families_of = of;
+        }
         // A selected circuit that closed is no longer highlighted.
         if let (Some(l), Ok(ss)) = (self.circuit, &s.sessions)
             && !ss.circuits.local.iter().any(|c| c.label == l)
         {
             self.circuit = None;
         }
-        self.snapshot = Some(s);
+        self.snapshot = Some(Rc::new(s));
         self.load_error = None;
     }
 

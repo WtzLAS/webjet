@@ -62,6 +62,8 @@ pub struct Live {
     pub path_cost: Mutex<Option<f64>>,
     /// The first probe sent since the last frame received.
     pub(crate) probe_pending: Mutex<Option<Instant>>,
+    /// Out of the table (closed): senders holding it on to choose again.
+    pub removed: std::sync::atomic::AtomicBool,
 }
 
 /// Frames each way per probe interval that make a circuit busy enough to
@@ -386,6 +388,9 @@ impl Table {
     fn remove_entry(&mut self, key: &(Bytes32, u32)) -> Option<Entry> {
         let e = self.entries.remove(key)?;
         self.count(&e.kind, false);
+        if let Kind::Local(c) = &e.kind {
+            c.live.removed.store(true, Ordering::Relaxed);
+        }
         if let Kind::Local(c) = &e.kind
             && let Some(v) = self.by_peer.get_mut(&c.peer)
         {
@@ -1007,7 +1012,7 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
             if ecn == frames::ecn::CE {
                 c.acct.ecn_marked.fetch_add(1, Ordering::Relaxed);
             }
-            crate::e2e::on_frame(n, &c, body, ecn);
+            crate::e2e::on_frame(n, &c, payload, frames::RELAY_HEADER, ecn);
         }
         Err((out_n, out_l, forward, route)) => {
             let Some(out_l) = out_l else { return };

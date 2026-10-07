@@ -621,6 +621,9 @@ const HOME_HYSTERESIS: f64 = 0.1;
 
 type Backoff = Arc<parking_lot::Mutex<std::collections::HashMap<Bytes32, (Instant, Duration)>>>;
 
+/// Dials a core node runs at once to the core nodes it lacks.
+const CORE_DIALS: usize = 8;
+
 /// Dial a node, backing off from it after a failure.
 async fn dial_tracked(n: &Arc<Node>, peer: Bytes32, backoff: &Backoff) {
     let r = tokio::time::timeout(Duration::from_secs(12), n.dial_node(peer)).await;
@@ -786,9 +789,16 @@ async fn connections(n: Arc<Node>) {
             .copied()
             .collect();
         if core {
-            for peer in missing {
-                dial_tracked(&n, peer, &backoff).await;
-            }
+            // In parallel (a few at a time): one by one, N unreachable
+            // relays held this loop, and the revocations it enforces on
+            // HeadChanged, for N × 12 s.
+            use futures::StreamExt;
+            futures::stream::iter(missing)
+                .for_each_concurrent(CORE_DIALS, |peer| {
+                    let (n, backoff) = (&n, &backoff);
+                    async move { dial_tracked(n, peer, backoff).await }
+                })
+                .await;
         } else if now >= next_explore {
             // Try every relay now and then, so a better one (e.g. one just
             // enrolled) becomes a home relay; the measurements decide below.
@@ -873,6 +883,8 @@ async fn secrets(n: Arc<Node>) {
             _ = tokio::time::sleep(wait) => {}
             e = ev.recv() => { if !matches!(e, Ok(Event::HeadChanged)) { continue; } }
         }
+        // The tree carries the camouflage chain and website (§9.7.2).
+        crate::transport::refresh_anytls(&n);
         if n.is_controller() {
             // A controller has the camouflage secret in its own state: write
             // it where the AnyTLS listener reads it, as relays do below.

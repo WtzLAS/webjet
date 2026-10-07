@@ -6,7 +6,7 @@
 use crate::crypto::Bytes32;
 use crate::packet::{Flow, Fragment, IcmpKind, Parsed, tcpf};
 use crate::policy::{PROTO_ICMP, PROTO_ICMPV6, PROTO_TCP, PROTO_UDP};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
@@ -92,6 +92,11 @@ pub struct Entry {
     pub gateway: bool,
 }
 
+/// A full table is swept for expired flows at most this often.
+const FULL_SWEEP_EVERY: Duration = Duration::from_secs(1);
+/// A full table evicts this share of its flows at once (1/64).
+const EVICT_SHARE: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// Belongs to a tracked flow.
@@ -117,6 +122,12 @@ pub enum InsertError {
 pub struct Conntrack {
     entries: HashMap<Key, Entry>,
     per_peer: HashMap<Bytes32, usize>,
+    /// Each peer's flows, so a peer's quota or session end doesn't scan
+    /// the whole table.
+    by_peer: HashMap<Bytes32, HashSet<Key>>,
+    /// The last full sweep made because the table (or the SNAT table) was
+    /// full: at most one per FULL_SWEEP_EVERY, not one per new flow.
+    full_sweep: Option<Instant>,
     gateway_per_peer: HashMap<Bytes32, usize>,
     gateway_total: usize,
     new_rate: HashMap<Bytes32, (Instant, u32)>,
@@ -138,6 +149,8 @@ impl Conntrack {
         Conntrack {
             entries: HashMap::new(),
             per_peer: HashMap::new(),
+            by_peer: HashMap::new(),
+            full_sweep: None,
             gateway_per_peer: HashMap::new(),
             gateway_total: 0,
             new_rate: HashMap::new(),
@@ -328,16 +341,16 @@ impl Conntrack {
                 }
             }
             if self.gateway_total >= self.gateway_cap {
-                self.expire(now);
+                self.sweep_when_full(now);
                 if self.gateway_total >= self.gateway_cap {
                     return Err(InsertError::SnatGlobal);
                 }
             }
         }
         if self.entries.len() >= self.global_cap {
-            self.expire(now);
+            self.sweep_when_full(now);
             if self.entries.len() >= self.global_cap {
-                self.evict_one(now);
+                self.evict(now);
             }
         }
         let k = Key {
@@ -361,6 +374,7 @@ impl Conntrack {
             },
         );
         *self.per_peer.entry(*peer).or_insert(0) += 1;
+        self.by_peer.entry(*peer).or_default().insert(k);
         if gateway {
             *self.gateway_per_peer.entry(*peer).or_insert(0) += 1;
             self.gateway_total += 1;
@@ -381,6 +395,12 @@ impl Conntrack {
                 self.per_peer.remove(&k.peer);
             }
         }
+        if let Some(set) = self.by_peer.get_mut(&k.peer) {
+            set.remove(k);
+            if set.is_empty() {
+                self.by_peer.remove(&k.peer);
+            }
+        }
         if e.gateway {
             self.gateway_total = self.gateway_total.saturating_sub(1);
             if let Some(c) = self.gateway_per_peer.get_mut(&k.peer) {
@@ -392,18 +412,43 @@ impl Conntrack {
         }
     }
 
-    fn evict_one(&mut self, now: Instant) {
-        let victim = self
+    /// The table is full: expire, unless that was done within the last
+    /// FULL_SWEEP_EVERY (a full table would otherwise be scanned per flow).
+    fn sweep_when_full(&mut self, now: Instant) {
+        if self
+            .full_sweep
+            .is_some_and(|t| now.duration_since(t) < FULL_SWEEP_EVERY)
+        {
+            return;
+        }
+        self.full_sweep = Some(now);
+        self.expire(now);
+    }
+
+    /// Make room: evict the least worth keeping (half-open TCP, then one-way
+    /// UDP, then the longest idle), 1/EVICT_SHARE of the table at a time, so
+    /// the scan is paid once per that many new flows and not for each.
+    fn evict(&mut self, now: Instant) {
+        let n = (self.global_cap / EVICT_SHARE).max(1);
+        let mut ranked: Vec<((u16, std::cmp::Reverse<Duration>), Key)> = self
             .entries
             .iter()
-            .min_by_key(|(_, e)| {
-                (
-                    e.state.evict_rank(),
-                    std::cmp::Reverse(now.duration_since(e.last)),
-                )
+            .map(|(k, e)| {
+                let idle = now.duration_since(e.last);
+                // Expired flows (not swept yet) go first.
+                let rank = if idle >= e.state.timeout() {
+                    0
+                } else {
+                    1 + u16::from(e.state.evict_rank())
+                };
+                ((rank, std::cmp::Reverse(idle)), *k)
             })
-            .map(|(k, _)| *k);
-        if let Some(k) = victim {
+            .collect();
+        if n < ranked.len() {
+            ranked.select_nth_unstable_by_key(n - 1, |(r, _)| *r);
+            ranked.truncate(n);
+        }
+        for (_, k) in ranked {
             self.remove(&k);
             self.evictions += 1;
         }
@@ -411,10 +456,16 @@ impl Conntrack {
 
     fn expire_peer(&mut self, peer: &Bytes32, now: Instant) {
         let dead: Vec<Key> = self
-            .entries
-            .iter()
-            .filter(|(k, e)| k.peer == *peer && now.duration_since(e.last) >= e.state.timeout())
-            .map(|(k, _)| *k)
+            .by_peer
+            .get(peer)
+            .into_iter()
+            .flatten()
+            .filter(|k| {
+                self.entries
+                    .get(k)
+                    .is_some_and(|e| now.duration_since(e.last) >= e.state.timeout())
+            })
+            .copied()
             .collect();
         for k in dead {
             self.remove(&k);
@@ -461,9 +512,10 @@ impl Conntrack {
     /// Drop every flow with a peer (session destroyed).
     pub fn drop_peer(&mut self, peer: &Bytes32) {
         let dead: Vec<Key> = self
-            .entries
-            .keys()
-            .filter(|k| k.peer == *peer)
+            .by_peer
+            .get(peer)
+            .into_iter()
+            .flatten()
             .copied()
             .collect();
         for k in dead {
@@ -737,6 +789,14 @@ mod prop {
             }
         }
         prop_assert_eq!(&ct.per_peer, &per);
+        let by: HashMap<Bytes32, usize> = ct.by_peer.iter().map(|(p, s)| (*p, s.len())).collect();
+        prop_assert_eq!(&by, &per);
+        prop_assert!(
+            ct.by_peer
+                .values()
+                .flatten()
+                .all(|k| ct.entries.contains_key(k))
+        );
         prop_assert_eq!(&ct.gateway_per_peer, &gw_per);
         prop_assert_eq!(ct.gateway_total, gw_per.values().sum::<usize>());
         prop_assert!(ct.entries.len() <= ct.global_cap);

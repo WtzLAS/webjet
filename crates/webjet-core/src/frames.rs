@@ -76,6 +76,27 @@ impl SessionKey {
         Some(out)
     }
 
+    /// `open` for a frame at `buf[at..]` that the caller owns: decrypted in
+    /// place, then moved to the front, so the data path copies it once
+    /// instead of allocating per packet.
+    pub fn open_owned(&self, mut buf: Vec<u8>, at: usize) -> Option<Vec<u8>> {
+        let frame = buf.get_mut(at..)?;
+        if frame.len() < OVERHEAD {
+            return None;
+        }
+        let (hdr, body) = frame.split_at_mut(HEADER);
+        let counter = crate::bytes::be_u64(hdr, 5)?;
+        let n = self
+            .cipher
+            .open_in_place(Self::nonce(counter), Aad::from(&*hdr), body)
+            .ok()?
+            .len();
+        let start = at + HEADER;
+        buf.copy_within(start..start + n, 0);
+        buf.truncate(n);
+        Some(buf)
+    }
+
     /// Open a frame whose header was already parsed. Does not touch any
     /// replay state.
     pub fn open(&self, frame: &[u8]) -> Option<Vec<u8>> {
@@ -224,9 +245,23 @@ impl ReplayWindow {
             if !self.any || c - self.top >= WINDOW {
                 self.bits = [0; WORDS];
             } else {
-                for x in start..=c {
+                // Clear the bits for start..=c (fewer than WINDOW of them),
+                // a word at a time (RFC 6479).
+                // Counted down, so a counter at u64::MAX can't overflow.
+                let mut x = start;
+                let mut left = c - start + 1;
+                while left > 0 {
                     let idx = (x % WINDOW) as usize;
-                    self.bits[idx / 64] &= !(1 << (idx % 64));
+                    let (w, b) = (idx / 64, idx % 64);
+                    let n = (64 - b as u64).min(left);
+                    let mask = if n == 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << n) - 1) << b
+                    };
+                    self.bits[w] &= !mask;
+                    left -= n;
+                    x = x.wrapping_add(n);
                 }
             }
             self.top = c;
@@ -337,6 +372,26 @@ mod tests {
             }
         }
         assert!(k.open(&[0u8; OVERHEAD - 1]).is_none());
+        // In place, behind a prefix (the relay header).
+        let f = k.seal(ftype::DATA, 77, 3, b"in place").unwrap();
+        let mut buf = vec![9u8; 5];
+        buf.extend_from_slice(&f);
+        assert_eq!(k.open_owned(buf.clone(), 5).unwrap(), b"in place");
+        let mut bad = buf.clone();
+        bad[5 + HEADER] ^= 1;
+        assert!(k.open_owned(bad, 5).is_none());
+        assert!(k.open_owned(buf[..5 + OVERHEAD - 1].to_vec(), 5).is_none());
+        assert!(k.open_owned(vec![0; 3], 5).is_none());
+    }
+
+    #[test]
+    fn replay_window_at_the_counter_limit() {
+        let mut w = ReplayWindow::default();
+        assert!(w.mark(u64::MAX - 100));
+        assert!(w.mark(u64::MAX));
+        assert!(!w.mark(u64::MAX));
+        assert!(w.mark(u64::MAX - 1));
+        assert!(!w.mark(u64::MAX - 100));
     }
 
     #[test]

@@ -24,6 +24,9 @@ use webjet_proto::{self as wp, Decodable, Encodable, HopMsg, Transport};
 
 pub const KEEPALIVE: Duration = Duration::from_secs(2);
 pub const HOP_DEAD: Duration = Duration::from_secs(15);
+/// How long `best_hop`'s choice is reused. Link costs move at keepalive
+/// pace (2 s), so 1 s changes nothing a peer would notice.
+const BEST_HOP_TTL: Duration = Duration::from_secs(1);
 
 /// A duplicate hop to the same peer over the same transport: whether the new
 /// one replaces the one we have (`existing_outbound`: we dialed that one).
@@ -257,6 +260,9 @@ pub struct Node {
     pub store: StoreLock,
     pub epochs: SharedEpochs,
     pub hops: Mutex<HashMap<u64, Arc<Hop>>>,
+    /// `best_hop`'s answer per peer, reused for BEST_HOP_TTL (it runs per
+    /// frame); a hop of that peer coming or going drops the entry.
+    best_hops: RwLock<HashMap<Bytes32, (Arc<Hop>, Instant)>>,
     pub records: Mutex<Records>,
     pub udp: OnceLock<Arc<UdpEndpoint>>,
     pub events: tokio::sync::broadcast::Sender<Event>,
@@ -338,6 +344,7 @@ impl Node {
             store: StoreLock::new(store),
             epochs,
             hops: Mutex::new(HashMap::new()),
+            best_hops: RwLock::new(HashMap::new()),
             records: Mutex::new(Records::default()),
             udp: OnceLock::new(),
             events,
@@ -430,7 +437,34 @@ impl Node {
         v
     }
 
+    /// The hop to send to `peer` on (§9.6). Cached for BEST_HOP_TTL: costs
+    /// move slowly, and this runs for every frame.
     pub fn best_hop(&self, peer: &Bytes32) -> Option<Arc<Hop>> {
+        if let Some((h, at)) = self.best_hops.read().get(peer)
+            && h.alive()
+            && at.elapsed() < BEST_HOP_TTL
+        {
+            return Some(h.clone());
+        }
+        let best = self.choose_hop(peer);
+        let mut cache = self.best_hops.write();
+        match &best {
+            Some(h) => {
+                cache.insert(*peer, (h.clone(), Instant::now()));
+            }
+            None => {
+                cache.remove(peer);
+            }
+        }
+        best
+    }
+
+    /// A hop to this peer came up or went down: choose again next time.
+    fn forget_best_hop(&self, peer: &Bytes32) {
+        self.best_hops.write().remove(peer);
+    }
+
+    fn choose_hop(&self, peer: &Bytes32) -> Option<Arc<Hop>> {
         let hops = self.hops_to(peer);
         if hops.is_empty() {
             return None;
@@ -574,6 +608,8 @@ impl Node {
                         queue_delay_us: AtomicU64::new(0),
                     });
                     hops.insert(hop.id, hop.clone());
+                    drop(hops);
+                    self.forget_best_hop(&peer);
                     break hop;
                 }
                 lost
@@ -608,7 +644,9 @@ impl Node {
         let failed =
             !hop.intentional.load(Ordering::Relaxed) && !hop.closed.load(Ordering::Relaxed);
         hop.close();
-        if self.hops.lock().remove(&hop.id).is_some() {
+        let removed = self.hops.lock().remove(&hop.id).is_some();
+        self.forget_best_hop(&hop.peer);
+        if removed {
             // Fold this session into the link's long-term record.
             let mut h = hop.stats.lock().history.clone();
             if failed && h.samples > 0 {
@@ -1088,7 +1126,6 @@ async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> 
             if let Some(o) = a.observed_addr.and_then(|o| o.to_sock()) {
                 *hop.observed.lock() = Some(o);
             }
-            crate::health::check_clock(n);
         }
         HopMsg::Digest(d) => {
             if let Some(dg) = d.digest {
@@ -1181,6 +1218,7 @@ impl Node {
             queue_delay_us: AtomicU64::new(0),
         });
         self.hops.lock().insert(hop.id, hop.clone());
+        self.forget_best_hop(&peer);
         (hop, TestHopRx { data, ctl })
     }
 }

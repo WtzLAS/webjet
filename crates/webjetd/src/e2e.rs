@@ -64,6 +64,9 @@ struct Inner {
     queue: VecDeque<(u8, Vec<u8>)>,
     established_at: Option<Instant>,
     primary: Option<u32>,
+    /// The primary circuit as last chosen, reused for PICK_TTL so a packet
+    /// needn't take the circuit table's lock; cleared when it closes.
+    picked: Option<(Arc<LocalCircuit>, Instant)>,
     hyst: webjet_core::routing::Hysteresis,
     hs_times: VecDeque<Instant>,
     last_unknown_hs: Option<Instant>,
@@ -158,6 +161,9 @@ impl Sessions {
             let mut i = s.inner.lock();
             if i.primary == Some(c.label) {
                 i.primary = None;
+            }
+            if i.picked.as_ref().is_some_and(|(p, _)| p.label == c.label) {
+                i.picked = None;
             }
         }
     }
@@ -313,7 +319,24 @@ fn compress_packet(
     z
 }
 
+/// How long `pick_circuit`'s choice is reused. Switching waits 3 s of
+/// hysteresis anyway, and a closed circuit is dropped at once.
+const PICK_TTL: Duration = Duration::from_millis(250);
+
 fn pick_circuit(n: &Node, s: &Session, i: &mut Inner) -> Option<Arc<LocalCircuit>> {
+    if let Some((c, at)) = &i.picked
+        && at.elapsed() < PICK_TTL
+        && !c.live.removed.load(Ordering::Relaxed)
+        && c.out_label.lock().is_some()
+    {
+        return Some(c.clone());
+    }
+    let chosen = choose_circuit(n, s, i);
+    i.picked = chosen.clone().map(|c| (c, Instant::now()));
+    chosen
+}
+
+fn choose_circuit(n: &Node, s: &Session, i: &mut Inner) -> Option<Arc<LocalCircuit>> {
     let circuits = n.circuits.lock().local_circuits(&s.peer);
     if circuits.is_empty() {
         i.primary = None;
@@ -709,7 +732,10 @@ fn advance(
 
 // ---------------------------------------------------------------- receiving
 
-pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
+/// An end-to-end frame at `buf[at..]` (after the relay header) arrived on
+/// circuit `c`. Taking the buffer lets it be decrypted in place.
+pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, buf: Vec<u8>, at: usize, ecn: u8) {
+    let Some(body) = buf.get(at..) else { return };
     let Some(h) = frames::parse_header(body) else {
         return;
     };
@@ -755,7 +781,9 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, body: &[u8], ecn: u8) {
         }
         k.key.clone()
     };
-    let Some(plain) = key.open(body) else { return };
+    let Some(plain) = key.open_owned(buf, at) else {
+        return;
+    };
     {
         let mut i = s.inner.lock();
         let Some(k) = i.recv.get_mut(&h.key_id) else {
@@ -1097,8 +1125,8 @@ mod tests {
             .map(|i| peer_key.seal(ftype::DATA, 7, i, &reply).expect("seal"))
             .collect();
         let t = Instant::now();
-        for (i, f) in frames.iter().enumerate() {
-            on_frame(&n, &circ, f, 0);
+        for (i, f) in frames.into_iter().enumerate() {
+            on_frame(&n, &circ, f, 0, 0);
             if i % 512 == 511 {
                 while tun.try_recv().is_ok() {}
             }

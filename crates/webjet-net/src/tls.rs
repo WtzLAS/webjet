@@ -41,19 +41,45 @@ impl PeerTrust for TrustAll {
 }
 
 /// The crypto provider: AWS-LC with only the hybrid PQ group (§9.3).
+/// Built once: every hop and e2e handshake makes a config with it.
 pub fn provider() -> Arc<CryptoProvider> {
-    let mut p = aws_lc_rs::default_provider();
-    p.kx_groups = vec![aws_lc_rs::kx_group::X25519MLKEM768];
-    p.cipher_suites
-        .retain(|s| s.version() == &rustls::version::TLS13);
-    Arc::new(p)
+    static P: std::sync::OnceLock<Arc<CryptoProvider>> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let mut p = aws_lc_rs::default_provider();
+        p.kx_groups = vec![aws_lc_rs::kx_group::X25519MLKEM768];
+        p.cipher_suites
+            .retain(|s| s.version() == &rustls::version::TLS13);
+        Arc::new(p)
+    })
+    .clone()
 }
 
-fn algs() -> WebPkiSupportedAlgorithms {
-    aws_lc_rs::default_provider().signature_verification_algorithms
+fn algs() -> &'static WebPkiSupportedAlgorithms {
+    static A: std::sync::OnceLock<WebPkiSupportedAlgorithms> = std::sync::OnceLock::new();
+    A.get_or_init(|| aws_lc_rs::default_provider().signature_verification_algorithms)
 }
 
+/// The TLS identity for `kp`, parsed once per key (a node has one, or two
+/// around a re-key) instead of per handshake.
 pub fn certified_key(kp: &KeyPair) -> anyhow::Result<Arc<CertifiedKey>> {
+    type Cache = parking_lot::Mutex<Vec<(Bytes32, Arc<CertifiedKey>)>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let public = kp.public();
+    if let Some((_, k)) = cache.lock().iter().find(|(p, _)| *p == public) {
+        return Ok(k.clone());
+    }
+    let k = new_certified_key(kp)?;
+    let mut c = cache.lock();
+    c.retain(|(p, _)| *p != public);
+    if c.len() >= 8 {
+        c.remove(0);
+    }
+    c.push((public, k.clone()));
+    Ok(k)
+}
+
+fn new_certified_key(kp: &KeyPair) -> anyhow::Result<Arc<CertifiedKey>> {
     let der = kp.pkcs8_der();
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der.to_vec()));
     let signer = aws_lc_rs::sign::any_eddsa_type(match &key {
@@ -79,7 +105,7 @@ fn verify_sig(
         message,
         &SubjectPublicKeyInfoDer::from(cert.as_ref()),
         dss,
-        &algs(),
+        algs(),
     )
 }
 

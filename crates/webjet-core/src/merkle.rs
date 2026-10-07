@@ -85,10 +85,24 @@ pub struct Proof {
     pub siblings: Vec<Bytes32>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Tree {
     leaves: BTreeMap<Bytes32, LeafEntry>,
     root: Option<Bytes32>,
+    /// The 256 subtree hashes at BUCKET_DEPTH, each computed when first
+    /// needed and dropped when a leaf in it changes: a change rehashes one
+    /// bucket, not the tree, and gossip asks for them all the time.
+    bucket_hashes: Vec<OnceLock<Bytes32>>,
+}
+
+impl Default for Tree {
+    fn default() -> Self {
+        Tree {
+            leaves: BTreeMap::new(),
+            root: None,
+            bucket_hashes: vec![OnceLock::new(); 256],
+        }
+    }
 }
 
 impl Tree {
@@ -114,8 +128,10 @@ impl Tree {
 
     pub fn insert(&mut self, kind: u8, key: Bytes32, bytes: Vec<u8>) {
         let hash = leaf_hash(kind, &key, &bytes);
+        let path = path_of(kind, &key);
+        self.changed(&path);
         self.leaves.insert(
-            path_of(kind, &key),
+            path,
             LeafEntry {
                 kind,
                 key,
@@ -127,8 +143,31 @@ impl Tree {
     }
 
     pub fn remove(&mut self, kind: u8, key: &Bytes32) {
-        if self.leaves.remove(&path_of(kind, key)).is_some() {
-            self.root = None;
+        let path = path_of(kind, key);
+        if self.leaves.remove(&path).is_some() {
+            self.changed(&path);
+        }
+    }
+
+    fn changed(&mut self, path: &Bytes32) {
+        self.root = None;
+        if let Some(b) = self.bucket_hashes.get_mut(usize::from(path[0])) {
+            *b = OnceLock::new();
+        }
+    }
+
+    fn bucket(&self, b: u8) -> Bytes32 {
+        let compute = || {
+            let items: Vec<(Bytes32, Bytes32)> = self
+                .leaves
+                .range(bucket_range(b))
+                .map(|(p, e)| (*p, e.hash))
+                .collect();
+            subtree(&items, BUCKET_DEPTH)
+        };
+        match self.bucket_hashes.get(usize::from(b)) {
+            Some(c) => *c.get_or_init(compute),
+            None => compute(),
         }
     }
 
@@ -140,9 +179,7 @@ impl Tree {
         if let Some(r) = self.root {
             return r;
         }
-        let items: Vec<(Bytes32, Bytes32)> =
-            self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
-        let r = subtree(&items, 0);
+        let r = self.compute_root();
         self.root = Some(r);
         r
     }
@@ -152,23 +189,23 @@ impl Tree {
         if let Some(r) = self.root {
             return r;
         }
-        let items: Vec<(Bytes32, Bytes32)> =
-            self.leaves.iter().map(|(p, e)| (*p, e.hash)).collect();
-        subtree(&items, 0)
+        // The buckets, hashed up their BUCKET_DEPTH levels (bucket b holds
+        // the paths whose first byte is b, bits most significant first).
+        let mut level = self.buckets();
+        while level.len() > 1 {
+            level = level
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[l, r]| internal_hash(l, r))
+                .collect();
+        }
+        level.first().copied().unwrap_or_else(|| empty(0))
     }
 
     /// The 256 subtree hashes at `BUCKET_DEPTH`.
     pub fn buckets(&self) -> Vec<Bytes32> {
-        let mut out = Vec::with_capacity(256);
-        for b in 0..=255u8 {
-            let items: Vec<(Bytes32, Bytes32)> = self
-                .leaves
-                .range(bucket_range(b))
-                .map(|(p, e)| (*p, e.hash))
-                .collect();
-            out.push(subtree(&items, BUCKET_DEPTH));
-        }
-        out
+        (0..=255u8).map(|b| self.bucket(b)).collect()
     }
 
     pub fn bucket_entries(&self, b: u8) -> Vec<(Bytes32, Bytes32)> {
@@ -309,6 +346,32 @@ impl Proof {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// The whole tree hashed from its leaves, as before bucket caching.
+    fn full_root(t: &Tree) -> Bytes32 {
+        let items: Vec<(Bytes32, Bytes32)> = t.iter().map(|(p, e)| (*p, e.hash)).collect();
+        subtree(&items, 0)
+    }
+
+    proptest! {
+        #[test]
+        fn cached_buckets_match_a_full_rehash(
+            ops in proptest::collection::vec((any::<bool>(), 0u8..40, any::<u8>()), 1..120),
+        ) {
+            let mut t = Tree::new();
+            for (insert, k, v) in ops {
+                let key = [k; 32];
+                if insert {
+                    t.insert(kind::NODE, key, vec![v]);
+                } else {
+                    t.remove(kind::NODE, &key);
+                }
+                let want = full_root(&t);
+                prop_assert_eq!(t.compute_root(), want);
+                prop_assert_eq!(t.clone().root(), want);
+            }
+        }
+    }
 
     #[test]
     fn empty_tree_root() {

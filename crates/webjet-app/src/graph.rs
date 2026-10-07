@@ -201,11 +201,12 @@ impl Graph {
             f64::from(self.area.0.max(100.0)),
             f64::from(self.area.1.max(100.0)),
         );
+        let pix = p.index_map();
         let mut at: Vec<Option<P>> = self
             .vertices
             .iter()
             .map(|v| {
-                p.index(&v.id).map(|i| {
+                pix.get(v.id.as_str()).map(|&i| {
                     let o = &p.vertices[i];
                     (f64::from(o.x) * aw, f64::from(o.y) * ah)
                 })
@@ -256,6 +257,7 @@ impl Graph {
     /// Compute the layout for `self.area`, continuing from `previous`
     /// where it has the same vertices.
     pub fn lay_out(&mut self, previous: Option<&Graph>) {
+        let pix = previous.map(Graph::index_map);
         let items: Vec<Item> = self
             .vertices
             .iter()
@@ -266,7 +268,8 @@ impl Graph {
                     h,
                     circle,
                     start: previous
-                        .and_then(|p| p.index(&v.id).map(|i| &p.vertices[i]))
+                        .zip(pix.as_ref())
+                        .and_then(|(p, ix)| ix.get(v.id.as_str()).map(|&i| &p.vertices[i]))
                         .map(|o| (o.x, o.y)),
                 }
             })
@@ -284,6 +287,15 @@ impl Graph {
 
     pub fn index(&self, id: &str) -> Option<usize> {
         self.vertices.iter().position(|v| v.id == id)
+    }
+
+    /// Vertex index by id, built once for many lookups (`index` is a scan).
+    fn index_map(&self) -> std::collections::HashMap<&str, usize> {
+        self.vertices
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.id.as_str(), i))
+            .collect()
     }
 
     /// Edges at a vertex.

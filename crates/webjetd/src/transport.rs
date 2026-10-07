@@ -268,13 +268,23 @@ async fn start_anytls(n: &Arc<Node>, addr: std::net::SocketAddr) -> Result<()> {
     tracing::info!("TCP+AnyTLS listening on {addr}");
     let n2 = n.clone();
     n.tasks.service("anytls-listener", async move {
+        const RETRY: std::time::Duration = std::time::Duration::from_secs(1);
+        let mut last_try: Option<std::time::Instant> = None;
         loop {
             let Ok((s, remote)) = l.accept().await else {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
-            refresh_anytls(&n2);
-            let Some((acc, secret, website)) = n2.anytls_acceptor.lock().clone() else {
+            // The acceptor is refreshed when the tree or the camouflage
+            // secret changes (agent `secrets`), not per connection: that
+            // reads a file. Until there is one, retry at most once a second.
+            let mut acceptor = n2.anytls_acceptor.lock().clone();
+            if acceptor.is_none() && last_try.is_none_or(|t| t.elapsed() >= RETRY) {
+                last_try = Some(std::time::Instant::now());
+                refresh_anytls(&n2);
+                acceptor = n2.anytls_acceptor.lock().clone();
+            }
+            let Some((acc, secret, website)) = acceptor else {
                 drop(s);
                 continue;
             };

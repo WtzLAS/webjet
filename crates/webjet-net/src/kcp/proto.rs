@@ -532,7 +532,10 @@ impl Kcp {
         if diff(sn, self.snd_una) < 0 || diff(sn, self.snd_nxt) >= 0 {
             return;
         }
-        if let Some(i) = self.snd_buf.iter().position(|s| s.sn == sn)
+        // snd_buf is in sequence order (wrapping, within one window), so
+        // find the segment by binary search rather than per-ACK scanning.
+        let i = self.snd_buf.partition_point(|s| diff(s.sn, sn) < 0);
+        if self.snd_buf.get(i).is_some_and(|s| s.sn == sn)
             && let Some(seg) = self.snd_buf.remove(i)
         {
             self.delivered += seg.data.len();

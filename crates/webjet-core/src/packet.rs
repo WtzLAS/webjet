@@ -448,10 +448,24 @@ fn fix_quoted_ip_checksum(p: &mut [u8], q: usize) {
     }
 }
 
-fn octets(a: IpAddr) -> Vec<u8> {
+/// An address's bytes on the stack (`map_addrs` runs per packet).
+struct Octets([u8; 16], usize);
+
+impl std::ops::Deref for Octets {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0[..self.1]
+    }
+}
+
+fn octets(a: IpAddr) -> Octets {
+    let mut b = [0u8; 16];
     match a {
-        IpAddr::V4(v) => v.octets().to_vec(),
-        IpAddr::V6(v) => v.octets().to_vec(),
+        IpAddr::V4(v) => {
+            b[..4].copy_from_slice(&v.octets());
+            Octets(b, 4)
+        }
+        IpAddr::V6(v) => Octets(v.octets(), 16),
     }
 }
 

@@ -83,8 +83,7 @@ fn head_msg(n: &Node) -> Option<HopMsg> {
 pub fn is_core(n: &Node, id: &Bytes32) -> bool {
     let s = n.store.read();
     let v = s.view();
-    let any_relay = v.nodes.values().any(|x| x.relay && x.valid);
-    !any_relay
+    !v.any_relay
         || v.nodes.get(id).is_some_and(|x| x.relay || x.control)
         || (*id == n.me && n.is_controller())
 }
@@ -831,6 +830,8 @@ fn flood(n: &Arc<Node>, except: Option<u64>, origin: Bytes32, ty: u16, raw: &[u8
         .filter(|h| h.alive() && !h.restricted && Some(h.id) != except)
         .cloned()
         .collect();
+    // Encoded once for all the hops it goes to.
+    let mut msg: Option<Option<Vec<u8>>> = None;
     for h in hops {
         let send = if !i_am_core {
             origin == n.me
@@ -841,8 +842,16 @@ fn flood(n: &Arc<Node>, except: Option<u64>, origin: Bytes32, ty: u16, raw: &[u8
                 || (ty == mt::ENDPOINT_RECORD && infra)
                 || subs.contains(&h.id)
         };
-        if send {
-            send_records(&h, vec![raw.to_vec()]);
+        if send
+            && let Some(bytes) = msg.get_or_insert_with(|| {
+                crate::node::ctl(HopMsg::Records(Box::new(wp::Records {
+                    items: Some(vec![wp::Blob {
+                        data: Some(raw.to_vec()),
+                    }]),
+                })))
+            })
+        {
+            h.send_raw_control(bytes.clone());
         }
     }
 }

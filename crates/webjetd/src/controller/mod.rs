@@ -100,6 +100,16 @@ struct Waiter {
     tx: oneshot::Sender<std::result::Result<Outcome, String>>,
 }
 
+/// Run blocking controller work (log fsync, snapshot files, the socket
+/// signer) from async code: on the agent's multi-threaded runtime the worker
+/// hands its other tasks off first; elsewhere (tests) it just runs.
+fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
 /// Lock order, where more than one is held: `apply_lock`, then `raft`, then
 /// `machine`, then the node's store. Never take `raft` while holding
 /// `machine`: `propose` and snapshot installs hold both, raft first.
@@ -222,16 +232,20 @@ impl Controller {
             if self.is_halted() {
                 continue;
             }
-            let out = self.raft.lock().tick(Instant::now());
-            self.send_raft(&n, out);
-            self.apply_committed(&n);
-            self.send_snapshots(&n);
-            if i.is_multiple_of(10) {
-                self.maybe_sign_head(&n);
-                if self.is_leader() {
-                    let me = self.clone();
-                    tokio::spawn(async move { me.leader_duties().await });
+            // Log fsyncs, snapshot files and the socket signer block: tell
+            // the runtime, so other tasks move off this worker meanwhile.
+            blocking(|| {
+                let out = self.raft.lock().tick(Instant::now());
+                self.send_raft(&n, out);
+                self.apply_committed(&n);
+                self.send_snapshots(&n);
+                if i.is_multiple_of(10) {
+                    self.maybe_sign_head(&n);
                 }
+            });
+            if i.is_multiple_of(10) && self.is_leader() {
+                let me = self.clone();
+                tokio::spawn(async move { me.leader_duties().await });
             }
         }
     }
@@ -783,7 +797,7 @@ impl Controller {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let (rx, idx) = {
+        let (rx, idx) = blocking(|| -> Result<_> {
             let mut r = self.raft.lock();
             let m = self.machine.lock();
             let idx = r.last_index() + 1;
@@ -812,17 +826,17 @@ impl Controller {
             );
             drop(r);
             self.send_raft(&n, out);
-            (rx, i)
-        };
-        // Single-voter clusters commit immediately; apply right away.
-        self.apply_committed(&n);
+            // Single-voter clusters commit immediately; apply right away.
+            self.apply_committed(&n);
+            Ok((rx, i))
+        })?;
         let outcome = tokio::time::timeout(PROPOSE_TIMEOUT, rx)
             .await
             .map_err(|_| anyhow!("entry {idx} not committed in time"))?
             .map_err(|_| anyhow!("waiter dropped"))?
             .map_err(|e| anyhow!(e))?;
         drop(_g);
-        self.maybe_sign_head(&n);
+        blocking(|| self.maybe_sign_head(&n));
         Ok((idx, outcome))
     }
 
@@ -889,7 +903,7 @@ impl Controller {
                 if !is_ctl {
                     return None;
                 }
-                self.on_raft(&n, from, rb);
+                blocking(|| self.on_raft(&n, from, rb));
                 None
             }
             RpcBody::GetCertRequest(_) => Some(RpcBody::CertRequestReply(Box::new(

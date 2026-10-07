@@ -211,8 +211,12 @@ impl UdpEndpoint {
             pongs: Mutex::new((Instant::now(), 0)),
             handshaking: Arc::default(),
         });
-        let e2 = ep.clone();
-        tokio::spawn(async move { e2.recv_loop().await });
+        // Several receivers on the one socket, so the gate's decryption
+        // isn't bounded by one core. KCP and FEC take reordering anyway.
+        for _ in 0..recv_tasks() {
+            let e2 = ep.clone();
+            tokio::spawn(async move { e2.recv_loop().await });
+        }
         Ok(ep)
     }
 
@@ -299,6 +303,7 @@ impl UdpEndpoint {
             else {
                 continue;
             };
+            let mut inner = inner;
             let body = &inner[5..];
             if kind == K_PUNCH {
                 self.on_punch(from, body);
@@ -307,10 +312,10 @@ impl UdpEndpoint {
             let key = (from, conv);
             let existing = self.sessions.lock().get(&key).map(|h| h.tx.clone());
             if let Some(tx) = existing {
-                let mut d = Vec::with_capacity(1 + body.len());
-                d.push(kind);
-                d.extend_from_slice(body);
-                let _ = tx.try_send((at, d));
+                // `kind || body` in the gate's buffer, without another one.
+                inner[4] = kind;
+                inner.drain(..4);
+                let _ = tx.try_send((at, inner));
                 continue;
             }
             if kind != K_OPEN || !self.listening {
@@ -335,7 +340,17 @@ impl UdpEndpoint {
             if !self.admit_ip(from.ip()) {
                 continue;
             }
-            let (stream, tx, stats, id) = self.clone().spawn_session(from, conv);
+            // Another receive task may have opened it meanwhile (OPENs are
+            // resent): then this OPEN goes to that session.
+            let Some((stream, tx, stats, id)) = self.clone().spawn_session(from, conv) else {
+                let tx = self.sessions.lock().get(&key).map(|h| h.tx.clone());
+                if let Some(tx) = tx {
+                    let mut d = vec![K_OPEN];
+                    d.extend_from_slice(body);
+                    let _ = tx.try_send((at, d));
+                }
+                continue;
+            };
             let mut d = vec![K_OPEN];
             d.extend_from_slice(body);
             let _ = tx.try_send((at, d));
@@ -391,7 +406,7 @@ impl UdpEndpoint {
     /// Dial a peer: returns a byte stream over KCP.
     pub fn dial(self: &Arc<Self>, to: SocketAddr) -> KcpConn {
         let conv = rand::random::<u32>() | 1;
-        let (stream, _tx, stats, _) = self.clone().spawn_session_inner(to, conv, true);
+        let (stream, _tx, stats, _) = self.clone().start_session(to, conv, true);
         let gate = GateResult::Normal(self.epochs.read().current);
         KcpConn {
             stream,
@@ -402,16 +417,39 @@ impl UdpEndpoint {
         }
     }
 
+    /// An accepted session, unless (peer, conv) has one already.
     fn spawn_session(
         self: Arc<Self>,
         peer: SocketAddr,
         conv: u32,
-    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
-        self.spawn_session_inner(peer, conv, false)
+    ) -> Option<(DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64)> {
+        let mut sessions = self.sessions.lock();
+        if sessions.contains_key(&(peer, conv)) {
+            return None;
+        }
+        Some(
+            self.clone()
+                .start_session_locked(&mut sessions, peer, conv, false),
+        )
     }
 
-    fn spawn_session_inner(
+    /// A new session for (peer, conv), replacing any (a dial's conv is random).
+    fn start_session(
         self: Arc<Self>,
+        peer: SocketAddr,
+        conv: u32,
+        dialer: bool,
+    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
+        let mut sessions = self.sessions.lock();
+        self.clone()
+            .start_session_locked(&mut sessions, peer, conv, dialer)
+    }
+
+    /// Register and start a session; checking and inserting under one
+    /// guard, so concurrent receive tasks can't both open (peer, conv).
+    fn start_session_locked(
+        self: Arc<Self>,
+        sessions: &mut HashMap<(SocketAddr, u32), SessionHandle>,
         peer: SocketAddr,
         conv: u32,
         dialer: bool,
@@ -420,9 +458,7 @@ impl UdpEndpoint {
         let id = SESSION_IDS.fetch_add(1, Ordering::Relaxed);
         let (user, inner) = tokio::io::duplex(DUPLEX);
         let (tx, rx) = mpsc::channel(4096);
-        self.sessions
-            .lock()
-            .insert((peer, conv), SessionHandle { tx: tx.clone(), id });
+        sessions.insert((peer, conv), SessionHandle { tx: tx.clone(), id });
         let stats = Arc::new(KcpStats::default());
         let st = stats.clone();
         tokio::spawn(async move {
@@ -795,8 +831,10 @@ async fn run_session(
     let mut pending: Vec<u8> = Vec::new();
     let mut pend_off = 0usize;
     let mut user_gone = false;
-    let mut tick = tokio::time::interval(Duration::from_millis(5));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The next wake-up without traffic: every BUSY_TICK while anything is
+    // queued, in flight or due, otherwise IDLE_TICK (a host may hold
+    // thousands of idle hops; their keepalives wake them anyway).
+    let mut wake = Instant::now() + BUSY_TICK;
 
     let seal_and_send = |inner: Vec<u8>| {
         let ep = ep.clone();
@@ -873,7 +911,7 @@ async fn run_session(
                     }
                 }
             }
-            _ = tick.tick() => {}
+            _ = tokio::time::sleep_until(wake.into()) => {}
         }
         // Hand received bytes to the user, a bounded amount at a time.
         if pending.is_empty() {
@@ -976,8 +1014,21 @@ async fn run_session(
         if !user_open && kcp.wait_snd() == 0 && pending.is_empty() {
             break;
         }
+        let busy = kcp.wait_snd() > 0 || fec_flush_at.is_some() || !pending.is_empty();
+        let now = Instant::now();
+        wake = now + if busy { BUSY_TICK } else { IDLE_TICK };
     }
 }
+
+/// Receive tasks per UDP endpoint: one per core, up to 4.
+fn recv_tasks() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get().min(4))
+}
+
+/// `run_session`'s tick with data queued or in flight: KCP's flush interval.
+const BUSY_TICK: Duration = Duration::from_millis(5);
+/// Its tick when idle; under the 1 s loss report and far under IDLE_TIMEOUT.
+const IDLE_TICK: Duration = Duration::from_millis(100);
 
 /// Received bytes taken out of KCP at once for a slow user; the rest waits
 /// in KCP's receive queue, where it shrinks the advertised window.

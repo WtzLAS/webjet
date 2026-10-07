@@ -515,20 +515,14 @@ impl Dataplane {
         if self.resolver.read().contains(&dst) {
             return;
         }
-        // Cryptokey routing (§9.5).
-        let (src_ok, peer_subject) = {
+        // Cryptokey routing (§9.5). The peer's policy subject is built only
+        // for a new flow (below): it copies names and tags.
+        let src_ok = {
             let s = n.store.read();
-            let v = s.view();
-            match v.nodes.get(peer) {
-                Some(info) => (
-                    info.ips.iter().any(|i| i.contains(&src)),
-                    Some(v.subject(info)),
-                ),
-                None => (false, None),
-            }
-        };
-        let Some(peer_subject) = peer_subject else {
-            return;
+            let Some(info) = s.view().nodes.get(peer) else {
+                return;
+            };
+            info.ips.iter().any(|i| i.contains(&src))
         };
         let now = Instant::now();
         if !src_ok {
@@ -581,6 +575,9 @@ impl Dataplane {
                 let verdict = {
                     let s = n.store.read();
                     let vw = s.view();
+                    let Some(peer_subject) = vw.nodes.get(peer).map(|x| vw.subject(x)) else {
+                        return;
+                    };
                     match gw {
                         None => {
                             let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {

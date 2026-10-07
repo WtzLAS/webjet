@@ -88,6 +88,11 @@ pub struct View {
     pub tombstoned_nodes: HashSet<Bytes32>,
     pub by_key: HashMap<Bytes32, Bytes32>,
     pub by_name: HashMap<String, Bytes32>,
+    /// Overlay addresses of valid nodes: single addresses (/32, /128) by
+    /// address, wider prefixes longest first (`node_by_ip`, per packet).
+    pub host_routes: HashMap<IpAddr, Bytes32>,
+    /// Some valid node is a relay (there is a core, §10.6).
+    pub any_relay: bool,
     pub ip_routes: Vec<(IpNet, Bytes32)>,
     pub accounts: HashMap<Bytes32, AccountInfo>,
     pub tombstoned_accounts: HashSet<Bytes32>,
@@ -123,10 +128,12 @@ impl View {
 
     /// The node owning an overlay address (longest prefix).
     pub fn node_by_ip(&self, ip: &IpAddr) -> Option<Bytes32> {
+        if let Some(id) = self.host_routes.get(ip) {
+            return Some(*id);
+        }
         self.ip_routes
             .iter()
-            .filter(|(n, _)| n.contains(ip))
-            .max_by_key(|(n, _)| n.prefix_len())
+            .find(|(n, _)| n.contains(ip))
             .map(|(_, id)| *id)
     }
 
@@ -986,14 +993,21 @@ pub fn build_view(
     offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
 ) -> View {
     let mut v = View::default();
-    view_accounts(&mut v, tree, root, offline_acct_tombs);
+    // Every leaf decoded once for all the passes below.
+    let leaves: Vec<LeafValue> = tree
+        .iter()
+        .filter_map(|(_, e)| match decode_leaf(e) {
+            Ok(val) => Some(val),
+            Err(_) => {
+                tracing::warn!("undecodable leaf of kind {} in the tree", e.kind);
+                None
+            }
+        })
+        .collect();
+    view_accounts(&mut v, &leaves, root, offline_acct_tombs);
     let ctrl = view_certs(&mut v, certs);
     // Nodes and singletons.
-    for (_, e) in tree.iter() {
-        let Ok(val) = leaf::decode(e.kind, &e.key, &e.bytes) else {
-            tracing::warn!("undecodable leaf of kind {} in the tree", e.kind);
-            continue;
-        };
+    for val in leaves {
         match val {
             LeafValue::Node(r) => {
                 let (info, offline_tomb) = node_info(&v, r, offline_node_tombs);
@@ -1041,15 +1055,23 @@ pub fn build_view(
             LeafValue::Account(..) | LeafValue::AccountTombstone(..) | LeafValue::Unknown => {}
         }
     }
+    v.any_relay = v.nodes.values().any(|x| x.relay && x.valid);
     for n in v.nodes.values() {
         v.by_key.insert(n.key, n.id);
         v.by_name.insert(n.name.clone(), n.id);
         if n.valid {
             for ip in &n.ips {
-                v.ip_routes.push((*ip, n.id));
+                if ip.prefix_len() == ip.max_prefix_len() {
+                    v.host_routes.insert(ip.addr(), n.id);
+                } else {
+                    v.ip_routes.push((*ip, n.id));
+                }
             }
         }
     }
+    // Longest prefix first, so the first match is the best.
+    v.ip_routes
+        .sort_by_key(|(net, id)| (std::cmp::Reverse(net.prefix_len()), *id));
     view_controllers(&mut v, ctrl);
     for n in v.nodes.values_mut() {
         n.control = v.controllers.contains_key(&n.id);
@@ -1057,48 +1079,65 @@ pub fn build_view(
     v
 }
 
+/// A tree leaf decoded. Account leaves are signed envelopes, and the view is
+/// rebuilt from every leaf on each change, so their decoding (signature
+/// check included) is kept by leaf hash, which covers kind, key and bytes.
+fn decode_leaf(e: &merkle::LeafEntry) -> Result<LeafValue> {
+    use parking_lot::Mutex;
+    use std::sync::OnceLock;
+    /// Enough for every account leaf of a large network, plus old versions.
+    const CACHED: usize = 1 << 16;
+    static CACHE: OnceLock<Mutex<HashMap<Bytes32, LeafValue>>> = OnceLock::new();
+    if e.kind != kind::ACCOUNT {
+        return leaf::decode(e.kind, &e.key, &e.bytes);
+    }
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(v) = cache.lock().get(&e.hash) {
+        return Ok(v.clone());
+    }
+    let v = leaf::decode(e.kind, &e.key, &e.bytes)?;
+    let mut c = cache.lock();
+    if c.len() >= CACHED {
+        c.clear();
+    }
+    c.insert(e.hash, v.clone());
+    Ok(v)
+}
+
 /// Accounts: signature and signer checks (§6.10, §10.2), into `v.accounts`
 /// and `v.tombstoned_accounts`.
 fn view_accounts(
     v: &mut View,
-    tree: &Tree,
+    leaves: &[LeafValue],
     root: &Bytes32,
     offline_acct_tombs: &BTreeMap<Bytes32, (wp::AccountTombstone, Vec<u8>)>,
 ) {
     // Accounts first: signature and signer checks (§6.10, §10.2).
-    let mut raw_accounts: Vec<(wp::AccountRecord, crypto::Verified)> = Vec::new();
-    for (_, e) in tree.iter() {
-        if e.kind == kind::ACCOUNT {
-            match leaf::decode(e.kind, &e.key, &e.bytes) {
-                Ok(LeafValue::Account(r, ver)) => raw_accounts.push((r, ver)),
-                Ok(LeafValue::AccountTombstone(t, ver)) => {
-                    let id = crypto::opt_k32(&t.account_id);
-                    let _ = ver;
-                    v.tombstoned_accounts.insert(id);
+    let mut raw_accounts: Vec<(&wp::AccountRecord, &crypto::Verified)> = Vec::new();
+    let mut revoke_issuers: HashSet<Bytes32> = HashSet::new();
+    for val in leaves {
+        match val {
+            LeafValue::Account(r, ver) => raw_accounts.push((r, ver)),
+            LeafValue::AccountTombstone(t, _) => {
+                let id = crypto::opt_k32(&t.account_id);
+                v.tombstoned_accounts.insert(id);
+                if t.revoke_issued {
+                    revoke_issuers.insert(id);
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
     // Offline account tombstones, with `revoke_issued` cascades.
-    let mut revoke_issuers: HashSet<Bytes32> = HashSet::new();
     for (id, (t, _)) in offline_acct_tombs {
         v.tombstoned_accounts.insert(*id);
         if t.revoke_issued {
             revoke_issuers.insert(*id);
         }
     }
-    for (_, e) in tree.iter() {
-        if e.kind == kind::ACCOUNT
-            && let Ok(LeafValue::AccountTombstone(t, _)) = leaf::decode(e.kind, &e.key, &e.bytes)
-            && t.revoke_issued
-        {
-            revoke_issuers.insert(crypto::opt_k32(&t.account_id));
-        }
-    }
     // Admin accounts (root-signed) first, then normal accounts.
     for pass in 0..2 {
-        for (r, ver) in &raw_accounts {
+        for &(r, ver) in &raw_accounts {
             let admin_pass = r.issuer_root;
             if (pass == 0) != admin_pass {
                 continue;
@@ -1257,6 +1296,29 @@ pub fn default_resolver_ips(pool: &[IpNet], taken: impl Fn(&IpAddr) -> bool) -> 
 mod tests {
     use super::*;
     use crate::testutil::Cluster;
+
+    #[test]
+    fn node_by_ip_takes_hosts_then_the_longest_prefix() {
+        let mut c = Cluster::new();
+        let (a, _) = c.data_node("a", "10.7.0.5", &[]);
+        let st = c.store();
+        let v = st.view();
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert_eq!(v.node_by_ip(&ip("10.7.0.5")), Some(a));
+        assert_eq!(v.node_by_ip(&ip("10.7.0.6")), None);
+        // Wider prefixes: the longest wins, whatever the order they came in.
+        let mut v = v.clone();
+        let (wide, narrow) = ([1u8; 32], [2u8; 32]);
+        v.ip_routes = vec![
+            ("10.9.0.0/16".parse().unwrap(), wide),
+            ("10.9.1.0/24".parse().unwrap(), narrow),
+        ];
+        v.ip_routes
+            .sort_by_key(|(net, id)| (std::cmp::Reverse(net.prefix_len()), *id));
+        assert_eq!(v.node_by_ip(&ip("10.9.1.7")), Some(narrow));
+        assert_eq!(v.node_by_ip(&ip("10.9.2.7")), Some(wide));
+        assert_eq!(v.node_by_ip(&ip("10.7.0.5")), Some(a));
+    }
 
     /// A head from the cluster's signing key over `tree`, newer than any
     /// the cluster has signed: what a compromised head signer could send.

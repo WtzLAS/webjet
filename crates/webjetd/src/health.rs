@@ -93,6 +93,8 @@ pub async fn run(n: Arc<Node>) {
         if i.is_multiple_of(6) {
             n.persist_links();
         }
+        // Clock offsets come with keepalive acks; looked at here, not per ack.
+        check_clock(&n);
         if let Err(e) = check_floor(&n) {
             let _ = CLOCK_FATAL.set(e);
         }
