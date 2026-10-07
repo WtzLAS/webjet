@@ -56,7 +56,8 @@ enum Cmd {
         /// Enroll this node with an enrollment string as part of the install.
         #[arg(long, value_name = "STRING")]
         enroll: Option<String>,
-        /// Install even if this version is installed already.
+        /// Install even if this version is installed already, or is older
+        /// than the installed one.
         #[arg(long)]
         force: bool,
         /// Don't start the agent (a later `webjetup enroll` starts it).
@@ -112,7 +113,11 @@ enum Cmd {
     /// Carry out a queued remote upgrade request (run by the service
     /// manager when webjetd queues one; nothing to do otherwise).
     #[command(hide = true)]
-    ApplyUpgrade,
+    ApplyUpgrade {
+        /// Only finish or roll back an upgrade a helper was cut short in.
+        #[arg(long)]
+        recover: bool,
+    },
 }
 
 fn main() {
@@ -154,7 +159,7 @@ fn run(cli: Cli) -> Result<()> {
                 &repo,
                 version.as_deref(),
                 from.as_deref(),
-                force,
+                if force { Mode::Force } else { Mode::Normal },
             )?;
             // The signer starts first: the controller asks it for its key.
             if signer || signer::configured(&layout) {
@@ -187,7 +192,7 @@ fn run(cli: Cli) -> Result<()> {
             // The helper pins the node id, known now (a re-key keeps it).
             remote::setup(&sys, &layout, &Repo::parse(&cli.repo)?, None, true)
         }
-        Cmd::ApplyUpgrade => remote::apply(&sys, &layout),
+        Cmd::ApplyUpgrade { recover } => remote::apply(&sys, &layout, recover),
         Cmd::Status => status(&layout),
         Cmd::List { limit } => list(&Repo::parse(&cli.repo)?, &layout, limit),
         Cmd::Remove { yes } => {
@@ -292,14 +297,28 @@ fn stage_from(from: &Path, stage: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How [`install`] treats what is installed already.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Skip the version that is installed, refuse an older one, and put the
+    /// installed programs back if replacing them fails.
+    Normal,
+    /// `--force`: install whatever version, otherwise as `Normal`.
+    Force,
+    /// The remote upgrade helper: the version is checked and the previous
+    /// programs kept by the helper already.
+    Helper,
+}
+
 fn install(
     sys: &Sys,
     l: &Layout,
     repo: &Repo,
     version: Option<&str>,
     from: Option<&Path>,
-    force: bool,
+    mode: Mode,
 ) -> Result<()> {
+    let force = mode != Mode::Normal;
     let target = layout::target().ok_or_else(|| anyhow!("no Webjet release for this platform"))?;
     let stage = tempfile::tempdir()?;
     let have = installed_version(l);
@@ -346,15 +365,59 @@ fn install(
         let v = system::query(&staged.to_string_lossy(), &["--version"])
             .ok_or_else(|| anyhow!("the downloaded webjetd doesn't run on this machine"))?;
         println!("    {}", v.trim());
+        let new = v.split_whitespace().nth(1).unwrap_or("");
+        if let Some(old) = &have
+            && webjet_release::is_upgrade(new, old) == Some(true)
+        {
+            if mode == Mode::Normal {
+                bail!(
+                    "{new} is older than the installed {old}: run with --force to downgrade \
+                     (a node's state isn't always readable by older versions)"
+                );
+            }
+            println!("    downgrading from {old}");
+        }
     }
 
     println!("==> Installing into {}", l.bin_dir.display());
+    // Kept until the new programs are all in place, and put back otherwise
+    // (the helper keeps its own copy, in the spool).
+    let previous = if mode != Mode::Helper && have.is_some() && !sys.dry {
+        let dir = tempfile::Builder::new()
+            .prefix("webjetup-previous-")
+            .tempdir()?;
+        remote::backup(sys, l, dir.path())?;
+        Some(dir)
+    } else {
+        None
+    };
     system::stop(sys, l);
     sys.mkdir(&l.bin_dir, false)?;
-    for f in wanted_files() {
-        let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
-        sys.install_file(&stage.path().join(&f), &l.bin_dir.join(&f), mode)?;
+    let replaced = (|| -> Result<()> {
+        for f in wanted_files() {
+            let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
+            sys.install_file(&stage.path().join(&f), &l.bin_dir.join(&f), mode)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = replaced {
+        let Some(dir) = previous else {
+            return Err(e);
+        };
+        println!("==> {e:#}; putting the installed version back");
+        let errors = remote::restore(sys, l, dir.path());
+        if !errors.is_empty() {
+            bail!(
+                "{e:#}; putting the installed version back failed too: {} (the agent is stopped)",
+                errors.join("; ")
+            );
+        }
+        if let Err(e2) = start_after_install(sys, l, true) {
+            bail!("{e:#}; the installed version is back, but starting it failed: {e2:#}");
+        }
+        bail!("{e:#}; the installed version is back and running");
     }
+    drop(previous);
     remove_retired(sys, l)?;
     // webjetup installs itself next to the programs, so `webjetup` keeps
     // working after install.sh's temporary copy is gone.

@@ -216,7 +216,12 @@ U upgrade "v$BAD" laptop >/tmp/$P-bad.txt 2>&1 && fail "the bad release should f
 grep -q "rolled_back" /tmp/$P-bad.txt || { cat /tmp/$P-bad.txt; fail "the bad release was not rolled back"; }
 on_host 'webjetd --version' | grep -q "$NEXT" || fail "the rollback didn't restore $NEXT"
 on_host 'systemctl is-active webjetd' | grep -qx active || fail "webjetd not active after the rollback"
-echo "== 6c. opted out"
+echo "== 6c. a local downgrade needs --force"
+on_host "webjetup --repo $REPO install $TAG" >/tmp/$P-down.txt 2>&1 && fail "a downgrade without --force"
+grep -q "older than the installed" /tmp/$P-down.txt || { cat /tmp/$P-down.txt; fail "downgrade: wrong error"; }
+on_host 'webjetd --version' | grep -q "$NEXT" || fail "a refused downgrade changed webjetd"
+on_host 'systemctl is-active webjetd' | grep -qx active || fail "a refused downgrade stopped webjetd"
+echo "== 6d. opted out"
 on_host "webjetup --repo $REPO install v$NEXT --no-remote-upgrade" >/dev/null || fail "install --no-remote-upgrade"
 on_host 'grep -q "remote = false" /etc/webjet/webjetd.toml' || fail "[upgrade] remote = false not written"
 on_host 'test ! -e /var/lib/webjet-upgrade && test ! -e /etc/systemd/system/webjet-upgrade.path' || fail "the helper is still installed"

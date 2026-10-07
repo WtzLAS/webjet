@@ -43,10 +43,19 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// systemd's limit for one run of the helper.
 const HELPER_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// systemd's limit for `apply-upgrade --recover` after it: two health checks
+/// at most, and some.
+const RECOVER_TIMEOUT: Duration = Duration::from_secs(6 * 60);
+
 /// Request ids the helper has used, with their expiry (in the spool).
 const USED_FILE: &str = "used.json";
 /// The programs before the last upgrade (in the spool).
 const PREVIOUS_DIR: &str = "previous";
+/// Exists while the helper replaces the programs (in the spool), so the
+/// next run finishes an upgrade that was cut short ([`recover`]).
+const INSTALLING_FILE: &str = "installing.json";
+/// Held while a helper runs (in the spool; Unix).
+const LOCK_FILE: &str = "helper.lock";
 
 // ---------------------------------------------------------------- configuration
 
@@ -130,9 +139,19 @@ After=network-online.target
 Type=oneshot
 ExecStart={bin} apply-upgrade
 TimeoutStartSec={limit}s
+# Runs however the helper ended, also when it was stopped at the time limit:
+# finishes or rolls back an upgrade it was cut short in (the agent may be
+# stopped then).
+ExecStopPost={bin} apply-upgrade --recover
+TimeoutStopSec={stop}s
+
+# Also once at boot, to finish an upgrade the machine went down in.
+[Install]
+WantedBy=multi-user.target
 ",
         bin = l.program(SELF).display(),
-        limit = HELPER_TIMEOUT.as_secs()
+        limit = HELPER_TIMEOUT.as_secs(),
+        stop = RECOVER_TIMEOUT.as_secs()
     )
 }
 
@@ -168,6 +187,7 @@ fn launchd_plist(l: &Layout) -> String {
   <key>Label</key><string>{UPGRADE_LAUNCHD_LABEL}</string>
   <key>ProgramArguments</key><array><string>{bin}</string><string>apply-upgrade</string></array>
   <key>QueueDirectories</key><array><string>{queue}</string></array>
+  <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>/var/log/webjet-upgrade.log</string>
   <key>StandardErrorPath</key><string>/var/log/webjet-upgrade.log</string>
 </dict></plist>
@@ -266,13 +286,20 @@ fn write_trust(sys: &Sys, l: &Layout, repo: &Repo, force: bool) -> Result<()> {
         rel::read_untrusted(&p)?.ok_or_else(|| anyhow!("{} is missing", p.display()))
     };
     let path = rel::trust_path(&l.upgrade_spool);
+    // One that can't be read is an error, not a reason to pin the agent's
+    // state again: removing it (as root) does that.
     let kept = if force {
         None
     } else {
-        rel::read_untrusted(&path)
-            .ok()
-            .flatten()
-            .and_then(|b| serde_json::from_slice::<rel::Trust>(&b).ok())
+        match rel::read_untrusted(&path)? {
+            None => None,
+            Some(b) => Some(serde_json::from_slice::<rel::Trust>(&b).with_context(|| {
+                format!(
+                    "{} is unreadable (remove it to pin this node's state again)",
+                    path.display()
+                )
+            })?),
+        }
     };
     let t = match kept {
         Some(t) => rel::Trust {
@@ -365,6 +392,11 @@ fn install_trigger(sys: &Sys, l: &Layout) -> Result<()> {
             "systemctl",
             &["enable", "--now", &format!("{UPGRADE_SERVICE}.path")],
         )?;
+        // At boot (see the unit); not now.
+        sys.run(
+            "systemctl",
+            &["enable", &format!("{UPGRADE_SERVICE}.service")],
+        )?;
     }
     Ok(())
 }
@@ -395,6 +427,10 @@ pub fn remove(sys: &Sys, l: &Layout) -> Result<()> {
                 sys.try_run(
                     "systemctl",
                     &["disable", "--now", &format!("{UPGRADE_SERVICE}.path")],
+                );
+                sys.try_run(
+                    "systemctl",
+                    &["disable", &format!("{UPGRADE_SERVICE}.service")],
                 );
             }
             sys.remove_file(&path)?;
@@ -509,8 +545,19 @@ fn clear_queue(l: &Layout, older_than: Option<Duration>) {
 
 /// `webjetup apply-upgrade`: take the queued request, if any, and carry it
 /// out. Always removes the request, so the trigger doesn't fire again.
-pub fn apply(sys: &Sys, l: &Layout) -> Result<()> {
+/// `only_recover`: only finish an upgrade a helper was cut short in.
+pub fn apply(sys: &Sys, l: &Layout, only_recover: bool) -> Result<()> {
     system::require_privileges(sys.dry)?;
+    let Some(_lock) = lock(l)? else {
+        println!("another upgrade helper is running");
+        return Ok(());
+    };
+    if !sys.dry {
+        recover(sys, l);
+    }
+    if only_recover {
+        return Ok(());
+    }
     let req_path = rel::request_path(&l.upgrade_spool);
     let raw = match rel::read_untrusted(&req_path) {
         Ok(None) => {
@@ -593,18 +640,169 @@ pub fn apply(sys: &Sys, l: &Layout) -> Result<()> {
         at: rel::now_ms(),
     };
     write_status(l, &status(UpgradeState::Running, None));
-    let outcome = upgrade(sys, l, &repo, &plan);
+    let job = Installing {
+        id: plan.id.clone(),
+        version: plan.version.clone(),
+        from: from.clone(),
+        installed: false,
+    };
+    let outcome = upgrade(sys, l, &repo, &plan, job);
+    finish(l, &status(UpgradeState::Running, None), outcome)
+}
+
+/// Write the outcome, then drop the installing mark.
+fn finish(l: &Layout, running: &HelperStatus, outcome: Result<(), Outcome>) -> Result<()> {
     let (state, error) = match outcome {
         Ok(()) => (UpgradeState::Done, None),
         Err(Outcome::Failed(e)) => (UpgradeState::Failed, Some(format!("{e:#}"))),
         Err(Outcome::RolledBack(e)) => (UpgradeState::RolledBack, Some(format!("{e:#}"))),
         Err(Outcome::RollbackFailed(e)) => (UpgradeState::RollbackFailed, Some(format!("{e:#}"))),
     };
-    write_status(l, &status(state, error.clone()));
+    write_status(
+        l,
+        &HelperStatus {
+            state,
+            error: error.clone(),
+            at: rel::now_ms(),
+            ..running.clone()
+        },
+    );
+    unmark(l);
     match error {
         None => Ok(()),
         Some(e) => bail!(e),
     }
+}
+
+/// The helper's lock: `None` when another helper holds it. The service
+/// managers run one helper at a time already; this keeps a second one
+/// (an admin's `webjetup apply-upgrade`) from taking an upgrade in
+/// progress for an interrupted one.
+#[cfg(unix)]
+fn lock(l: &Layout) -> Result<Option<std::fs::File>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    if !l.upgrade_spool.is_dir() {
+        return Ok(Some(tempfile::tempfile()?));
+    }
+    let path = l.upgrade_spool.join(LOCK_FILE);
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    // SAFETY: flock on a descriptor we own; it is released when `f` closes.
+    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    Ok((r == 0).then_some(f))
+}
+
+#[cfg(not(unix))]
+fn lock(_: &Layout) -> Result<Option<()>> {
+    // The scheduled task doesn't start a second instance while one runs.
+    Ok(Some(()))
+}
+
+/// What [`INSTALLING_FILE`] holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Installing {
+    id: String,
+    version: String,
+    #[serde(default)]
+    from: Option<String>,
+    /// Every new file is in place: only the restart and the health check
+    /// were left.
+    #[serde(default)]
+    installed: bool,
+}
+
+fn mark(l: &Layout, job: &Installing) -> Result<()> {
+    rel::write_atomic(
+        &l.upgrade_spool,
+        INSTALLING_FILE,
+        &serde_json::to_vec(job)?,
+        0o600,
+    )
+}
+
+fn unmark(l: &Layout) {
+    let _ = std::fs::remove_file(l.upgrade_spool.join(INSTALLING_FILE));
+}
+
+/// The interrupted upgrade, if a helper was cut short (killed at systemd's
+/// time limit, or the machine went down) while replacing the programs. A
+/// mark that can't be read still counts, with nothing known about it.
+fn interrupted(l: &Layout) -> Option<Installing> {
+    let path = l.upgrade_spool.join(INSTALLING_FILE);
+    path.symlink_metadata().ok()?;
+    Some(
+        rel::read_untrusted(&path)
+            .ok()
+            .flatten()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default(),
+    )
+}
+
+/// Finish what an interrupted helper left. Every start of the helper
+/// checks, including the one at boot. With every new file in place and the
+/// new agent healthy the upgrade is done; otherwise the previous version
+/// goes back. A helper cut short before it replaced anything (while
+/// downloading) only gets its status corrected.
+fn recover(sys: &Sys, l: &Layout) {
+    let status = rel::read_status(&l.upgrade_spool).ok().flatten();
+    let Some(job) = interrupted(l) else {
+        if let Some(s) = status
+            && s.state == UpgradeState::Running
+        {
+            write_status(
+                l,
+                &HelperStatus {
+                    state: UpgradeState::Failed,
+                    error: Some(
+                        "the upgrade helper was interrupted before it replaced anything".into(),
+                    ),
+                    at: rel::now_ms(),
+                    ..s
+                },
+            );
+        }
+        return;
+    };
+    println!(
+        "==> The upgrade to {} was interrupted; finishing it",
+        if job.version.is_empty() {
+            "?"
+        } else {
+            &job.version
+        }
+    );
+    let running = HelperStatus {
+        id: job.id.clone(),
+        version: job.version.clone(),
+        from: job.from.clone(),
+        state: UpgradeState::Running,
+        error: None,
+        at: rel::now_ms(),
+    };
+    let want = job.version.trim_start_matches('v');
+    let done = job.installed
+        && !want.is_empty()
+        && crate::installed_version(l).as_deref() == Some(want)
+        && restart(sys, l).is_ok()
+        && healthy(l, want, HEALTH_TIMEOUT).is_ok();
+    let outcome = if done {
+        Ok(())
+    } else {
+        Err(roll_back(
+            sys,
+            l,
+            anyhow!("the upgrade helper was interrupted while installing"),
+        ))
+    };
+    let _ = finish(l, &running, outcome);
 }
 
 enum Outcome {
@@ -616,7 +814,13 @@ enum Outcome {
     RollbackFailed(anyhow::Error),
 }
 
-fn upgrade(sys: &Sys, l: &Layout, repo: &Repo, plan: &rel::Plan) -> Result<(), Outcome> {
+fn upgrade(
+    sys: &Sys,
+    l: &Layout,
+    repo: &Repo,
+    plan: &rel::Plan,
+    mut job: Installing,
+) -> Result<(), Outcome> {
     let stage = tempfile::tempdir().map_err(|e| Outcome::Failed(e.into()))?;
     let fetch = || -> Result<PathBuf> {
         let c = Client::new().with_deadline(DOWNLOAD_TIMEOUT);
@@ -635,13 +839,32 @@ fn upgrade(sys: &Sys, l: &Layout, repo: &Repo, plan: &rel::Plan) -> Result<(), O
             &plan.webjetup.sha256,
             stage.path(),
         )?;
+        // The new webjetup must run here before it replaces this one.
+        system::make_executable(&up)?;
+        query(&up.to_string_lossy(), &["--version"])
+            .ok_or_else(|| anyhow!("the downloaded webjetup doesn't run on this machine"))?;
         Ok(up)
     };
     let new_self = fetch().map_err(Outcome::Failed)?;
-    backup(sys, l).map_err(Outcome::Failed)?;
-    let install = || -> Result<()> {
-        crate::install(sys, l, repo, Some(&plan.version), Some(stage.path()), true)?;
+    backup(sys, l, &previous(l)).map_err(Outcome::Failed)?;
+    if !sys.dry {
+        mark(l, &job).map_err(Outcome::Failed)?;
+    }
+    let mut install = || -> Result<()> {
+        // The helper keeps the previous programs itself (in the spool).
+        crate::install(
+            sys,
+            l,
+            repo,
+            Some(&plan.version),
+            Some(stage.path()),
+            crate::Mode::Helper,
+        )?;
         sys.install_file(&new_self, &l.program(SELF), 0o755)?;
+        job.installed = true;
+        if !sys.dry {
+            mark(l, &job)?;
+        }
         restart(sys, l)
     };
     let want = plan.version.trim_start_matches('v');
@@ -652,19 +875,33 @@ fn upgrade(sys: &Sys, l: &Layout, repo: &Repo, plan: &rel::Plan) -> Result<(), O
         },
         Err(e) => e,
     };
+    Err(roll_back(sys, l, problem))
+}
+
+/// Put the previous version back after `problem` and start it: every file
+/// that can be, whatever fails on the way, and the agent is always started.
+fn roll_back(sys: &Sys, l: &Layout, problem: anyhow::Error) -> Outcome {
     println!("==> {problem:#}; putting the previous version back");
-    let back = || -> Result<()> {
-        restore(sys, l)?;
-        restart(sys, l)?;
-        let old =
-            crate::installed_version(l).ok_or_else(|| anyhow!("no webjetd after restoring"))?;
-        healthy(l, &old, HEALTH_TIMEOUT)
-    };
-    match back() {
-        Ok(()) => Err(Outcome::RolledBack(problem)),
-        Err(e) => Err(Outcome::RollbackFailed(anyhow!(
-            "{problem:#}; rolling back failed too: {e:#}"
-        ))),
+    system::stop(sys, l);
+    let mut errors = restore(sys, l, &previous(l));
+    match restart(sys, l) {
+        Err(e) => errors.push(format!("starting the agent: {e:#}")),
+        Ok(()) => match crate::installed_version(l) {
+            None => errors.push("no webjetd after restoring".into()),
+            Some(old) => {
+                if let Err(e) = healthy(l, &old, HEALTH_TIMEOUT) {
+                    errors.push(format!("{e:#}"));
+                }
+            }
+        },
+    }
+    if errors.is_empty() {
+        Outcome::RolledBack(problem)
+    } else {
+        Outcome::RollbackFailed(anyhow!(
+            "{problem:#}; rolling back failed too: {}",
+            errors.join("; ")
+        ))
     }
 }
 
@@ -685,31 +922,48 @@ fn backed_up_files() -> Vec<String> {
     v
 }
 
-/// Copy the installed programs (and webjetup) aside.
-fn backup(sys: &Sys, l: &Layout) -> Result<()> {
-    let dir = previous(l);
-    sys.remove_dir_all(&dir)?;
-    sys.mkdir(&dir, true)?;
+/// Copy the installed programs (and webjetup) into `dir`, an empty
+/// directory afterwards holding only them.
+pub fn backup(sys: &Sys, l: &Layout, dir: &Path) -> Result<()> {
+    sys.say(&format!("keep the installed programs in {}", dir.display()));
+    if sys.dry {
+        return Ok(());
+    }
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).with_context(|| format!("remove {}", dir.display()))?;
+    }
+    sys.mkdir(dir, true)?;
     for f in backed_up_files() {
         let src = l.bin_dir.join(&f);
         if src.exists() {
-            sys.install_file(&src, &dir.join(&f), 0o755)?;
+            system::copy_synced(&src, &dir.join(&f))?;
         }
     }
     Ok(())
 }
 
-fn restore(sys: &Sys, l: &Layout) -> Result<()> {
-    system::stop(sys, l);
-    let dir = previous(l);
+/// Put the programs [`backup`] kept in `dir` back, as many as can be: the
+/// errors, if any. webjetup comes last, and failing to put it back is only
+/// a note: the agent is what has to run again, and a newer webjetup
+/// handles older agents.
+pub fn restore(sys: &Sys, l: &Layout, dir: &Path) -> Vec<String> {
+    let mut errors = Vec::new();
+    let me = crate::layout::exe(SELF);
     for f in backed_up_files() {
         let src = dir.join(&f);
-        if src.exists() {
-            let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
-            sys.install_file(&src, &l.bin_dir.join(&f), mode)?;
+        if !src.exists() {
+            continue;
+        }
+        let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
+        if let Err(e) = sys.install_file(&src, &l.bin_dir.join(&f), mode) {
+            if f == me {
+                println!("    note: webjetup stays at the new version ({e:#})");
+            } else {
+                errors.push(format!("{e:#}"));
+            }
         }
     }
-    Ok(())
+    errors
 }
 
 /// Wait until the agent answers on its control socket with version `want`.
@@ -741,6 +995,145 @@ fn healthy(l: &Layout, want: &str, timeout: Duration) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A layout whose programs and spool are in `d`.
+    fn layout_in(d: &Path) -> Layout {
+        let mut l = Layout::system();
+        l.bin_dir = d.join("bin");
+        l.upgrade_spool = d.join("spool");
+        l.config = d.join("webjetd.toml");
+        std::fs::create_dir_all(&l.bin_dir).unwrap();
+        std::fs::create_dir_all(&l.upgrade_spool).unwrap();
+        l
+    }
+
+    fn put(l: &Layout, files: &[(&str, &str)]) {
+        for (f, text) in files {
+            std::fs::write(l.bin_dir.join(crate::layout::exe(f)), text).unwrap();
+        }
+    }
+
+    fn get(l: &Layout, f: &str) -> String {
+        std::fs::read_to_string(l.bin_dir.join(crate::layout::exe(f))).unwrap_or_default()
+    }
+
+    #[test]
+    fn restore_puts_back_every_file_it_can() {
+        let d = tempfile::tempdir().unwrap();
+        let l = layout_in(d.path());
+        let sys = Sys { dry: false };
+        put(&l, &[("webjetd", "d1"), ("webjetctl", "c1"), (SELF, "u1")]);
+        let prev = previous(&l);
+        backup(&sys, &l, &prev).unwrap();
+        put(&l, &[("webjetd", "d2"), ("webjetctl", "c2"), (SELF, "u2")]);
+        // webjetctl can't be put back (a directory stands in for a file that
+        // can't be replaced): the others still are.
+        let ctl = l.bin_dir.join(crate::layout::exe("webjetctl"));
+        std::fs::remove_file(&ctl).unwrap();
+        std::fs::create_dir(&ctl).unwrap();
+        std::fs::write(ctl.join("x"), "x").unwrap();
+        let errors = restore(&sys, &l, &prev);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            (get(&l, "webjetd"), get(&l, SELF)),
+            ("d1".into(), "u1".into())
+        );
+        // A webjetup that can't be put back is only a note.
+        std::fs::remove_dir_all(&ctl).unwrap();
+        let me = l.bin_dir.join(crate::layout::exe(SELF));
+        std::fs::remove_file(&me).unwrap();
+        std::fs::create_dir(&me).unwrap();
+        std::fs::write(me.join("x"), "x").unwrap();
+        put(&l, &[("webjetd", "d2")]);
+        assert!(restore(&sys, &l, &prev).is_empty());
+        assert_eq!(
+            (get(&l, "webjetd"), get(&l, "webjetctl")),
+            ("d1".into(), "c1".into())
+        );
+    }
+
+    #[test]
+    fn backups_hold_only_the_last_programs() {
+        let d = tempfile::tempdir().unwrap();
+        let l = layout_in(d.path());
+        let sys = Sys { dry: false };
+        let prev = previous(&l);
+        std::fs::create_dir_all(&prev).unwrap();
+        std::fs::write(prev.join("stale"), "x").unwrap();
+        put(&l, &[("webjetd", "d1")]);
+        backup(&sys, &l, &prev).unwrap();
+        let names: Vec<_> = std::fs::read_dir(&prev)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            names,
+            [std::ffi::OsString::from(crate::layout::exe("webjetd"))]
+        );
+    }
+
+    #[test]
+    fn an_interrupted_download_is_marked_failed() {
+        let d = tempfile::tempdir().unwrap();
+        let l = layout_in(d.path());
+        let sys = Sys { dry: false };
+        let running = HelperStatus {
+            id: "abc".into(),
+            version: "v9.0.0".into(),
+            from: Some("8.0.0".into()),
+            state: UpgradeState::Running,
+            error: None,
+            at: 1,
+        };
+        write_status(&l, &running);
+        recover(&sys, &l);
+        let s = rel::read_status(&l.upgrade_spool).unwrap().unwrap();
+        assert_eq!((s.state, s.id.as_str()), (UpgradeState::Failed, "abc"));
+        assert!(s.error.unwrap().contains("interrupted"));
+        // Finished ones are left alone.
+        write_status(
+            &l,
+            &HelperStatus {
+                state: UpgradeState::Done,
+                ..running
+            },
+        );
+        recover(&sys, &l);
+        let s = rel::read_status(&l.upgrade_spool).unwrap().unwrap();
+        assert_eq!(s.state, UpgradeState::Done);
+    }
+
+    #[test]
+    fn installing_marks_round_trip() {
+        let d = tempfile::tempdir().unwrap();
+        let l = layout_in(d.path());
+        assert_eq!(interrupted(&l), None);
+        let job = Installing {
+            id: "abc".into(),
+            version: "v9.0.0".into(),
+            from: Some("8.0.0".into()),
+            installed: true,
+        };
+        mark(&l, &job).unwrap();
+        assert_eq!(interrupted(&l), Some(job));
+        // One that can't be read still counts as interrupted.
+        std::fs::write(l.upgrade_spool.join(INSTALLING_FILE), "garbage").unwrap();
+        assert_eq!(interrupted(&l), Some(Installing::default()));
+        unmark(&l);
+        assert_eq!(interrupted(&l), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_helper_at_a_time() {
+        let d = tempfile::tempdir().unwrap();
+        let l = layout_in(d.path());
+        let first = lock(&l).unwrap();
+        assert!(first.is_some());
+        assert!(lock(&l).unwrap().is_none(), "held");
+        drop(first);
+        assert!(lock(&l).unwrap().is_some(), "released");
+    }
 
     #[test]
     fn config_switch() {
@@ -784,6 +1177,15 @@ mod tests {
             l.program(SELF).display()
         )));
         assert!(svc.contains("Type=oneshot\n"));
+        // A helper cut short (at the time limit, or by a reboot) is finished
+        // or rolled back after it and at boot; downloads end before the limit.
+        assert!(svc.contains(&format!(
+            "ExecStopPost={} apply-upgrade --recover\n",
+            l.program(SELF).display()
+        )));
+        assert!(svc.contains("WantedBy=multi-user.target\n"));
+        assert!(svc.contains(&format!("TimeoutStartSec={}s\n", HELPER_TIMEOUT.as_secs())));
+        assert!(DOWNLOAD_TIMEOUT + 2 * HEALTH_TIMEOUT < HELPER_TIMEOUT);
         // The agent's sandbox may write the queue, and nothing else of the spool.
         assert!(systemd_dropin(&l).contains("ReadWritePaths=-/var/lib/webjet-upgrade/queue\n"));
         assert_eq!(
@@ -793,6 +1195,7 @@ mod tests {
         let plist = launchd_plist(&l);
         assert!(plist.contains("<string>net.webjet.upgrade</string>"));
         assert!(plist.contains("<key>QueueDirectories</key><array><string>/var/lib/webjet-upgrade/queue</string></array>"));
+        assert!(plist.contains("<key>RunAtLoad</key><true/>"));
         assert!(windows_task_command(&l).ends_with("\" apply-upgrade"));
     }
 
@@ -813,7 +1216,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let mut l = Layout::system();
         l.upgrade_spool = d.path().to_path_buf();
-        apply(&Sys { dry: true }, &l).unwrap();
+        apply(&Sys { dry: true }, &l, false).unwrap();
         assert!(rel::read_status(&l.upgrade_spool).unwrap().is_none());
     }
 
@@ -829,7 +1232,7 @@ mod tests {
             serde_json::to_vec(&q).unwrap(),
         )
         .unwrap();
-        let e = apply(&Sys { dry: false }, &l);
+        let e = apply(&Sys { dry: false }, &l, false);
         if !system::privileged() {
             assert!(format!("{:#}", e.unwrap_err()).contains("root"));
             return;

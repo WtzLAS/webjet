@@ -825,7 +825,7 @@ A node refuses when it runs a version older than 0.9.0 (upgrade it with `webjetu
 
 **Check:** `sudo webjetup status` on each node shows the new version (and, under `remote`, the last remote upgrade), and `webjetctl local status` shows no alarms. Remotely: `webjetctl network node upgrade-status <node>`.
 
-**Rollback:** `sudo webjetup install <older version> --force` on the node installs an older release again (not past an activated StateVersion, section 3.4). Remote upgrades never downgrade.
+**Rollback:** `sudo webjetup install <older version> --force` on the node installs an older release again (not past an activated StateVersion, section 3.4); without `--force`, `webjetup` refuses a version older than the installed one. If replacing the programs fails part-way, `webjetup install` puts the installed ones back and starts them. Remote upgrades never downgrade.
 
 ---
 

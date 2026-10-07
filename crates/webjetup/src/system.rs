@@ -189,7 +189,7 @@ impl Sys {
 }
 
 /// Copy `src` to `dest` (replacing it) and flush it to disk.
-fn copy_synced(src: &Path, dest: &Path) -> Result<()> {
+pub fn copy_synced(src: &Path, dest: &Path) -> Result<()> {
     let mut from = std::fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
     let mut to =
         std::fs::File::create(dest).with_context(|| format!("create {}", dest.display()))?;
@@ -217,6 +217,11 @@ fn aside_path(dest: &Path) -> Result<PathBuf> {
         "can't move {} aside: earlier copies are still in use",
         dest.display()
     )
+}
+
+/// Let the owner run `p` (a downloaded program).
+pub fn make_executable(p: &Path) -> Result<()> {
+    set_mode(p, 0o755)
 }
 
 /// Flush a directory's entries (a rename in it) to disk, where that exists.
