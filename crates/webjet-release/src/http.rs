@@ -172,6 +172,93 @@ fn retry<T>(
         }
     }
 }
+/// Proxy variables in the order they are tried. This is curl's order for an
+/// https URL (the scheme's own variable, then `ALL_PROXY`), followed by
+/// `HTTP_PROXY`, which webjetup has always used too.
+const PROXY_VARS: [&str; 6] = [
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "http_proxy",
+    "HTTP_PROXY",
+];
+
+/// Variables listing hosts that bypass the proxy (comma-separated).
+const NO_PROXY_VARS: [&str; 2] = ["no_proxy", "NO_PROXY"];
+
+/// The first proxy variable that is set and not empty: (name, value).
+fn proxy_var(get: &impl Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
+    PROXY_VARS.iter().find_map(|&name| {
+        get(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .map(|v| (name, v))
+    })
+}
+
+/// The proxy that the variables in `get` ask for. `None` means "connect
+/// directly". The `String` describes the route for error messages.
+///
+/// Two things differ from `ureq::Proxy::try_from_env`:
+/// - `HTTPS_PROXY` comes before `ALL_PROXY`, as in curl.
+/// - SOCKS proxies get the host name, not an address looked up here
+///   (`socks5://` behaves like `socks5h://`, `socks4://` like `socks4a://`).
+///   When local DNS is filtered or poisoned, the lookup leads somewhere other
+///   than the release server. Sending the host name keeps the proxy on the
+///   route it has for that name. TLS still checks the server's certificate,
+///   and the checksums still check the files.
+///
+/// An invalid proxy URL is an error. Connecting directly instead would bypass
+/// a proxy the user asked for.
+fn proxy_from(get: impl Fn(&str) -> Option<String>) -> Result<Option<(ureq::Proxy, String)>> {
+    let Some((var, url)) = proxy_var(&get) else {
+        return Ok(None);
+    };
+    let invalid = || anyhow!("{var}={url:?} isn't a valid proxy URL");
+    let parsed = ureq::Proxy::new(&url).map_err(|_| invalid())?;
+    let protocol = match parsed.protocol() {
+        ureq::ProxyProtocol::Socks4 => ureq::ProxyProtocol::Socks4A,
+        p => p,
+    };
+    let mut b = ureq::Proxy::builder(protocol)
+        .host(parsed.host())
+        .port(parsed.port())
+        .resolve_target(false);
+    if let Some(u) = parsed.username() {
+        b = b.username(u);
+    }
+    if let Some(p) = parsed.password() {
+        b = b.password(p);
+    }
+    if let Some(list) = NO_PROXY_VARS.iter().find_map(|&n| get(n)) {
+        for expr in list.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            b = b.no_proxy(expr);
+        }
+    }
+    let proxy = b.build().map_err(|_| invalid())?;
+    let route = format!(
+        "via the {} proxy {}:{} from {var}",
+        parsed.protocol(),
+        parsed.host(),
+        parsed.port()
+    );
+    Ok(Some((proxy, route)))
+}
+
+/// Whether `e` is a TLS certificate check failure.
+fn is_certificate_error(e: &ureq::Error) -> bool {
+    let tls = match e {
+        ureq::Error::Rustls(t) => Some(t),
+        ureq::Error::Io(io) => io.get_ref().and_then(|i| i.downcast_ref::<rustls::Error>()),
+        _ => None,
+    };
+    matches!(
+        tls,
+        Some(rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented)
+    )
+}
+
 /// The key exchange groups webjetup offers (see [`Client::new`]).
 fn classic_kx_groups() -> Vec<&'static dyn rustls::crypto::SupportedKxGroup> {
     use rustls::crypto::aws_lc_rs::kx_group;
@@ -182,6 +269,12 @@ pub struct Client {
     agent: ureq::Agent,
     /// No request runs past this (see [`Client::with_deadline`]).
     deadline: Option<Instant>,
+    /// How requests leave this computer, for error messages ("directly",
+    /// "via the SOCKS5 proxy …").
+    route: String,
+    /// The proxy variable is invalid: every request fails with this
+    /// message, rather than connecting directly.
+    proxy_error: Option<String>,
 }
 
 impl Default for Client {
@@ -192,6 +285,11 @@ impl Default for Client {
 
 impl Client {
     pub fn new() -> Client {
+        Self::with_env(|n| std::env::var(n).ok())
+    }
+
+    /// A client whose proxy comes from the variables in `get`.
+    fn with_env(get: impl Fn(&str) -> Option<String>) -> Client {
         // Classic key exchange only. The workspace builds rustls with
         // `prefer-post-quantum` (the overlay wants ML-KEM), which puts a large
         // X25519MLKEM768 share first in the ClientHello; some servers and
@@ -204,9 +302,14 @@ impl Client {
             .unversioned_rustls_crypto_provider(Arc::new(provider))
             .root_certs(ureq::tls::RootCerts::WebPki)
             .build();
+        let (proxy, route, proxy_error) = match proxy_from(get) {
+            Ok(Some((p, route))) => (Some(p), route, None),
+            Ok(None) => (None, "directly (no proxy variable set)".to_string(), None),
+            Err(e) => (None, String::new(), Some(format!("{e:#}"))),
+        };
         let agent = ureq::Agent::config_builder()
             .tls_config(tls)
-            .proxy(ureq::Proxy::try_from_env())
+            .proxy(proxy)
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_global(Some(REQUEST_TIMEOUT))
             .user_agent(format!("webjetup/{}", env!("CARGO_PKG_VERSION")))
@@ -215,6 +318,8 @@ impl Client {
         Client {
             agent,
             deadline: None,
+            route,
+            proxy_error,
         }
     }
 
@@ -232,6 +337,9 @@ impl Client {
         &self,
         url: &str,
     ) -> std::result::Result<ureq::http::Response<ureq::Body>, Failure> {
+        if let Some(e) = &self.proxy_error {
+            return Err(Failure::Final(anyhow!("{url}: {e}")));
+        }
         let mut timeout = REQUEST_TIMEOUT;
         if let Some(d) = self.deadline {
             timeout = timeout.min(d.saturating_duration_since(Instant::now()));
@@ -241,6 +349,7 @@ impl Client {
                 )));
             }
         }
+        let route = &self.route;
         self.agent
             .get(url)
             .config()
@@ -250,7 +359,15 @@ impl Client {
             .map_err(|e| match e {
                 ureq::Error::StatusCode(404) => Failure::Final(NotFound(url.to_string()).into()),
                 ureq::Error::StatusCode(c) if c < 500 => Failure::Final(anyhow!("{url}: HTTP {c}")),
-                e => Failure::Retry(anyhow!("{url}: {e}")),
+                // Trying again reaches the same impostor.
+                e if is_certificate_error(&e) => Failure::Final(anyhow!(
+                    "{url} (connected {route}): {e}: the certificate isn't the release \
+                     server's, so something else answered (a proxy, firewall, filter or wrong \
+                     DNS answer). If this computer needs a proxy, set https_proxy or all_proxy \
+                     where this command sees it (sudo drops them: `sudo env \
+                     https_proxy=… webjetup …`)"
+                )),
+                e => Failure::Retry(anyhow!("{url} (connected {route}): {e}")),
             })
     }
 
@@ -452,5 +569,127 @@ mod tests {
         let s = "65EC1F165CB9FA749FCC0032E846B3190E376C37292541D1A6435749E5C8CF4B  webjet.tar.gz\n";
         assert_eq!(parse_sha256(s).unwrap(), s[..64].to_ascii_lowercase());
         assert!(parse_sha256("<html>not found</html>").is_err());
+    }
+
+    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |n| vars.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn proxy_variables_in_curls_order() {
+        let all = [
+            ("HTTP_PROXY", "http://h:1"),
+            ("ALL_PROXY", "socks5://a:2"),
+            ("https_proxy", "http://s:3"),
+        ];
+        assert_eq!(
+            proxy_var(&env(&all)),
+            Some(("https_proxy", "http://s:3".into()))
+        );
+        assert_eq!(
+            proxy_var(&env(&all[..2])),
+            Some(("ALL_PROXY", "socks5://a:2".into()))
+        );
+        assert_eq!(
+            proxy_var(&env(&all[..1])),
+            Some(("HTTP_PROXY", "http://h:1".into()))
+        );
+        // An empty variable counts as unset.
+        assert_eq!(
+            proxy_var(&env(&[("https_proxy", " "), ("all_proxy", "socks5://a:2")])),
+            Some(("all_proxy", "socks5://a:2".into()))
+        );
+        assert!(proxy_from(env(&[])).unwrap().is_none());
+    }
+
+    #[test]
+    fn socks_proxies_resolve_the_host_name_at_the_proxy() {
+        for (url, proto) in [
+            ("socks5://127.0.0.1:7890", ureq::ProxyProtocol::Socks5),
+            ("socks5h://127.0.0.1:7890", ureq::ProxyProtocol::Socks5h),
+            ("socks4://127.0.0.1:7890", ureq::ProxyProtocol::Socks4A),
+            ("http://127.0.0.1:7890", ureq::ProxyProtocol::Http),
+        ] {
+            let (p, route) = proxy_from(env(&[("all_proxy", url)])).unwrap().unwrap();
+            assert_eq!(p.protocol(), proto, "{url}");
+            assert!(!p.resolve_target(), "{url}");
+            assert_eq!((p.host(), p.port()), ("127.0.0.1", 7890));
+            assert!(route.ends_with("127.0.0.1:7890 from all_proxy"), "{route}");
+        }
+        let (p, _) = proxy_from(env(&[("all_proxy", "socks5://u:pw@proxy:1080")]))
+            .unwrap()
+            .unwrap();
+        assert_eq!((p.username(), p.password()), (Some("u"), Some("pw")));
+    }
+
+    #[test]
+    fn no_proxy_and_invalid_proxies() {
+        let (p, _) = proxy_from(env(&[
+            ("https_proxy", "http://127.0.0.1:7890"),
+            ("NO_PROXY", "localhost, .example.net"),
+        ]))
+        .unwrap()
+        .unwrap();
+        let uri = |s: &str| s.parse::<ureq::http::Uri>().unwrap();
+        assert!(p.is_no_proxy(&uri("https://forgejo.example.net/x")));
+        assert!(!p.is_no_proxy(&uri("https://forgejo.example.org/x")));
+        // Never fall back to a direct connection the user didn't ask for.
+        let e = proxy_from(env(&[("all_proxy", "ftp://127.0.0.1:21")])).unwrap_err();
+        assert!(format!("{e}").contains("all_proxy"), "{e}");
+        let c = Client::with_env(env(&[("all_proxy", "ftp://127.0.0.1:21")]));
+        let Err(Failure::Final(e)) = c.get_once("https://127.0.0.1:9/") else {
+            panic!("an invalid proxy must fail the request");
+        };
+        assert!(format!("{e}").contains("isn't a valid proxy URL"), "{e}");
+    }
+
+    /// The bug behind "invalid peer certificate: CaUsedAsEndEntity" behind a
+    /// SOCKS5 proxy: ureq without its socks-proxy feature ignored the proxy
+    /// and connected directly. Now the request goes to the proxy, and the
+    /// proxy gets the host name.
+    #[test]
+    fn requests_go_through_a_socks5_proxy_with_the_host_name() {
+        use std::net::TcpListener;
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            // Greeting: version, method count, methods; choose "no auth".
+            let mut head = [0u8; 2];
+            s.read_exact(&mut head).unwrap();
+            let mut methods = vec![0u8; usize::from(head[1])];
+            s.read_exact(&mut methods).unwrap();
+            s.write_all(&[5, 0]).unwrap();
+            // CONNECT: version, command, reserved, address type, address.
+            let mut req = [0u8; 4];
+            s.read_exact(&mut req).unwrap();
+            assert_eq!(req[..2], [5, 1]);
+            assert_eq!(
+                req[3], 3,
+                "the proxy must get a domain name, not an address"
+            );
+            let mut len = [0u8; 1];
+            s.read_exact(&mut len).unwrap();
+            let mut name = vec![0u8; usize::from(len[0]) + 2];
+            s.read_exact(&mut name).unwrap();
+            // Refuse: "connection not allowed by ruleset".
+            s.write_all(&[5, 2, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+            let port = u16::from_be_bytes([name[name.len() - 2], name[name.len() - 1]]);
+            name.truncate(name.len() - 2);
+            (String::from_utf8(name).unwrap(), port)
+        });
+        let c = Client::with_env(env(&[("all_proxy", &format!("socks5://127.0.0.1:{port}"))]));
+        let Err(Failure::Retry(e)) = c.get_once("https://release.example.invalid/x") else {
+            panic!("the refused CONNECT must fail the request");
+        };
+        assert!(format!("{e}").contains("via the SOCKS5 proxy"), "{e}");
+        assert_eq!(
+            server.join().unwrap(),
+            ("release.example.invalid".into(), 443)
+        );
     }
 }

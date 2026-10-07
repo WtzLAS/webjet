@@ -820,6 +820,7 @@ A node refuses when it runs a version older than 0.9.0 (upgrade it with `webjetu
    ```
    [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.10.3/install.sh | sudo sh
    ```
+   Behind a proxy, pass its variable through `sudo`, which drops it: `sudo env all_proxy=socks5://127.0.0.1:1080 webjetup upgrade v0.10.3` (README, "Installing a release"). The remote upgrade helper runs as a service and has no proxy variables, so nodes that only reach the release server through a proxy are upgraded by hand.
 3. Upgrade relays, then the other nodes, in stages by tag. Watch software versions (`webjet_node_info`, or the version under each node in webjet-app's Nodes tab) and alarms between stages. When a release raises the minimum gossip protocol (its release notes say so), upgraded nodes ignore the endpoint, link-state and attachment records of nodes that haven't been upgraded yet (architecture §10.6.5). Those nodes are shown as `outdated` and no routes go through them until they are upgraded, so upgrade relays without delay.
 4. Upgrade `webjetctl` on admins' machines and on the offline computer (from the release archive, as in "Installing the programs").
 

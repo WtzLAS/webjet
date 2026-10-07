@@ -154,6 +154,19 @@ runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
 `… | sudo sh -s -- v0.10.3` picks a version.
 
+Behind a proxy, `webjetup` (and `webjetctl network node upgrade`) take it
+from the first variable that is set among `https_proxy`, `all_proxy` and
+`http_proxy` (either case), and skip the hosts in `no_proxy`. They accept
+`http://`, `https://`, `socks4://` and `socks5://` proxies (also `socks4a://`,
+`socks5h://` and `socks://`). A SOCKS proxy always gets the host name, so a
+lookup on the machine itself can't send the download elsewhere. `sudo` drops
+these variables, so pass them on: `curl … | sudo env all_proxy=$all_proxy sh`
+or `sudo env https_proxy=$https_proxy webjetup upgrade`. `install.sh`
+downloads with curl, which only gives the host name to a SOCKS5 proxy written
+as `socks5h://`. If a download fails with "invalid peer certificate", the
+machine reached something other than the release server: a proxy that isn't
+used, a filter or a wrong DNS answer.
+
 On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
 release page and, in an Administrator prompt:
 

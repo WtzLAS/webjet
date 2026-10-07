@@ -23,7 +23,9 @@ serde_json.workspace = true
 hex.workspace = true
 rustls = { workspace = true, optional = true }
 # HTTPS with the workspace's aws-lc-rs provider (no ring) and Mozilla's roots.
-ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"], optional = true }
+# socks-proxy: without it ureq ignores a socks5:// proxy variable and
+# connects directly (only a log warning nobody sees).
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots", "socks-proxy"], optional = true }
 sha2 = { version = "0.11", optional = true }
 
 [target.'cfg(unix)'.dependencies]
