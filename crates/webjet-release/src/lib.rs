@@ -74,8 +74,10 @@ pub fn webjetup_name(tag: &str, target: &str) -> String {
 
 // ---------------------------------------------------------------- versions
 
-/// A release version: `0.9.0`, `v0.9.0`, `0.9.0-rc.1`. A pre-release sorts
-/// before its release; pre-release labels compare as text.
+/// A release version: `0.9.0`, `v0.9.0`, `0.9.0-rc.1`. Versions order by
+/// SemVer precedence: a pre-release sorts before its release, and pre-release
+/// labels compare identifier by identifier, numeric ones as numbers
+/// (`rc.2` < `rc.10`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Version {
     pub major: u64,
@@ -105,9 +107,10 @@ impl Version {
             return None;
         }
         if let Some(p) = pre
-            && (p.is_empty()
-                || p.len() > 32
-                || !p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.'))
+            && (p.len() > 32
+                || p.split('.').any(|id| {
+                    id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric())
+                }))
         {
             return None;
         }
@@ -128,8 +131,39 @@ impl Ord for Version {
                 (None, None) => Ordering::Equal,
                 (None, Some(_)) => Ordering::Greater,
                 (Some(_), None) => Ordering::Less,
-                (Some(a), Some(b)) => a.cmp(b),
+                (Some(a), Some(b)) => pre_cmp(a, b),
             })
+    }
+}
+
+/// SemVer §11 precedence of two pre-release labels: identifier by identifier;
+/// numeric identifiers compare as numbers and sort before alphanumeric ones;
+/// a label that is a prefix of the other sorts first. Labels SemVer would call
+/// equal (`rc.01`, `rc.1`) fall back to text so the order agrees with `Eq`.
+fn pre_cmp(a: &str, b: &str) -> Ordering {
+    fn num(id: &str) -> Option<&str> {
+        id.bytes()
+            .all(|c| c.is_ascii_digit())
+            .then(|| id.trim_start_matches('0'))
+    }
+    let mut ia = a.split('.');
+    let mut ib = b.split('.');
+    loop {
+        let o = match (ia.next(), ib.next()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => match (num(x), num(y)) {
+                // Digits without leading zeros: the longer one is larger.
+                (Some(m), Some(n)) => m.len().cmp(&n.len()).then_with(|| m.cmp(n)),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => x.cmp(y),
+            },
+        };
+        if o != Ordering::Equal {
+            return o;
+        }
     }
 }
 
@@ -547,6 +581,18 @@ mod tests {
         assert!(v("v1.0.0") > v("0.99.99"));
         assert!(v("0.9.0") > v("0.9.0-rc.1"));
         assert!(v("0.9.0-rc.2") > v("0.9.0-rc.1"));
+        // SemVer §11: numeric identifiers compare as numbers.
+        assert!(v("0.9.0-rc.10") > v("0.9.0-rc.2"));
+        assert!(v("0.9.0-rc.100000000000000000000") > v("0.9.0-rc.99"));
+        assert!(v("0.9.0-alpha") < v("0.9.0-alpha.1"));
+        assert!(v("0.9.0-alpha.1") < v("0.9.0-alpha.beta"));
+        assert!(v("0.9.0-alpha.beta") < v("0.9.0-beta"));
+        assert!(v("0.9.0-beta.11") < v("0.9.0-rc.1"));
+        assert!(v("0.9.0-1") < v("0.9.0-a"));
+        assert_eq!(is_upgrade("0.9.0-rc.10", "v0.9.0-rc.2"), Some(false));
+        // Order agrees with Eq.
+        assert!(v("0.9.0-rc.01") != v("0.9.0-rc.1"));
+        assert_ne!(v("0.9.0-rc.01").cmp(&v("0.9.0-rc.1")), Ordering::Equal);
         assert_eq!(v("v0.9.0"), v("0.9.0"));
         assert_eq!(v("0.10.0").to_string(), "0.10.0");
         assert_eq!(v("0.9.0-rc.1").to_string(), "0.9.0-rc.1");
@@ -558,6 +604,9 @@ mod tests {
             "a.b.c",
             "0.9.0-",
             "0.9.0-x/y",
+            "0.9.0-rc..1",
+            "0.9.0-.rc",
+            "0.9.0-rc.",
             "0.9.-1",
             "v0.9.0 x",
         ] {
