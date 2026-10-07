@@ -1009,6 +1009,257 @@ impl Sessions {
 }
 
 #[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    use crate::circuit::{self, LocalCircuit};
+    use crate::node::{Hop, TestHopRx};
+    use crate::testnode::{self, Cluster};
+    use webjet_core::testutil::{NodeSpec, packets};
+    use webjet_proto::{self as wp, HopMsg, Transport};
+
+    /// `src` and `dst` with a circuit between them through `relay`, which
+    /// the test plays: frames each side sends are handed to the other.
+    struct Link {
+        sn: Arc<Node>,
+        dn: Arc<Node>,
+        s: Bytes32,
+        d: Bytes32,
+        hs: Arc<Hop>,
+        rs: TestHopRx,
+        hd: Arc<Hop>,
+        rd: TestHopRx,
+        /// The labels each side receives on.
+        s_in: u32,
+        d_in: u32,
+        /// Data packets each side's tun got.
+        tun_s: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        tun_d: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        _keep: (Arc<LocalCircuit>, tempfile::TempDir, tempfile::TempDir),
+    }
+
+    async fn link() -> Link {
+        let mut c = Cluster::new();
+        let s = c.data_node("src", "10.7.0.2", &[]);
+        let r = c.enroll(NodeSpec {
+            name: "relay",
+            ip: "10.7.0.3",
+            roles: &[wp::Role::Data, wp::Role::Relay],
+            ..Default::default()
+        });
+        let d = c.data_node("dst", "10.7.0.4", &[]);
+        c.set_policy(wp::Policy {
+            default_action: wp::Action::Allow,
+            ..Default::default()
+        })
+        .expect("policy");
+        let (sn, d1) = testnode::node(&mut c, s.0, s.1.clone());
+        let (dn, d2) = testnode::node(&mut c, d.0, d.1.clone());
+        let (hs, mut rs) = sn.test_hop(r.0, Transport::TcpTls);
+        let (hd, mut rd) = dn.test_hop(r.0, Transport::TcpTls);
+        // The source opens; the relay passes the setup on to the destination.
+        let (n2, peer, relay) = (sn.clone(), d.0, r.0);
+        let opening = tokio::spawn(async move { circuit::open(&n2, peer, vec![relay]).await });
+        let o = loop {
+            if let Some(HopMsg::CircuitOpen(o)) = rs.control().pop() {
+                break o;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        };
+        circuit::on_open(
+            &dn,
+            &hd,
+            wp::CircuitOpen {
+                setup: o.setup.clone(),
+                label: 33,
+            },
+        )
+        .await
+        .expect("destination accepts");
+        let Some(HopMsg::CircuitAccept(a)) = rd.control().pop() else {
+            panic!("expected CircuitAccept")
+        };
+        circuit::on_accept(
+            &sn,
+            &hs,
+            wp::CircuitAccept {
+                label: o.label,
+                peer_label: 44,
+            },
+        );
+        let cs = opening.await.expect("task").expect("circuit");
+        let (_, tun_s) = crate::dataplane::Dataplane::for_test(&sn);
+        let (_, tun_d) = crate::dataplane::Dataplane::for_test(&dn);
+        Link {
+            sn,
+            dn,
+            s: s.0,
+            d: d.0,
+            hs,
+            rs,
+            hd,
+            rd,
+            s_in: o.label,
+            d_in: a.peer_label,
+            tun_s,
+            tun_d,
+            _keep: (cs, d1, d2),
+        }
+    }
+
+    fn relabel(frame: &[u8], label: u32) -> Vec<u8> {
+        let (_, limit, ecn, body) = frames::parse_relay(frame).expect("relay frame");
+        [&frames::relay_header(label, limit, ecn)[..], body].concat()
+    }
+
+    /// Pass frames between the two until neither sends any more. `to_d` and
+    /// `to_s` see each frame on its way (with the label it was sent on) and
+    /// return the frames to deliver instead.
+    async fn pump(
+        l: &mut Link,
+        mut to_d: impl FnMut(Vec<u8>) -> Vec<Vec<u8>>,
+        mut to_s: impl FnMut(Vec<u8>) -> Vec<Vec<u8>>,
+    ) {
+        let mut quiet = 0;
+        while quiet < 5 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let (up, down) = (l.rs.relay(), l.rd.relay());
+            if up.is_empty() && down.is_empty() {
+                quiet += 1;
+                continue;
+            }
+            quiet = 0;
+            for f in up.into_iter().flat_map(&mut to_d) {
+                circuit::on_relay_frame(&l.dn, &l.hd, relabel(&f, l.d_in));
+            }
+            for f in down.into_iter().flat_map(&mut to_s) {
+                circuit::on_relay_frame(&l.sn, &l.hs, relabel(&f, l.s_in));
+            }
+        }
+    }
+
+    fn pass(f: Vec<u8>) -> Vec<Vec<u8>> {
+        vec![f]
+    }
+
+    fn session(n: &Node, peer: &Bytes32) -> Arc<Session> {
+        n.e2e.get(peer).expect("session")
+    }
+
+    fn ping(from: [u8; 4], to: [u8; 4]) -> Vec<u8> {
+        packets::udp4(from, to, 4000, 5000, b"hello")
+    }
+
+    fn delivered(tun: &mut tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) -> Vec<Vec<u8>> {
+        std::iter::from_fn(|| tun.try_recv().ok()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_queued_packet_goes_once_the_handshake_is_done() {
+        let mut l = link().await;
+        let p = ping([10, 7, 0, 2], [10, 7, 0, 4]);
+        assert!(matches!(
+            send(&l.sn, &l.d, ftype::DATA, &p, 0),
+            SendResult::Queued
+        ));
+        pump(&mut l, pass, pass).await;
+        let (a, b) = (session(&l.sn, &l.d), session(&l.dn, &l.s));
+        assert!(a.established() && b.established());
+        assert!(!a.handshaking(), "the initiator keeps no handshake state");
+        assert_eq!(delivered(&mut l.tun_d), [p]);
+        // And back, on the same keys.
+        let r = ping([10, 7, 0, 4], [10, 7, 0, 2]);
+        assert!(matches!(
+            send(&l.dn, &l.s, ftype::DATA, &r, 0),
+            SendResult::Sent
+        ));
+        pump(&mut l, pass, pass).await;
+        assert_eq!(delivered(&mut l.tun_s), [r]);
+    }
+
+    /// Both ends start a handshake at once: the lower node id stays the
+    /// client, the other answers, and they end with one pair of keys.
+    #[tokio::test]
+    async fn simultaneous_handshakes_end_in_one_session() {
+        let mut l = link().await;
+        let (p, r) = (
+            ping([10, 7, 0, 2], [10, 7, 0, 4]),
+            ping([10, 7, 0, 4], [10, 7, 0, 2]),
+        );
+        send(&l.sn, &l.d, ftype::DATA, &p, 0);
+        send(&l.dn, &l.s, ftype::DATA, &r, 0);
+        // Let both flights be on their way before either arrives.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        pump(&mut l, pass, pass).await;
+        let (a, b) = (session(&l.sn, &l.d), session(&l.dn, &l.s));
+        assert!(a.established() && b.established());
+        // Each side's queued packet arrived, so the keys agree.
+        assert_eq!(delivered(&mut l.tun_d), [p]);
+        assert_eq!(delivered(&mut l.tun_s), [r]);
+    }
+
+    /// A flight that arrives twice (the peer resent it) is answered with
+    /// the same reply, and the handshake still completes.
+    #[tokio::test]
+    async fn a_repeated_flight_is_answered_again() {
+        let mut l = link().await;
+        let p = ping([10, 7, 0, 2], [10, 7, 0, 4]);
+        send(&l.sn, &l.d, ftype::DATA, &p, 0);
+        let mut first = true;
+        let mut replies = 0;
+        pump(
+            &mut l,
+            |f| {
+                if std::mem::take(&mut first) {
+                    vec![f.clone(), f]
+                } else {
+                    vec![f]
+                }
+            },
+            |f| {
+                replies += 1;
+                vec![f]
+            },
+        )
+        .await;
+        assert!(replies >= 2, "the repeated flight was answered");
+        assert!(session(&l.sn, &l.d).established());
+        assert!(session(&l.dn, &l.s).established());
+        assert_eq!(delivered(&mut l.tun_d), [p], "once");
+    }
+
+    /// A damaged reply ends the initiator's handshake at once, instead of
+    /// leaving the session handshaking until it gives up.
+    #[tokio::test]
+    async fn a_damaged_flight_ends_the_handshake() {
+        let mut l = link().await;
+        send(
+            &l.sn,
+            &l.d,
+            ftype::DATA,
+            &ping([10, 7, 0, 2], [10, 7, 0, 4]),
+            0,
+        );
+        let mut damaged = 0;
+        pump(&mut l, pass, |mut f| {
+            // The TLS bytes of a handshake frame (they're padded): the
+            // last one of the flight is in its last encrypted record.
+            let (_, _, _, body) = frames::parse_relay(&f).expect("relay frame");
+            if let Some(h) = frames::parse_handshake(body) {
+                let end = frames::RELAY_HEADER + 22 + h.tls.len();
+                f[end - 1] ^= 0x40;
+                damaged += 1;
+            }
+            vec![f]
+        })
+        .await;
+        assert_eq!(damaged, 1, "the responder's flight");
+        let a = session(&l.sn, &l.d);
+        assert!(!a.established());
+        assert!(!a.handshaking(), "no stale handshake state");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use webjet_proto::{self as wp, Decodable, Encodable};
