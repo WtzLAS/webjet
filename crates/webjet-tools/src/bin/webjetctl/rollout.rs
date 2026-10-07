@@ -2,11 +2,73 @@
 
 use crate::{agent::*, cli::*, output::*};
 use anyhow::{Result, anyhow, bail};
+use futures::{StreamExt, stream};
 use serde_json::{Value, json};
 use webjet_core::crypto::{self, Bytes32};
 use webjet_core::types::now_ms;
-use webjet_tools::upgrade;
+use webjet_proto as wp;
+use webjet_tools::{Account, upgrade};
 use webjetd::control::Request;
+
+/// Control calls in flight at once: a stage's nodes are asked together, but
+/// the agent's control channel has only `MAX_CONNECTIONS` (64) slots, shared
+/// with every other client.
+const PARALLEL: usize = 16;
+
+/// Run `calls` at most [`PARALLEL`] at a time; the answers in their order.
+async fn together<T>(calls: impl IntoIterator<Item = impl Future<Output = T>>) -> Vec<T> {
+    stream::iter(calls).buffered(PARALLEL).collect().await
+}
+
+/// What asking one node to upgrade came to.
+enum Sent {
+    /// It runs the version already.
+    Already(Value),
+    /// It can't take the request; it is left as it is.
+    Skipped(String),
+    /// The request is queued there: the node's version before, the id.
+    Queued { from: String, id: String },
+}
+
+/// Ask node `t` for its status and, when it can take one, send it a signed
+/// request for `tag`.
+async fn send(
+    cli: &Cli,
+    t: &upgrade::Target,
+    tag: &str,
+    files: &[wp::UpgradeFile],
+    a: &Account,
+) -> Sent {
+    let st = match call(cli, Request::UpgradeStatus { node: Some(t.id) }).await {
+        Ok(st) => st,
+        Err(e) => {
+            return Sent::Skipped(format!(
+                "{e:#} (offline? nodes before 0.9.0 can't be upgraded remotely: upgrade them with webjetup)"
+            ));
+        }
+    };
+    if upgrade::progress(&st, tag, "-") == upgrade::Progress::Done {
+        return Sent::Already(st["version"].clone());
+    }
+    if st["remote"].as_bool() == Some(false) {
+        return Sent::Skipped(
+            "remote upgrades are turned off there ([upgrade] remote = false)".into(),
+        );
+    }
+    if st["helper"].as_bool() != Some(true) {
+        return Sent::Skipped(
+            "no upgrade helper installed there (webjetup install sets it up)".into(),
+        );
+    }
+    let req = upgrade::sign_request(&a.kp, &a.id, &t.id, tag, files, now_ms());
+    match call(cli, Request::Upgrade { request: req }).await {
+        Ok(r) => Sent::Queued {
+            from: st["version"].as_str().unwrap_or("?").to_string(),
+            id: r["id"].as_str().unwrap_or_default().to_string(),
+        },
+        Err(e) => Sent::Skipped(format!("{e:#}")),
+    }
+}
 
 pub(crate) struct Selection<'a> {
     pub(crate) names: &'a [String],
@@ -164,73 +226,45 @@ pub(crate) async fn upgrade_nodes(
         skipped.push(json!({"name": t.name, "node_id": hex::encode(t.id), "result": "skipped", "reason": why}));
     };
     for (i, stage) in stages.iter().enumerate() {
+        // Every node of the stage is asked at once, so an offline node costs
+        // the stage one RPC timeout rather than one each.
+        let sent = together(stage.iter().map(|t| send(cli, t, &tag, &files, &a))).await;
         let mut waiting: Vec<(&upgrade::Target, String)> = Vec::new();
-        for t in stage {
-            let st = match call(cli, Request::UpgradeStatus { node: Some(t.id) }).await {
-                Ok(st) => st,
-                Err(e) => {
-                    skip(
-                        t,
-                        format!(
-                            "{e:#} (offline? nodes before 0.9.0 can't be upgraded remotely: upgrade them with webjetup)"
-                        ),
-                    );
-                    continue;
+        for (t, s) in stage.iter().zip(sent) {
+            match s {
+                Sent::Already(version) => {
+                    if !cli.json {
+                        println!(
+                            "  {}: runs {} already",
+                            t.name,
+                            version.as_str().unwrap_or("?")
+                        );
+                    }
+                    done.push(json!({"name": t.name, "node_id": hex::encode(t.id), "result": "already", "version": version}));
                 }
-            };
-            if upgrade::progress(&st, &tag, "-") == upgrade::Progress::Done {
-                if !cli.json {
-                    println!(
-                        "  {}: runs {} already",
-                        t.name,
-                        st["version"].as_str().unwrap_or("?")
-                    );
+                Sent::Skipped(why) => skip(t, why),
+                Sent::Queued { from, id } => {
+                    if !cli.json {
+                        println!("  {}: {from} → {tag} queued", t.name);
+                    }
+                    waiting.push((t, id));
                 }
-                done.push(json!({"name": t.name, "node_id": hex::encode(t.id), "result": "already", "version": st["version"]}));
-                continue;
             }
-            if st["remote"].as_bool() == Some(false) {
-                skip(
-                    t,
-                    "remote upgrades are turned off there ([upgrade] remote = false)".into(),
-                );
-                continue;
-            }
-            if st["helper"].as_bool() != Some(true) {
-                skip(
-                    t,
-                    "no upgrade helper installed there (webjetup install sets it up)".into(),
-                );
-                continue;
-            }
-            let req = upgrade::sign_request(&a.kp, &a.id, &t.id, &tag, &files, now_ms());
-            let r = match call(cli, Request::Upgrade { request: req }).await {
-                Ok(r) => r,
-                Err(e) => {
-                    skip(t, format!("{e:#}"));
-                    continue;
-                }
-            };
-            let id = r["id"].as_str().unwrap_or_default().to_string();
-            if !cli.json {
-                println!(
-                    "  {}: {} → {tag} queued",
-                    t.name,
-                    st["version"].as_str().unwrap_or("?")
-                );
-            }
-            waiting.push((t, id));
         }
         let start = std::time::Instant::now();
         while !waiting.is_empty() {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let mut still = Vec::new();
-            for (t, id) in waiting {
+            let want = tag.as_str();
+            let polled = together(waiting.iter().map(|(t, id)| async move {
                 // A node restarting doesn't answer for a while.
-                let p = match call(cli, Request::UpgradeStatus { node: Some(t.id) }).await {
-                    Ok(v) => upgrade::progress(&v, &tag, &id),
+                match call(cli, Request::UpgradeStatus { node: Some(t.id) }).await {
+                    Ok(v) => upgrade::progress(&v, want, id),
                     Err(e) => upgrade::Progress::Waiting(format!("{e:#}")),
-                };
+                }
+            }))
+            .await;
+            let mut still = Vec::new();
+            for ((t, id), p) in waiting.into_iter().zip(polled) {
                 match p {
                     upgrade::Progress::Done => {
                         if !cli.json {
