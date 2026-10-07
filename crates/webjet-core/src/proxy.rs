@@ -19,14 +19,14 @@
 
 use crate::conntrack::{Conntrack, Key};
 use crate::crypto::Bytes32;
-use crate::packet::{Flow, Parsed};
+use crate::packet::{Flow, Fragment, Parsed};
 use crate::policy::{PROTO_TCP, PROTO_UDP, Selector};
 use crate::types::valid_name;
 use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::ops::RangeInclusive;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use webjet_proto as wp;
 
 /// Source ports the ingress uses when it translates the source: above
@@ -205,12 +205,56 @@ pub struct FlowInfo {
     pub client: Option<Flow>,
 }
 
+/// How long a datagram's later fragments may follow its first one.
+pub const FRAG_TIMEOUT: Duration = Duration::from_secs(30);
+/// At most this many datagrams' fragment routes at once.
+pub const FRAG_CAP: usize = 8192;
+
+/// One fragmented datagram as it arrives at one point of the proxy: from
+/// the tun interface (`from: None`) or in a PROXY frame from a peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FragKey {
+    pub from: Option<Bytes32>,
+    pub proto: u8,
+    pub src: IpAddr,
+    pub dst: IpAddr,
+    pub id: u32,
+}
+
+impl FragKey {
+    pub fn of(from: Option<&Bytes32>, p: &Parsed) -> Self {
+        FragKey {
+            from: from.copied(),
+            proto: p.flow.proto,
+            src: p.flow.src,
+            dst: p.flow.dst,
+            id: p.frag_id,
+        }
+    }
+}
+
+/// Where the later fragments of a datagram go: the way its first fragment
+/// went. Later fragments carry no ports, so no flow lookup finds them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FragRoute {
+    /// To this peer in a PROXY frame; `None`: into the tun interface.
+    pub peer: Option<Bytes32>,
+    /// The addresses the first fragment was given (`None`: kept).
+    pub src: Option<IpAddr>,
+    pub dst: Option<IpAddr>,
+    /// For the counters: the flow's side, rule and rule owner.
+    pub role: Role,
+    pub rule: String,
+    pub owner: Bytes32,
+}
+
 /// Proxy flows: their own connection tracking plus the address mappings.
 ///
 /// * Ingress flows: conntrack key = (target node, translated flow), entry
 ///   outbound; `by_client` maps the captured flow to that key.
 /// * Target flows: conntrack key = (ingress, flow as received), entry
 ///   inbound; `by_flow` finds the ingress for replies from the tun.
+/// * Fragmented datagrams: `frags` sends later fragments after their first.
 pub struct Table {
     pub ct: Conntrack,
     info: HashMap<Key, FlowInfo>,
@@ -218,6 +262,7 @@ pub struct Table {
     by_flow: HashMap<Flow, Bytes32>,
     /// Translated sources in use: (protocol, source, port, target, port).
     snat_used: HashSet<(u8, IpAddr, u16, IpAddr, u16)>,
+    frags: HashMap<FragKey, (FragRoute, Instant)>,
 }
 
 impl Default for Table {
@@ -234,6 +279,7 @@ impl Table {
             by_client: HashMap::new(),
             by_flow: HashMap::new(),
             snat_used: HashSet::new(),
+            frags: HashMap::new(),
         }
     }
 
@@ -338,6 +384,39 @@ impl Table {
         for k in dead {
             self.forget(&k);
         }
+        self.frags
+            .retain(|_, (_, t)| now.duration_since(*t) < FRAG_TIMEOUT);
+    }
+
+    /// Remember where a first fragment went (`p`: the fragment as it
+    /// arrived), so its datagram's later fragments follow it.
+    pub fn add_frag(&mut self, from: Option<&Bytes32>, p: &Parsed, route: FragRoute, now: Instant) {
+        if p.fragment != Fragment::First {
+            return;
+        }
+        if self.frags.len() >= FRAG_CAP {
+            self.frags
+                .retain(|_, (_, t)| now.duration_since(*t) < FRAG_TIMEOUT);
+            if self.frags.len() >= FRAG_CAP {
+                return;
+            }
+        }
+        self.frags.insert(FragKey::of(from, p), (route, now));
+    }
+
+    /// Where a later fragment goes, if its first fragment came this way.
+    pub fn frag_route(
+        &mut self,
+        from: Option<&Bytes32>,
+        p: &Parsed,
+        now: Instant,
+    ) -> Option<FragRoute> {
+        let (r, t) = self.frags.get_mut(&FragKey::of(from, p))?;
+        if now.duration_since(*t) >= FRAG_TIMEOUT {
+            return None;
+        }
+        *t = now;
+        Some(r.clone())
     }
 
     /// Re-check every flow (rules or policy changed); `keep` says whether
@@ -355,6 +434,10 @@ impl Table {
             .collect();
         for k in dead {
             self.forget(&k);
+        }
+        if n > 0 {
+            // Datagrams in flight may belong to a flow just closed.
+            self.frags.clear();
         }
         n
     }
@@ -560,5 +643,34 @@ mod tests {
         }
         t.expire(later);
         assert_eq!(t.target_peer(&p.flow), Some(ingress2));
+    }
+
+    #[test]
+    fn later_fragments_follow_their_first_until_it_expires() {
+        let mut t = Table::new();
+        let now = Instant::now();
+        let mut p = udp4([203, 0, 113, 7], [10, 7, 255, 53], 4000, 27015, &[0; 64]);
+        p[4..6].copy_from_slice(&7u16.to_be_bytes());
+        p[6] = 0x20;
+        let first = parse(&p).unwrap();
+        p[6] = 0;
+        p[7] = 4;
+        let later = parse(&p).unwrap();
+        let route = FragRoute {
+            peer: Some([9; 32]),
+            src: None,
+            dst: Some("10.7.0.2".parse().unwrap()),
+            role: Role::Ingress,
+            rule: "game".into(),
+            owner: [1; 32],
+        };
+        // Only a first fragment opens a route; it is per arrival point.
+        t.add_frag(None, &later, route.clone(), now);
+        assert_eq!(t.frag_route(None, &later, now), None);
+        t.add_frag(None, &first, route.clone(), now);
+        assert_eq!(t.frag_route(None, &later, now), Some(route));
+        assert_eq!(t.frag_route(Some(&[9; 32]), &later, now), None);
+        t.expire(now + FRAG_TIMEOUT);
+        assert_eq!(t.frag_route(None, &later, now + FRAG_TIMEOUT), None);
     }
 }

@@ -400,6 +400,9 @@ pub fn rewrite(p: &mut [u8], new_src: Option<(IpAddr, u16)>, new_dst: Option<(Ip
     let is_echo = matches!(parsed.icmp, Some(IcmpKind::Echo { .. }));
     // A later fragment has no ports: its L4 bytes are payload.
     let ports = parsed.fragment != Fragment::Later;
+    // A first fragment's L4 checksum covers the whole datagram, which
+    // `fix_checksums` can't see: update it for what changes here instead.
+    let before = (parsed.fragment == Fragment::First).then(|| l4_sum_fields(p, &parsed));
     if let Some((a, port)) = new_src {
         set_addr(p, true, a);
         if ports && (proto == PROTO_TCP || proto == PROTO_UDP || is_echo) {
@@ -433,7 +436,55 @@ pub fn rewrite(p: &mut [u8], new_src: Option<(IpAddr, u16)>, new_dst: Option<(Ip
             fix_quoted_ip_checksum(p, q);
         }
     }
+    if let Some(old) = before {
+        adjust_l4_checksum(p, &parsed, &old);
+    }
     fix_checksums(p);
+}
+
+/// The bytes of a packet's L4 checksum that `rewrite` may change: the
+/// pseudo header's addresses (TCP, UDP, ICMPv6) and the ports or echo id.
+fn l4_sum_fields(p: &[u8], parsed: &Parsed) -> Vec<u8> {
+    let off = parsed.l4_offset;
+    let mut v = Vec::with_capacity(36);
+    if parsed.flow.proto != PROTO_ICMP
+        && let Some((s, d)) = src_dst(p)
+    {
+        v.extend_from_slice(&octets(s));
+        v.extend_from_slice(&octets(d));
+    }
+    let span = match parsed.flow.proto {
+        PROTO_TCP | PROTO_UDP => off..off + 4,
+        PROTO_ICMP | PROTO_ICMPV6 => off + 4..off + 6,
+        _ => off..off,
+    };
+    v.extend_from_slice(p.get(span).unwrap_or_default());
+    v
+}
+
+/// Update the L4 checksum of a first fragment for the fields `rewrite`
+/// changed (`old`: `l4_sum_fields` before the change; RFC 1624).
+fn adjust_l4_checksum(p: &mut [u8], parsed: &Parsed, old: &[u8]) {
+    let off = parsed.l4_offset;
+    let at = match parsed.flow.proto {
+        PROTO_TCP => off + 16,
+        PROTO_UDP => off + 6,
+        PROTO_ICMP | PROTO_ICMPV6 if matches!(parsed.icmp, Some(IcmpKind::Echo { .. })) => off + 2,
+        _ => return,
+    };
+    let new = l4_sum_fields(p, parsed);
+    if p.len() < at + 2 || new.len() != old.len() {
+        return;
+    }
+    let c = u16::from_be_bytes([p[at], p[at + 1]]);
+    if parsed.flow.proto == PROTO_UDP && c == 0 && version(p) == Some(4) {
+        return; // IPv4 UDP without a checksum
+    }
+    let mut c = adjust_checksum(c, old, &new);
+    if parsed.flow.proto == PROTO_UDP && c == 0 {
+        c = 0xffff;
+    }
+    p[at..at + 2].copy_from_slice(&c.to_be_bytes());
 }
 
 /// Recompute the IPv4 header checksum of the packet an ICMP error quotes
@@ -787,6 +838,29 @@ pub mod tests {
             pseudo(&parsed.flow.src, &parsed.flow.dst, 17, p.len() - off),
         )) == 0
             && checksum(&p[..20]) == 0
+    }
+
+    #[test]
+    fn rewriting_a_first_fragment_keeps_the_datagram_checksum() {
+        // The UDP checksum of a first fragment covers bytes in later
+        // fragments: rewriting must adjust it, not recompute it.
+        for (src, dst) in [
+            ([10, 0, 0, 1], [10, 0, 0, 2]),
+            ([203, 0, 113, 5], [10, 7, 255, 53]),
+        ] {
+            let whole = udp4(src, dst, 5555, 27015, &[7u8; 64]);
+            let mut first = whole[..20 + 32].to_vec();
+            first[2..4].copy_from_slice(&52u16.to_be_bytes());
+            first[6] = 0x20;
+            fix_checksums(&mut first);
+            let to = (IpAddr::from([10, 7, 0, 3]), 27016);
+            let from = (IpAddr::from([10, 7, 0, 2]), 61000);
+            rewrite(&mut first, Some(from), Some(to));
+            let mut expect = whole.clone();
+            rewrite(&mut expect, Some(from), Some(to));
+            assert_eq!(first[20..28], expect[20..28], "ports and checksum");
+            assert_eq!(checksum(&first[..20]), 0);
+        }
     }
 
     #[test]

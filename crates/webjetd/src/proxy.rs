@@ -19,7 +19,7 @@ use crate::dataplane::Dataplane;
 use crate::node::Node;
 use parking_lot::{Mutex, RwLock};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,9 +27,9 @@ use std::time::Instant;
 use webjet_core::conntrack::{Key, Verdict as Ct};
 use webjet_core::crypto::{self, Bytes32};
 use webjet_core::frames::ftype;
-use webjet_core::packet::{self, Flow, IcmpKind, Parsed, Unreach, tcpf};
-use webjet_core::policy::{self, Decision, Dest, PROTO_TCP};
-use webjet_core::proxy::{self as px, FlowInfo, Role, Rule, Table, Target};
+use webjet_core::packet::{self, Flow, Fragment, IcmpKind, Parsed, Unreach, tcpf};
+use webjet_core::policy::{self, Decision, Dest, PROTO_TCP, PROTO_UDP};
+use webjet_core::proxy::{self as px, FlowInfo, FragRoute, Role, Rule, Table, Target};
 use webjet_core::store::View;
 use webjet_proto as wp;
 
@@ -67,6 +67,10 @@ struct Choice {
 /// Listen ports (protocol, port) and proxy addresses in the chains.
 type Applied = (Vec<(u8, u16)>, Vec<IpAddr>);
 
+/// At most this many real-IP UDP flows get a reply route (each is an
+/// `ip rule`, and the kernel walks the rules in order).
+const REPLY_ROUTE_CAP: usize = 1024;
+
 pub struct Proxy {
     pub table: Mutex<Table>,
     rules: RwLock<Vec<RuleState>>,
@@ -77,6 +81,11 @@ pub struct Proxy {
     pub real_ip_ready: AtomicBool,
     /// Leftovers of an earlier run were removed.
     cleaned: AtomicBool,
+    /// Real-IP UDP flows (as received) whose replies have a route into the
+    /// tun interface (`platform::proxy_reply_route`).
+    reply_routes: Mutex<HashSet<Flow>>,
+    /// Adding such a route failed once (warned).
+    reply_route_failed: AtomicBool,
     counters: Mutex<BTreeMap<(Role, String, Bytes32), Counters>>,
 }
 
@@ -145,6 +154,8 @@ impl Proxy {
             applied: Mutex::new(None),
             real_ip_ready: AtomicBool::new(false),
             cleaned: AtomicBool::new(false),
+            reply_routes: Mutex::new(HashSet::new()),
+            reply_route_failed: AtomicBool::new(false),
             counters: Mutex::new(BTreeMap::new()),
         }
     }
@@ -165,7 +176,9 @@ impl Proxy {
         if !self.addrs.read().contains(&f.dst) || dp.is_mine(&f.src) {
             return false;
         }
+        // A later fragment has no ports; it follows its first fragment.
         p.icmp == Some(IcmpKind::Error)
+            || p.fragment == Fragment::Later
             || self
                 .rules
                 .read()
@@ -173,10 +186,60 @@ impl Proxy {
                 .any(|r| r.rule.proto == f.proto && r.rule.listen_port == f.dport)
     }
 
+    /// A later fragment of a datagram (it has no ports, so no flow finds
+    /// it) goes where its first fragment went, with the same addresses.
+    /// `from`: the peer it came from, `None` for the tun interface. False
+    /// when no first fragment went this way.
+    fn later_fragment(
+        &self,
+        n: &Arc<Node>,
+        from: Option<&Bytes32>,
+        p: &[u8],
+        parsed: &Parsed,
+    ) -> bool {
+        if parsed.fragment != Fragment::Later {
+            return false;
+        }
+        let Some(r) = self.table.lock().frag_route(from, parsed, Instant::now()) else {
+            return false;
+        };
+        let mut q = p.to_vec();
+        if r.src.is_some() || r.dst.is_some() {
+            // Addresses only: a later fragment carries no ports.
+            packet::rewrite(&mut q, r.src.map(|a| (a, 0)), r.dst.map(|a| (a, 0)));
+        }
+        // The ingress sends to the target in frames; the target writes to
+        // its tun interface what goes to the target.
+        let to_target = (r.role == Role::Ingress) == r.peer.is_some();
+        let bytes = q.len() as u64;
+        self.count(r.role, &r.rule, r.owner, |c| {
+            if to_target {
+                c.to_target_packets += 1;
+                c.to_target_bytes += bytes;
+            } else {
+                c.to_client_packets += 1;
+                c.to_client_bytes += bytes;
+            }
+        });
+        match r.peer {
+            Some(peer) => send(n, &peer, &q),
+            None => {
+                if let Some(dp) = n.dataplane.get() {
+                    dp.write_tun_raw(q);
+                }
+            }
+        }
+        true
+    }
+
     // ------------------------------------------------------------ the ingress
 
     /// A client's packet (ingress): an existing flow's or a new one.
     pub fn from_client(&self, n: &Arc<Node>, dp: &Dataplane, p: Vec<u8>, parsed: Parsed) {
+        if parsed.fragment == Fragment::Later {
+            self.later_fragment(n, None, &p, &parsed);
+            return;
+        }
         let now = Instant::now();
         let error = parsed.icmp == Some(IcmpKind::Error);
         // An ICMP error from the client quotes a reply we sent it.
@@ -202,6 +265,21 @@ impl Proxy {
             );
             if !error && let Some(pp) = packet::parse(&q) {
                 self.table.lock().ct.classify(&k.peer, &pp, true, now);
+            }
+            if !error {
+                self.table.lock().add_frag(
+                    None,
+                    &parsed,
+                    FragRoute {
+                        peer: Some(k.peer),
+                        src: Some(k.flow.src),
+                        dst: Some(k.flow.dst),
+                        role: Role::Ingress,
+                        rule: rule.clone(),
+                        owner: n.me,
+                    },
+                    now,
+                );
             }
             self.count(Role::Ingress, &rule, n.me, |c| {
                 c.to_target_packets += 1;
@@ -309,6 +387,19 @@ impl Proxy {
                     client: Some(client),
                 },
             );
+            t.add_frag(
+                None,
+                &parsed,
+                FragRoute {
+                    peer: Some(choice.peer),
+                    src: Some(src.0),
+                    dst: Some(choice.addr),
+                    role: Role::Ingress,
+                    rule: rule.name.clone(),
+                    owner: n.me,
+                },
+                now,
+            );
         }
         self.count(Role::Ingress, &rule.name, n.me, |c| {
             c.flows += 1;
@@ -387,6 +478,10 @@ impl Proxy {
         let Some(parsed) = packet::parse(&p) else {
             return;
         };
+        if parsed.fragment == Fragment::Later {
+            self.later_fragment(n, Some(peer), &p, &parsed);
+            return;
+        }
         let now = Instant::now();
         let error = parsed.icmp == Some(IcmpKind::Error);
         // A reply's flow reversed, or the flow an ICMP error quotes, is the
@@ -412,6 +507,21 @@ impl Proxy {
                     Some((client.dst, client.dport)),
                     Some((client.src, client.sport)),
                 );
+                if !error {
+                    self.table.lock().add_frag(
+                        Some(peer),
+                        &parsed,
+                        FragRoute {
+                            peer: None,
+                            src: Some(client.dst),
+                            dst: Some(client.src),
+                            role: Role::Ingress,
+                            rule: rule.clone(),
+                            owner: n.me,
+                        },
+                        now,
+                    );
+                }
                 self.count(Role::Ingress, &rule, n.me, |c| {
                     c.to_client_packets += 1;
                     c.to_client_bytes += q.len() as u64;
@@ -443,6 +553,7 @@ impl Proxy {
             }
         };
         let v = self.table.lock().ct.classify(peer, &parsed, false, now);
+        let mut reply_route = false;
         let rule = match v {
             Ct::Invalid => return,
             Ct::Tracked | Ct::RelatedError => {
@@ -459,7 +570,8 @@ impl Proxy {
                 .unwrap_or_default()
             }
             Ct::New => match self.admit(n, dp, peer, &flow, mine, gw.is_some()) {
-                Ok(rule) => {
+                Ok((rule, real)) => {
+                    reply_route = real && mine && flow.proto == PROTO_UDP;
                     let mut t = self.table.lock();
                     if let Err(e) =
                         t.ct.insert(peer, &parsed, false, Some(rule.clone()), gw.is_some(), now)
@@ -497,6 +609,7 @@ impl Proxy {
                 }
             },
         };
+        let mut mapped = None;
         if let Some(g) = gw
             && g.mapped()
         {
@@ -504,12 +617,94 @@ impl Proxy {
                 return;
             };
             packet::rewrite(&mut p, None, Some((ld, flow.dport)));
+            mapped = Some(ld);
+        }
+        if v != Ct::RelatedError {
+            self.table.lock().add_frag(
+                Some(peer),
+                &parsed,
+                FragRoute {
+                    peer: None,
+                    src: None,
+                    dst: mapped,
+                    role: Role::Target,
+                    rule: rule.clone(),
+                    owner: *peer,
+                },
+                now,
+            );
         }
         self.count(Role::Target, &rule, *peer, |c| {
             c.to_target_packets += 1;
             c.to_target_bytes += p.len() as u64;
         });
+        if reply_route && self.claim_reply_route(&flow) {
+            // The server's first reply must find the route: write the
+            // packet once it is in (the `ip` command blocks).
+            let n = n.clone();
+            let job = move || {
+                if let Some(dp) = n.dataplane.get() {
+                    dp.proxy.add_reply_route(&flow);
+                    dp.write_tun_raw(p);
+                }
+            };
+            match tokio::runtime::Handle::try_current() {
+                Ok(h) => drop(h.spawn_blocking(job)),
+                Err(_) => job(),
+            }
+            return;
+        }
         dp.write_tun_raw(p);
+    }
+
+    /// Take a reply route slot for a new real-IP UDP flow; false when it
+    /// has one already or too many flows do.
+    fn claim_reply_route(&self, f: &Flow) -> bool {
+        let mut r = self.reply_routes.lock();
+        if r.len() >= REPLY_ROUTE_CAP {
+            tracing::debug!(
+                "reverse proxy: no reply route for {}: too many flows",
+                f.src
+            );
+            return false;
+        }
+        r.insert(*f)
+    }
+
+    /// Add the reply route of a claimed flow (blocking).
+    fn add_reply_route(&self, f: &Flow) {
+        if crate::platform::proxy_reply_route(f, true) {
+            return;
+        }
+        self.reply_routes.lock().remove(f);
+        if !self.reply_route_failed.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "reverse proxy: could not route UDP replies to {} into the tun interface \
+                 (ip rule with ports needs Linux 4.17); a server on a wildcard address \
+                 will answer it from another address",
+                f.src
+            );
+        }
+    }
+
+    /// Remove the reply routes of flows that are gone (blocking).
+    fn sweep_reply_routes(&self) {
+        let live: HashSet<Flow> = self
+            .table
+            .lock()
+            .flows()
+            .filter(|(_, _, i)| i.role == Role::Target)
+            .map(|(k, _, _)| k.flow)
+            .collect();
+        let gone: Vec<Flow> = {
+            let mut r = self.reply_routes.lock();
+            let gone = r.iter().filter(|f| !live.contains(f)).copied().collect();
+            r.retain(|f| live.contains(f));
+            gone
+        };
+        for f in gone {
+            crate::platform::proxy_reply_route(&f, false);
+        }
     }
 
     /// May the ingress `peer` start this flow here? Its rule's name, or the
@@ -522,7 +717,7 @@ impl Proxy {
         flow: &Flow,
         mine: bool,
         gateway: bool,
-    ) -> Result<String, (String, String)> {
+    ) -> Result<(String, bool), (String, String)> {
         let s = n.store.read();
         let v = s.view();
         let Some(info) = v.nodes.get(peer).filter(|x| x.valid) else {
@@ -581,7 +776,7 @@ impl Proxy {
         if verdict.decision == Decision::Deny {
             return Err((name, "the policy denies the ingress".into()));
         }
-        Ok(name)
+        Ok((name, !from_ingress))
     }
 
     // ------------------------------------------------------------ the target's replies
@@ -590,6 +785,9 @@ impl Proxy {
     /// mapping) that answers a proxy flow to this node: send it back to the
     /// ingress. False when it isn't one.
     pub fn from_local(&self, n: &Arc<Node>, p: &[u8], parsed: &Parsed) -> bool {
+        if parsed.fragment == Fragment::Later {
+            return self.later_fragment(n, None, p, parsed);
+        }
         let error = parsed.icmp == Some(IcmpKind::Error);
         let started = if error {
             match parsed.inner {
@@ -607,8 +805,9 @@ impl Proxy {
             let Some(peer) = t.target_peer(&started) else {
                 return false;
             };
+            let now = Instant::now();
             if !error {
-                t.ct.classify(&peer, parsed, true, Instant::now());
+                t.ct.classify(&peer, parsed, true, now);
             }
             let rule = t
                 .info(&Key {
@@ -617,6 +816,21 @@ impl Proxy {
                 })
                 .map(|i| i.rule.clone())
                 .unwrap_or_default();
+            if !error {
+                t.add_frag(
+                    None,
+                    parsed,
+                    FragRoute {
+                        peer: Some(peer),
+                        src: None,
+                        dst: None,
+                        role: Role::Target,
+                        rule: rule.clone(),
+                        owner: peer,
+                    },
+                    now,
+                );
+            }
             (peer, rule)
         };
         self.count(Role::Target, &rule, peer, |c| {
@@ -738,6 +952,7 @@ impl Proxy {
             }
         }
         self.reevaluate(n);
+        self.sweep_reply_routes();
     }
 
     fn check_rule(
@@ -939,6 +1154,7 @@ impl Proxy {
         {
             crate::platform::proxy_clear(&dp.dev_name);
         }
+        self.reply_routes.lock().clear();
     }
 
     /// This node's proxy traffic for its metric report (§12.5).
@@ -1425,5 +1641,143 @@ mod tests {
     fn helpers() {
         assert_eq!(endpoint(&"10.0.0.1".parse().unwrap(), 80), "10.0.0.1:80");
         assert_eq!(endpoint(&"fd00::1".parse().unwrap(), 80), "[fd00::1]:80");
+    }
+
+    /// Split an IPv4 packet into two fragments, the first carrying `at`
+    /// bytes (a multiple of 8) of the L4 header and data.
+    fn frag4(p: &[u8], id: u16, at: usize) -> (Vec<u8>, Vec<u8>) {
+        let ihl = usize::from(p[0] & 0x0f) * 4;
+        let mut a = p[..ihl + at].to_vec();
+        let mut b = p[..ihl].to_vec();
+        b.extend_from_slice(&p[ihl + at..]);
+        for (f, flags) in [(&mut a, 0x2000u16), (&mut b, (at / 8) as u16)] {
+            let len = f.len() as u16;
+            f[2..4].copy_from_slice(&len.to_be_bytes());
+            f[4..6].copy_from_slice(&id.to_be_bytes());
+            f[6..8].copy_from_slice(&flags.to_be_bytes());
+            packet::fix_checksums(f);
+        }
+        (a, b)
+    }
+
+    /// Put two IPv4 fragments back together; the UDP checksum must hold.
+    fn reassemble(a: &[u8], b: &[u8]) -> Vec<u8> {
+        let ihl = usize::from(a[0] & 0x0f) * 4;
+        assert_eq!(
+            &a[12..20],
+            &b[12..20],
+            "both fragments have the same addresses"
+        );
+        let mut p = a.to_vec();
+        p.extend_from_slice(&b[ihl..]);
+        let len = p.len() as u16;
+        p[2..4].copy_from_slice(&len.to_be_bytes());
+        p[6] = 0;
+        p[7] = 0;
+        let mut fixed = p.clone();
+        packet::fix_checksums(&mut fixed);
+        assert_eq!(p[ihl + 6..ihl + 8], fixed[ihl + 6..ihl + 8], "UDP checksum");
+        p
+    }
+
+    /// udp 27015 on the ingress → udp 27015 on web (a game server).
+    fn game_net() -> T {
+        let mut t = net();
+        t.c.set_policy(policy(vec![allow(
+            "in",
+            "tag:ingress",
+            "tag:web",
+            "udp:27015",
+        )]))
+        .unwrap();
+        t.c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&t.ing.0)),
+            proxy: Some(vec![wp::ProxyRule {
+                name: Some("game".into()),
+                protocol: webjet_core::policy::PROTO_UDP,
+                listen_port: 27015,
+                target_port: 27015,
+                ..web_rule()
+            }]),
+            ..Default::default()
+        })
+        .unwrap();
+        t
+    }
+
+    #[tokio::test]
+    async fn ingress_sends_fragments_after_their_first() {
+        use webjet_core::testutil::packets::udp4;
+        let mut t = game_net();
+        let web = t.web.0;
+        let ing = t.ing.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &ing, web, &[FEATURE]);
+        let pa = proxy_addr(&dp);
+        // A client's datagram bigger than the tun MTU arrives in two pieces.
+        let big = udp4(CLIENT, pa, 5555, 27015, &[7u8; 1400]);
+        let (a, b) = frag4(&big, 0x1234, 1200);
+        assert!(dp.proxy.is_capture(&dp, &packet::parse(&b).unwrap()));
+        dp.outbound(a);
+        dp.outbound(b);
+        let q = n.e2e.queued_for_test(&web);
+        assert_eq!(q.len(), 2, "both fragments go to the target");
+        let whole = reassemble(&q[0].1, &q[1].1);
+        let f = packet::parse(&whole).unwrap().flow;
+        assert_eq!(
+            (f.src, f.dst, f.dport),
+            (IpAddr::from(ING), IpAddr::from(WEB), 27015)
+        );
+        assert_eq!(&whole[28..], &[7u8; 1400][..]);
+
+        // The target's big reply comes back in pieces too.
+        let reply = udp4(WEB, ING, 27015, f.sport, &[9u8; 1400]);
+        let (a, b) = frag4(&reply, 0x4321, 1200);
+        dp.proxy.from_peer(&n, &dp, &web, a);
+        dp.proxy.from_peer(&n, &dp, &web, b);
+        let out = drain(&mut tun);
+        assert_eq!(out.len(), 2, "both fragments go to the client");
+        let back = reassemble(&out[0], &out[1]);
+        let f = packet::parse(&back).unwrap().flow;
+        assert_eq!(
+            (f.src, f.sport, f.dst, f.dport),
+            (IpAddr::from(pa), 27015, IpAddr::from(CLIENT), 5555)
+        );
+        let c = counters(&dp.proxy);
+        assert_eq!((c.to_target_packets, c.to_client_packets), (2, 2));
+
+        // A later fragment of a datagram whose first one never came is dropped.
+        let (_, stray) = frag4(&udp4(CLIENT, pa, 5555, 27015, &[1u8; 1400]), 0x9999, 1200);
+        dp.outbound(stray);
+        assert_eq!(n.e2e.queued_for_test(&web).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn target_takes_fragments_and_answers_in_fragments() {
+        use webjet_core::testutil::packets::udp4;
+        let mut t = game_net();
+        let ing = t.ing.0;
+        let web = t.web.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &web, ing, &[FEATURE]);
+        let req = udp4(ING, WEB, 61000, 27015, &[3u8; 1400]);
+        let (a, b) = frag4(&req, 0x0101, 1200);
+        dp.proxy.from_peer(&n, &dp, &ing, a.clone());
+        dp.proxy.from_peer(&n, &dp, &ing, b.clone());
+        assert_eq!(drain(&mut tun), vec![a, b], "written to the tun interface");
+        // The server's reply, fragmented by the local stack.
+        let reply = udp4(WEB, ING, 27015, 61000, &[4u8; 1400]);
+        let (a, b) = frag4(&reply, 0x0202, 1200);
+        for f in [&a, &b] {
+            assert!(dp.proxy.from_local(&n, f, &packet::parse(f).unwrap()));
+        }
+        assert_eq!(
+            n.e2e.queued_for_test(&ing),
+            vec![(ftype::PROXY, a), (ftype::PROXY, b)]
+        );
+        // Another datagram's later fragment isn't proxy traffic.
+        let (_, other) = frag4(&udp4(WEB, ING, 53, 61000, &[5u8; 1400]), 0x0303, 1200);
+        assert!(
+            !dp.proxy
+                .from_local(&n, &other, &packet::parse(&other).unwrap())
+        );
     }
 }

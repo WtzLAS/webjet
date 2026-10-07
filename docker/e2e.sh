@@ -6,7 +6,8 @@
 #   cli     a client outside the overlay (plain container on the WAN)
 # Checks kernel ping over the overlay, magic DNS, policy, the gateway, and
 # reverse proxy ports on node-a (to node-b with the client's real address,
-# to node-b by selector without it, and to lanhost behind the gateway).
+# to node-b by selector without it, UDP datagrams larger than the tun MTU,
+# and to lanhost behind the gateway).
 set -eu
 IMG=${IMG:-webjet:test}
 P=wjt
@@ -64,7 +65,7 @@ id = "a-to-b"
 action = "allow"
 src = ["node:node-a"]
 dst = ["node:node-b"]
-ports = ["icmp", "tcp:8080", "udp:5300"]
+ports = ["icmp", "tcp:8080", "udp:5300", "udp:27015"]
 
 [[policy.rule]]
 id = "a-to-lan"
@@ -131,6 +132,13 @@ target = ["10.7.0.11"]
 target_port = 8080
 
 [[proxy]]
+name = "game"
+protocol = "udp"
+listen_port = 27015
+target = ["10.7.0.11"]
+target_port = 27015
+
+[[proxy]]
 name = "echo"
 protocol = "udp"
 listen_port = 5353
@@ -180,6 +188,23 @@ x $P-cli sh -c "echo ping | nc -u -w 2 $A_IP 5353" >/dev/null 2>&1 || true
 sleep 1
 x $P-b cat /tmp/udp.out | grep -q ping || { echo "FAIL: node-b got no datagram"; x $P-b cat /tmp/udp.err; exit 1; }
 x $P-b grep -q "10.7.0.10" /tmp/udp.err || { echo "FAIL: the datagram didn't come from node-a's address"; x $P-b cat /tmp/udp.err; exit 1; }
+echo "-- udp datagrams over the tun MTU (IP fragments) both ways, with and without the client's address"
+x $P-b sh -c 'head -c 1400 /dev/zero | tr "\0" s > /tmp/s1400'
+x $P-cli sh -c 'head -c 1400 /dev/zero | tr "\0" c > /tmp/c1400'
+for case in "27015 27015" "5353 5300"; do
+  set -- $case
+  # A first datagram learns the path MTU (the ingress answers "fragmentation
+  # needed", and nc quits on the error); then they go in fragments.
+  x $P-cli sh -c "cat /tmp/c1400 | timeout 2 nc -u -w 1 $A_IP $1" >/dev/null 2>&1 || true
+  docker exec -d $P-b sh -c "timeout 8 nc -lun $2 < /tmp/s1400 > /tmp/frag$2.out 2>/dev/null"
+  sleep 0.5
+  got=$(x $P-cli sh -c "(cat /tmp/c1400; sleep 3) | timeout 5 nc -u $A_IP $1 | wc -c" || true)
+  srv=$(x $P-b sh -c "wc -c < /tmp/frag$2.out")
+  [ "$srv" -ge 1400 ] || { echo "FAIL: node-b got $srv of 1400 bytes on port $1"; x $P-a webjetctl local proxy; exit 1; }
+  [ "$got" -ge 1400 ] || { echo "FAIL: client got $got of 1400 bytes on port $1"; x $P-b webjetctl local proxy; exit 1; }
+  echo "port $1: 1400-byte datagrams through both ways"
+done
+x $P-b ip rule show priority 22345 | grep -q "sport 27015" || { echo "FAIL: node-b has no reply route for the real-IP UDP flow"; x $P-b ip rule show; exit 1; }
 echo "-- tcp 9100 and 9101 -> lanhost behind the gateway"
 for port in 9100 9101; do
   listen $P-lan 9100 printed lan$port

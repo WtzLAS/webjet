@@ -14,6 +14,7 @@
 use ipnet::IpNet;
 use std::net::IpAddr;
 use std::process::Command;
+use webjet_core::packet::Flow;
 
 /// Marker for system state the agent owns (NRPT comment, resolver files).
 pub const OWNER_TAG: &str = "webjet";
@@ -335,6 +336,9 @@ pub const REAL_IP_OUT: &str = "WEBJET-REALIP-OUT";
 /// Connection mark and routing table for replies to real client addresses.
 pub const REAL_IP_MARK: &str = "0x574a0000/0xffff0000";
 pub const REAL_IP_TABLE: &str = "22346";
+/// Priority of the per-flow rules that route replies of real-IP UDP flows
+/// into the tun interface (`proxy_reply_route`).
+pub const REAL_IP_UDP_PRIO: &str = "22345";
 
 fn ipt(v6: bool) -> &'static str {
     if v6 { "ip6tables" } else { "iptables" }
@@ -574,6 +578,75 @@ pub fn proxy_real_ip(tun: &str, pool: &[IpNet]) -> bool {
     ok
 }
 
+/// The `ip rule` selector for the replies of a real-IP UDP flow (`f`: as
+/// received, client → this node): locally sent, from the flow's port to
+/// the client's address and port.
+fn reply_rule(f: &Flow) -> Vec<String> {
+    let host = if f.src.is_ipv6() { 128 } else { 32 };
+    args(&[
+        if f.src.is_ipv6() { "-6" } else { "-4" },
+        "rule",
+        "add",
+        "to",
+        &format!("{}/{host}", f.src),
+        "ipproto",
+        "udp",
+        "sport",
+        &f.dport.to_string(),
+        "dport",
+        &f.sport.to_string(),
+        "iif",
+        "lo",
+        "lookup",
+        REAL_IP_TABLE,
+        "priority",
+        REAL_IP_UDP_PRIO,
+    ])
+}
+
+/// Route a real-IP UDP flow's replies into the tun interface (`add`) or
+/// stop doing so (Linux only). A UDP server on a wildcard address lets the
+/// kernel pick each reply's source by its route to the client: through
+/// another interface, the reply would leave with that interface's address
+/// in a connection of its own, never meeting the connection mark. This
+/// rule makes the route lookup pick the tun interface, and with it the
+/// overlay address the client's packets came to.
+pub fn proxy_reply_route(f: &Flow, add: bool) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let mut a = reply_rule(f);
+    if !add {
+        a[2] = "del".into();
+    }
+    let a: Vec<&str> = a.iter().map(String::as_str).collect();
+    run("ip", &a)
+}
+
+/// Remove every per-flow reply rule (`proxy_reply_route`) of a family.
+fn proxy_reply_routes_clear(fam: &str) {
+    let n = output("ip", &[fam, "rule", "show", "priority", REAL_IP_UDP_PRIO])
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
+        .unwrap_or(0);
+    if n == 0 {
+        return;
+    }
+    let batch = format!("rule del priority {REAL_IP_UDP_PRIO}\n").repeat(n);
+    let child = Command::new("ip")
+        .args([fam, "-force", "-batch", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut c) = child {
+        if let Some(mut i) = c.stdin.take() {
+            use std::io::Write;
+            let _ = i.write_all(batch.as_bytes());
+        }
+        let _ = c.wait();
+    }
+}
+
 /// Remove the reverse proxy's iptables chains and routing rule.
 pub fn proxy_clear(tun: &str) {
     if !cfg!(target_os = "linux") {
@@ -612,6 +685,7 @@ pub fn proxy_clear(tun: &str) {
                 break;
             }
         }
+        proxy_reply_routes_clear(fam);
         run("ip", &[fam, "route", "flush", "table", REAL_IP_TABLE]);
     }
 }
@@ -694,6 +768,22 @@ mod tests {
         assert!(s.contains("Add-DnsClientNrptRule -Namespace '.internal' -NameServers @('10.7.255.53') -Comment 'webjet'"));
         assert!(s.contains("-Namespace '.corp.example'"));
         assert_eq!(ps_quote("a'b"), "'a''b'");
+    }
+
+    #[test]
+    fn reply_rule_selects_a_flows_replies() {
+        let f = Flow {
+            proto: 17,
+            src: "203.0.113.5".parse().unwrap(),
+            dst: "10.7.0.11".parse().unwrap(),
+            sport: 41210,
+            dport: 27015,
+        };
+        assert_eq!(
+            reply_rule(&f).join(" "),
+            "-4 rule add to 203.0.113.5/32 ipproto udp sport 27015 dport 41210 iif lo \
+             lookup 22346 priority 22345"
+        );
     }
 
     #[test]

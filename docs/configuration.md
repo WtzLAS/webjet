@@ -199,7 +199,7 @@ The rules themselves belong to the ingress node's
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `accept_real_ip` | `false` | Accept proxied flows that keep the client's real address as their source, and route their replies back into the overlay. Needs Linux with the tun interface. The agent marks these flows with connmark `0x574a0000/0xffff0000` and routes their replies through routing table 22346. Without it, this node still receives proxied flows, but from the ingress's overlay address. |
+| `accept_real_ip` | `false` | Accept proxied flows that keep the client's real address as their source, and route their replies back into the overlay. Needs Linux with the tun interface. The agent marks these flows with connmark `0x574a0000/0xffff0000` and routes their replies through routing table 22346. For UDP flows it also adds an `ip rule` (priority 22345) per flow, so a server listening on `0.0.0.0` (a game server, say) answers from its overlay address; that needs Linux 4.17 or later. Without it, this node still receives proxied flows, but from the ingress's overlay address. |
 
 ```toml
 [proxy]
