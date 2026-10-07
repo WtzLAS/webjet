@@ -5,7 +5,7 @@
 //! part of a summary.
 
 use anyhow::{Result, bail};
-use webjet_core::crypto::{self, Bytes32, open_expect};
+use webjet_core::crypto::{self, Bytes32};
 use webjet_core::merkle::leaf_hash;
 use webjet_core::store::View;
 use webjet_core::types::MINUTE;
@@ -19,23 +19,14 @@ pub const MAX_RECORDS: u32 = 200;
 /// Check a signed `LogRequest`: a valid admin account signed it with its
 /// current key, recently. Returns the request.
 pub fn check_request(view: &View, raw: &[u8], now: u64) -> Result<wp::LogRequest> {
-    let v = crypto::open_envelope(raw)?;
-    if v.ty != mt::LOG_REQUEST {
-        bail!("not a log request");
-    }
-    let req: wp::LogRequest = v.decode()?;
-    let id = crypto::opt_k32(&req.account_id);
-    let Some(a) = view.accounts.get(&id) else {
-        bail!("unknown account");
-    };
-    if !a.valid || !a.admin {
-        bail!("only admins read the operation log");
-    }
-    // Checks the signature against the account's current key.
-    open_expect(raw, mt::LOG_REQUEST, &[a.key])?;
-    if req.issued_at.abs_diff(now) > REQUEST_SKEW {
-        bail!("the request's time is too far from the controller's clock; check the clocks");
-    }
+    let req: wp::LogRequest = crate::admin::signed_request(
+        view,
+        raw,
+        mt::LOG_REQUEST,
+        "read the operation log",
+        |r: &wp::LogRequest| crypto::opt_k32(&r.account_id),
+    )?;
+    recent(req.issued_at, now)?;
     Ok(req)
 }
 
@@ -43,20 +34,18 @@ pub fn check_request(view: &View, raw: &[u8], now: u64) -> Result<wp::LogRequest
 /// key, recently. The reply holds every secret the controllers keep (PSKs,
 /// the camouflage key), so only admins get it.
 pub fn check_snapshot_request(view: &View, raw: &[u8], now: u64) -> Result<()> {
-    let v = crypto::open_envelope(raw)?;
-    if v.ty != mt::SNAPSHOT_REQUEST {
-        bail!("not a snapshot request");
-    }
-    let req: wp::SnapshotRequest = v.decode()?;
-    let id = crypto::opt_k32(&req.account_id);
-    let Some(a) = view.accounts.get(&id) else {
-        bail!("unknown account");
-    };
-    if !a.valid || !a.admin {
-        bail!("only admins export the controller state");
-    }
-    open_expect(raw, mt::SNAPSHOT_REQUEST, &[a.key])?;
-    if req.issued_at.abs_diff(now) > REQUEST_SKEW {
+    let req: wp::SnapshotRequest = crate::admin::signed_request(
+        view,
+        raw,
+        mt::SNAPSHOT_REQUEST,
+        "export the controller state",
+        |r: &wp::SnapshotRequest| crypto::opt_k32(&r.account_id),
+    )?;
+    recent(req.issued_at, now)
+}
+
+fn recent(issued_at: u64, now: u64) -> Result<()> {
+    if issued_at.abs_diff(now) > REQUEST_SKEW {
         bail!("the request's time is too far from the controller's clock; check the clocks");
     }
     Ok(())

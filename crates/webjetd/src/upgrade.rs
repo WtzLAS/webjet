@@ -40,20 +40,13 @@ const FORWARD_TIMEOUT: Duration = Duration::from_secs(30);
 /// and the node): a valid admin signed it with its current key, recently,
 /// for a short time, for a well-formed version and one node.
 pub fn check_signed(view: &View, raw: &[u8], now: u64) -> Result<wp::UpgradeRequest> {
-    let v = crypto::open_envelope(raw)?;
-    if v.ty != mt::UPGRADE_REQUEST {
-        bail!("not an upgrade request");
-    }
-    let req: wp::UpgradeRequest = v.decode()?;
-    let id = crypto::opt_k32(&req.account_id);
-    let Some(a) = view.accounts.get(&id) else {
-        bail!("unknown account");
-    };
-    if !a.valid || !a.admin {
-        bail!("only admins upgrade nodes");
-    }
-    // The signature, against the account's current key.
-    crypto::open_expect(raw, mt::UPGRADE_REQUEST, &[a.key])?;
+    let req: wp::UpgradeRequest = crate::admin::signed_request(
+        view,
+        raw,
+        mt::UPGRADE_REQUEST,
+        "upgrade nodes",
+        |r: &wp::UpgradeRequest| crypto::opt_k32(&r.account_id),
+    )?;
     if req.node_id.is_none() || req.nonce.is_none() {
         bail!("the request names no node");
     }
@@ -388,7 +381,7 @@ mod tests {
                 issued_at: now,
             },
         );
-        assert!(err(&other_type, now).contains("not an upgrade request"));
+        assert!(err(&other_type, now).contains("expected a signed UpgradeRequest"));
     }
 
     #[test]

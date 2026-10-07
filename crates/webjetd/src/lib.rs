@@ -4,6 +4,7 @@
 /// What `webjetd features` prints (webjetup asks before it relies on them).
 pub const FEATURES: &[&str] = &["remote-upgrade"];
 
+pub mod admin;
 pub mod agent;
 pub mod circuit;
 pub mod compression;

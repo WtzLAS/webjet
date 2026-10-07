@@ -56,13 +56,7 @@ pub fn classify_entry(bytes: &[u8]) -> Option<raft::ConfChange> {
             let op: wp::SignedOp = v.decode().ok()?;
             match op.op? {
                 wp::AccountOp::ChangeMembership(c) => {
-                    let id = opt_k32(&c.node_id);
-                    Some(match c.change {
-                        wp::MembershipChange::AddLearner => ConfChange::AddLearner(id),
-                        wp::MembershipChange::Promote => ConfChange::Promote(id),
-                        wp::MembershipChange::Demote => ConfChange::Demote(id),
-                        wp::MembershipChange::Remove => ConfChange::Remove(id),
-                    })
+                    Some(conf_change(c.change, opt_k32(&c.node_id)))
                 }
                 _ => None,
             }
@@ -81,16 +75,19 @@ pub fn classify_entry(bytes: &[u8]) -> Option<raft::ConfChange> {
                     .collect(),
             }))
         }
-        EntryPayload::AutoMembershipEntry(a) => {
-            let id = opt_k32(&a.node_id);
-            Some(match a.change {
-                wp::MembershipChange::AddLearner => ConfChange::AddLearner(id),
-                wp::MembershipChange::Promote => ConfChange::Promote(id),
-                wp::MembershipChange::Demote => ConfChange::Demote(id),
-                wp::MembershipChange::Remove => ConfChange::Remove(id),
-            })
-        }
+        EntryPayload::AutoMembershipEntry(a) => Some(conf_change(a.change, opt_k32(&a.node_id))),
         _ => None,
+    }
+}
+
+/// Raft's form of a membership change, admin-signed or automatic.
+fn conf_change(change: wp::MembershipChange, id: Bytes32) -> raft::ConfChange {
+    use raft::ConfChange;
+    match change {
+        wp::MembershipChange::AddLearner => ConfChange::AddLearner(id),
+        wp::MembershipChange::Promote => ConfChange::Promote(id),
+        wp::MembershipChange::Demote => ConfChange::Demote(id),
+        wp::MembershipChange::Remove => ConfChange::Remove(id),
     }
 }
 const HEAD_RESIGN: u64 = HOUR;

@@ -201,17 +201,21 @@ pub async fn submit_op(n: &Arc<Node>, raw: Vec<u8>) -> Result<(u64, String)> {
     }
     let body = RpcBody::SubmitOp(Box::new(wp::SubmitOp { signed: Some(raw) }));
     let (_, r) = crate::rpc::call_any(n, body, Duration::from_secs(20)).await?;
+    let index = submitted(r)?;
+    // Wait for the change to reach us.
+    let start = std::time::Instant::now();
+    while n.store.read().head().map_or(0, |h| h.head.version) < index
+        && start.elapsed() < Duration::from_secs(15)
+    {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok((index, String::new()))
+}
+
+/// A controller's answer to a submission: the log index, or its error.
+fn submitted(r: RpcBody) -> Result<u64> {
     match r {
-        RpcBody::SubmitResult(r) if r.ok => {
-            // Wait for the change to reach us.
-            let start = std::time::Instant::now();
-            while n.store.read().head().map_or(0, |h| h.head.version) < r.index
-                && start.elapsed() < Duration::from_secs(15)
-            {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            Ok((r.index, String::new()))
-        }
+        RpcBody::SubmitResult(r) if r.ok => Ok(r.index),
         RpcBody::SubmitResult(r) => bail!(r.error.unwrap_or_default()),
         RpcBody::RpcAck(a) => bail!(a.error.unwrap_or_default()),
         _ => bail!("unexpected reply"),
@@ -281,14 +285,11 @@ pub async fn submit_signed(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
                     let body = RpcBody::SubmitRoot(Box::new(wp::SubmitRoot {
                         signed: Some(raw.clone()),
                     }));
-                    match crate::rpc::call_any(n, body, Duration::from_secs(20))
-                        .await?
-                        .1
-                    {
-                        RpcBody::SubmitResult(r) if r.ok => r.index,
-                        RpcBody::SubmitResult(r) => bail!(r.error.unwrap_or_default()),
-                        _ => bail!("unexpected reply"),
-                    }
+                    submitted(
+                        crate::rpc::call_any(n, body, Duration::from_secs(20))
+                            .await?
+                            .1,
+                    )?
                 }
             };
             out.insert("index".into(), json!(idx));
