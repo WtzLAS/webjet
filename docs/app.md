@@ -121,7 +121,7 @@ isn't available.
   everything else, with solid label backgrounds; all other links, delays and
   nodes are dimmed, so a crowded graph stays readable.
 
-  The layout (`crates/webjet-app/src/graph.rs`) is made for the size of the
+  The layout (`crates/webjet-app/src/graph/layout.rs`) is made for the size of the
   drawing area and takes the labels' sizes into account. Each connected
   part of the network is laid out on its own: stress majorization places
   nodes so that their distances follow the number of hops between them,
@@ -258,13 +258,13 @@ tab's layout at several window sizes and drags its three separators.
 `circuit_details_do_not_overlap` checks that a selected circuit's details
 (long node names, narrow pane) wrap inside their own rows, and
 `graph_labels_do_not_overlap` that no two node labels in the drawn graph
-overlap. The layout itself is tested in `graph::tests` (the network from a
+overlap. The layout itself is tested in `graph::layout::tests` (the network from a
 bug report at several area sizes: no overlapping labels, at most a few
 crossings and edges through labels; a 40-node network; continuing from an
 old picture; refreshes never moving a node and new nodes going into free
 room next to their neighbors). `refreshes_do_not_move_the_nodes` checks the
-same through the app's refresh path. `WEBJET_LAYOUT_SVG=<dir> cargo test -p webjet-app --lib
-graph::tests` writes the test pictures as SVG files to look at.
+same through the app's refresh path (`graph::tests`). `WEBJET_LAYOUT_SVG=<dir> cargo test -p webjet-app --lib
+graph::layout::tests` writes the test pictures as SVG files to look at.
 `config_tab_is_for_admins` types into the configuration editor (checked as
 typed, undo), switches to a remote node's configuration with unapplied
 edits, and checks that a demoted account loses the tab.
