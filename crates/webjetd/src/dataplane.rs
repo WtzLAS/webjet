@@ -161,10 +161,12 @@ impl Dataplane {
     }
 
     pub(crate) fn icmp(&self, orig: &[u8], why: Unreach) {
-        if !self.icmp_bucket.lock().take() {
+        // Build first: a datagram that may not get an error (another error,
+        // a later fragment, multicast) must not spend a token.
+        let Some(r) = packet::icmp_unreachable(orig, why) else {
             return;
-        }
-        if let Some(r) = packet::icmp_unreachable(orig, why) {
+        };
+        if self.icmp_bucket.lock().take() {
             self.write_tun(r);
         }
     }
@@ -308,6 +310,12 @@ impl Dataplane {
             return;
         }
         n.metrics.tun_in(p.len());
+        // The overlay carries unicast only: the host's multicast (mDNS,
+        // SSDP, …) and broadcasts are dropped quietly, not counted as
+        // unroutable and never answered with an ICMP error.
+        if !packet::is_unicast(&dst) {
+            return;
+        }
         // Where does it go? A node, or a gateway serving a published prefix (§9.5, §11.9.3).
         let (peer, dest_is_node) = match self.route(&n, &dst) {
             Some(x) => x,
@@ -1364,6 +1372,17 @@ mod tests {
         assert_eq!(icmp.flow.dst, IpAddr::from(ME));
         assert_eq!(counter(&t.n.metrics.no_route), 1);
         assert_eq!(counter(&t.n.metrics.tun_rx), 1);
+    }
+
+    #[tokio::test]
+    async fn outbound_multicast_is_dropped_quietly() {
+        let mut t = setup();
+        // mDNS and the limited broadcast: no ICMP error, not unroutable.
+        t.dp.outbound(udp4(ME, [224, 0, 0, 251], 5353, 5353, b"query"));
+        t.dp.outbound(udp4(ME, [255, 255, 255, 255], 68, 67, b"discover"));
+        assert!(tun_packets(&mut t).is_empty());
+        assert_eq!(counter(&t.n.metrics.no_route), 0);
+        assert_eq!(counter(&t.n.metrics.tun_rx), 2);
     }
 
     #[tokio::test]

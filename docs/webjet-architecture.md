@@ -856,6 +856,7 @@ With relays, the last hop's TLS peer is a relay, not the source. So the check us
 - Outbound: send packets for a destination IP only to the node whose record contains that IP, or, for a published subnet prefix, to a gateway serving it (§11.9.3). The state machine guarantees each overlay IP belongs to at most one node (§7.2).
 - **Denied by policy:** if the outbound access-control check (§14.4) denies a packet, write an ICMP / ICMPv6 "administratively prohibited" back into the tun interface. Rate-limit these replies too.
 - **Unreachable destination:** if path computation finds no route to the destination (for example because it is offline, §10.5), write an ICMP / ICMPv6 "host unreachable" back into the tun interface, so applications fail fast instead of waiting for a timeout. Rate-limit these replies.
+- **Multicast and broadcast:** the overlay carries unicast only. Packets the host sends to a multicast group (mDNS, SSDP, …), to the IPv4 limited broadcast or from an unspecified address are dropped silently: they do not count as unroutable, and no ICMP error is sent about them (RFC 1122 3.2.2, RFC 4443 2.4). The same rule applies to every ICMP error Webjet writes, and only a reply that is actually sent takes a rate-limit token.
 
 ### 9.6 Transport selection: priority and cost
 

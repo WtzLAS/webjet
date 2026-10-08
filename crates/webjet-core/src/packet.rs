@@ -632,8 +632,22 @@ pub enum Unreach {
     Host,
 }
 
+/// Whether `a` names a single host: not unspecified, multicast or the IPv4
+/// limited broadcast. ICMP errors are never sent about a datagram whose
+/// source or destination is anything else (RFC 1122 3.2.2, RFC 1812 4.3.2.7,
+/// RFC 4443 2.4(e)); a reply would come "from" a group address and answer
+/// every member's query.
+pub fn is_unicast(a: &IpAddr) -> bool {
+    match a {
+        IpAddr::V4(v) => !(v.is_unspecified() || v.is_multicast() || v.is_broadcast()),
+        IpAddr::V6(v) => !(v.is_unspecified() || v.is_multicast()),
+    }
+}
+
 /// Build an ICMP/ICMPv6 destination-unreachable reply to `orig`, sourced
 /// from `orig`'s destination, to be written back into the tun interface.
+/// `None` when no error may be sent: for errors, later fragments, and
+/// datagrams to or from a non-unicast address.
 pub fn icmp_unreachable(orig: &[u8], why: Unreach) -> Option<Vec<u8>> {
     let parsed = parse(orig)?;
     if parsed.icmp == Some(IcmpKind::Error) {
@@ -641,6 +655,9 @@ pub fn icmp_unreachable(orig: &[u8], why: Unreach) -> Option<Vec<u8>> {
     }
     if parsed.fragment == Fragment::Later {
         return None; // only the first fragment (RFC 1122 3.2.2)
+    }
+    if !is_unicast(&parsed.flow.src) || !is_unicast(&parsed.flow.dst) {
+        return None; // multicast, broadcast or unspecified (RFC 1122 3.2.2)
     }
     let (src, dst) = (parsed.flow.dst, parsed.flow.src);
     match (src, dst) {
@@ -901,6 +918,46 @@ pub mod tests {
         assert_eq!(pr.inner.unwrap().src, "10.7.0.9".parse::<IpAddr>().unwrap());
         assert_eq!(pr.inner.unwrap().sport, 4321);
         assert_eq!(checksum(&r2[20..]), 0);
+    }
+
+    #[test]
+    fn no_icmp_errors_about_multicast_or_broadcast() {
+        // mDNS, SSDP, limited broadcast, and an unspecified or group source.
+        for (src, dst) in [
+            ([10, 7, 0, 1], [224, 0, 0, 251]),
+            ([10, 7, 0, 1], [239, 255, 255, 250]),
+            ([10, 7, 0, 1], [255, 255, 255, 255]),
+            ([0, 0, 0, 0], [10, 7, 0, 2]),
+            ([224, 0, 0, 1], [10, 7, 0, 2]),
+        ] {
+            let p = udp4(src, dst, 5353, 5353, b"query");
+            assert!(
+                icmp_unreachable(&p, Unreach::Host).is_none(),
+                "{src:?} -> {dst:?}"
+            );
+        }
+        // IPv6 mDNS (ff02::fb) and an unspecified source.
+        let v6 = |src: [u8; 16], dst: [u8; 16]| {
+            let mut p = vec![0x60, 0, 0, 0, 0, 8, PROTO_UDP, 255];
+            p.extend_from_slice(&src);
+            p.extend_from_slice(&dst);
+            p.extend_from_slice(&[0x14, 0xe9, 0x14, 0xe9, 0, 8, 0, 0]);
+            fix_checksums(&mut p);
+            p
+        };
+        let mut mdns = [0; 16];
+        mdns[..2].copy_from_slice(&[0xff, 0x02]);
+        mdns[15] = 0xfb;
+        let mut host = [0xfd; 16];
+        host[15] = 1;
+        assert!(icmp_unreachable(&v6(host, mdns), Unreach::Host).is_none());
+        assert!(icmp_unreachable(&v6([0; 16], host), Unreach::Host).is_none());
+        // A unicast IPv6 datagram still gets its error.
+        let mut other = host;
+        other[15] = 2;
+        assert!(icmp_unreachable(&v6(host, other), Unreach::Host).is_some());
+        assert!(is_unicast(&IpAddr::from([10, 7, 0, 2])));
+        assert!(!is_unicast(&IpAddr::from(mdns)));
     }
 
     #[test]
