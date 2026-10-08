@@ -8,9 +8,9 @@ use webjetd::config::Config;
 #[derive(Parser)]
 #[command(name = "webjetd", version, about = "The Webjet agent")]
 struct Cli {
-    /// Path to webjetd.toml (default: /etc/webjet, /Library/Application
-    /// Support/Webjet or %ProgramData%\Webjet). A path given here or in
-    /// WEBJET_CONFIG must exist.
+    /// Path to webjetd.toml (default: /etc/webjet, /usr/local/etc/webjet on
+    /// FreeBSD, /Library/Application Support/Webjet or %ProgramData%\Webjet).
+    /// A path given here or in WEBJET_CONFIG must exist.
     #[arg(short, long, global = true, env = "WEBJET_CONFIG")]
     config: Option<PathBuf>,
     /// Override the data directory.
@@ -63,6 +63,8 @@ enum Cmd {
 fn default_signer_key() -> &'static str {
     if cfg!(windows) {
         r"C:\ProgramData\webjet-signer\signing.key"
+    } else if cfg!(target_os = "freebsd") {
+        "/var/db/webjet-signer/signing.key"
     } else {
         "/var/lib/webjet-signer/signing.key"
     }

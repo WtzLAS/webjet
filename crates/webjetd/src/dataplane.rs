@@ -936,7 +936,12 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
             }
             b = b.description("Webjet");
         }
-        if !cfg!(target_os = "macos") || dev_name.starts_with("utun") && dev_name.len() > 4 {
+        // FreeBSD's driver makes `tunN` only: other names are given by
+        // renaming the interface once it exists (below).
+        let rename = cfg!(target_os = "freebsd") && !crate::platform::is_tun_unit(&dev_name);
+        if rename {
+            crate::platform::destroy_stale_tun(&dev_name);
+        } else if !cfg!(target_os = "macos") || dev_name.starts_with("utun") && dev_name.len() > 4 {
             b = b.name(dev_name.clone());
         }
         for ip in &my_ips {
@@ -952,6 +957,12 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         let dev = Arc::new(b.build_async().map_err(|e| {
             anyhow::anyhow!("creating the tun interface: {e} (root/CAP_NET_ADMIN needed)")
         })?);
+        #[cfg(target_os = "freebsd")]
+        if rename && let Err(e) = dev.set_name(&dev_name) {
+            // The interface is up under its driver name; it works, only the
+            // name differs from the configuration.
+            tracing::warn!("could not rename the tun interface to {dev_name}: {e}");
+        }
         if let Ok(name) = dev.name() {
             dev_name = name;
         }

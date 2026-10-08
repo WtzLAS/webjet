@@ -1,12 +1,13 @@
 //! Operating-system integration (§19.1): routes, split DNS, gateway NAT and
 //! local interface information.
 //!
-//! | | Linux | macOS | Windows |
-//! |---|---|---|---|
-//! | routes | `ip route` | `route` | `netsh interface ipvX ... route` (active store) |
-//! | split DNS | systemd-resolved (`resolvectl`) | `/etc/resolver/<domain>` | NRPT rules (comment `webjet`) |
-//! | gateway NAT | iptables MASQUERADE | — | — (gateways run on Linux) |
-//! | reverse proxy | iptables DNAT, connmark + policy routing | — | — (Linux only) |
+//! | | Linux | macOS | FreeBSD (OPNsense) | Windows |
+//! |---|---|---|---|---|
+//! | routes | `ip route` | `route` | `route` | `netsh interface ipvX ... route` (active store) |
+//! | split DNS | systemd-resolved (`resolvectl`) | `/etc/resolver/<domain>` | — (warns) | NRPT rules (comment `webjet`) |
+//! | gateway NAT | iptables MASQUERADE | — | — | — (gateways run on Linux) |
+//! | reverse proxy | iptables DNAT, connmark + policy routing | — | — | — (Linux only) |
+//! | multicast groups | `/proc/net/igmp{,6}` | `getifmaddrs` | `getifmaddrs` | `GetMulticastIpAddressTable` |
 //!
 //! Everything the agent adds is removed again by [`cleanup`] (at shutdown and
 //! on uninstall).
@@ -129,7 +130,7 @@ pub fn route_cmd(add: bool, net: &IpNet, dev: &str) -> (&'static str, Vec<String
             "ip",
             vec!["route".into(), verb.into(), n, "dev".into(), dev.into()],
         )
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", target_os = "freebsd")) {
         let fam = if net.addr().is_ipv4() {
             "-inet"
         } else {
@@ -171,17 +172,69 @@ pub fn route_cmd(add: bool, net: &IpNet, dev: &str) -> (&'static str, Vec<String
 pub fn add_route(net: &IpNet, dev: &str) -> bool {
     let (cmd, args) = route_cmd(true, net, dev);
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
-    let ok = run(cmd, &a);
+    // BSD `route add` fails on a route that already exists (left by an
+    // earlier run, or the interface's own); `change` then points it at
+    // `dev`, as Linux's `ip route replace` does in one step.
+    let ok = run(cmd, &a)
+        || (cfg!(any(target_os = "macos", target_os = "freebsd")) && run(cmd, &bsd_change(&a)));
     if ok {
         tracing::debug!("route {net} via {dev}");
     }
     ok
 }
 
+/// A BSD `route add …` command line as `route change …`.
+fn bsd_change<'a>(add: &[&'a str]) -> Vec<&'a str> {
+    add.iter()
+        .map(|&w| if w == "add" { "change" } else { w })
+        .collect()
+}
+
 pub fn del_route(net: &IpNet, dev: &str) -> bool {
     let (cmd, args) = route_cmd(false, net, dev);
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     run(cmd, &a)
+}
+
+// ---------------------------------------------------------------- tun interface (FreeBSD)
+
+/// FreeBSD's tun driver only creates `tunN` interfaces, and unlike Linux's
+/// they outlive the process that opened them: an agent that was killed
+/// leaves its renamed interface behind (with its addresses and routes), and
+/// the next start couldn't take the name. Destroy `name` if it is such a
+/// leftover: a tun interface (`ifconfig -g tun` lists it) nobody else uses.
+/// Only for names that aren't `tunN`, which the driver hands out itself.
+pub fn destroy_stale_tun(name: &str) -> bool {
+    if !cfg!(target_os = "freebsd") || is_tun_unit(name) {
+        return false;
+    }
+    let members = output("ifconfig", &["-g", "tun"])
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    if !members.split_whitespace().any(|m| m == name) {
+        return false;
+    }
+    // ifconfig names the process that holds a tun interface open.
+    let shown = output("ifconfig", &[name])
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    if shown.contains("Opened by PID") {
+        tracing::warn!("tun interface {name} is in use by another process");
+        return false;
+    }
+    let ok = run("ifconfig", &[name, "destroy"]);
+    if ok {
+        tracing::info!("removed the tun interface {name} an earlier run left behind");
+    } else {
+        tracing::warn!("could not remove the leftover tun interface {name}");
+    }
+    ok
+}
+
+/// `tun` followed by a unit number: a name FreeBSD's tun driver gives out.
+pub fn is_tun_unit(name: &str) -> bool {
+    name.strip_prefix("tun")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 // ---------------------------------------------------------------- split DNS (§11.10.1)
@@ -248,6 +301,22 @@ pub fn configure_dns(dev: &str, resolver: &[IpAddr], domains: &[String]) {
                     .collect::<String>();
             let _ = std::fs::write(format!("/etc/resolver/{d}"), body);
         }
+    } else if cfg!(target_os = "freebsd") {
+        // No per-domain resolver configuration to hook into: on OPNsense
+        // Unbound owns DNS (a domain override does it by hand).
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            tracing::warn!(
+                "split DNS is not configured on FreeBSD: forward {} to {} yourself \
+                 (OPNsense: Unbound DNS → Query Forwarding)",
+                domains.join(", "),
+                resolver
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        });
     } else {
         #[cfg(windows)]
         if !powershell(&nrpt_script(resolver, domains)) {
@@ -694,7 +763,8 @@ pub fn proxy_clear(tun: &str) {
 
 /// The multicast groups the host has joined on interface `dev` (§9.5.1),
 /// as the OS keeps them for IGMP/MLD; `None` when it can't tell (then
-/// everything is taken). Linux: /proc/net/igmp{,6}; macOS: getifmaddrs;
+/// everything is taken). Linux: /proc/net/igmp{,6}; macOS and FreeBSD:
+/// getifmaddrs;
 /// Windows: GetMulticastIpAddressTable.
 pub fn multicast_groups(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
     let mut v = groups_os(dev)?;
@@ -750,9 +820,10 @@ fn parse_proc_igmp6(text: &str, dev: &str) -> std::collections::HashSet<IpAddr> 
         .collect()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 fn groups_os(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
-    // Not in the libc crate for Apple targets.
+    // `struct ifmaddrs` (<ifaddrs.h>), the same on both; declared here
+    // because the libc crate lacks it for Apple targets.
     #[repr(C)]
     struct IfMaddrs {
         next: *mut IfMaddrs,
@@ -852,7 +923,12 @@ fn groups_os(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
     Some(out)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    windows
+)))]
 fn groups_os(_dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
     None
 }
@@ -911,7 +987,7 @@ mod tests {
                 (cmd, args.join(" ").as_str()),
                 ("ip", "route replace 192.168.50.0/24 dev webjet0")
             );
-        } else if cfg!(target_os = "macos") {
+        } else if cfg!(any(target_os = "macos", target_os = "freebsd")) {
             assert_eq!(cmd, "route");
             assert!(
                 args.join(" ")
@@ -923,6 +999,34 @@ mod tests {
                 "interface ipv4 add route prefix=192.168.50.0/24 interface=webjet0 store=active"
             );
         }
+    }
+
+    #[test]
+    fn bsd_route_change_and_tun_units() {
+        assert_eq!(
+            bsd_change(&[
+                "-q",
+                "-n",
+                "add",
+                "-inet",
+                "10.7.0.0/16",
+                "-interface",
+                "webjet0"
+            ]),
+            [
+                "-q",
+                "-n",
+                "change",
+                "-inet",
+                "10.7.0.0/16",
+                "-interface",
+                "webjet0"
+            ]
+        );
+        assert!(is_tun_unit("tun0") && is_tun_unit("tun17"));
+        assert!(!is_tun_unit("tun") && !is_tun_unit("webjet0") && !is_tun_unit("tunx1"));
+        // Never touches anything for a driver-made name (or off FreeBSD).
+        assert!(!destroy_stale_tun("tun3"));
     }
 
     #[test]
@@ -1000,10 +1104,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
     fn loopback_groups_are_read() {
         // Every IPv4-capable interface has joined all-hosts.
-        let lo = if cfg!(target_os = "macos") {
+        let lo = if cfg!(any(target_os = "macos", target_os = "freebsd")) {
             "lo0"
         } else {
             "lo"

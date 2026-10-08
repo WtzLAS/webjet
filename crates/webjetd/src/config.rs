@@ -320,6 +320,8 @@ fn default_data_dir() -> PathBuf {
         PathBuf::from("/Library/Application Support/Webjet/state")
     } else if cfg!(windows) {
         program_data().join("Webjet").join("state")
+    } else if cfg!(target_os = "freebsd") {
+        PathBuf::from("/var/db/webjet")
     } else {
         PathBuf::from("/var/lib/webjet")
     }
@@ -338,6 +340,8 @@ pub fn default_config_path() -> PathBuf {
         PathBuf::from("/Library/Application Support/Webjet/webjetd.toml")
     } else if cfg!(windows) {
         program_data().join("Webjet").join("webjetd.toml")
+    } else if cfg!(target_os = "freebsd") {
+        PathBuf::from("/usr/local/etc/webjet/webjetd.toml")
     } else {
         PathBuf::from("/etc/webjet/webjetd.toml")
     }

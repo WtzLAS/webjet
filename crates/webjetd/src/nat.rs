@@ -34,6 +34,11 @@ const TUNNEL_PREFIXES: &[&str] = &[
     "proton",
     "mullvad",
     "openvpn",
+    // OPNsense/FreeBSD: OpenVPN servers and clients (`ovpns1`, `ovpnc1`),
+    // IPsec's `enc0`, GRE tunnels.
+    "ovpn",
+    "enc",
+    "gre",
     "cscotun",
     "gpd",
     "pangp",

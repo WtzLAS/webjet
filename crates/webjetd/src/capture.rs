@@ -3,7 +3,7 @@
 //!
 //! A game that sends its LAN discovery to 255.255.255.255 without choosing
 //! an interface has it sent out one interface only: the default route's on
-//! Linux and macOS, the lowest-metric broadcast route's on Windows, which
+//! Linux, macOS and FreeBSD, the lowest-metric broadcast route's on Windows, which
 //! is the LAN, not the overlay. Capture sees those datagrams leave, without
 //! taking them from the LAN (local players still see the game), and hands
 //! them to the overlay's fan-out with this node's overlay address as the
@@ -17,8 +17,9 @@
 //!
 //! - Linux: a packet socket on every interface, with a kernel filter for
 //!   outgoing UDP to the captured ports (CAP_NET_RAW).
-//! - macOS: a BPF device per Ethernet/Wi-Fi interface, with a kernel filter
-//!   for UDP to the captured ports.
+//! - macOS, FreeBSD (OPNsense): a BPF device per Ethernet/Wi-Fi interface,
+//!   with a kernel filter for UDP to the captured ports (FreeBSD: sent
+//!   ones only).
 //! - Windows: a raw socket bound to 127.0.0.1, which sees the limited
 //!   broadcasts the host sends (the WinIPBroadcast technique); no driver.
 
@@ -46,7 +47,7 @@ const QUEUE: usize = 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Want {
     ports: CapturePorts,
-    /// The interfaces to open (macOS; empty elsewhere).
+    /// The interfaces to open (macOS, FreeBSD; empty elsewhere).
     ifaces: Vec<String>,
 }
 
@@ -217,10 +218,10 @@ const PACKET_OUTGOING: u32 = 4;
 const SKF_PROTOCOL: u32 = 0xffff_f000;
 
 /// Accept unfragmented IPv4 UDP datagrams to one of `ranges`. `eth`: the
-/// packet starts with an Ethernet header (macOS BPF), else with the IP
+/// packet starts with an Ethernet header (BSD BPF), else with the IP
 /// header (Linux packet socket, which also checks the direction).
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", test)),
+    not(any(target_os = "linux", target_os = "macos", target_os = "freebsd", test)),
     allow(dead_code)
 )]
 fn filter(eth: bool, outgoing: bool, ranges: &[(u16, u16)]) -> Vec<Insn> {
@@ -328,20 +329,51 @@ mod os {
     }
 }
 
-// ---------------------------------------------------------------- macOS
+// ---------------------------------------------------------------- macOS, FreeBSD
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 mod os {
     use super::*;
 
-    const BIOCSBLEN: libc::c_ulong = 0xc004_4266;
-    const BIOCSETIF: libc::c_ulong = 0x8020_426c;
-    const BIOCIMMEDIATE: libc::c_ulong = 0x8004_4270;
-    const BIOCGDLT: libc::c_ulong = 0x4004_426a;
-    const BIOCSETF: libc::c_ulong = 0x8010_4267;
-    const BIOCSRTIMEOUT: libc::c_ulong = 0x8010_426d;
+    /// `_IOC` from <sys/ioccom.h> (the same on macOS and FreeBSD), with the
+    /// size of the argument type, which differs between targets (pointer
+    /// and `timeval` sizes).
+    const fn ioc(inout: libc::c_ulong, num: u8, size: usize) -> libc::c_ulong {
+        inout
+            | (((size as libc::c_ulong) & 0x1fff) << 16)
+            | ((b'B' as libc::c_ulong) << 8)
+            | num as libc::c_ulong
+    }
+    const OUT: libc::c_ulong = 0x4000_0000;
+    const IN: libc::c_ulong = 0x8000_0000;
+    const UINT: usize = std::mem::size_of::<libc::c_uint>();
+    const BIOCSBLEN: libc::c_ulong = ioc(IN | OUT, 102, UINT);
+    const BIOCSETF: libc::c_ulong = ioc(IN, 103, std::mem::size_of::<BpfProgram>());
+    const BIOCGDLT: libc::c_ulong = ioc(OUT, 106, UINT);
+    /// `struct ifreq`: 16 bytes of name, a 16-byte union.
+    const BIOCSETIF: libc::c_ulong = ioc(IN, 108, 32);
+    const BIOCSRTIMEOUT: libc::c_ulong = ioc(IN, 109, std::mem::size_of::<libc::timeval>());
+    const BIOCIMMEDIATE: libc::c_ulong = ioc(IN, 112, UINT);
+    /// FreeBSD: which directions the device sees (`BPF_D_OUT`: sent only).
+    #[cfg(target_os = "freebsd")]
+    const BIOCSDIRECTION: libc::c_ulong = ioc(IN, 119, UINT);
+    #[cfg(target_os = "freebsd")]
+    const BPF_D_OUT: libc::c_uint = 2;
     const DLT_EN10MB: u32 = 1;
     const BUF: usize = 1 << 16;
+
+    /// The request numbers <net/bpf.h> defines on 64-bit targets.
+    #[cfg(target_pointer_width = "64")]
+    const _: () = {
+        assert!(BIOCSBLEN == 0xc004_4266);
+        assert!(BIOCSETF == 0x8010_4267);
+        assert!(BIOCGDLT == 0x4004_426a);
+        assert!(BIOCSETIF == 0x8020_426c);
+        assert!(BIOCSRTIMEOUT == 0x8010_426d);
+        assert!(BIOCIMMEDIATE == 0x8004_4270);
+    };
+    #[cfg(target_os = "freebsd")]
+    const _: () = assert!(BIOCSDIRECTION == 0x8004_4277);
 
     #[repr(C)]
     struct BpfInsn {
@@ -357,8 +389,9 @@ mod os {
         insns: *const BpfInsn,
     }
 
-    /// Ethernet and Wi-Fi interfaces with an IPv4 address (not the
-    /// overlay's, not other tunnels).
+    /// Ethernet and Wi-Fi interfaces (VLANs, bridges, laggs on FreeBSD)
+    /// with an IPv4 address: not the overlay's, not other tunnels or
+    /// pseudo-interfaces.
     pub(super) fn interfaces(dev: &str) -> Vec<String> {
         let mut v: Vec<String> = if_addrs::get_if_addrs()
             .unwrap_or_default()
@@ -367,7 +400,7 @@ mod os {
                 !i.is_loopback()
                     && i.name != dev
                     && !crate::nat::is_overlay_if(&i.name)
-                    && !["utun", "ipsec", "ppp", "gif", "stf", "awdl", "llw"]
+                    && !super::NOT_CAPTURED_IFS
                         .iter()
                         .any(|p| i.name.starts_with(p))
                     && matches!(i.addr, if_addrs::IfAddr::V4(_))
@@ -400,6 +433,16 @@ mod os {
     }
 
     fn open_dev() -> std::io::Result<libc::c_int> {
+        // FreeBSD clones a new device for each open of /dev/bpf.
+        if cfg!(target_os = "freebsd") {
+            // SAFETY: a valid C string.
+            let fd = unsafe { libc::open(c"/dev/bpf".as_ptr(), libc::O_RDONLY) };
+            return if fd >= 0 {
+                Ok(fd)
+            } else {
+                Err(std::io::Error::last_os_error())
+            };
+        }
         let mut last = std::io::Error::from(std::io::ErrorKind::NotFound);
         for i in 0..256 {
             let path = std::ffi::CString::new(format!("/dev/bpf{i}")).unwrap_or_default();
@@ -438,10 +481,18 @@ mod os {
         }
         let mut one: libc::c_uint = 1;
         ioctl(fd, BIOCIMMEDIATE, &mut one)?;
-        let mut tv = libc::timeval {
-            tv_sec: 0,
-            tv_usec: READ_TIMEOUT.as_micros() as libc::suseconds_t,
-        };
+        // A router sees its LAN's broadcasts come in all day: leave them in
+        // the kernel (best effort; the source check drops them anyway).
+        #[cfg(target_os = "freebsd")]
+        {
+            let mut d = BPF_D_OUT;
+            if let Err(e) = ioctl(fd, BIOCSDIRECTION, &mut d) {
+                tracing::debug!("BPF on {name}: BIOCSDIRECTION: {e}");
+            }
+        }
+        // SAFETY: all-zero is a valid timeval.
+        let mut tv: libc::timeval = unsafe { std::mem::zeroed() };
+        tv.tv_usec = READ_TIMEOUT.as_micros() as libc::suseconds_t;
         ioctl(fd, BIOCSRTIMEOUT, &mut tv)?;
         let mut p = BpfProgram {
             len: prog.len() as libc::c_uint,
@@ -462,7 +513,7 @@ mod os {
                     _ => Err(e),
                 };
             }
-            out.extend(super::bpf_records(&self.buf[..n as usize]));
+            out.extend(super::bpf_records(&self.buf[..n as usize], &super::BPF_HDR));
             Ok(())
         }
     }
@@ -487,24 +538,93 @@ mod os {
     }
 }
 
-/// The IPv4 packets in a macOS BPF read buffer: `bpf_hdr` records (caplen
-/// at 8, hdrlen at 16), each padded to 4 bytes, holding Ethernet frames.
+/// Interface name prefixes BPF capture leaves alone: tunnels, VPNs and
+/// pseudo-interfaces of macOS (`utun`, `awdl`, `llw`, …) and FreeBSD /
+/// OPNsense (`tun`, `ovpn`, `wg`, `enc`, `pflog`, `pfsync`, …).
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "freebsd", test)),
+    allow(dead_code)
+)]
+const NOT_CAPTURED_IFS: &[&str] = &[
+    "utun", "tun", "tap", "ipsec", "enc", "ovpn", "wg", "ppp", "gif", "gre", "stf", "awdl", "llw",
+    "pflog", "pfsync",
+];
+
+/// Where a BPF record header (`struct bpf_hdr`) keeps the captured length
+/// and the header length, and what records are padded to (`BPF_WORDALIGN`).
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "freebsd", test)),
+    allow(dead_code)
+)]
+struct BpfHdr {
+    caplen: usize,
+    hdrlen: usize,
+    align: usize,
+}
+
+/// macOS: a 32-bit `timeval32` stamp, records padded to 4 bytes.
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
-fn bpf_records(buf: &[u8]) -> Vec<Vec<u8>> {
+const BPF_HDR_MACOS: BpfHdr = BpfHdr {
+    caplen: 8,
+    hdrlen: 16,
+    align: 4,
+};
+
+/// FreeBSD: a native `timeval` stamp, records padded to a `long`.
+#[cfg(target_os = "freebsd")]
+const BPF_HDR: BpfHdr = BpfHdr {
+    caplen: std::mem::offset_of!(libc::bpf_hdr, bh_caplen),
+    hdrlen: std::mem::offset_of!(libc::bpf_hdr, bh_hdrlen),
+    align: std::mem::size_of::<libc::c_long>(),
+};
+#[cfg(target_os = "macos")]
+const BPF_HDR: BpfHdr = BPF_HDR_MACOS;
+
+/// FreeBSD on 64-bit targets (amd64, arm64): the layout `BPF_HDR` takes.
+#[cfg(any(test, all(target_os = "freebsd", target_pointer_width = "64")))]
+const BPF_HDR_FREEBSD64: BpfHdr = BpfHdr {
+    caplen: 16,
+    hdrlen: 24,
+    align: 8,
+};
+#[cfg(all(target_os = "freebsd", target_pointer_width = "64"))]
+const _: () = assert!(
+    BPF_HDR.caplen == BPF_HDR_FREEBSD64.caplen
+        && BPF_HDR.hdrlen == BPF_HDR_FREEBSD64.hdrlen
+        && BPF_HDR.align == BPF_HDR_FREEBSD64.align
+);
+
+/// The IPv4 packets in a BPF read buffer: `bpf_hdr` records, each padded,
+/// holding Ethernet frames.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "freebsd", test)),
+    allow(dead_code)
+)]
+fn bpf_records(buf: &[u8], h: &BpfHdr) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut off = 0usize;
-    while off + 18 <= buf.len() {
-        let u32_at = |i: usize| u32::from_ne_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
-        let caplen = u32_at(off + 8) as usize;
-        let hdrlen = usize::from(u16::from_ne_bytes([buf[off + 16], buf[off + 17]]));
+    while off + h.hdrlen + 2 <= buf.len() {
+        let caplen = u32::from_ne_bytes([
+            buf[off + h.caplen],
+            buf[off + h.caplen + 1],
+            buf[off + h.caplen + 2],
+            buf[off + h.caplen + 3],
+        ]) as usize;
+        let hdrlen = usize::from(u16::from_ne_bytes([
+            buf[off + h.hdrlen],
+            buf[off + h.hdrlen + 1],
+        ]));
         let start = off + hdrlen;
-        let Some(frame) = buf.get(start..start + caplen) else {
+        let Some(frame) = start
+            .checked_add(caplen)
+            .and_then(|end| buf.get(start..end))
+        else {
             break;
         };
         if frame.len() > 14 && frame[12..14] == [0x08, 0x00] {
             out.push(frame[14..].to_vec());
         }
-        let next = (hdrlen + caplen + 3) & !3;
+        let next = (hdrlen + caplen + h.align - 1) & !(h.align - 1);
         if next == 0 {
             break;
         }
@@ -566,7 +686,12 @@ mod os {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    windows
+)))]
 mod os {
     use super::*;
 
@@ -692,20 +817,41 @@ mod tests {
         let mut frame = vec![0xff; 6];
         frame.extend_from_slice(&[2, 0, 0, 0, 0, 1, 0x08, 0x00]);
         frame.extend_from_slice(&ping);
-        let mut buf = Vec::new();
-        for _ in 0..2 {
-            let mut h = vec![0u8; 18];
-            h[8..12].copy_from_slice(&(frame.len() as u32).to_ne_bytes());
-            h[12..16].copy_from_slice(&(frame.len() as u32).to_ne_bytes());
-            h[16..18].copy_from_slice(&18u16.to_ne_bytes());
-            buf.extend_from_slice(&h);
-            buf.extend_from_slice(&frame);
-            while buf.len() % 4 != 0 {
-                buf.push(0);
+        for layout in [&BPF_HDR_MACOS, &BPF_HDR_FREEBSD64] {
+            // The header as the kernel writes it: padded to the alignment.
+            let hlen = (layout.hdrlen + 2 + layout.align - 1) & !(layout.align - 1);
+            let mut buf = Vec::new();
+            for _ in 0..2 {
+                let mut h = vec![0u8; hlen];
+                let c = layout.caplen;
+                h[c..c + 4].copy_from_slice(&(frame.len() as u32).to_ne_bytes());
+                h[c + 4..c + 8].copy_from_slice(&(frame.len() as u32).to_ne_bytes());
+                h[layout.hdrlen..layout.hdrlen + 2].copy_from_slice(&(hlen as u16).to_ne_bytes());
+                buf.extend_from_slice(&h);
+                buf.extend_from_slice(&frame);
+                while buf.len() % layout.align != 0 {
+                    buf.push(0);
+                }
             }
+            let got = bpf_records(&buf, layout);
+            assert_eq!(got, vec![ping.clone(), ping.clone()]);
+            assert!(bpf_records(&buf[..hlen + 12], layout).is_empty());
+            assert!(bpf_records(&buf[..5], layout).is_empty());
         }
-        let got = bpf_records(&buf);
-        assert_eq!(got, vec![ping.clone(), ping]);
-        assert!(bpf_records(&buf[..30]).is_empty());
+    }
+
+    #[test]
+    fn capture_skips_tunnels_and_pseudo_interfaces() {
+        let skipped = |n: &str| NOT_CAPTURED_IFS.iter().any(|p| n.starts_with(p));
+        for n in [
+            "utun3", "tun0", "ovpns1", "wg0", "enc0", "pflog0", "pfsync0", "awdl0",
+        ] {
+            assert!(skipped(n), "{n}");
+        }
+        for n in [
+            "en0", "em0", "igb1", "vtnet0", "ix0", "vlan0.10", "bridge0", "lagg0",
+        ] {
+            assert!(!skipped(n), "{n}");
+        }
     }
 }
