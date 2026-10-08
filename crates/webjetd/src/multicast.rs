@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use webjet_core::conntrack::Verdict as Ct;
 use webjet_core::crypto::Bytes32;
 use webjet_core::frames::ftype;
-use webjet_core::multicast::{self as mc, Kind, State};
+use webjet_core::multicast::{self as mc, Kind, Origin, State};
 use webjet_core::packet::{self, Parsed};
 use webjet_core::policy::{Decision, Dest, PROTO_UDP};
 use webjet_core::types::now_ms;
@@ -72,7 +72,6 @@ fn peer_takes(n: &Node, peer: &Bytes32) -> Option<bool> {
 
 /// A broadcast or multicast datagram the host sent into the tun interface.
 pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &Parsed) {
-    let m = &n.metrics;
     // IGMP / MLD: the host joined or left a group.
     if is_membership_report(&p, parsed) {
         dp.mcast_wake.notify_one();
@@ -97,6 +96,27 @@ pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &P
         }
         parsed.flow.src = mine;
     }
+    fan_out(dp, n, p, &parsed, kind, Origin::Tun);
+}
+
+/// A datagram the host sent out another interface, taken by capture
+/// (§9.5.2) and already given this node's overlay address as its source.
+pub(crate) fn captured(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parsed) {
+    if parsed.flow.proto != PROTO_UDP || !on(n, dp) || !dp.is_mine(&parsed.flow.src) {
+        return;
+    }
+    let pools = n.store.read().overlay_pool.clone();
+    let Some(kind) = mc::kind(&parsed.flow.dst, &pools) else {
+        return;
+    };
+    n.metrics.multicast_captured.fetch_add(1, Ordering::Relaxed);
+    fan_out(dp, n, p, parsed, kind, Origin::Captured);
+}
+
+/// One copy of a datagram from this host to each peer that takes it,
+/// within the budget.
+fn fan_out(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parsed, kind: Kind, origin: Origin) {
+    let m = &n.metrics;
     let now = Instant::now();
     let payload = p.get(parsed.l4_offset + 8..).unwrap_or_default();
     let digest = mc::digest(kind, payload);
@@ -104,6 +124,11 @@ pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &P
         let mut st = dp.mcast.lock();
         if st.is_echo(digest, now) {
             m.multicast_echo.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        // An app that sends on every interface: once, by the first path.
+        if st.duplicate(digest, origin, now) {
+            m.multicast_duplicate.fetch_add(1, Ordering::Relaxed);
             return;
         }
         if !st.budget_left(now) {
@@ -117,7 +142,7 @@ pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &P
             return;
         }
         drop(st);
-        recipients(dp, n, &parsed, kind, now)
+        recipients(dp, n, parsed, kind, now)
     };
     if candidates.is_empty() {
         return;
@@ -153,7 +178,7 @@ pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &P
     for (peer, addr, rule) in chosen {
         // Track the flow as if it went to the peer's address, so its
         // unicast reply (a pong, an mDNS answer) is let back in.
-        track(dp, n, &peer, &parsed, addr, true, rule, now);
+        track(dp, n, &peer, parsed, addr, true, rule, now);
         if crate::e2e::send(n, &peer, ftype::MCAST, &p, ecn) != crate::e2e::SendResult::NoRoute {
             m.multicast_tx.fetch_add(1, Ordering::Relaxed);
         }
@@ -753,6 +778,34 @@ mod tests {
             .map(|(_, b)| mc::decode_report(&b).unwrap())
             .collect();
         assert_eq!(reports.last(), Some(&Report::Nothing), "{reports:?}");
+    }
+
+    #[tokio::test]
+    async fn captured_datagrams_fan_out_once() {
+        let t = setup(&[]);
+        let ping = udp4(ME, [255, 255, 255, 255], 50000, 19132, b"captured ping");
+        let parsed = packet::parse(&ping).unwrap();
+        captured(&t.dp, &t.n, ping.clone(), &parsed);
+        assert_eq!((mcast_to(&t, &t.a), mcast_to(&t, &t.b)), (1, 1));
+        assert_eq!(mcast_to(&t, &t.c), 0, "policy");
+        let m = &t.n.metrics;
+        assert_eq!(m.multicast_captured.load(Ordering::Relaxed), 1);
+        // The app also sent it into the tun interface: once is enough.
+        t.dp.outbound(ping.clone());
+        assert_eq!(mcast_to(&t, &t.a), 1);
+        assert_eq!(m.multicast_duplicate.load(Ordering::Relaxed), 1);
+        // Capture hands over only datagrams from this node's overlay address.
+        let other = udp4([10, 7, 0, 9], [255, 255, 255, 255], 1, 19132, b"other");
+        captured(&t.dp, &t.n, other.clone(), &packet::parse(&other).unwrap());
+        assert_eq!(mcast_to(&t, &t.a), 1);
+        // The pong to a captured ping comes back as a tracked reply.
+        let pong = packet::parse(&udp4(A, ME, 19132, 50000, b"pong")).unwrap();
+        assert_eq!(
+            t.dp.conntrack
+                .lock()
+                .classify(&t.a, &pong, false, Instant::now()),
+            webjet_core::conntrack::Verdict::Tracked
+        );
     }
 
     #[tokio::test]

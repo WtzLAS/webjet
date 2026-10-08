@@ -41376,10 +41376,303 @@ mod root {
             }
         }
 
+        /// The table `MulticastConfig` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `MulticastConfig` in the file `schema/webjet.fbs:209`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct MulticastConfig {
+            /// The field `capture` in the table `MulticastConfig`
+            pub capture:
+                ::core::option::Option<::planus::alloc::vec::Vec<::planus::alloc::string::String>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for MulticastConfig {
+            fn default() -> Self {
+                Self {
+                    capture: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl MulticastConfig {
+            /// Creates a [MulticastConfigBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> MulticastConfigBuilder<()> {
+                MulticastConfigBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_capture: impl ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_capture = field_capture.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<6> =
+                    ::core::default::Default::default();
+                if prepared_capture.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[::planus::Offset<str>]>>(0);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_capture) = prepared_capture {
+                            object_writer.write::<_, _, 4>(&prepared_capture);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<MulticastConfig>> for MulticastConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<MulticastConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<MulticastConfig>> for MulticastConfig {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<MulticastConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<MulticastConfig> for MulticastConfig {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<MulticastConfig> {
+                MulticastConfig::create(builder, &self.capture)
+            }
+        }
+
+        /// Builder for serializing an instance of the [MulticastConfig] type.
+        ///
+        /// Can be created using the [MulticastConfig::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct MulticastConfigBuilder<State>(State);
+
+        impl MulticastConfigBuilder<()> {
+            /// Setter for the [`capture` field](MulticastConfig#structfield.capture).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn capture<T0>(self, value: T0) -> MulticastConfigBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+            {
+                MulticastConfigBuilder((value,))
+            }
+
+            /// Sets the [`capture` field](MulticastConfig#structfield.capture) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn capture_as_null(self) -> MulticastConfigBuilder<((),)> {
+                self.capture(())
+            }
+        }
+
+        impl<T0> MulticastConfigBuilder<(T0,)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [MulticastConfig].
+            #[inline]
+            pub fn finish(
+                self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<MulticastConfig>
+            where
+                Self: ::planus::WriteAsOffset<MulticastConfig>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>>
+            ::planus::WriteAs<::planus::Offset<MulticastConfig>> for MulticastConfigBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<MulticastConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<MulticastConfig> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>>
+            ::planus::WriteAsOptional<::planus::Offset<MulticastConfig>>
+            for MulticastConfigBuilder<(T0,)>
+        {
+            type Prepared = ::planus::Offset<MulticastConfig>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<MulticastConfig>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>>
+            ::planus::WriteAsOffset<MulticastConfig> for MulticastConfigBuilder<(T0,)>
+        {
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::planus::Offset<MulticastConfig> {
+                let (v0,) = &self.0;
+                MulticastConfig::create(builder, v0)
+            }
+        }
+
+        /// Reference to a deserialized [MulticastConfig].
+        #[derive(Copy, Clone)]
+        pub struct MulticastConfigRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> MulticastConfigRef<'a> {
+            /// Getter for the [`capture` field](MulticastConfig#structfield.capture).
+            #[inline]
+            pub fn capture(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<&'a ::core::primitive::str>>,
+                >,
+            > {
+                self.0.access(0, "MulticastConfig", "capture")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for MulticastConfigRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("MulticastConfigRef");
+                if let ::core::option::Option::Some(field_capture) = self.capture().transpose() {
+                    f.field("capture", &field_capture);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<MulticastConfigRef<'a>> for MulticastConfig {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: MulticastConfigRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    capture: if let ::core::option::Option::Some(capture) = value.capture()? {
+                        ::core::option::Option::Some(capture.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for MulticastConfigRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for MulticastConfigRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[MulticastConfigRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<MulticastConfig>> for MulticastConfig {
+            type Value = ::planus::Offset<MulticastConfig>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<MulticastConfig>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for MulticastConfigRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[MulticastConfigRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `TransportConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TransportConfig` in the file `schema/webjet.fbs:205`
+        /// * Table `TransportConfig` in the file `schema/webjet.fbs:213`
         #[derive(
             Clone,
             Debug,
@@ -41407,6 +41700,9 @@ mod root {
             /// The field `compression` in the table `TransportConfig`
             pub compression:
                 ::core::option::Option<::planus::alloc::boxed::Box<self::CompressionConfig>>,
+            /// The field `multicast` in the table `TransportConfig`
+            pub multicast:
+                ::core::option::Option<::planus::alloc::boxed::Box<self::MulticastConfig>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -41419,6 +41715,7 @@ mod root {
                     camouflage: ::core::default::Default::default(),
                     padding: ::core::default::Default::default(),
                     compression: ::core::default::Default::default(),
+                    multicast: ::core::default::Default::default(),
                 }
             }
         }
@@ -41445,6 +41742,7 @@ mod root {
                 field_compression: impl ::planus::WriteAsOptional<
                     ::planus::Offset<self::CompressionConfig>,
                 >,
+                field_multicast: impl ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             ) -> ::planus::Offset<Self> {
                 let prepared_version = field_version.prepare(builder, &0);
                 let prepared_defaults = field_defaults.prepare(builder);
@@ -41452,8 +41750,9 @@ mod root {
                 let prepared_camouflage = field_camouflage.prepare(builder);
                 let prepared_padding = field_padding.prepare(builder);
                 let prepared_compression = field_compression.prepare(builder);
+                let prepared_multicast = field_multicast.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<16> =
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
                     ::core::default::Default::default();
                 if prepared_version.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -41472,6 +41771,9 @@ mod root {
                 }
                 if prepared_compression.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::CompressionConfig>>(5);
+                }
+                if prepared_multicast.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::MulticastConfig>>(6);
                 }
 
                 unsafe {
@@ -41498,6 +41800,10 @@ mod root {
                             prepared_compression
                         {
                             object_writer.write::<_, _, 4>(&prepared_compression);
+                        }
+                        if let ::core::option::Option::Some(prepared_multicast) = prepared_multicast
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_multicast);
                         }
                     });
                 }
@@ -41543,6 +41849,7 @@ mod root {
                     &self.camouflage,
                     &self.padding,
                     &self.compression,
+                    &self.multicast,
                 )
             }
         }
@@ -41681,6 +41988,29 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`multicast` field](TransportConfig#structfield.multicast).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn multicast<T6>(
+                self,
+                value: T6,
+            ) -> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                TransportConfigBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`multicast` field](TransportConfig#structfield.multicast) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn multicast_as_null(self) -> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, ())> {
+                self.multicast(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [TransportConfig].
             #[inline]
             pub fn finish(
@@ -41705,8 +42035,9 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::Camouflage>>,
                 T4: ::planus::WriteAsOptional<::planus::Offset<self::PaddingScheme>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             > ::planus::WriteAs<::planus::Offset<TransportConfig>>
-            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<TransportConfig>;
 
@@ -41730,8 +42061,9 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::Camouflage>>,
                 T4: ::planus::WriteAsOptional<::planus::Offset<self::PaddingScheme>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             > ::planus::WriteAsOptional<::planus::Offset<TransportConfig>>
-            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<TransportConfig>;
 
@@ -41755,16 +42087,17 @@ mod root {
                 T3: ::planus::WriteAsOptional<::planus::Offset<self::Camouflage>>,
                 T4: ::planus::WriteAsOptional<::planus::Offset<self::PaddingScheme>>,
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
+                T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             > ::planus::WriteAsOffset<TransportConfig>
-            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5)>
+            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             #[inline]
             fn prepare(
                 &self,
                 builder: &mut ::planus::Builder,
             ) -> ::planus::Offset<TransportConfig> {
-                let (v0, v1, v2, v3, v4, v5) = &self.0;
-                TransportConfig::create(builder, v0, v1, v2, v3, v4, v5)
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                TransportConfig::create(builder, v0, v1, v2, v3, v4, v5, v6)
             }
         }
 
@@ -41829,6 +42162,15 @@ mod root {
             {
                 self.0.access(5, "TransportConfig", "compression")
             }
+
+            /// Getter for the [`multicast` field](TransportConfig#structfield.multicast).
+            #[inline]
+            pub fn multicast(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::MulticastConfigRef<'a>>>
+            {
+                self.0.access(6, "TransportConfig", "multicast")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for TransportConfigRef<'a> {
@@ -41854,6 +42196,10 @@ mod root {
                     self.compression().transpose()
                 {
                     f.field("compression", &field_compression);
+                }
+                if let ::core::option::Option::Some(field_multicast) = self.multicast().transpose()
+                {
+                    f.field("multicast", &field_multicast);
                 }
                 f.finish()
             }
@@ -41897,6 +42243,13 @@ mod root {
                     {
                         ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
                             ::core::convert::TryInto::try_into(compression)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    multicast: if let ::core::option::Option::Some(multicast) = value.multicast()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(multicast)?,
                         ))
                     } else {
                         ::core::option::Option::None
@@ -41981,7 +42334,7 @@ mod root {
         /// The table `ControllerSettings` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:218`
+        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:227`
         #[derive(
             Clone,
             Debug,
@@ -42441,7 +42794,7 @@ mod root {
         /// The table `NetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:229`
+        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:238`
         #[derive(
             Clone,
             Debug,
@@ -43043,7 +43396,7 @@ mod root {
         /// The table `NodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NodeConfig` in the file `schema/webjet.fbs:242`
+        /// * Table `NodeConfig` in the file `schema/webjet.fbs:251`
         #[derive(
             Clone,
             Debug,
@@ -43076,6 +43429,9 @@ mod root {
             /// The field `compression` in the table `NodeConfig`
             pub compression:
                 ::core::option::Option<::planus::alloc::boxed::Box<self::CompressionConfig>>,
+            /// The field `multicast` in the table `NodeConfig`
+            pub multicast:
+                ::core::option::Option<::planus::alloc::boxed::Box<self::MulticastConfig>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -43091,6 +43447,7 @@ mod root {
                     dns_forward: ::core::default::Default::default(),
                     proxy: ::core::default::Default::default(),
                     compression: ::core::default::Default::default(),
+                    multicast: ::core::default::Default::default(),
                 }
             }
         }
@@ -43128,6 +43485,7 @@ mod root {
                 field_compression: impl ::planus::WriteAsOptional<
                     ::planus::Offset<self::CompressionConfig>,
                 >,
+                field_multicast: impl ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_version = field_version.prepare(builder, &0);
@@ -43138,8 +43496,9 @@ mod root {
                 let prepared_dns_forward = field_dns_forward.prepare(builder);
                 let prepared_proxy = field_proxy.prepare(builder);
                 let prepared_compression = field_compression.prepare(builder);
+                let prepared_multicast = field_multicast.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<22> =
+                let mut table_writer: ::planus::table_writer::TableWriter<24> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -43172,6 +43531,9 @@ mod root {
                 }
                 if prepared_compression.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::CompressionConfig>>(8);
+                }
+                if prepared_multicast.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::MulticastConfig>>(9);
                 }
 
                 unsafe {
@@ -43210,6 +43572,10 @@ mod root {
                             prepared_compression
                         {
                             object_writer.write::<_, _, 4>(&prepared_compression);
+                        }
+                        if let ::core::option::Option::Some(prepared_multicast) = prepared_multicast
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_multicast);
                         }
                     });
                 }
@@ -43252,6 +43618,7 @@ mod root {
                     &self.dns_forward,
                     &self.proxy,
                     &self.compression,
+                    &self.multicast,
                 )
             }
         }
@@ -43463,6 +43830,33 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)> {
+            /// Setter for the [`multicast` field](NodeConfig#structfield.multicast).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn multicast<T9>(
+                self,
+                value: T9,
+            ) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+            where
+                T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self.0;
+                NodeConfigBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, value))
+            }
+
+            /// Sets the [`multicast` field](NodeConfig#structfield.multicast) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn multicast_as_null(
+                self,
+            ) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, ())> {
+                self.multicast(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>
+            NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NodeConfig].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig>
@@ -43485,8 +43879,9 @@ mod root {
                 T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
                 T7: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>,
                 T8: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             > ::planus::WriteAs<::planus::Offset<NodeConfig>>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
         {
             type Prepared = ::planus::Offset<NodeConfig>;
 
@@ -43508,8 +43903,9 @@ mod root {
                 T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
                 T7: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>,
                 T8: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             > ::planus::WriteAsOptional<::planus::Offset<NodeConfig>>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
         {
             type Prepared = ::planus::Offset<NodeConfig>;
 
@@ -43534,13 +43930,14 @@ mod root {
                 T6: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ForwardZone>]>>,
                 T7: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::ProxyRule>]>>,
                 T8: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
             > ::planus::WriteAsOffset<NodeConfig>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = &self.0;
-                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8)
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = &self.0;
+                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
             }
         }
 
@@ -43641,6 +44038,15 @@ mod root {
             {
                 self.0.access(8, "NodeConfig", "compression")
             }
+
+            /// Getter for the [`multicast` field](NodeConfig#structfield.multicast).
+            #[inline]
+            pub fn multicast(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::MulticastConfigRef<'a>>>
+            {
+                self.0.access(9, "NodeConfig", "multicast")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for NodeConfigRef<'a> {
@@ -43678,6 +44084,10 @@ mod root {
                     self.compression().transpose()
                 {
                     f.field("compression", &field_compression);
+                }
+                if let ::core::option::Option::Some(field_multicast) = self.multicast().transpose()
+                {
+                    f.field("multicast", &field_multicast);
                 }
                 f.finish()
             }
@@ -43732,6 +44142,13 @@ mod root {
                     {
                         ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
                             ::core::convert::TryInto::try_into(compression)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    multicast: if let ::core::option::Option::Some(multicast) = value.multicast()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(multicast)?,
                         ))
                     } else {
                         ::core::option::Option::None
@@ -43816,7 +44233,7 @@ mod root {
         /// The table `ProxyRule` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyRule` in the file `schema/webjet.fbs:258`
+        /// * Table `ProxyRule` in the file `schema/webjet.fbs:268`
         #[derive(
             Clone,
             Debug,
@@ -44336,7 +44753,7 @@ mod root {
         /// The table `SignedTreeHead` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:269`
+        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:279`
         #[derive(
             Clone,
             Debug,
@@ -44862,7 +45279,7 @@ mod root {
         /// The table `SigningKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:278`
+        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:288`
         #[derive(
             Clone,
             Debug,
@@ -45341,7 +45758,7 @@ mod root {
         /// The table `SigningKeyTombstone` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:286`
+        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:296`
         #[derive(
             Clone,
             Debug,
@@ -45739,7 +46156,7 @@ mod root {
         /// The table `EmergencyKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:293`
+        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:303`
         #[derive(
             Clone,
             Debug,
@@ -46022,7 +46439,7 @@ mod root {
         /// The table `TypeSchema` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchema` in the file `schema/webjet.fbs:297`
+        /// * Table `TypeSchema` in the file `schema/webjet.fbs:307`
         #[derive(
             Clone,
             Debug,
@@ -46326,7 +46743,7 @@ mod root {
         /// The table `TypeSchemas` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:298`
+        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:308`
         #[derive(
             Clone,
             Debug,
@@ -46644,7 +47061,7 @@ mod root {
         /// The table `StateVersion` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `StateVersion` in the file `schema/webjet.fbs:300`
+        /// * Table `StateVersion` in the file `schema/webjet.fbs:310`
         #[derive(
             Clone,
             Debug,
@@ -47204,7 +47621,7 @@ mod root {
         /// The table `Genesis` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Genesis` in the file `schema/webjet.fbs:310`
+        /// * Table `Genesis` in the file `schema/webjet.fbs:320`
         #[derive(
             Clone,
             Debug,
@@ -47677,7 +48094,7 @@ mod root {
         /// The table `LogRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRequest` in the file `schema/webjet.fbs:322`
+        /// * Table `LogRequest` in the file `schema/webjet.fbs:332`
         #[derive(
             Clone,
             Debug,
@@ -48091,7 +48508,7 @@ mod root {
         /// The table `SnapshotRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:330`
+        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:340`
         #[derive(
             Clone,
             Debug,
@@ -48432,7 +48849,7 @@ mod root {
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:337`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:347`
         #[derive(
             Clone,
             Debug,
@@ -48842,7 +49259,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:344`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:354`
         #[derive(
             Clone,
             Debug,
@@ -49751,7 +50168,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:361`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:371`
         #[derive(
             Clone,
             Debug,
@@ -50206,7 +50623,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:369`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:379`
         #[derive(
             Clone,
             Debug,
@@ -50665,7 +51082,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:377`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:387`
         #[derive(
             Clone,
             Debug,
@@ -51266,7 +51683,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:387`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:397`
         #[derive(
             Clone,
             Debug,
@@ -51702,7 +52119,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:394`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:404`
         #[derive(
             Clone,
             Debug,
@@ -52258,7 +52675,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:403`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:413`
         #[derive(
             Clone,
             Debug,
@@ -52768,7 +53185,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:414`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:424`
         #[derive(
             Clone,
             Debug,
@@ -53130,7 +53547,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:422`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:432`
         #[derive(
             Copy,
             Clone,
@@ -53303,7 +53720,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:424`
+        /// * Table `Counter` in the file `schema/webjet.fbs:434`
         #[derive(
             Clone,
             Debug,
@@ -53612,7 +54029,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:426`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:436`
         #[derive(
             Clone,
             Debug,
@@ -53911,7 +54328,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:428`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:438`
         #[derive(
             Clone,
             Debug,
@@ -54309,7 +54726,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:435`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:445`
         #[derive(
             Clone,
             Debug,
@@ -55175,7 +55592,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:450`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:460`
         #[derive(
             Clone,
             Debug,
@@ -56200,7 +56617,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:467`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:477`
         #[derive(
             Clone,
             Debug,
@@ -56556,7 +56973,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:469`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:479`
         #[derive(
             Clone,
             Debug,
@@ -56911,7 +57328,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:471`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:481`
         #[derive(
             Clone,
             Debug,
@@ -58243,7 +58660,7 @@ mod root {
         /// The table `TunMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TunMetrics` in the file `schema/webjet.fbs:494`
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:504`
         #[derive(
             Clone,
             Debug,
@@ -58268,6 +58685,8 @@ mod root {
             pub multicast_tx_packets: u64,
             /// The field `multicast_rx_packets` in the table `TunMetrics`
             pub multicast_rx_packets: u64,
+            /// The field `multicast_captured_packets` in the table `TunMetrics`
+            pub multicast_captured_packets: u64,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -58280,6 +58699,7 @@ mod root {
                     tx_bytes: 0,
                     multicast_tx_packets: 0,
                     multicast_rx_packets: 0,
+                    multicast_captured_packets: 0,
                 }
             }
         }
@@ -58300,6 +58720,7 @@ mod root {
                 field_tx_bytes: impl ::planus::WriteAsDefault<u64, u64>,
                 field_multicast_tx_packets: impl ::planus::WriteAsDefault<u64, u64>,
                 field_multicast_rx_packets: impl ::planus::WriteAsDefault<u64, u64>,
+                field_multicast_captured_packets: impl ::planus::WriteAsDefault<u64, u64>,
             ) -> ::planus::Offset<Self> {
                 let prepared_rx_packets = field_rx_packets.prepare(builder, &0);
                 let prepared_rx_bytes = field_rx_bytes.prepare(builder, &0);
@@ -58307,8 +58728,10 @@ mod root {
                 let prepared_tx_bytes = field_tx_bytes.prepare(builder, &0);
                 let prepared_multicast_tx_packets = field_multicast_tx_packets.prepare(builder, &0);
                 let prepared_multicast_rx_packets = field_multicast_rx_packets.prepare(builder, &0);
+                let prepared_multicast_captured_packets =
+                    field_multicast_captured_packets.prepare(builder, &0);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<16> =
+                let mut table_writer: ::planus::table_writer::TableWriter<18> =
                     ::core::default::Default::default();
                 if prepared_rx_packets.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -58327,6 +58750,9 @@ mod root {
                 }
                 if prepared_multicast_rx_packets.is_some() {
                     table_writer.write_entry::<u64>(5);
+                }
+                if prepared_multicast_captured_packets.is_some() {
+                    table_writer.write_entry::<u64>(6);
                 }
 
                 unsafe {
@@ -58356,6 +58782,11 @@ mod root {
                             prepared_multicast_rx_packets
                         {
                             object_writer.write::<_, _, 8>(&prepared_multicast_rx_packets);
+                        }
+                        if let ::core::option::Option::Some(prepared_multicast_captured_packets) =
+                            prepared_multicast_captured_packets
+                        {
+                            object_writer.write::<_, _, 8>(&prepared_multicast_captured_packets);
                         }
                     });
                 }
@@ -58395,6 +58826,7 @@ mod root {
                     self.tx_bytes,
                     self.multicast_tx_packets,
                     self.multicast_rx_packets,
+                    self.multicast_captured_packets,
                 )
             }
         }
@@ -58540,6 +58972,31 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5> TunMetricsBuilder<(T0, T1, T2, T3, T4, T5)> {
+            /// Setter for the [`multicast_captured_packets` field](TunMetrics#structfield.multicast_captured_packets).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn multicast_captured_packets<T6>(
+                self,
+                value: T6,
+            ) -> TunMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)>
+            where
+                T6: ::planus::WriteAsDefault<u64, u64>,
+            {
+                let (v0, v1, v2, v3, v4, v5) = self.0;
+                TunMetricsBuilder((v0, v1, v2, v3, v4, v5, value))
+            }
+
+            /// Sets the [`multicast_captured_packets` field](TunMetrics#structfield.multicast_captured_packets) to the default value.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn multicast_captured_packets_as_default(
+                self,
+            ) -> TunMetricsBuilder<(T0, T1, T2, T3, T4, T5, ::planus::DefaultValue)> {
+                self.multicast_captured_packets(::planus::DefaultValue)
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6> TunMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [TunMetrics].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics>
@@ -58557,8 +59014,9 @@ mod root {
                 T3: ::planus::WriteAsDefault<u64, u64>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
                 T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u64, u64>,
             > ::planus::WriteAs<::planus::Offset<TunMetrics>>
-            for TunMetricsBuilder<(T0, T1, T2, T3, T4, T5)>
+            for TunMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<TunMetrics>;
 
@@ -58575,8 +59033,9 @@ mod root {
                 T3: ::planus::WriteAsDefault<u64, u64>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
                 T5: ::planus::WriteAsDefault<u64, u64>,
+                T6: ::planus::WriteAsDefault<u64, u64>,
             > ::planus::WriteAsOptional<::planus::Offset<TunMetrics>>
-            for TunMetricsBuilder<(T0, T1, T2, T3, T4, T5)>
+            for TunMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             type Prepared = ::planus::Offset<TunMetrics>;
 
@@ -58596,12 +59055,14 @@ mod root {
                 T3: ::planus::WriteAsDefault<u64, u64>,
                 T4: ::planus::WriteAsDefault<u64, u64>,
                 T5: ::planus::WriteAsDefault<u64, u64>,
-            > ::planus::WriteAsOffset<TunMetrics> for TunMetricsBuilder<(T0, T1, T2, T3, T4, T5)>
+                T6: ::planus::WriteAsDefault<u64, u64>,
+            > ::planus::WriteAsOffset<TunMetrics>
+            for TunMetricsBuilder<(T0, T1, T2, T3, T4, T5, T6)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<TunMetrics> {
-                let (v0, v1, v2, v3, v4, v5) = &self.0;
-                TunMetrics::create(builder, v0, v1, v2, v3, v4, v5)
+                let (v0, v1, v2, v3, v4, v5, v6) = &self.0;
+                TunMetrics::create(builder, v0, v1, v2, v3, v4, v5, v6)
             }
         }
 
@@ -58657,6 +59118,16 @@ mod root {
                         .unwrap_or(0),
                 )
             }
+
+            /// Getter for the [`multicast_captured_packets` field](TunMetrics#structfield.multicast_captured_packets).
+            #[inline]
+            pub fn multicast_captured_packets(&self) -> ::planus::Result<u64> {
+                ::core::result::Result::Ok(
+                    self.0
+                        .access(6, "TunMetrics", "multicast_captured_packets")?
+                        .unwrap_or(0),
+                )
+            }
         }
 
         impl<'a> ::core::fmt::Debug for TunMetricsRef<'a> {
@@ -58668,6 +59139,10 @@ mod root {
                 f.field("tx_bytes", &self.tx_bytes());
                 f.field("multicast_tx_packets", &self.multicast_tx_packets());
                 f.field("multicast_rx_packets", &self.multicast_rx_packets());
+                f.field(
+                    "multicast_captured_packets",
+                    &self.multicast_captured_packets(),
+                );
                 f.finish()
             }
         }
@@ -58687,6 +59162,9 @@ mod root {
                     )?,
                     multicast_rx_packets: ::core::convert::TryInto::try_into(
                         value.multicast_rx_packets()?,
+                    )?,
+                    multicast_captured_packets: ::core::convert::TryInto::try_into(
+                        value.multicast_captured_packets()?,
                     )?,
                 })
             }
@@ -58768,7 +59246,7 @@ mod root {
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:510`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:523`
         #[derive(
             Clone,
             Debug,
@@ -59488,7 +59966,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:524`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:537`
         #[derive(
             Clone,
             Debug,
@@ -60222,7 +60700,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:539`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:552`
         #[derive(
             Clone,
             Debug,
@@ -61071,7 +61549,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:553`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:566`
         #[derive(
             Clone,
             Debug,
@@ -61387,7 +61865,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:555`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:568`
         #[derive(
             Clone,
             Debug,
@@ -62198,7 +62676,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:569`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:582`
         #[derive(
             Clone,
             Debug,
@@ -62515,7 +62993,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:571`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:584`
         #[derive(
             Clone,
             Debug,
@@ -62940,7 +63418,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:578`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:591`
         #[derive(
             Clone,
             Debug,
@@ -63206,7 +63684,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:579`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:592`
         #[derive(
             Clone,
             Debug,
@@ -63491,7 +63969,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:582`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:595`
         #[derive(
             Clone,
             Debug,
@@ -63763,7 +64241,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:583`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:596`
         #[derive(
             Clone,
             Debug,
@@ -64033,7 +64511,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:584`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:597`
         #[derive(
             Clone,
             Debug,
@@ -64301,7 +64779,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:585`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:598`
         #[derive(
             Clone,
             Debug,
@@ -64573,7 +65051,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:586`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:599`
         #[derive(
             Clone,
             Debug,
@@ -64849,7 +65327,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:587`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:600`
         #[derive(
             Clone,
             Debug,
@@ -65186,7 +65664,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:588`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:601`
         #[derive(
             Clone,
             Debug,
@@ -65477,7 +65955,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:589`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:602`
         #[derive(
             Clone,
             Debug,
@@ -65752,7 +66230,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:591`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:604`
         #[derive(
             Copy,
             Clone,
@@ -65930,7 +66408,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:592`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:605`
         #[derive(
             Clone,
             Debug,
@@ -66266,7 +66744,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:594`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:607`
         #[derive(
             Clone,
             Debug,
@@ -66528,7 +67006,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:596`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:609`
         #[derive(
             Clone,
             Debug,
@@ -67552,7 +68030,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:616`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:629`
         #[derive(
             Clone,
             Debug,
@@ -67957,7 +68435,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:625`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:638`
         #[derive(
             Clone,
             Debug,
@@ -68221,7 +68699,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:626`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:639`
         #[derive(
             Clone,
             Debug,
@@ -68504,7 +68982,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:627`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:640`
         #[derive(
             Clone,
             Debug,
@@ -68793,7 +69271,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:628`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:641`
         #[derive(
             Clone,
             Debug,
@@ -69189,7 +69667,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:629`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:642`
         #[derive(
             Clone,
             Debug,
@@ -69472,7 +69950,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:630`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:643`
         #[derive(
             Clone,
             Debug,
@@ -69761,7 +70239,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:631`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:644`
         #[derive(
             Clone,
             Debug,
@@ -70052,7 +70530,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:632`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:645`
         #[derive(
             Clone,
             Debug,
@@ -70314,7 +70792,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:633`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:646`
         #[derive(
             Clone,
             Debug,
@@ -70581,7 +71059,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:634`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:647`
         #[derive(
             Clone,
             Debug,
@@ -70925,7 +71403,7 @@ mod root {
         /// The table `AutoMembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:636`
+        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:649`
         #[derive(
             Clone,
             Debug,
@@ -71266,7 +71744,7 @@ mod root {
         /// The table `ForceNewClusterEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:640`
+        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:653`
         #[derive(
             Clone,
             Debug,
@@ -71708,7 +72186,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:647`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:660`
         #[derive(
             Clone,
             Debug,
@@ -72538,7 +73016,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:663`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:676`
         #[derive(
             Clone,
             Debug,
@@ -72852,7 +73330,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:668`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:681`
         #[derive(
             Clone,
             Debug,
@@ -73208,7 +73686,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:674`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:687`
         #[derive(
             Clone,
             Debug,
@@ -73733,7 +74211,7 @@ mod root {
         /// The table `UpgradeFile` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:688`
+        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:701`
         #[derive(
             Clone,
             Debug,
@@ -74049,7 +74527,7 @@ mod root {
         /// The table `UpgradeRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:692`
+        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:705`
         #[derive(
             Clone,
             Debug,

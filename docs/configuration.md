@@ -703,6 +703,31 @@ overrides.
 | `relay_capacity_mbps` | estimated | The relay's forwarding capacity, used for its load figure (§11.8.1). When unset, the agent estimates it from observed throughput, never below 100 Mbit/s. Usually set per node. |
 | `rate_ceiling_mbps` | none | Upper bound for the UDP transport's sending rate |
 
+#### `[multicast]`
+
+Broadcast and multicast over the overlay are on by default (architecture
+§9.5.1; the `multicast_*` limits above). `capture` also takes, for the UDP
+ports listed, the broadcasts and IPv4 multicasts the host sends out its
+*other* interfaces (LAN, Wi-Fi) — what most games do for LAN discovery,
+since they broadcast to `255.255.255.255` without choosing an interface
+(architecture §9.5.2).
+
+```toml
+[multicast]
+capture = ["udp:19132", "udp:7551"]   # Minecraft Bedrock, a game lobby
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `capture` | `[]` | UDP port specs (`udp:19132`, `udp:4000-4010`, `udp` for every port). Ports 67, 68, 137, 138, 1900, 3702, 5353 and 5355 are never captured. |
+
+Capture runs on Linux (`AF_PACKET`, needs `CAP_NET_RAW`), macOS (BPF) and
+Windows (a raw socket on the loopback address; limited broadcasts only).
+The source of a captured datagram becomes the node's overlay address, so
+replies come back through the overlay; LAN players keep seeing the game.
+Older controllers don't know the setting: upgrade every controller before
+the first change. `show` doesn't write the section out when it is unset.
+
 #### `[controllers]`
 
 How the Raft leader manages the controller cluster (§7.5; operations guide
@@ -747,6 +772,7 @@ only. It holds a subset of the keys:
 | `limits.value.<name>` | Replaces the network's value and overrides. |
 | `[[seeds]]` | Tried before the network's seeds. |
 | `[[dns.record]]`, `[[dns.forward]]` | Answered or forwarded by this node's resolver only, before the network's. Checked like the network's (inside the suffix or a forwarded zone, no shadowing of magic DNS names). |
+| `multicast.capture` | Replaces the network's list; `[]` turns capture off for this node. |
 | `[[proxy]]` | [Reverse proxy ports](#proxy-reverse-proxy-ports) this node listens on. Node scope only. |
 
 Policy, the DNS suffix and resolver, transport overrides, camouflage,
@@ -936,6 +962,33 @@ webjetctl local config --node laptop-17 set transport.priority.kcp 0
 
 The node stops trying UDP and connects over TLS or AnyTLS. To undo it,
 `unset` the same key.
+
+### Play LAN games across the overlay
+
+Games find each other with UDP broadcasts. Let the game nodes reach each
+other on the game's ports, and capture its discovery port so broadcasts the
+game sends out the LAN interface reach the overlay too:
+
+```sh
+webjetctl network config edit
+```
+
+```toml
+[[policy.rule]]
+id = "games"
+action = "allow"
+src = ["tag:game"]
+dst = ["tag:game"]
+ports = ["udp:19132-19133"]           # Minecraft Bedrock
+
+[multicast]
+capture = ["udp:19132"]
+```
+
+Every game node then lists the others' worlds. `webjetctl local metrics |
+grep multicast` shows copies sent and captured; if a node's `local status`
+shows the `multicast_capture` alarm, capture couldn't start there (see the
+message: usually missing rights).
 
 ### Compress packets on an expensive link
 

@@ -33,6 +33,9 @@ pub const REPORT_EVERY: Duration = Duration::from_secs(60);
 pub const ECHO_WINDOW: Duration = Duration::from_secs(1);
 /// Most groups a report carries; a host with more is reported as "any".
 pub const MAX_GROUPS: usize = 256;
+/// A datagram the host sends both into the tun interface and out another
+/// interface within this time goes out once (§9.5.2).
+pub const DUPLICATE_WINDOW: Duration = Duration::from_millis(500);
 const ECHO_CAP: usize = 4096;
 const SENDER_CAP: usize = 4096;
 
@@ -93,6 +96,100 @@ pub fn digest(kind: Kind, payload: &[u8]) -> u64 {
     kind.hash(&mut h);
     payload.hash(&mut h);
     h.finish()
+}
+
+// ---------------------------------------------------------------- capture
+
+/// UDP ports capture never takes, whatever the configuration says: their
+/// answers carry LAN addresses peers can't reach (mDNS, LLMNR, SSDP,
+/// NetBIOS, WS-Discovery) or configure the LAN itself (DHCP).
+pub const NEVER_CAPTURED: [u16; 8] = [67, 68, 137, 138, 1900, 3702, 5353, 5355];
+
+/// The UDP ports to capture (§9.5.2), from `[multicast] capture` specs:
+/// `udp:19132`, `udp:4000-4010`, `udp` (every port but [`NEVER_CAPTURED`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CapturePorts(Vec<(u16, u16)>);
+
+impl CapturePorts {
+    pub fn parse(specs: &[String]) -> anyhow::Result<CapturePorts> {
+        let mut set = crate::policy::PortSet::default();
+        for s in specs {
+            let p = crate::policy::PortSet::parse_spec(s)
+                .map_err(|e| anyhow::anyhow!("multicast.capture {s:?}: {e}"))?;
+            if !p.tcp.is_empty() || p.icmp || p.other || p.udp.is_empty() {
+                anyhow::bail!("multicast.capture {s:?}: only UDP ports (udp:19132, udp:4000-4010)");
+            }
+            if let [(lo, hi)] = p.udp[..]
+                && lo == hi
+                && NEVER_CAPTURED.contains(&lo)
+            {
+                anyhow::bail!(
+                    "multicast.capture {s:?}: port {lo} is never captured (its answers carry LAN addresses)"
+                );
+            }
+            set.union(&p);
+        }
+        Ok(CapturePorts(set.udp))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The port ranges, merged and sorted.
+    pub fn ranges(&self) -> &[(u16, u16)] {
+        &self.0
+    }
+
+    pub fn contains(&self, port: u16) -> bool {
+        !NEVER_CAPTURED.contains(&port) && self.0.iter().any(|&(lo, hi)| lo <= port && port <= hi)
+    }
+}
+
+/// A datagram the host sent out another interface, as the overlay carries
+/// it: `None` unless it is UDP to a captured port, unfragmented, sent from
+/// one of `lan_addrs` (this host's own addresses on other interfaces, never
+/// the overlay's), to the limited broadcast, a LAN's directed broadcast
+/// (`lan_nets`) or an IPv4 multicast group. The source becomes `overlay`,
+/// so replies come back through the tun interface, and a directed LAN
+/// broadcast becomes the limited broadcast, which receivers deliver.
+pub fn captured(
+    p: &[u8],
+    ports: &CapturePorts,
+    lan_addrs: &[IpAddr],
+    lan_nets: &[IpNet],
+    overlay: IpAddr,
+) -> Option<Vec<u8>> {
+    let parsed = crate::packet::parse(p)?;
+    let f = &parsed.flow;
+    if f.proto != crate::policy::PROTO_UDP
+        || parsed.fragment != crate::packet::Fragment::Whole
+        || !overlay.is_ipv4()
+        || !lan_addrs.contains(&f.src)
+        || !ports.contains(f.dport)
+        || NEVER_CAPTURED.contains(&f.sport)
+    {
+        return None;
+    }
+    let IpAddr::V4(dst) = f.dst else { return None };
+    let directed = !dst.is_broadcast()
+        && lan_nets.iter().any(|n| match n {
+            IpNet::V4(n) => {
+                n.prefix_len() <= 30 && n.broadcast() == dst && IpNet::V4(*n).contains(&f.src)
+            }
+            IpNet::V6(_) => false,
+        });
+    if !(dst.is_broadcast() || dst.is_multicast() || directed) {
+        return None;
+    }
+    let mut out = p.to_vec();
+    let bcast = IpAddr::V4(Ipv4Addr::BROADCAST);
+    crate::packet::rewrite(
+        &mut out,
+        Some((overlay, f.sport)),
+        directed.then_some((bcast, f.dport)),
+    );
+    Some(out)
 }
 
 // ---------------------------------------------------------------- reports
@@ -271,6 +368,19 @@ pub struct State {
     per_sender: HashMap<Bytes32, Budget>,
     /// Recently delivered datagrams (`digest`), for echo detection.
     delivered: HashMap<u64, Instant>,
+    /// Recently sent datagrams (`digest`) and the path they took, so one
+    /// the host sends both into the tun interface and out a LAN interface
+    /// (apps that send on every interface) goes out once.
+    sent: HashMap<u64, (Instant, Origin)>,
+}
+
+/// Where a datagram the overlay carries came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// The host sent it into the tun interface.
+    Tun,
+    /// The host sent it out another interface; capture took it (§9.5.2).
+    Captured,
 }
 
 impl State {
@@ -287,6 +397,7 @@ impl State {
             reported: HashMap::new(),
             per_sender: HashMap::new(),
             delivered: HashMap::new(),
+            sent: HashMap::new(),
         }
     }
 
@@ -440,6 +551,27 @@ impl State {
         self.delivered.insert(digest, now);
     }
 
+    /// A datagram is about to go out by way of `origin`: is it the same one
+    /// the host just sent by the other path? Then it's a duplicate. Only
+    /// across paths: an app repeating a datagram on one path keeps doing so.
+    pub fn duplicate(&mut self, digest: u64, origin: Origin, now: Instant) -> bool {
+        if let Some((t, o)) = self.sent.get(&digest)
+            && *o != origin
+            && now.saturating_duration_since(*t) < DUPLICATE_WINDOW
+        {
+            return true;
+        }
+        if self.sent.len() >= ECHO_CAP {
+            self.sent
+                .retain(|_, (t, _)| now.saturating_duration_since(*t) < DUPLICATE_WINDOW);
+            if self.sent.len() >= ECHO_CAP {
+                self.sent.clear();
+            }
+        }
+        self.sent.insert(digest, (now, origin));
+        false
+    }
+
     // ------------------------------------------------------------ upkeep
 
     pub fn forget(&mut self, peer: &Bytes32) {
@@ -455,6 +587,8 @@ impl State {
         self.per_sender.retain(|_, b| !b.full(now));
         self.delivered
             .retain(|_, t| now.saturating_duration_since(*t) < ECHO_WINDOW);
+        self.sent
+            .retain(|_, (t, _)| now.saturating_duration_since(*t) < DUPLICATE_WINDOW);
     }
 }
 
@@ -625,6 +759,99 @@ mod tests {
         s.delivered(d, t);
         assert!(s.is_echo(d, t + Duration::from_millis(500)));
         assert!(!s.is_echo(d, t + ECHO_WINDOW));
+    }
+
+    #[test]
+    fn capture_ports() {
+        let p =
+            |v: &[&str]| CapturePorts::parse(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let c = p(&["udp:19132", "udp:4000-4010"]).unwrap();
+        assert!(c.contains(19132) && c.contains(4005) && !c.contains(19133));
+        let all = p(&["udp"]).unwrap();
+        assert!(all.contains(19132) && !all.contains(5353) && !all.contains(67));
+        assert!(p(&[]).unwrap().is_empty());
+        for bad in [
+            "tcp:80", "icmp", "*", "udp:5353", "udp:67", "udp:x", "udp:9-1",
+        ] {
+            assert!(p(&[bad]).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn captured_datagrams() {
+        use crate::testutil::packets::udp4;
+        let ports = CapturePorts::parse(&["udp:19132".to_string()]).unwrap();
+        let lan = [ip("192.168.1.5")];
+        let nets: Vec<IpNet> = vec!["192.168.1.0/24".parse().unwrap()];
+        let me = ip("10.7.0.11");
+        let cap = |p: &[u8]| captured(p, &ports, &lan, &nets, me);
+        // A Bedrock ping to the limited broadcast: the source becomes ours.
+        let ping = udp4(
+            [192, 168, 1, 5],
+            [255, 255, 255, 255],
+            50000,
+            19132,
+            b"ping",
+        );
+        let out = cap(&ping).unwrap();
+        let f = crate::packet::parse(&out).unwrap().flow;
+        assert_eq!(
+            (f.src, f.sport, f.dst, f.dport),
+            (me, 50000, ip("255.255.255.255"), 19132)
+        );
+        let mut fixed = out.clone();
+        crate::packet::fix_checksums(&mut fixed);
+        assert_eq!(fixed, out, "checksums valid");
+        // The LAN's directed broadcast arrives as the limited broadcast.
+        let out = cap(&udp4(
+            [192, 168, 1, 5],
+            [192, 168, 1, 255],
+            50000,
+            19132,
+            b"x",
+        ))
+        .unwrap();
+        assert_eq!(
+            crate::packet::parse(&out).unwrap().flow.dst,
+            ip("255.255.255.255")
+        );
+        // Multicast, kept as it is.
+        let out = cap(&udp4([192, 168, 1, 5], [239, 1, 2, 3], 50000, 19132, b"x")).unwrap();
+        assert_eq!(
+            crate::packet::parse(&out).unwrap().flow.dst,
+            ip("239.1.2.3")
+        );
+        // Not ours, not a captured port, DHCP, unicast, another subnet's broadcast.
+        for (src, dst, sport, dport) in [
+            ([192, 168, 1, 9], [255, 255, 255, 255], 50000, 19132),
+            ([192, 168, 1, 5], [255, 255, 255, 255], 50000, 19133),
+            ([192, 168, 1, 5], [255, 255, 255, 255], 68, 19132),
+            ([192, 168, 1, 5], [192, 168, 1, 7], 50000, 19132),
+            ([192, 168, 1, 5], [192, 168, 2, 255], 50000, 19132),
+        ] {
+            assert!(
+                cap(&udp4(src, dst, sport, dport, b"x")).is_none(),
+                "{src:?} -> {dst:?}"
+            );
+        }
+        // TCP, and an IPv6 overlay address.
+        let mut tcp = ping.clone();
+        tcp[9] = 6;
+        assert!(cap(&tcp).is_none());
+        assert!(captured(&ping, &ports, &lan, &nets, ip("fd00::1")).is_none());
+    }
+
+    #[test]
+    fn duplicates_across_paths_only() {
+        let t = Instant::now();
+        let mut s = State::new(50, 65536, t);
+        let d = digest(Kind::Broadcast, b"ping");
+        assert!(!s.duplicate(d, Origin::Tun, t));
+        assert!(s.duplicate(d, Origin::Captured, t + Duration::from_millis(10)));
+        // The same path again: an app repeating itself.
+        assert!(!s.duplicate(d, Origin::Tun, t + Duration::from_millis(20)));
+        let later = t + Duration::from_millis(20) + DUPLICATE_WINDOW;
+        assert!(!s.duplicate(d, Origin::Captured, later));
     }
 
     #[test]

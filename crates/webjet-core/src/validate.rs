@@ -223,6 +223,9 @@ pub fn transport(t: &wp::TransportConfig) -> Result<()> {
     if let Some(c) = &t.compression {
         compression(c)?;
     }
+    if let Some(m) = &t.multicast {
+        multicast(m)?;
+    }
     Ok(())
 }
 
@@ -249,6 +252,16 @@ pub fn controller_settings(c: &wp::ControllerSettings) -> Result<()> {
 /// Compression settings (§9.8): control off or zstd, data off or lz4.
 pub fn compression(c: &wp::CompressionConfig) -> Result<()> {
     crate::compress::check(c.control, c.data)
+}
+
+/// `[multicast]` (§9.5.2): capture takes UDP port specs only.
+pub fn multicast(m: &wp::MulticastConfig) -> Result<()> {
+    let capture = m.capture.clone().unwrap_or_default();
+    if capture.len() > 64 {
+        bail!("multicast.capture: at most 64 port specs");
+    }
+    crate::multicast::CapturePorts::parse(&capture)?;
+    Ok(())
 }
 
 #[cfg(test)]

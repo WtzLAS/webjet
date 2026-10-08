@@ -595,11 +595,12 @@ impl Exposition {
             }
             for (dir, packets) in [
                 ("rx", t.multicast_rx_packets),
+                ("captured", t.multicast_captured_packets),
                 ("tx", t.multicast_tx_packets),
             ] {
                 self.counter(
                     "webjet_multicast_packets",
-                    "Broadcast and multicast: copies sent to peers (tx), datagrams from peers delivered to the tun interface (rx).",
+                    "Broadcast and multicast: copies sent to peers (tx), datagrams from peers delivered to the tun interface (rx), datagrams the host sent out another interface taken into the overlay (captured).",
                     &[
                         ("node", node.as_str()),
                         ("owner", owner.as_str()),
@@ -863,6 +864,7 @@ mod tests {
                 tx_bytes: 700,
                 multicast_tx_packets: 4,
                 multicast_rx_packets: 3,
+                multicast_captured_packets: 2,
             })),
             compression: Some(vec![wp::CompressionMetrics {
                 plane: Some("control".into()),

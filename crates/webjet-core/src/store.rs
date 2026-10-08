@@ -300,6 +300,25 @@ impl View {
         )
     }
 
+    /// The UDP ports whose broadcasts and multicasts a node captures from
+    /// its other interfaces (§9.5.2): the node's own `capture`, else the
+    /// network's, else none.
+    pub fn capture_ports(&self, node: &Bytes32) -> Vec<String> {
+        let node_set = self
+            .node_configs
+            .get(node)
+            .and_then(|c| c.multicast.as_deref())
+            .and_then(|m| m.capture.clone());
+        node_set
+            .or_else(|| {
+                self.transport
+                    .as_ref()
+                    .and_then(|t| t.multicast.as_deref())
+                    .and_then(|m| m.capture.clone())
+            })
+            .unwrap_or_default()
+    }
+
     /// The seed list a node uses (§10.7.1): its own seeds first, then the
     /// network's.
     pub fn seeds_for(&self, node: &Bytes32) -> Vec<wp::SeedEntry> {

@@ -46,6 +46,8 @@ snap = "1"
 tun-rs = { workspace = true }
 libc = "0.2"
 if-addrs = "0.15"
+# Capture (§9.5.2): packet sockets with kernel filters (Linux), raw sockets (Windows).
+socket2 = { version = "0.6", features = ["all"] }
 netdev = { version = "0.46", default-features = false, features = ["gateway"] }
 crab_nat = "0.8"
 igd-next = { version = "0.18", default-features = false, features = ["aio_tokio"] }

@@ -8,7 +8,8 @@
 //! - **node scope** (one node, its owner or an admin): a subset that
 //!   overrides or extends the network's for that node only:
 //!   `[transport.priority]`, `[limits.value]`, `[[seeds]]` (tried first),
-//!   `[[dns.record]]` and `[[dns.forward]]` (answered by that node only).
+//!   `[[dns.record]]` and `[[dns.forward]]` (answered by that node only),
+//!   `[multicast] capture` (replaces the network's).
 //!
 //! `version` is the version the file was made from (`show` prints it).
 //! `apply` refuses a file whose version is no longer the one in force, so a
@@ -63,6 +64,40 @@ pub struct ConfigFile {
     /// The controller cluster's membership (network scope only, §7.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controllers: Option<ControllersSection>,
+    /// Broadcast and multicast (§9.5): what is captured from the host's
+    /// other interfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multicast: Option<MulticastSection>,
+}
+
+/// `[multicast]` (§9.5.2). `capture`: UDP port specs (`udp:19132`,
+/// `udp:4000-4010`, `udp`) whose broadcasts and IPv4 multicasts the host
+/// sends out its other interfaces (LAN, Wi-Fi) are copied into the overlay
+/// too, for apps that don't send them to the overlay interface (most games
+/// broadcasting to 255.255.255.255). Left out: the network's value (node
+/// scope), or none; `[]` captures nothing.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MulticastSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<Vec<String>>,
+}
+
+impl MulticastSection {
+    fn to_wire(&self) -> Result<wp::MulticastConfig> {
+        let m = wp::MulticastConfig {
+            capture: self.capture.clone(),
+        };
+        webjet_core::validate::multicast(&m)?;
+        Ok(m)
+    }
+
+    fn from_wire(m: Option<&wp::MulticastConfig>) -> Option<MulticastSection> {
+        let capture = m?.capture.clone()?;
+        Some(MulticastSection {
+            capture: Some(capture),
+        })
+    }
 }
 
 /// `[controllers]` (§7.5): how the Raft leader manages membership. A key
@@ -359,7 +394,7 @@ impl ConfigFile {
             return Ok(());
         }
         bail!(
-            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, limits.value, seeds, dns.record, dns.forward and proxy",
+            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, limits.value, seeds, dns.record, dns.forward, multicast.capture and proxy",
             bad.join(", ")
         )
     }
@@ -402,6 +437,11 @@ impl ConfigFile {
                 .compression
                 .as_ref()
                 .map(|c| c.to_wire().map(Box::new))
+                .transpose()?,
+            multicast: self
+                .multicast
+                .as_ref()
+                .map(|m| m.to_wire().map(Box::new))
                 .transpose()?,
         };
         webjet_core::validate::transport(&transport)?;
@@ -489,6 +529,12 @@ impl ConfigFile {
                 .and_then(|t| t.compression.as_ref())
                 .map(|c| c.to_wire().map(Box::new))
                 .transpose()?,
+            multicast: self
+                .multicast
+                .as_ref()
+                .filter(|m| m.capture.is_some())
+                .map(|m| m.to_wire().map(Box::new))
+                .transpose()?,
         })
     }
 
@@ -507,6 +553,7 @@ impl ConfigFile {
                 .controllers
                 .clone()
                 .or_else(|| current.controllers.clone()),
+            multicast: self.multicast.clone().or_else(|| current.multicast.clone()),
         }
     }
 
@@ -520,6 +567,7 @@ impl ConfigFile {
             ("limits", self.limits.is_some()),
             ("proxy", self.proxy.is_some()),
             ("controllers", self.controllers.is_some()),
+            ("multicast", self.multicast.is_some()),
         ]
         .into_iter()
         .filter_map(|(k, set)| set.then_some(k))
@@ -1020,6 +1068,10 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         // values in a comment): a file with `[controllers]` writes a leaf
         // controllers before 0.7.0 don't know.
         controllers: ctl.as_ref().map(ControllersSection::from_wire),
+        // Not spelled out with `fill` either (render_network says what is in
+        // force): a file with `[multicast]` writes a field controllers before
+        // it don't know.
+        multicast: MulticastSection::from_wire(tr.multicast.as_deref()),
     })
 }
 
@@ -1070,6 +1122,7 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
     let forward = forwards_out(&c.dns_forward.clone().unwrap_or_default());
     let proxy = proxy_out(&c.proxy.clone().unwrap_or_default());
     let compression = CompressionFile::from_wire(c.compression.as_deref());
+    let multicast = MulticastSection::from_wire(c.multicast.as_deref());
     ConfigFile {
         proxy: (!proxy.is_empty()).then_some(proxy),
         version: Some(c.version),
@@ -1090,6 +1143,7 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
             ..Default::default()
         }),
         controllers: None,
+        multicast,
     }
 }
 
@@ -1156,6 +1210,17 @@ pub fn render_network(tree: &Value) -> Result<String> {
             unset.join(", ")
         );
     }
+    if f.multicast
+        .as_ref()
+        .and_then(|m| m.capture.as_ref())
+        .is_none_or(|c| c.is_empty())
+    {
+        s.push_str("# multicast.capture is empty: only broadcasts and multicasts the host sends\n");
+        s.push_str("# into the overlay interface are carried (games that broadcast to\n");
+        s.push_str(
+            "# 255.255.255.255 send out the LAN instead; e.g. capture = [\"udp:19132\"]).\n",
+        );
+    }
     let d = webjet_core::membership::Settings::of(None);
     let c = f.controllers.clone().unwrap_or_default();
     let mut builtin = Vec::new();
@@ -1189,7 +1254,8 @@ pub fn render_node(name: &str, c: Option<&wp::NodeConfig>) -> Result<String> {
         "# Configuration of node {name} (webjetctl local config)."
     );
     s.push_str("# Overrides the network configuration for this node: transport.priority,\n");
-    s.push_str("# transport.compression, limits.value; adds seeds (tried first),\n");
+    s.push_str("# transport.compression, limits.value, multicast.capture; adds seeds\n");
+    s.push_str("# (tried first),\n");
     s.push_str("# dns.record and dns.forward;\n");
     s.push_str("# [[proxy]] makes the node a reverse proxy (Linux data nodes; see\n");
     s.push_str("# `webjetctl local proxy` for the rules' status).\n");
@@ -1254,6 +1320,18 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
         }),
         controllers: None,
         proxy: None,
+        multicast: Some(MulticastSection {
+            capture: Some(
+                e["capture"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+        }),
     })
 }
 
@@ -1419,6 +1497,7 @@ pub fn edit_network(
     keep(&mut f.limits, &cur.limits);
     keep(&mut f.proxy, &cur.proxy);
     keep(&mut f.controllers, &cur.controllers);
+    keep(&mut f.multicast, &cur.multicast);
     Ok(f)
 }
 
@@ -1497,7 +1576,7 @@ pub fn network_apply(f: &ConfigFile, tree: &Value, base: &Path) -> Result<Networ
     let sections = f.sections();
     if sections.is_empty() {
         bail!(
-            "the file sets nothing: no [policy], [dns], seeds, [transport], [limits] or [controllers]"
+            "the file sets nothing: no [policy], [dns], seeds, [transport], [limits], [multicast] or [controllers]"
         );
     }
     let now = tree["network_version"].as_u64().unwrap_or(0);
@@ -1772,6 +1851,49 @@ value = { circuits_global = 9000 }
     }
 
     #[test]
+    fn multicast_capture() {
+        // Not spelled out by show (older controllers don't know the field).
+        let shown = render_network(&empty_tree()).unwrap();
+        assert!(shown.contains("multicast.capture is empty"));
+        let f = ConfigFile::parse(&shown).unwrap();
+        assert!(f.multicast.is_none());
+        let w = f.to_network(1, Path::new("/x")).unwrap();
+        assert!(w.transport.unwrap().multicast.is_none());
+        // Network scope.
+        let f = ConfigFile::parse(
+            "version = 0\n[multicast]\ncapture = [\"udp:19132\", \"udp:4000-4010\"]\n",
+        )
+        .unwrap();
+        assert_eq!(f.sections(), ["multicast"]);
+        let w = f.to_network(1, Path::new("/x")).unwrap();
+        let m = w.transport.as_ref().unwrap().multicast.clone().unwrap();
+        assert_eq!(m.capture.unwrap(), ["udp:19132", "udp:4000-4010"]);
+        let mut t = empty_tree();
+        t["transport"] = serde_json::to_value(&**w.transport.as_ref().unwrap()).unwrap();
+        assert_eq!(network_from_tree(&t, true).unwrap().multicast, f.multicast);
+        // Left out of a later file: stays.
+        let later = ConfigFile::parse("version = 1\n[limits]\n").unwrap();
+        assert_eq!(later.over(&f).multicast, f.multicast);
+        // Bad specs.
+        for bad in ["\"tcp:80\"", "\"udp:5353\"", "\"icmp\"", "\"udp:x\""] {
+            let f = ConfigFile::parse(&format!("version = 0\n[multicast]\ncapture = [{bad}]\n"))
+                .unwrap();
+            assert!(f.to_network(1, Path::new("/x")).is_err(), "{bad}");
+            assert!(f.to_node(&[7; 32], 1).is_err(), "{bad}");
+        }
+        assert!(ConfigFile::parse("[multicast]\nreflect = true\n").is_err());
+        // Node scope: `capture = []` turns the network's off on this node,
+        // and round-trips; without `capture` the node sets nothing.
+        let node = ConfigFile::parse("version = 0\n[multicast]\ncapture = []\n").unwrap();
+        let c = node.to_node(&[7; 32], 1).unwrap();
+        assert_eq!(c.multicast.as_deref().unwrap().capture, Some(vec![]));
+        assert_eq!(node_from_wire(Some(&c)).multicast, node.multicast);
+        assert!(!node_from_wire(Some(&c)).is_empty());
+        let none = ConfigFile::parse("version = 0\n[multicast]\n").unwrap();
+        assert!(none.to_node(&[7; 32], 1).unwrap().multicast.is_none());
+    }
+
+    #[test]
     fn left_out_sections_stay() {
         let current = ConfigFile::parse(NETWORK).unwrap();
         let file = ConfigFile::parse("version = 3\n[limits]\n").unwrap();
@@ -1954,6 +2076,7 @@ value = { circuits_global = 9000 }
             })),
             padding: None,
             compression: None,
+            multicast: None,
         };
         let mut tree = empty_tree();
         tree["network_version"] = json!(5);

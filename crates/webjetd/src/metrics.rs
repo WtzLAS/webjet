@@ -25,6 +25,10 @@ pub struct Counters {
     pub multicast_rx: AtomicU64,
     pub multicast_limited: AtomicU64,
     pub multicast_echo: AtomicU64,
+    /// Capture (§9.5.2): datagrams the host sent out another interface,
+    /// taken into the overlay; and datagrams sent both ways, sent once.
+    pub multicast_captured: AtomicU64,
+    pub multicast_duplicate: AtomicU64,
     /// Overlay packets and bytes read from the tun interface (rx) and
     /// written to it (tx); reverse proxy traffic is counted apart.
     pub tun_rx: AtomicU64,
@@ -322,6 +326,10 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                 m.multicast_limited.load(Ordering::Relaxed),
             ),
             counter("multicast_echo", m.multicast_echo.load(Ordering::Relaxed)),
+            counter(
+                "multicast_duplicate",
+                m.multicast_duplicate.load(Ordering::Relaxed),
+            ),
         ]),
         alarms: Some(alarms),
         load: Some(Box::new(relay_load(n))),
@@ -339,6 +347,7 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             tx_bytes: m.tun_tx_bytes.load(Ordering::Relaxed),
             multicast_tx_packets: m.multicast_tx.load(Ordering::Relaxed),
             multicast_rx_packets: m.multicast_rx.load(Ordering::Relaxed),
+            multicast_captured_packets: m.multicast_captured.load(Ordering::Relaxed),
         })),
     };
     n.kp.sign_obj(mt::METRIC_REPORT, &rep)

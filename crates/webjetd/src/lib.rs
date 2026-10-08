@@ -6,6 +6,7 @@ pub const FEATURES: &[&str] = &["remote-upgrade"];
 
 pub mod admin;
 pub mod agent;
+pub mod capture;
 pub mod circuit;
 pub mod compression;
 pub mod config;

@@ -996,6 +996,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     });
     if let Some(dev) = dev_handle {
         crate::multicast::watch_memberships(n, dp.clone());
+        crate::capture::start(n, dp.clone());
         let dp2 = dp.clone();
         n.tasks.service("tun-reader", async move {
             let mut buf = vec![0u8; 65536];

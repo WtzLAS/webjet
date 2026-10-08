@@ -4,8 +4,12 @@
 // Friends tab that broadcasts RakNet unconnected pings to
 // 255.255.255.255:19132 and lists the servers that answer.
 //
-//	raknet-lan -name g-1 -bind 10.7.0.11 -rate 1 -status /tmp/rak.json
-//	           [-connect] [-relay] [-mutate]
+//	raknet-lan -name g-1 -bind 10.7.0.11 -rate 1 -status /tmp/rak.txt
+//	           [-connect] [-relay] [-mutate] [-unbound]
+//
+// -unbound sends discovery from a socket bound to 0.0.0.0, as the real
+// client does: the OS then sends the broadcast out of its default
+// interface, not the overlay's (what capture, architecture §9.5.2, is for).
 //
 // -connect opens a RakNet connection to every server found and exchanges
 // a message a second on it. -relay rebroadcasts every discovery ping it
@@ -107,6 +111,7 @@ func main() {
 	relay := flag.Bool("relay", false, "rebroadcast discovery pings heard from other hosts")
 	mutate := flag.Bool("mutate", false, "with -relay: change each relayed ping")
 	noClient := flag.Bool("no-client", false, "server (and relay) only")
+	unbound := flag.Bool("unbound", false, "client socket bound to 0.0.0.0, like the real game")
 	flag.Parse()
 	st = status{Name: *name, Servers: map[string]string{}, DialErrs: map[string]string{}}
 
@@ -123,7 +128,11 @@ func main() {
 		go runRelay(*bind, *mutate)
 	}
 	if !*noClient {
-		go client(*bind, *rate, *connect)
+		from := *bind
+		if *unbound {
+			from = ""
+		}
+		go client(from, *rate, *connect)
 	}
 	write := func() {
 		mu.Lock()
@@ -200,7 +209,7 @@ func client(bind string, rate float64, connect bool) {
 			if n < 35 || b[0] != 0x1c || string(b[17:33]) != string(magic) {
 				continue
 			}
-			if from.IP.String() == bind {
+			if mine(from.IP) {
 				continue // our own world, answered locally
 			}
 			l := int(binary.BigEndian.Uint16(b[33:35]))
@@ -245,11 +254,26 @@ func client(bind string, rate float64, connect bool) {
 	}
 }
 
+// mine: one of this host's addresses.
+func mine(ip net.IP) bool {
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // play joins a world over RakNet (MTU discovery, connection handshake)
 // and exchanges a message a second.
 func play(bind, ip string) {
 	addr := fmt.Sprintf("%s:%d", ip, port)
-	d := raknet.Dialer{UpstreamDialer: &net.Dialer{LocalAddr: &net.UDPAddr{IP: net.ParseIP(bind)}}}
+	nd := &net.Dialer{}
+	if bind != "" {
+		nd.LocalAddr = &net.UDPAddr{IP: net.ParseIP(bind)}
+	}
+	d := raknet.Dialer{UpstreamDialer: nd}
 	var c *raknet.Conn
 	var err error
 	for try := 0; try < 3; try++ {

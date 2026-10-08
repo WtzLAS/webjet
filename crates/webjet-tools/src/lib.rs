@@ -962,6 +962,7 @@ mod tests {
             camouflage: Some(Box::new(cam)),
             padding: None,
             compression: None,
+            multicast: None,
         };
         webjet_core::validate::transport(&t).unwrap();
     }

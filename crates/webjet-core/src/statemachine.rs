@@ -1188,6 +1188,9 @@ impl Machine {
         if let Some(c) = &cfg.compression {
             crate::validate::compression(c).map_err(|e| ApplyError::Rejected(e.to_string()))?;
         }
+        if let Some(m) = &cfg.multicast {
+            crate::validate::multicast(m).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        }
         if !proxy.is_empty()
             && !rec
                 .roles
@@ -1211,7 +1214,8 @@ impl Machine {
             && cfg
                 .compression
                 .as_ref()
-                .is_none_or(|c| c.control == 0 && c.data == 0);
+                .is_none_or(|c| c.control == 0 && c.data == 0)
+            && cfg.multicast.as_ref().is_none_or(|m| m.capture.is_none());
         if empty {
             if current == 0 {
                 return rej("the node has no configuration to clear");
@@ -3281,6 +3285,9 @@ mod tests {
                     control: crate::compress::algo::UNSET,
                     data: crate::compress::algo::LZ4,
                 })),
+                multicast: Some(Box::new(wp::MulticastConfig {
+                    capture: Some(vec!["udp:19132".into()]),
+                })),
             })),
             controllers: None,
         }
@@ -3416,6 +3423,7 @@ mod tests {
             dns_forward: None,
             proxy: None,
             compression: None,
+            multicast: None,
         }
     }
 

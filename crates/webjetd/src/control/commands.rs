@@ -296,6 +296,7 @@ fn node_config(n: &Node, id: Bytes32) -> Result<Value> {
                 "control": webjet_core::compress::algo::name(compression.control),
                 "data": webjet_core::compress::algo::name(compression.data),
             },
+            "capture": view.capture_ports(&id),
             "suffix": view.suffix(),
             "resolver": ips(view.resolver_ips(&s.overlay_pool)),
         },

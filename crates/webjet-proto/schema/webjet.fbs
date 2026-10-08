@@ -202,6 +202,14 @@ table CompressionConfig {
     data: ubyte;
 }
 
+// Broadcast and multicast (§9.5.1). `capture`: UDP port specs
+// ("udp:19132", "udp:4000-4010") whose broadcasts and multicasts the host
+// sends out its other interfaces are copied into the overlay too (§9.5.2).
+// Unset: the next level decides; an empty list captures nothing.
+table MulticastConfig {
+    capture: [string];
+}
+
 table TransportConfig {
     version: uint64;
     defaults: [TransportPriority];
@@ -209,6 +217,7 @@ table TransportConfig {
     camouflage: Camouflage;
     padding: PaddingScheme;
     compression: CompressionConfig;
+    multicast: MulticastConfig;        // TOML [multicast]
 }
 
 // How the leader manages the controller cluster's membership (§7.5).
@@ -249,6 +258,7 @@ table NodeConfig {
     dns_forward: [ForwardZone];        // forwarded by this node's resolver only
     proxy: [ProxyRule];                // reverse proxy ports this node listens on
     compression: CompressionConfig;    // replaces the network's, per plane
+    multicast: MulticastConfig;        // capture replaces the network's
 }
 
 // A reverse proxy rule (§11.11): a Linux data node listens on `listen_port`
@@ -500,6 +510,9 @@ table TunMetrics {
     // datagrams from peers delivered to the interface.
     multicast_tx_packets: uint64;
     multicast_rx_packets: uint64;
+    // Datagrams the host sent out another interface, taken into the
+    // overlay (§9.5.2).
+    multicast_captured_packets: uint64;
 }
 
 // Compression on this node (§9.8) for one plane, "control" or "data".
