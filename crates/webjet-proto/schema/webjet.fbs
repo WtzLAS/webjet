@@ -496,6 +496,10 @@ table TunMetrics {
     rx_bytes: uint64;
     tx_packets: uint64;
     tx_bytes: uint64;
+    // Broadcast and multicast (§9.5.1): copies sent to peers, and
+    // datagrams from peers delivered to the interface.
+    multicast_tx_packets: uint64;
+    multicast_rx_packets: uint64;
 }
 
 // Compression on this node (§9.8) for one plane, "control" or "data".

@@ -26,6 +26,13 @@ pub mod ftype {
     /// RPC with `req_id || kind || Rpc` zstd-compressed (§9.8). Sent only
     /// to peers advertising `zstd`.
     pub const RPC_ZSTD: u8 = 12;
+    /// A broadcast or multicast inner packet (§9.5.1): delivered to the
+    /// tun interface only, never forwarded. Sent only to peers
+    /// advertising `multicast`.
+    pub const MCAST: u8 = 13;
+    /// Which broadcasts and groups the sender takes (§9.5.1), answering
+    /// MCAST frames: `webjet_core::multicast::encode_report`.
+    pub const GROUPS: u8 = 14;
 }
 
 /// type(1) + key_id(4) + counter(8)

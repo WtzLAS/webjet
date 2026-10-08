@@ -152,7 +152,20 @@ pub const LIMITS: &[LimitSpec] = &[
         256,
         "relay: nodes a peer may subscribe to",
     ),
+    lim(
+        "multicast_packets_per_sec",
+        50,
+        "broadcast and multicast copies sent per second, and taken per sender; 0 turns them off",
+    ),
+    lim(
+        "multicast_bytes_per_sec",
+        65_536,
+        "broadcast and multicast bytes sent per second (every copy counts), and taken per sender",
+    ),
 ];
+
+/// Limits that may be 0, which turns their feature off.
+pub const ZERO_TURNS_OFF: &[&str] = &["multicast_packets_per_sec"];
 
 /// The built-in default of a limit (`None`: not set by default, or unknown).
 pub fn limit_default(name: &str) -> Option<u64> {
@@ -173,7 +186,7 @@ pub fn limits(l: &wp::Limits) -> Result<()> {
             if !known_limit(n) {
                 bail!("unknown limit {n:?}");
             }
-            if x.value == 0 {
+            if x.value == 0 && !ZERO_TURNS_OFF.contains(&n) {
                 bail!("limit {n} must be positive");
             }
         }

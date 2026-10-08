@@ -9,6 +9,7 @@ pub mod frames;
 pub mod leaf;
 pub mod membership;
 pub mod merkle;
+pub mod multicast;
 pub mod packet;
 pub mod padding;
 pub mod policy;

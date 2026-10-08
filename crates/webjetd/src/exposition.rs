@@ -593,6 +593,22 @@ impl Exposition {
                     ts,
                 );
             }
+            for (dir, packets) in [
+                ("rx", t.multicast_rx_packets),
+                ("tx", t.multicast_tx_packets),
+            ] {
+                self.counter(
+                    "webjet_multicast_packets",
+                    "Broadcast and multicast: copies sent to peers (tx), datagrams from peers delivered to the tun interface (rx).",
+                    &[
+                        ("node", node.as_str()),
+                        ("owner", owner.as_str()),
+                        ("direction", dir),
+                    ],
+                    packets,
+                    ts,
+                );
+            }
         }
     }
 
@@ -845,6 +861,8 @@ mod tests {
                 rx_bytes: 1100,
                 tx_packets: 7,
                 tx_bytes: 700,
+                multicast_tx_packets: 4,
+                multicast_rx_packets: 3,
             })),
             compression: Some(vec![wp::CompressionMetrics {
                 plane: Some("control".into()),
@@ -887,6 +905,9 @@ mod tests {
         assert!(
             t.contains("webjet_tun_bytes_total{node=\"n1\",owner=\"alice\",direction=\"tx\"} 700 ")
         );
+        assert!(t.contains(
+            "webjet_multicast_packets_total{node=\"n1\",owner=\"alice\",direction=\"tx\"} 4 "
+        ));
         // Proxy traffic has its own families.
         assert!(t.contains("webjet_proxy_bytes_total{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\",direction=\"to_client\"} 9000 "), "{t}");
         assert!(t.contains("webjet_proxy_active_flows{node=\"n1\",owner=\"alice\",rule=\"web\",side=\"ingress\",ingress=\"n1\"} 2 "));

@@ -63,10 +63,11 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["webjetd", "run"]
 
 # ---------------------------------------------------------------- test image
-# Debugging tools and the scripts used by docker/e2e.sh.
+# Debugging tools and the scripts used by docker/e2e.sh (python3 for
+# docker/mcast.py in docker/multicast-test.sh).
 FROM base AS test
 RUN apt-get update \
- && apt-get install -y --no-install-recommends iputils-ping procps netcat-openbsd dnsutils \
+ && apt-get install -y --no-install-recommends iputils-ping procps netcat-openbsd dnsutils python3-minimal \
  && rm -rf /var/lib/apt/lists/*
 COPY scripts/ /opt/webjet/scripts/
 COPY docker/ /opt/webjet/docker/

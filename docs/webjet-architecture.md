@@ -340,7 +340,8 @@ Tells the network which relays a DATA node can be reached through. These are als
 E2EFrame {
     type:     u8     // DATA | HANDSHAKE | PROBE | PROBE_ACK |
                      // PUNCH_OFFER | PUNCH_GO | CLOSE | RPC | PROXY |
-                     // DATA_LZ4 | PROXY_LZ4 | RPC_ZSTD
+                     // DATA_LZ4 | PROXY_LZ4 | RPC_ZSTD |
+                     // MCAST | GROUPS
     key_id:   u32    // receiver's key id (absent in HANDSHAKE)
     counter:  u64    // per-key, strictly increasing, never reused
     body:     AEAD(key, nonce = 0u32 || counter,
@@ -813,6 +814,7 @@ Frames use the format in §6.9.
 - **`DATA`:** one inner IP packet, never fragmented. **`DATA_LZ4`** carries it LZ4-compressed (§9.8).
 - **`PROBE` / `PROBE_ACK`:** `{ route_tag, sent_at, echo, held }` and `{ route_tag, sent_at, reply_at }`: the route tag is the route id's first 8 bytes, a probe echoes the last answer's `reply_at` and how long it was held, so both ends measure the round trip from one exchange (§11.4). Nodes before 0.10.2 send `{ route_id, probe_seq, sent_at }` and expect it echoed; newer nodes answer such probes that way. Encrypted end to end, so a relay can delay or drop probes but never forge an answer. They are sent only over circuits with little traffic of their own (§11.4): they show the circuit works, and give its cost until its links are known.
 - **`PUNCH_OFFER` / `PUNCH_GO`:** hole-punching coordination (§11.7).
+- **`MCAST`:** one inner broadcast or multicast packet, delivered to the tun interface only and never forwarded; **`GROUPS`:** which broadcasts and groups the sender takes (§9.5.1). Both are sent only to peers advertising `multicast`.
 - **`CLOSE`:** the peer tears down the session.
 - The whole E2EFrame is the **inner frame** counted by accounting (§12.1).
 
@@ -856,7 +858,44 @@ With relays, the last hop's TLS peer is a relay, not the source. So the check us
 - Outbound: send packets for a destination IP only to the node whose record contains that IP, or, for a published subnet prefix, to a gateway serving it (§11.9.3). The state machine guarantees each overlay IP belongs to at most one node (§7.2).
 - **Denied by policy:** if the outbound access-control check (§14.4) denies a packet, write an ICMP / ICMPv6 "administratively prohibited" back into the tun interface. Rate-limit these replies too.
 - **Unreachable destination:** if path computation finds no route to the destination (for example because it is offline, §10.5), write an ICMP / ICMPv6 "host unreachable" back into the tun interface, so applications fail fast instead of waiting for a timeout. Rate-limit these replies.
-- **Multicast and broadcast:** the overlay carries unicast only. Packets the host sends to a multicast group (mDNS, SSDP, …), to the IPv4 limited broadcast or from an unspecified address are dropped silently: they do not count as unroutable, and no ICMP error is sent about them (RFC 1122 3.2.2, RFC 4443 2.4). The same rule applies to every ICMP error Webjet writes, and only a reply that is actually sent takes a rate-limit token.
+- **Multicast and broadcast** go through §9.5.1 or are dropped silently: they never count as unroutable, and no ICMP error is sent about a packet to or from a multicast, broadcast or unspecified address (RFC 1122 3.2.2, RFC 4443 2.4). That rule applies to every ICMP error Webjet writes, and only a reply that is actually sent takes a rate-limit token.
+
+#### 9.5.1 Broadcast and multicast
+
+The overlay behaves as one link for UDP broadcast and multicast, so LAN discovery works across it (Minecraft Bedrock's RakNet pings to `255.255.255.255:19132`, mDNS, SSDP, game lobbies). It is on by default and needs no configuration beyond the policy.
+
+**What is carried.** UDP that the host sends from its own overlay address to:
+
+- a broadcast: the limited broadcast `255.255.255.255`, the IPv4 overlay pool's own broadcast address (`10.7.255.255` for `10.7.0.0/16`), all-hosts `224.0.0.1`, or `ff02::1`;
+- a multicast group: any other IPv4 multicast address, or IPv6 multicast of link-local scope or wider (interface-local `ff01::/16` never leaves a host).
+
+IPv6 link-local sources (mDNS and LLMNR use them) are rewritten to the node's overlay address. Other sources (a gateway's LAN, another program's spoofed address), other protocols and IGMP/MLD are not carried; a gateway never passes a LAN's broadcasts into the overlay, nor the overlay's onto a LAN.
+
+**Fan-out, never forwarding.** The sending node makes one copy per recipient and sends it, frame type `MCAST`, in its end-to-end session with that peer (§9.4), through whatever circuit the session uses; relays see only ordinary encrypted frames. A receiving node writes the copy to its tun interface and nowhere else. No node forwards a broadcast it received, so a packet can't loop through the overlay or come back multiplied. Recipients are the valid DATA nodes that:
+
+- have an overlay address of the packet's family;
+- advertise the `multicast` feature in their EndpointRecord (an edge node that has no record for a peer yet looks it up, and reaches it from the next packet on; discovery repeats);
+- the policy lets the sender reach on the packet's protocol and port (§14.4);
+- want it: for a group, only peers whose host joined that group (below).
+
+**Membership (IGMP/MLD snooping).** Each node reads the groups its host joined on the tun interface from the OS (Linux `/proc/net/igmp` and `/proc/net/igmp6`, macOS `getifmaddrs`, Windows `GetMulticastIpAddressTable`) every 5 s, and at once when the host sends an IGMP or MLD report. When a node receives a copy from a sender, it answers with a `GROUPS` frame listing the groups it takes: on first contact, every 60 s while copies keep coming, and to every recent sender when its groups change. A sender keeps the list for 180 s; until it has one for a peer, it sends the peer everything. Broadcasts go to every recipient regardless. A node whose OS can't tell its groups reports "any". A receiving host's kernel still drops groups it hasn't joined, so a stale list costs only bandwidth.
+
+**Replies.** Discovery is answered by unicast (a RakNet pong, an mDNS reply). Each copy is tracked in connection tracking as the unicast flow it stands for, on both ends: the sender records `(peer, its host's address and port → the peer's overlay address and the destination port)`, the receiver the same flow towards its own address. The reply then passes as a reply on both ends without a separate rule from the replier to the sender, exactly as for a unicast flow the sender started. A hit counts for the allowing rule.
+
+**Storm limits.** On top of having no forwarding:
+
+- **Budget per node:** `multicast_packets_per_sec` (default 50) and `multicast_bytes_per_sec` (default 64 KiB) cap what the node sends. *Every copy counts*: a broadcast to 20 peers takes 20 packets of the budget. Copies over the budget are dropped; the next datagram starts where the last fan-out stopped, so a budget smaller than the network still reaches each peer in turn. A node's broadcast traffic can't exceed the budget, whatever its applications do, and the `multicast_limit` alarm (warning) is raised at the first refused copy (it clears after a minute without).
+- **Cap per sender:** a receiver takes at most the same budget from each sender and drops the rest, so a broken or hostile node can't flood others.
+- **Echoes:** a datagram the host sends within a second of receiving one with the same destination kind and payload is not sent again. That stops reflectors (an mDNS repeater, an application that rebroadcasts what it hears) from bouncing packets between nodes.
+- **Off:** `multicast_packets_per_sec = 0` turns it off for the nodes it applies to: they send nothing, drop what arrives, tell senders so (an empty `GROUPS` report), and stop advertising `multicast`.
+
+For Minecraft Bedrock: a client on the server list pings about once a second, which is one copy per peer per second, under 2 KB/s with 30 peers; the defaults leave room for about 50 peers before the budget rotates.
+
+**Counters.** `webjet_multicast_packets_total{direction}` counts copies sent (tx) and datagrams delivered (rx); `webjet_limit_hits_total{limit="multicast_limited"}` counts copies and datagrams over a budget, `{limit="multicast_echo"}` echoes not sent. Copies denied by policy on the receiving end count as `acl_denied`.
+
+**Limits.** Only what reaches the tun interface is carried. Linux and Windows send `255.255.255.255` out of the interface with the default route, normally the physical one, unless the application binds to the overlay address or the interface; macOS sends it out of every broadcast-capable interface, which a `utun` isn't. Applications that broadcast to the overlay pool's address (`10.7.255.255`) or to multicast groups (routed to the tun interface by the agent's pool route or by the application choosing the interface) work everywhere; receivers deliver the pool broadcast as `255.255.255.255`, which every OS accepts. Capturing limited broadcasts from the physical interface is not implemented. Fragmented datagrams are not carried whole: later fragments have no ports for the policy check and are dropped (discovery packets are small).
+
+**Upgrading.** Nodes from before this release don't advertise `multicast`, so they are left out of fan-out and never receive `MCAST` or `GROUPS` frames; no order is needed. Older controllers refuse the new limit names in a network configuration (`unknown limit`); upgrade controllers before setting them.
 
 ### 9.6 Transport selection: priority and cost
 

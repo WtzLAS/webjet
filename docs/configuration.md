@@ -698,6 +698,8 @@ overrides.
 | `hop_handshakes_per_ip` | 5 | Hop TLS handshakes in progress per source IP |
 | `lookups_per_sec` | 20 | Relay: record lookups per second per peer |
 | `subscriptions_per_peer` | 256 | Relay: nodes one peer may subscribe to |
+| `multicast_packets_per_sec` | 50 | Broadcast and multicast copies this node sends per second, each recipient counted (architecture §9.5.1); also what it takes from each sender. `0` turns broadcast and multicast off for the node |
+| `multicast_bytes_per_sec` | 65536 | Broadcast and multicast bytes sent per second, every copy counted; also taken per sender |
 | `relay_capacity_mbps` | estimated | The relay's forwarding capacity, used for its load figure (§11.8.1). When unset, the agent estimates it from observed throughput, never below 100 Mbit/s. Usually set per node. |
 | `rate_ceiling_mbps` | none | Upper bound for the UDP transport's sending rate |
 

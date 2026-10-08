@@ -18,6 +18,13 @@ pub struct Counters {
     pub cryptokey_dropped: AtomicU64,
     pub conntrack_limit: AtomicU64,
     pub snat_exhausted: AtomicU64,
+    /// Broadcast and multicast (§9.5.1): copies sent, datagrams delivered
+    /// to the tun interface, copies or datagrams over a budget, and echoes
+    /// of delivered datagrams the host sent back.
+    pub multicast_tx: AtomicU64,
+    pub multicast_rx: AtomicU64,
+    pub multicast_limited: AtomicU64,
+    pub multicast_echo: AtomicU64,
     /// Overlay packets and bytes read from the tun interface (rx) and
     /// written to it (tx); reverse proxy traffic is counted apart.
     pub tun_rx: AtomicU64,
@@ -310,6 +317,11 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             ),
             counter("aqm_dropped", m.aqm_dropped.load(Ordering::Relaxed)),
             counter("ecn_marked", m.ecn_marked.load(Ordering::Relaxed)),
+            counter(
+                "multicast_limited",
+                m.multicast_limited.load(Ordering::Relaxed),
+            ),
+            counter("multicast_echo", m.multicast_echo.load(Ordering::Relaxed)),
         ]),
         alarms: Some(alarms),
         load: Some(Box::new(relay_load(n))),
@@ -325,6 +337,8 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             rx_bytes: m.tun_rx_bytes.load(Ordering::Relaxed),
             tx_packets: m.tun_tx.load(Ordering::Relaxed),
             tx_bytes: m.tun_tx_bytes.load(Ordering::Relaxed),
+            multicast_tx_packets: m.multicast_tx.load(Ordering::Relaxed),
+            multicast_rx_packets: m.multicast_rx.load(Ordering::Relaxed),
         })),
     };
     n.kp.sign_obj(mt::METRIC_REPORT, &rep)

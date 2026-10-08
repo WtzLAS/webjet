@@ -928,23 +928,39 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
 
 /// Ask home relays for a peer's records and subscribe (§10.6.2).
 pub fn lookup(n: &Arc<Node>, peer: &Bytes32) {
+    lookup_many(n, std::slice::from_ref(peer));
+}
+
+/// `lookup` for several peers at once, in as few Lookup messages as
+/// possible (64 ids each; relays limit lookups per second).
+pub fn lookup_many(n: &Arc<Node>, peers: &[Bytes32]) {
     if is_core(n, &n.me) {
         return;
     }
-    {
+    let due: Vec<Bytes32> = {
         let mut p = n.sync.lookups_pending.lock();
-        if p.get(peer)
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
-        {
-            return;
-        }
-        p.insert(*peer, Instant::now());
+        let now = Instant::now();
+        peers
+            .iter()
+            .filter(|peer| {
+                let fresh = p
+                    .get(*peer)
+                    .is_some_and(|t| now.duration_since(*t) < Duration::from_secs(60));
+                if !fresh {
+                    p.insert(**peer, now);
+                }
+                !fresh
+            })
+            .copied()
+            .collect()
+    };
+    for chunk in due.chunks(64) {
+        let msg = HopMsg::Lookup(Box::new(wp::Lookup {
+            node_ids: Some(chunk.iter().map(crypto::k32).collect()),
+            subscribe_ttl_s: 300,
+        }));
+        n.broadcast_control(msg, None);
     }
-    let msg = HopMsg::Lookup(Box::new(wp::Lookup {
-        node_ids: Some(vec![crypto::k32(peer)]),
-        subscribe_ttl_s: 300,
-    }));
-    n.broadcast_control(msg, None);
 }
 
 /// Someone looks at the whole graph (the `topology` control command, e.g.
@@ -1020,6 +1036,14 @@ fn features(n: &Node) -> Vec<String> {
         // Applies automatic membership entries (§7.5).
         webjet_core::membership::FEATURE.into(),
     ];
+    // Takes broadcast and multicast (§9.5.1), unless turned off.
+    if let Some(d) = n.dataplane.get() {
+        let on = crate::multicast::on(n, d);
+        d.mcast.lock().advertised = Some(on);
+        if on {
+            f.push(webjet_core::multicast::FEATURE.into());
+        }
+    }
     if n.dataplane.get().is_some_and(|d| {
         d.proxy
             .real_ip_ready

@@ -690,6 +690,173 @@ pub fn proxy_clear(tun: &str) {
     }
 }
 
+// ---------------------------------------------------------------- multicast groups
+
+/// The multicast groups the host has joined on interface `dev` (§9.5.1),
+/// as the OS keeps them for IGMP/MLD; `None` when it can't tell (then
+/// everything is taken). Linux: /proc/net/igmp{,6}; macOS: getifmaddrs;
+/// Windows: GetMulticastIpAddressTable.
+pub fn multicast_groups(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
+    let mut v = groups_os(dev)?;
+    v.retain(|a| a.is_multicast());
+    Some(v)
+}
+
+#[cfg(target_os = "linux")]
+fn groups_os(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
+    let v4 = std::fs::read_to_string("/proc/net/igmp").ok()?;
+    let v6 = std::fs::read_to_string("/proc/net/igmp6").unwrap_or_default();
+    let mut out = parse_proc_igmp(&v4, dev);
+    out.extend(parse_proc_igmp6(&v6, dev));
+    Some(out)
+}
+
+/// `/proc/net/igmp`: a line per interface (`Idx Device : Count Querier`)
+/// followed by indented lines per group, the address in hex as the kernel
+/// holds it (network order read as a host integer).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_igmp(text: &str, dev: &str) -> std::collections::HashSet<IpAddr> {
+    let mut out = std::collections::HashSet::new();
+    let mut ours = false;
+    for line in text.lines().skip(1) {
+        if !line.starts_with(char::is_whitespace) {
+            ours = line.split_whitespace().nth(1) == Some(dev);
+        } else if ours
+            && let Some(hex) = line.split_whitespace().next()
+            && let Ok(x) = u32::from_str_radix(hex, 16)
+        {
+            out.insert(IpAddr::from(x.to_ne_bytes()));
+        }
+    }
+    out
+}
+
+/// `/proc/net/igmp6`: `idx device address-hex users flags timer`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_igmp6(text: &str, dev: &str) -> std::collections::HashSet<IpAddr> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f.get(1) != Some(&dev) {
+                return None;
+            }
+            let hex = f.get(2).filter(|h| h.len() == 32)?;
+            let mut b = [0u8; 16];
+            for (i, x) in b.iter_mut().enumerate() {
+                *x = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+            }
+            Some(IpAddr::from(b))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn groups_os(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
+    // Not in the libc crate for Apple targets.
+    #[repr(C)]
+    struct IfMaddrs {
+        next: *mut IfMaddrs,
+        name: *mut libc::sockaddr,
+        addr: *mut libc::sockaddr,
+        lladdr: *mut libc::sockaddr,
+    }
+    unsafe extern "C" {
+        fn getifmaddrs(ifmap: *mut *mut IfMaddrs) -> libc::c_int;
+        fn freeifmaddrs(ifmp: *mut IfMaddrs);
+    }
+    let cname = std::ffi::CString::new(dev).ok()?;
+    // SAFETY: a valid C string.
+    let index = unsafe { libc::if_nametoindex(cname.as_ptr()) };
+    if index == 0 {
+        return None;
+    }
+    let mut head: *mut IfMaddrs = std::ptr::null_mut();
+    // SAFETY: getifmaddrs fills `head` with a list we free below.
+    if unsafe { getifmaddrs(&mut head) } != 0 {
+        return None;
+    }
+    let mut out = std::collections::HashSet::new();
+    let mut cur = head;
+    while !cur.is_null() {
+        // SAFETY: entries of the list getifmaddrs returned; the sockaddrs
+        // are read by their family.
+        unsafe {
+            let e = &*cur;
+            let on_dev = !e.name.is_null()
+                && i32::from((*e.name).sa_family) == libc::AF_LINK
+                && u32::from((*(e.name as *const libc::sockaddr_dl)).sdl_index) == index;
+            if on_dev && !e.addr.is_null() {
+                match i32::from((*e.addr).sa_family) {
+                    libc::AF_INET => {
+                        let a = &*(e.addr as *const libc::sockaddr_in);
+                        out.insert(IpAddr::from(a.sin_addr.s_addr.to_ne_bytes()));
+                    }
+                    libc::AF_INET6 => {
+                        let a = &*(e.addr as *const libc::sockaddr_in6);
+                        out.insert(IpAddr::from(a.sin6_addr.s6_addr));
+                    }
+                    _ => {}
+                }
+            }
+            cur = e.next;
+        }
+    }
+    // SAFETY: the list getifmaddrs returned, freed once.
+    unsafe { freeifmaddrs(head) };
+    Some(out)
+}
+
+#[cfg(windows)]
+fn groups_os(dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        ConvertInterfaceAliasToLuid, FreeMibTable, GetMulticastIpAddressTable,
+        MIB_MULTICASTIPADDRESS_TABLE,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC};
+    let alias: Vec<u16> = dev.encode_utf16().chain(Some(0)).collect();
+    let mut luid = NET_LUID_LH { Value: 0 };
+    // SAFETY: a NUL-terminated alias and an out pointer.
+    if unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) } != 0 {
+        return None;
+    }
+    let mut table: *mut MIB_MULTICASTIPADDRESS_TABLE = std::ptr::null_mut();
+    // SAFETY: fills `table`, freed with FreeMibTable below.
+    if unsafe { GetMulticastIpAddressTable(AF_UNSPEC, &mut table) } != 0 || table.is_null() {
+        return None;
+    }
+    let mut out = std::collections::HashSet::new();
+    // SAFETY: `NumEntries` rows follow the header; addresses are read by
+    // their family.
+    unsafe {
+        let n = (*table).NumEntries as usize;
+        let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), n);
+        for r in rows {
+            if r.InterfaceLuid.Value != luid.Value {
+                continue;
+            }
+            match r.Address.si_family {
+                AF_INET => {
+                    out.insert(IpAddr::from(
+                        r.Address.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes(),
+                    ));
+                }
+                AF_INET6 => {
+                    out.insert(IpAddr::from(r.Address.Ipv6.sin6_addr.u.Byte));
+                }
+                _ => {}
+            }
+        }
+        FreeMibTable(table as *const _);
+    }
+    Some(out)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn groups_os(_dev: &str) -> Option<std::collections::HashSet<IpAddr>> {
+    None
+}
+
 // ---------------------------------------------------------------- interfaces
 
 use crate::nat::is_overlay_if;
@@ -805,6 +972,44 @@ mod tests {
         assert_eq!(line(2), "filter -o webjet0 -d 10.7.255.53 -j ACCEPT");
         assert_eq!(line(3), "filter -i webjet0 -s 10.7.255.53 -j ACCEPT");
         assert!(line(4).starts_with("mangle -o webjet0 -p tcp") && line(4).contains("TCPMSS"));
+    }
+
+    #[test]
+    fn proc_igmp_is_parsed() {
+        let v4 = "Idx\tDevice    : Count Querier\tGroup    Users Timer\tReporter
+1\tlo        :     1      V3
+\t\t\t\t010000E0     1 0:00000000\t\t0
+5\twebjet0   :     2      V3
+\t\t\t\tFB0000E0     1 0:00000000\t\t0
+\t\t\t\t010000E0     1 0:00000000\t\t0
+";
+        let g = parse_proc_igmp(v4, "webjet0");
+        let want = |a: [u8; 4]| IpAddr::from(u32::from_le_bytes(a).to_ne_bytes());
+        // The kernel prints the network-order word as a host integer: on
+        // little-endian machines the bytes come out reversed.
+        assert!(g.contains(&want([224, 0, 0, 251])) && g.contains(&want([224, 0, 0, 1])));
+        assert_eq!(g.len(), 2);
+        assert!(parse_proc_igmp(v4, "eth0").is_empty());
+        let v6 = "1    lo              ff020000000000000000000000000001     1 0000000C 0
+5    webjet0         ff0200000000000000000000000000fb     1 00000004 0
+5    webjet0         ff020000000000000000000000000001     1 0000000C 0
+";
+        let g6 = parse_proc_igmp6(v6, "webjet0");
+        assert!(g6.contains(&"ff02::fb".parse::<IpAddr>().unwrap()));
+        assert_eq!(g6.len(), 2);
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn loopback_groups_are_read() {
+        // Every IPv4-capable interface has joined all-hosts.
+        let lo = if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        };
+        let g = multicast_groups(lo).expect("groups");
+        assert!(g.contains(&IpAddr::from([224, 0, 0, 1])), "{g:?}");
     }
 
     #[test]

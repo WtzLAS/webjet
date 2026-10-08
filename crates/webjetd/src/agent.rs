@@ -734,8 +734,11 @@ async fn connections(n: Arc<Node>) {
                     Ok(Event::HeadChanged) => {
                         n.enforce_revocations();
                         crate::transport::apply_limits(&n);
-                        // New compression settings: tell peers (§9.8).
-                        if crate::compression::refresh(&n) {
+                        // New compression settings, or broadcast and
+                        // multicast turned on or off: tell peers (§9.8,
+                        // §9.5.1).
+                        let mcast = crate::multicast::refresh(&n);
+                        if crate::compression::refresh(&n) || mcast {
                             crate::gossip::publish_endpoint(&n, true);
                         }
                     }

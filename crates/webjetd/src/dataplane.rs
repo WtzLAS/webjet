@@ -49,6 +49,10 @@ pub struct Dataplane {
     pings: Mutex<HashMap<u16, mpsc::UnboundedSender<u16>>>,
     /// Reverse proxy ports and flows (§11.11), apart from the overlay's.
     pub proxy: crate::proxy::Proxy,
+    /// Broadcast and multicast (§9.5.1).
+    pub(crate) mcast: Mutex<webjet_core::multicast::State>,
+    /// Wakes the membership watcher: the host sent an IGMP/MLD report.
+    pub(crate) mcast_wake: tokio::sync::Notify,
 }
 
 impl Dataplane {
@@ -64,7 +68,7 @@ impl Dataplane {
         v
     }
 
-    fn node(&self) -> Option<Arc<Node>> {
+    pub(crate) fn node(&self) -> Option<Arc<Node>> {
         self.node.upgrade()
     }
 
@@ -270,6 +274,18 @@ impl Dataplane {
             });
             return;
         }
+        // Broadcast and multicast are fanned out to peers (§9.5.1), or
+        // dropped quietly: never counted as unroutable, never answered
+        // with an ICMP error. Before the gateway path: a LAN's broadcasts
+        // never enter the overlay. The pool's directed broadcast looks like
+        // unicast but isn't.
+        if !packet::is_unicast(&dst)
+            || webjet_core::multicast::is_pool_broadcast(&dst, &n.store.read().overlay_pool)
+        {
+            n.metrics.tun_in(p.len());
+            crate::multicast::outbound(self, &n, p, &parsed);
+            return;
+        }
         if self.is_mine(&dst) {
             self.loopback(p);
             return;
@@ -310,12 +326,6 @@ impl Dataplane {
             return;
         }
         n.metrics.tun_in(p.len());
-        // The overlay carries unicast only: the host's multicast (mDNS,
-        // SSDP, …) and broadcasts are dropped quietly, not counted as
-        // unroutable and never answered with an ICMP error.
-        if !packet::is_unicast(&dst) {
-            return;
-        }
         // Where does it go? A node, or a gateway serving a published prefix (§9.5, §11.9.3).
         let (peer, dest_is_node) = match self.route(&n, &dst) {
             Some(x) => x,
@@ -865,6 +875,8 @@ impl Dataplane {
             dns_applied: Mutex::new(None),
             pings: Mutex::new(HashMap::new()),
             proxy: crate::proxy::Proxy::new(),
+            mcast: Mutex::new(crate::multicast::new_state(n)),
+            mcast_wake: tokio::sync::Notify::new(),
         });
         let _ = n.dataplane.set(dp.clone());
         dp.refresh();
@@ -979,8 +991,11 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         dns_applied: Mutex::new(None),
         pings: Mutex::new(HashMap::new()),
         proxy: crate::proxy::Proxy::new(),
+        mcast: Mutex::new(crate::multicast::new_state(n)),
+        mcast_wake: tokio::sync::Notify::new(),
     });
     if let Some(dev) = dev_handle {
+        crate::multicast::watch_memberships(n, dp.clone());
         let dp2 = dp.clone();
         n.tasks.service("tun-reader", async move {
             let mut buf = vec![0u8; 65536];
@@ -1013,6 +1028,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
                 _ = tick.tick() => {
                     dp2.conntrack.lock().expire(Instant::now());
                     dp2.proxy.table.lock().expire(Instant::now());
+                    crate::multicast::upkeep(&dp2);
                     // Re-check LAN interfaces for serving changes.
                     dp2.applied_gen.store(u64::MAX, Ordering::SeqCst);
                 }
@@ -1375,14 +1391,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn outbound_multicast_is_dropped_quietly() {
+    async fn outbound_multicast_never_gets_an_icmp_error() {
         let mut t = setup();
-        // mDNS and the limited broadcast: no ICMP error, not unroutable.
+        // Denied by policy (udp): dropped, no ICMP error, not unroutable.
         t.dp.outbound(udp4(ME, [224, 0, 0, 251], 5353, 5353, b"query"));
         t.dp.outbound(udp4(ME, [255, 255, 255, 255], 68, 67, b"discover"));
         assert!(tun_packets(&mut t).is_empty());
         assert_eq!(counter(&t.n.metrics.no_route), 0);
         assert_eq!(counter(&t.n.metrics.tun_rx), 2);
+    }
+
+    #[tokio::test]
+    async fn the_pool_broadcast_is_not_unicast() {
+        let mut t = setup();
+        t.dp.outbound(udp4(ME, [10, 7, 255, 255], 5000, 19132, b"ping"));
+        assert!(tun_packets(&mut t).is_empty(), "no ICMP error");
+        assert_eq!(counter(&t.n.metrics.no_route), 0);
     }
 
     #[tokio::test]

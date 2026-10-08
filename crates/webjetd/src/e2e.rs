@@ -852,6 +852,8 @@ pub fn on_frame(n: &Arc<Node>, c: &Arc<LocalCircuit>, buf: Vec<u8>, at: usize, e
                 dp.proxy.from_peer(n, dp, &c.peer, p);
             }
         }
+        ftype::MCAST => crate::multicast::inbound(n, &c.peer, plain),
+        ftype::GROUPS => crate::multicast::on_report(n, &c.peer, &plain),
         ftype::PROBE => crate::paths::on_probe(n, &s, c, &plain),
         ftype::PROBE_ACK => crate::paths::on_probe_ack(n, c, &plain),
         ftype::PUNCH_OFFER | ftype::PUNCH_GO => crate::punch::on_message(n, &c.peer, ty, &plain),

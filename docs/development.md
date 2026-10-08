@@ -150,7 +150,9 @@ leaves) and `wire.fbs` (hop messages, RPC, Raft). After editing them, run
   feature for them in their EndpointRecord (`gossip::features`); older nodes
   drop types they don't know. Compression works this way: `CONTROL_ZSTD`,
   `RPC_ZSTD`, `DATA_LZ4`, `PROXY_LZ4` behind the `zstd`/`lz4` features
-  (`webjetd/src/compression.rs`, `webjet-core/src/compress.rs`).
+  (`webjetd/src/compression.rs`, `webjet-core/src/compress.rs`); broadcast
+  and multicast (`MCAST`, `GROUPS`) behind `multicast`
+  (`webjetd/src/multicast.rs`, `webjet-core/src/multicast.rs`).
 
 ## The controller state machine
 
@@ -330,6 +332,7 @@ few seconds; nothing needs root, a network or Docker.
 | `scripts/soak-test.sh [s]` | nothing | Runs the local network past the e2e re-key interval (120 s) and checks every agent still answers. Catches timer-driven deadlocks. |
 | `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account), and the data behind its tabs. Skipped without a network. |
 | `docker/e2e.sh` | Docker, image `webjet:test` | Real tun interfaces: kernel ping, magic DNS, policy, subnet gateway. |
+| `docker/multicast-test.sh` | Docker, image `webjet:test` | Broadcast and multicast on five nodes (architecture §9.5.1): Bedrock-style discovery pings with unicast pongs, the pool broadcast, IGMP membership, the echo guard, the per-node budget and its alarm, turning it off per node. `docker/mcast.py` sends and counts datagrams. |
 | `docker/nat-test.sh` | Docker, image `webjet:test` | Hole punching through two NAT routers (`MODE=symmetric` for a symmetric NAT), a public node without NAT, a fake `wg0` VPN that must not be used as a direct path, and loopback pings. |
 | `docker/load-test.sh` | Docker, image `webjet:test` | Path stability under load: two data nodes behind shaped access links (netem), two relays. A bulk transfer must keep its circuit (at most one path switch), the busy circuit's probes pause, the idle one keeps being probed (§11.2, §11.4). `SECS=`, `RATE=`, `DELAY=` adjust it. |
 | `docker/deploy-test.sh` | Docker | The deployment image as documented in docs/docker.md. |
@@ -343,7 +346,7 @@ Notes:
   `/tmp/webjet-local/keys`. Query a node with
   `target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local status`.
 - macOS has no `timeout`; use `perl -e 'alarm shift; exec @ARGV' 5 <cmd>`.
-- `docker/e2e.sh`, `docker/nat-test.sh` and `docker/load-test.sh` use the `test` image: `docker build --target test -t webjet:test .`
+- `docker/e2e.sh`, `docker/multicast-test.sh`, `docker/nat-test.sh` and `docker/load-test.sh` use the `test` image: `docker build --target test -t webjet:test .`
 - `docker/tpm-test.sh` sets `TPM2TOOLS_TCTI` to the software TPM and runs
   the TPM unit test with `WEBJET_TEST_TPM=1`. Without a kernel resource
   manager, every TPM operation must flush transient objects or the TPM runs
