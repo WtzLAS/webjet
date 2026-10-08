@@ -28,13 +28,17 @@ use webjet_proto::{self as wp, msg_type as mt};
 
 // ---------------------------------------------------------------- targets and names
 
-/// Every platform a release is built for.
-pub const TARGETS: [&str; 5] = [
+/// Every platform a release can have files for. A release may lack some
+/// (up to 0.10.3 the macOS files were uploaded after CI published the
+/// release, and there were no FreeBSD files): upgrade requests carry the
+/// ones it has.
+pub const TARGETS: [&str; 6] = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
+    "x86_64-unknown-freebsd",
 ];
 
 /// The release target of this build, which is also the machine's.
@@ -49,6 +53,8 @@ pub fn target() -> Option<&'static str> {
         Some("aarch64-apple-darwin")
     } else if cfg!(all(windows, target_arch = "x86_64")) {
         Some("x86_64-pc-windows-msvc")
+    } else if cfg!(all(target_os = "freebsd", target_arch = "x86_64")) {
+        Some("x86_64-unknown-freebsd")
     } else {
         None
     }
@@ -227,6 +233,8 @@ pub fn default_spool_dir() -> PathBuf {
             .map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from)
             .join("Webjet")
             .join("upgrade")
+    } else if cfg!(target_os = "freebsd") {
+        PathBuf::from("/var/db/webjet-upgrade")
     } else {
         PathBuf::from("/var/lib/webjet-upgrade")
     }

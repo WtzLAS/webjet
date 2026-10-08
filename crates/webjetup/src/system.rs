@@ -299,6 +299,8 @@ pub fn service_state(l: &Layout) -> String {
         launchd_state(LAUNCHD_LABEL)
     } else if cfg!(windows) {
         windows_state(SERVICE)
+    } else if cfg!(target_os = "freebsd") {
+        crate::freebsd::state(crate::freebsd::AGENT).unwrap_or_else(|| "not installed".into())
     } else {
         if !l.service_file.as_deref().is_some_and(Path::exists) {
             return "not installed".into();
@@ -442,6 +444,8 @@ pub fn stop(sys: &Sys, l: &Layout) {
             std::thread::sleep(Duration::from_millis(500));
         }
         println!("    webjetd did not stop within 60 s");
+    } else if cfg!(target_os = "freebsd") {
+        crate::freebsd::stop(sys, crate::freebsd::AGENT);
     } else if l.service_file.as_deref().is_some_and(Path::exists) && have("systemctl") {
         sys.try_run("systemctl", &["stop", SERVICE]);
     }
@@ -579,6 +583,12 @@ pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
                 sys.run("sc.exe", &["start", SERVICE])?;
             }
         }
+    } else if cfg!(target_os = "freebsd") {
+        let name = crate::freebsd::AGENT;
+        crate::freebsd::install(sys, name, &crate::freebsd::agent_script(l))?;
+        if start {
+            crate::freebsd::restart(sys, name)?;
+        }
     } else {
         let unit = l
             .service_file
@@ -634,6 +644,8 @@ pub fn remove_service(sys: &Sys, l: &Layout) -> Result<()> {
                 WINDOWS_NRPT_CLEANUP,
             ],
         );
+    } else if cfg!(target_os = "freebsd") {
+        crate::freebsd::remove(sys, crate::freebsd::AGENT)?;
     } else if let Some(unit) = &l.service_file
         && unit.exists()
     {

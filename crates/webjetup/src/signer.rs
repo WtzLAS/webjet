@@ -7,6 +7,8 @@
 //!   (mode 0660, `--group-access`) but not read the key. It is ordered before
 //!   webjetd and pulled in by it.
 //! * macOS: launchd daemon `net.webjet.signer` (root, like the agent).
+//! * FreeBSD: rc.d script `webjet_signer` (root, like the agent), ordered
+//!   before webjetd's.
 //! * Windows: service `webjet-signer` (LocalSystem), which webjetd's service
 //!   depends on.
 //!
@@ -230,6 +232,12 @@ pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
         if start {
             sys.try_run("sc.exe", &["start", SIGNER_SERVICE]);
         }
+    } else if cfg!(target_os = "freebsd") {
+        let name = crate::freebsd::SIGNER;
+        crate::freebsd::install(sys, name, &crate::freebsd::signer_script(l))?;
+        if start {
+            crate::freebsd::restart(sys, name)?;
+        }
     } else {
         system::ensure_linux_user(sys)?;
         system::ensure_user(sys, SIGNER_USER)?;
@@ -281,6 +289,8 @@ pub fn remove(sys: &Sys, l: &Layout) -> Result<()> {
             sys.try_run("sc.exe", &["stop", SIGNER_SERVICE]);
             sys.run("sc.exe", &["delete", SIGNER_SERVICE])?;
         }
+    } else if cfg!(target_os = "freebsd") {
+        crate::freebsd::remove(sys, crate::freebsd::SIGNER)?;
     } else if let Some(unit) = &l.signer_service_file
         && unit.exists()
     {
@@ -321,6 +331,8 @@ pub fn state(l: &Layout) -> Option<String> {
             .then(|| system::launchd_state(SIGNER_LAUNCHD_LABEL))
     } else if cfg!(windows) {
         query("sc.exe", &["query", SIGNER_SERVICE]).map(|_| system::windows_state(SIGNER_SERVICE))
+    } else if cfg!(target_os = "freebsd") {
+        crate::freebsd::state(crate::freebsd::SIGNER)
     } else {
         l.signer_service_file
             .as_deref()

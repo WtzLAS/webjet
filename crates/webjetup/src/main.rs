@@ -11,6 +11,7 @@
 //!   webjetup apply-upgrade         (the remote upgrade helper, run by the
 //!                                  service manager; see `remote`)
 
+mod freebsd;
 mod layout;
 mod release;
 mod remote;
@@ -560,6 +561,10 @@ fn status(l: &Layout) -> Result<()> {
         println!("log       {}", log.display());
     } else if cfg!(target_os = "linux") {
         println!("log       journalctl -u webjetd");
+    } else if cfg!(target_os = "freebsd") {
+        println!(
+            "log       /var/log/messages (syslog tag webjetd; OPNsense: System › Log Files › General)"
+        );
     }
     let ctl = l.program("webjetctl");
     if let Some(v) = have.as_deref()
@@ -649,6 +654,14 @@ fn nuke(sys: &Sys, l: &Layout) -> Result<()> {
         if system::query("id", &["-u", layout::LINUX_USER]).is_some() {
             sys.run("userdel", &[layout::LINUX_USER])?;
         }
+    } else if cfg!(target_os = "freebsd") {
+        sys.remove_dir_all(&l.data_dir)?;
+        sys.remove_dir_all(&l.config_dir)?;
+        if let Some(rt) = &l.runtime_dir {
+            sys.remove_dir_all(rt)?;
+        }
+        // The interface an agent that was killed left behind.
+        freebsd::destroy_interface(sys, layout::LINUX_TUN);
     } else {
         // macOS and Windows keep config and state in one directory.
         sys.remove_dir_all(&l.config_dir)?;

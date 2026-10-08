@@ -42,7 +42,8 @@ pub const SYSTEM_KEYCHAIN: &str = "/Library/Keychains/System.keychain";
 /// The system user webjetd runs as on Linux.
 pub const LINUX_USER: &str = "webjet";
 
-/// The tun interface name, for leftover DNS settings on Linux.
+/// The tun interface name, for leftover DNS settings on Linux and a
+/// leftover interface on FreeBSD.
 pub const LINUX_TUN: &str = "webjet0";
 
 /// `name` with the platform's executable suffix.
@@ -73,7 +74,7 @@ pub struct Layout {
     pub config: PathBuf,
     /// Identity key and network state.
     pub data_dir: PathBuf,
-    /// systemd unit or launchd property list.
+    /// systemd unit, launchd property list or FreeBSD rc.d script.
     pub service_file: Option<PathBuf>,
     pub log: Option<PathBuf>,
     /// Control socket directory.
@@ -130,6 +131,23 @@ impl Layout {
                 signer_key: program_data.join("webjet-signer").join("signing.key"),
                 signer_socket: PathBuf::from(r"\\.\pipe\webjet-signer"),
                 signer_service_file: None,
+                signer_log: None,
+                upgrade_spool: webjet_release::default_spool_dir(),
+            }
+        } else if cfg!(target_os = "freebsd") {
+            // hier(7): local software's settings under /usr/local/etc, its
+            // state under /var/db. Logs go to syslog (daemon(8) -T).
+            Layout {
+                bin_dir: PathBuf::from("/usr/local/bin"),
+                config_dir: PathBuf::from("/usr/local/etc/webjet"),
+                config: PathBuf::from("/usr/local/etc/webjet/webjetd.toml"),
+                data_dir: PathBuf::from("/var/db/webjet"),
+                service_file: Some(crate::freebsd::rc_script_path(crate::freebsd::AGENT)),
+                log: None,
+                runtime_dir: Some(PathBuf::from("/var/run/webjet")),
+                signer_key: PathBuf::from("/var/db/webjet-signer/signing.key"),
+                signer_socket: PathBuf::from("/var/run/webjet-signer/signer.sock"),
+                signer_service_file: Some(crate::freebsd::rc_script_path(crate::freebsd::SIGNER)),
                 signer_log: None,
                 upgrade_spool: webjet_release::default_spool_dir(),
             }
@@ -218,7 +236,10 @@ mod tests {
             "release targets cover the platforms the tests run on"
         );
         let l = Layout::system();
-        assert!(l.data_dir.starts_with(&l.config_dir) || cfg!(target_os = "linux"));
+        assert!(
+            l.data_dir.starts_with(&l.config_dir)
+                || cfg!(any(target_os = "linux", target_os = "freebsd"))
+        );
         assert!(l.program("webjetd").ends_with(exe("webjetd")));
     }
 }

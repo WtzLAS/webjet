@@ -9,7 +9,7 @@
 # Every argument is passed to `webjetup install`. Environment:
 #   WEBJET_REPO     repository to install from (default below)
 #   WEBJET_VERSION  release to take webjetup from (default: latest)
-# Linux and macOS; on Windows download webjetup-<tag>-x86_64-pc-windows-msvc.exe
+# Linux, macOS and FreeBSD (OPNsense); on Windows download webjetup-<tag>-x86_64-pc-windows-msvc.exe
 # from the release page and run `webjetup install` as Administrator.
 set -eu
 
@@ -25,6 +25,7 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 case "$(uname -s)" in
     Linux) os=unknown-linux-gnu ;;
     Darwin) os=apple-darwin ;;
+    FreeBSD) os=unknown-freebsd ;;
     *) die "unsupported system $(uname -s); see the release page for Windows" ;;
 esac
 case "$(uname -m)" in
@@ -58,6 +59,8 @@ curl -fsSL "$url.sha256" -o "$tmp/webjetup.sha256" || die "download failed: $url
 want=$(cut -d ' ' -f 1 < "$tmp/webjetup.sha256")
 if command -v sha256sum >/dev/null 2>&1; then
     have=$(sha256sum "$tmp/webjetup" | cut -d ' ' -f 1)
+elif command -v sha256 >/dev/null 2>&1; then
+    have=$(sha256 -q "$tmp/webjetup")
 else
     have=$(shasum -a 256 "$tmp/webjetup" | cut -d ' ' -f 1)
 fi

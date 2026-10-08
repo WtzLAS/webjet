@@ -9,7 +9,9 @@
 //!   `webjet-upgrade.service`; a drop-in lets the sandboxed agent write the
 //!   queue;
 //! * macOS: launchd job `net.webjet.upgrade` with QueueDirectories;
-//! * Windows: scheduled task "Webjet upgrade", as SYSTEM, every minute.
+//! * Windows: scheduled task "Webjet upgrade", as SYSTEM, every minute;
+//! * FreeBSD: a cron job (`/usr/local/etc/cron.d/webjet-upgrade`), as root,
+//!   every minute.
 //!
 //! The helper trusts nothing the agent wrote: it checks the request itself
 //! against the network's root key and the node id pinned in `trust.json`
@@ -363,6 +365,16 @@ fn install_trigger(sys: &Sys, l: &Layout) -> Result<()> {
                 "/F",
             ],
         )?;
+    } else if cfg!(target_os = "freebsd") {
+        // cron picks up new and changed files in its directories itself.
+        let path = crate::freebsd::cron_path();
+        let want = crate::freebsd::upgrade_cron(l);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(want.as_str()) {
+            if let Some(d) = path.parent() {
+                sys.mkdir(d, false)?;
+            }
+            sys.write(&path, &want, 0o644)?;
+        }
     } else {
         let dir = systemd_dir(l);
         for (path, want) in [
@@ -417,6 +429,8 @@ pub fn remove(sys: &Sys, l: &Layout) -> Result<()> {
         if query("schtasks.exe", &["/Query", "/TN", UPGRADE_TASK]).is_some() {
             sys.run("schtasks.exe", &["/Delete", "/TN", UPGRADE_TASK, "/F"])?;
         }
+    } else if cfg!(target_os = "freebsd") {
+        sys.remove_file(&crate::freebsd::cron_path())?;
     } else {
         let dir = systemd_dir(l);
         let path = dir.join(format!("{UPGRADE_SERVICE}.path"));
