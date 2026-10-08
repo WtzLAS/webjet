@@ -19,15 +19,16 @@ on:
 
 env:
   CARGO_INCREMENTAL: "0"
+  # cargo runs one job per core by default: on the 208-core runner that ran
+  # out of the job container's 1024 open files ("Too many open files"). The
+  # runner ignores a container `options: --ulimit`.
+  CARGO_BUILD_JOBS: "64"
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
-      # cargo starts a job per core; the default 1024 open files runs out on the
-      # 208-core runner ("Too many open files").
-      options: --ulimit nofile=65536
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
@@ -65,9 +66,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
-      # cargo starts a job per core; the default 1024 open files runs out on the
-      # 208-core runner ("Too many open files").
-      options: --ulimit nofile=65536
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
@@ -81,9 +79,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
-      # cargo starts a job per core; the default 1024 open files runs out on the
-      # 208-core runner ("Too many open files").
-      options: --ulimit nofile=65536
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
