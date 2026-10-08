@@ -3,13 +3,10 @@
 #   git tag -a v0.3.0      # release notes as the message
 #   git push origin v0.3.0
 #
-# Runs the tests, then builds Linux x86_64, Linux arm64 (cross-compiled) and
-# Windows x86_64 in the builder image, and creates the Forgejo release with
-# their files, webjetup and install.sh (scripts/release.sh). macOS isn't
-# built here: add it from a Mac afterwards with
-#
-#   WEBJET_FORGEJO_TOKEN=… scripts/release.sh v0.3.0 --publish \
-#     --targets "aarch64-apple-darwin x86_64-apple-darwin"
+# Runs the tests, then builds every target in the builder image (Linux
+# x86_64 natively; Linux arm64, Windows x86_64, FreeBSD x86_64 and macOS
+# arm64 and x86_64 cross-compiled) and creates the Forgejo release with
+# their files, webjetup and install.sh (scripts/release.sh).
 #
 # Publishing uses the RELEASE_TOKEN secret if set (a Forgejo token with
 # write:repository), else the workflow's automatic token.
@@ -26,7 +23,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      credentials:
+        username: ${{ secrets.BUILDER_USER }}
+        password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: cargo test
@@ -36,7 +36,10 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      credentials:
+        username: ${{ secrets.BUILDER_USER }}
+        password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       # actions/checkout fetches the tagged commit, not the tag object, so
@@ -52,5 +55,6 @@ jobs:
           WEBJET_FORGEJO_REPO: ${{ github.repository }}
         run: |
           targets="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu"
-          targets="$targets x86_64-pc-windows-msvc"
+          targets="$targets x86_64-pc-windows-msvc x86_64-unknown-freebsd"
+          targets="$targets aarch64-apple-darwin x86_64-apple-darwin"
           scripts/release.sh "${GITHUB_REF_NAME}" --publish --targets "$targets"

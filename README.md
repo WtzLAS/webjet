@@ -137,10 +137,11 @@ is described in [docs/configuration.md](docs/configuration.md).
 Releases are published at
 <https://forgejo.wolf109909.top/webj8/webjet/releases> with binaries for
 Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+),
-macOS (x86_64 and aarch64) and Windows (x86_64).
+macOS (x86_64 and aarch64), Windows (x86_64) and, from the release after
+0.10.3, FreeBSD 14 / OPNsense 24.7+ (x86_64).
 
-`webjetup` installs, upgrades and removes Webjet. On Linux and macOS, as
-root:
+`webjetup` installs, upgrades and removes Webjet. On Linux, macOS and
+FreeBSD, as root:
 
 ```sh
 curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.10.3/install.sh | sudo sh
@@ -178,7 +179,7 @@ Then, on any platform:
 
 | Command | What it does |
 | --- | --- |
-| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS) or the service, PATH and folder ACLs (Windows). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. On a controller, `--signer` adds the signer service, which holds the signing key in its own process (`webjetd signer`), and points the agent at it; later upgrades keep it. From 0.9.0 it also sets up the remote upgrade helper, which lets admins upgrade the node with `webjetctl network node upgrade` (signed per node, pinned checksums, forward only, automatic rollback); `--no-remote-upgrade` turns that off and `--remote-upgrade` back on, and later upgrades keep the choice. |
+| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS), the service, PATH and folder ACLs (Windows) or the rc.d service (FreeBSD). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. On a controller, `--signer` adds the signer service, which holds the signing key in its own process (`webjetd signer`), and points the agent at it; later upgrades keep it. From 0.9.0 it also sets up the remote upgrade helper, which lets admins upgrade the node with `webjetctl network node upgrade` (signed per node, pinned checksums, forward only, automatic rollback); `--no-remote-upgrade` turns that off and `--remote-upgrade` back on, and later upgrades keep the choice. |
 | `webjetup enroll <STRING>` | Enroll this node (or re-key it, operations guide 2.7) and start the agent. |
 | `webjetup status` | Installed version, service state, enrollment, remote upgrades and the last one, this node's name and addresses. |
 | `webjetup list` | Published releases. |
@@ -191,14 +192,14 @@ repository.
 
 ## Platform notes
 
-| Platform | Linux | macOS | Windows |
-| --- | --- | --- | --- |
-| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) |
-| Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) |
-| Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` |
-| Control channel (open to every local user; changes need a signature) | Unix socket, 0666 | Unix socket, 0666 | named pipe `\\.\pipe\webjet`, everyone reads and writes |
-| Key storage (`[key] storage`) | `tpm` (tpm2-tools) when a TPM is usable, else `file` | `keychain` (System keychain) | `dpapi` (machine scope) |
-| Roles | all | DATA | DATA |
+| Platform | Linux | macOS | Windows | FreeBSD 14, OPNsense 24.7+ (x86_64; from the first release after 0.10.3) |
+| --- | --- | --- | --- | --- |
+| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) | `webjetup` (rc.d script `/usr/local/etc/rc.d/webjetd` under `daemon(8)`, root, enabled in `/etc/rc.conf.d/webjetd`; logs to syslog) |
+| Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) | `tun`, renamed to `webjet0` |
+| Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` | not set (Unbound query forwarding by hand) |
+| Control channel (open to every local user; changes need a signature) | Unix socket, 0666 | Unix socket, 0666 | named pipe `\\.\pipe\webjet`, everyone reads and writes | Unix socket, 0666 |
+| Key storage (`[key] storage`) | `tpm` (tpm2-tools) when a TPM is usable, else `file` | `keychain` (System keychain) | `dpapi` (machine scope) | `file` |
+| Roles | all | DATA | DATA | DATA |
 
 Routes and split DNS are removed when the agent stops; `webjetup remove`
 removes the service as well.

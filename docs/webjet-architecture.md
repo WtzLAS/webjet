@@ -878,7 +878,7 @@ IPv6 link-local sources (mDNS and LLMNR use them) are rewritten to the node's ov
 - the policy lets the sender reach on the packet's protocol and port (§14.4);
 - want it: for a group, only peers whose host joined that group (below).
 
-**Membership (IGMP/MLD snooping).** Each node reads the groups its host joined on the tun interface from the OS (Linux `/proc/net/igmp` and `/proc/net/igmp6`, macOS `getifmaddrs`, Windows `GetMulticastIpAddressTable`) every 5 s, and at once when the host sends an IGMP or MLD report. When a node receives a copy from a sender, it answers with a `GROUPS` frame listing the groups it takes: on first contact, every 60 s while copies keep coming, and to every recent sender when its groups change. A sender keeps the list for 180 s; until it has one for a peer, it sends the peer everything. Broadcasts go to every recipient regardless. A node whose OS can't tell its groups reports "any". A receiving host's kernel still drops groups it hasn't joined, so a stale list costs only bandwidth.
+**Membership (IGMP/MLD snooping).** Each node reads the groups its host joined on the tun interface from the OS (Linux `/proc/net/igmp` and `/proc/net/igmp6`, macOS and FreeBSD `getifmaddrs`, Windows `GetMulticastIpAddressTable`) every 5 s, and at once when the host sends an IGMP or MLD report. When a node receives a copy from a sender, it answers with a `GROUPS` frame listing the groups it takes: on first contact, every 60 s while copies keep coming, and to every recent sender when its groups change. A sender keeps the list for 180 s; until it has one for a peer, it sends the peer everything. Broadcasts go to every recipient regardless. A node whose OS can't tell its groups reports "any". A receiving host's kernel still drops groups it hasn't joined, so a stale list costs only bandwidth.
 
 **Replies.** Discovery is answered by unicast (a RakNet pong, an mDNS reply). Each copy is tracked in connection tracking as the unicast flow it stands for, on both ends: the sender records `(peer, its host's address and port → the peer's overlay address and the destination port)`, the receiver the same flow towards its own address. The reply then passes as a reply on both ends without a separate rule from the replier to the sender, exactly as for a unicast flow the sender started. A hit counts for the allowing rule.
 
@@ -893,7 +893,7 @@ For Minecraft Bedrock: a client on the server list pings about once a second, wh
 
 **Counters.** `webjet_multicast_packets_total{direction}` counts copies sent (tx), datagrams delivered (rx) and datagrams taken by capture (captured, §9.5.2); `webjet_limit_hits_total{limit="multicast_limited"}` counts copies and datagrams over a budget, `{limit="multicast_echo"}` echoes not sent, `{limit="multicast_duplicate"}` datagrams sent both ways and carried once. Copies denied by policy on the receiving end count as `acl_denied`.
 
-**Limits.** Without capture (§9.5.2), only what reaches the tun interface is carried. An application that broadcasts to `255.255.255.255` without choosing an interface has it sent out of one interface: on Linux and macOS the one with the default route, on Windows the one whose `255.255.255.255/32` route has the lowest metric; normally the physical one, not the overlay's. Applications that broadcast to the overlay pool's address (`10.7.255.255`), bind to the overlay address, or send multicast on the overlay interface work everywhere; receivers deliver the pool broadcast as `255.255.255.255`, which every OS accepts. Fragmented datagrams are not carried whole: later fragments have no ports for the policy check and are dropped (discovery packets are small).
+**Limits.** Without capture (§9.5.2), only what reaches the tun interface is carried. An application that broadcasts to `255.255.255.255` without choosing an interface has it sent out of one interface: on Linux, macOS and FreeBSD the one with the default route, on Windows the one whose `255.255.255.255/32` route has the lowest metric; normally the physical one, not the overlay's. Applications that broadcast to the overlay pool's address (`10.7.255.255`), bind to the overlay address, or send multicast on the overlay interface work everywhere; receivers deliver the pool broadcast as `255.255.255.255`, which every OS accepts. Fragmented datagrams are not carried whole: later fragments have no ports for the policy check and are dropped (discovery packets are small).
 
 #### 9.5.2 Capture: broadcasts sent out other interfaces
 
@@ -907,6 +907,7 @@ Most games broadcast their LAN discovery to `255.255.255.255` from a socket boun
 
 - **Linux:** one `AF_PACKET` socket with a classic BPF filter in the kernel: outgoing (`PACKET_OUTGOING`) IPv4 UDP to the captured ports, unfragmented. Only matching datagrams are copied to the agent. Needs `CAP_NET_RAW` (the agent runs as root or with the capability).
 - **macOS:** a BPF device (`/dev/bpf*`) per Ethernet or Wi-Fi interface with an IPv4 address, with the same filter for Ethernet frames; the agent keeps only datagrams from the host's own addresses. Interfaces are re-checked every 5 s.
+- **FreeBSD (OPNsense):** as macOS (one cloned `/dev/bpf` per Ethernet interface, including VLAN, bridge and lagg interfaces; tunnels such as `tun`, `ovpn`, `wg`, `enc` and `pflog`/`pfsync` are skipped), with the device set to see sent packets only (`BIOCSDIRECTION`), so a router's busy LANs cost nothing.
 - **Windows:** a raw UDP socket bound to `127.0.0.1`, which receives the limited broadcasts this host sends whatever interface Windows chose (the technique of WinIPBroadcast). It sees no directed broadcasts or multicast, and, as WinIPBroadcast documents, no datagram whose source and destination ports are equal. Datagrams with TTL 1 (WinIPBroadcast's own relays) are ignored. Needs administrator rights, which the service has.
 
 If capture can't start (no permission, no BPF device), the `multicast_capture` alarm (warning) says why and the agent retries every minute; everything else works as without capture.
@@ -2436,20 +2437,22 @@ This section says where things live and how the system is run. Step-by-step proc
 
 ### 19.1 Platforms
 
-| | Linux | macOS | Windows |
-|---|---|---|---|
-| Service | systemd unit | launchd daemon | Windows service |
-| Virtual interface (`tun-rs`) | `/dev/net/tun` | `utun` | Wintun driver |
-| Runs as | Dedicated user with `CAP_NET_ADMIN` only, plus systemd sandboxing | Root daemon (creating `utun` requires it) | LocalSystem service |
-| Key storage (§8.3) | Key file, TPM-sealed where available | Keychain | DPAPI, or TPM |
-| Split DNS (§11.10.1) | systemd-resolved | Per-domain resolver configuration | NRPT rules |
-| Local control channel | Unix socket | Unix socket | Named pipe |
-| Configuration | `/etc/webjet/` | `/Library/Application Support/Webjet/` | `%ProgramData%\Webjet\` |
-| State | `/var/lib/webjet/` | `/Library/Application Support/Webjet/state/` | `%ProgramData%\Webjet\state\` |
-| Logs | journald | Unified log | Event Log |
-| Start after time sync (§18.6) | `time-sync.target` | — | Windows Time service |
+| | Linux | macOS | Windows | FreeBSD (OPNsense) |
+|---|---|---|---|---|
+| Service | systemd unit | launchd daemon | Windows service | rc.d script under `daemon(8)`, enabled in `/etc/rc.conf.d/webjetd` |
+| Virtual interface (`tun-rs`) | `/dev/net/tun` | `utun` | Wintun driver | `tun` driver, renamed |
+| Runs as | Dedicated user with `CAP_NET_ADMIN` only, plus systemd sandboxing | Root daemon (creating `utun` requires it) | LocalSystem service | Root (tun, routes and BPF have no finer privilege) |
+| Key storage (§8.3) | Key file, TPM-sealed where available | Keychain | DPAPI, or TPM | Key file |
+| Split DNS (§11.10.1) | systemd-resolved | Per-domain resolver configuration | NRPT rules | — (Unbound query forwarding by hand) |
+| Local control channel | Unix socket | Unix socket | Named pipe | Unix socket |
+| Configuration | `/etc/webjet/` | `/Library/Application Support/Webjet/` | `%ProgramData%\Webjet\` | `/usr/local/etc/webjet/` |
+| State | `/var/lib/webjet/` | `/Library/Application Support/Webjet/state/` | `%ProgramData%\Webjet\state\` | `/var/db/webjet/` |
+| Logs | journald | Unified log | Event Log | syslog, tag `webjetd` |
+| Start after time sync (§18.6) | `time-sync.target` | — | Windows Time service | — |
+| Remote upgrade helper (§19.8) | systemd path unit | launchd queue directory | Scheduled task, every minute | cron job, every minute |
 
 - **Controllers, relays and gateways run on Linux.** macOS and Windows are supported as DATA nodes. This keeps the server-side roles to one platform to build and test.
+- **FreeBSD (OPNsense) is being prepared** as a DATA node platform. The agent's operating-system integration covers it: the tun interface (FreeBSD's `tun` driver makes `tunN` interfaces; any other configured name, `webjet0` by default, is given by renaming, and a renamed interface an earlier run left behind is destroyed at start, because FreeBSD keeps it after the process exits), routes (`route add`, falling back to `route change` for a route that already exists), multicast group membership (`getifmaddrs`) and capture (§9.5.2, BPF on sent packets only). Split DNS is not configured (on OPNsense, Unbound owns DNS: forward the overlay suffix to the overlay resolver by hand); gateway NAT and the reverse proxy are Linux only. `webjetup` installs the services: `webjetd` (and `webjet_signer` with `--signer`) as rc.d scripts run by `daemon(8)`, which restarts the program when it exits and sends its output to syslog; OPNsense starts every service enabled in `/etc/rc.conf.d/` at boot. Releases after 0.10.3 include `x86_64-unknown-freebsd` (cross-compiled in CI against a FreeBSD 14.4 sysroot; runs on FreeBSD 14.0 and later 14.x, OPNsense 24.7 and later).
 - iOS and Android are not part of the first implementation (§2).
 
 ### 19.2 Programs

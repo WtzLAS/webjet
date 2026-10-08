@@ -7,20 +7,27 @@
 #   scripts/release.sh v0.1.0 --publish --targets "aarch64-apple-darwin x86_64-apple-darwin"
 #
 # Targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
-# x86_64-pc-windows-msvc, aarch64-apple-darwin, x86_64-apple-darwin.
+# x86_64-pc-windows-msvc, x86_64-unknown-freebsd, aarch64-apple-darwin,
+# x86_64-apple-darwin.
 # `--targets` builds and uploads only those, adding them to an existing
-# release (assets with the same name are replaced). That's how the macOS
-# files join a release that CI published (.forgejo/workflows/release.yml).
+# release (assets with the same name are replaced), for example to rebuild
+# one target of a release CI published (.forgejo/workflows/release.yml).
 #
 # Where each target is built:
-#   macOS targets    natively; needs a Mac
-#   Linux targets    on Linux, with cargo (the CI image, ci/builder.Dockerfile,
-#                    has the arm64 cross toolchain); elsewhere in Docker with
+#   macOS targets    natively on a Mac; elsewhere (CI) cross-compiled by
+#                    scripts/macos-cargo.sh against the macOS SDK in
+#                    WEBJET_MACOS_SDK (the CI image has one)
+#   Linux targets    on Linux, with cargo (the CI image,
+#                    webj8-internal/webjet-builder, has the arm64 cross
+#                    toolchain); elsewhere in Docker with
 #                    docker/release.Dockerfile (Debian 11, glibc 2.31+)
 #   Windows          cargo-xwin (in the CI image; on a Mac it needs
 #                    `cargo install cargo-xwin` and Homebrew's llvm and lld:
 #                    rustup's rust-lld, which cargo-xwin falls back to, can't
 #                    run standalone)
+#   FreeBSD          cross-compiled by scripts/freebsd-cargo.sh (Clang and
+#                    lld against a FreeBSD 14.4 sysroot; in the CI image, on
+#                    a Mac with Homebrew's llvm and lld)
 #
 # Each archive holds webjetd and webjetctl at the
 # top level, next to a `.sha256` file:
@@ -45,7 +52,7 @@ usage="usage: scripts/release.sh <tag> [--publish] [--targets \"<target> …\"]"
 TAG=${1:?$usage}
 shift
 PUBLISH=0
-ALL="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin x86_64-apple-darwin"
+ALL="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-unknown-freebsd aarch64-apple-darwin x86_64-apple-darwin"
 TARGETS=$ALL
 while [ $# -gt 0 ]; do
     case $1 in
@@ -107,10 +114,12 @@ package() { # target directory-with-binaries
     echo "packaged $DIST/$f"
 }
 
+# On a Mac natively; elsewhere cross-compiled against the macOS SDK in
+# WEBJET_MACOS_SDK (scripts/macos-cargo.sh, the CI image).
 build_macos() { # target
-    [ "$HOST_OS" = Darwin ] || die "$1 can only be built on a Mac"
-    rustup target add "$1" >/dev/null 2>&1 || true
-    cargo build --release --locked --target "$1" -p webjetd -p webjet-tools -p webjetup
+    [ "$HOST_OS" = Darwin ] || [ -n "${WEBJET_MACOS_SDK:-}" ] ||
+        die "$1 needs a Mac or a macOS SDK in WEBJET_MACOS_SDK"
+    scripts/macos-cargo.sh "$1" build --release --locked -p webjetd -p webjet-tools -p webjetup
     package "$1" "target/$1/release"
     add_webjetup "$1" "target/$1/release/webjetup"
 }
@@ -128,6 +137,22 @@ build_linux() { # target
         add_webjetup "$1" "$out/webjetup"
         rm -rf "$out"
     fi
+}
+
+# FreeBSD binaries built against the 14.4 sysroot run on 14.0 and later
+# 14.x as long as they need no symbol newer than 14.0's (FBSD_1.7): libc
+# symbols added in later 14.x releases are FBSD_1.8.
+FREEBSD_MAX_SYMVER=FBSD_1.7
+build_freebsd() { # target
+    scripts/freebsd-cargo.sh build --release --locked -p webjetd -p webjet-tools -p webjetup
+    readelf=$(command -v llvm-readelf || command -v readelf || echo /opt/homebrew/opt/llvm/bin/llvm-readelf)
+    for b in $BINS webjetup; do
+        newer=$("$readelf" -V "target/$1/release/$b" | grep -o 'FBSD_1\.[0-9]*' | sort -u -t . -k 2n |
+            awk -v max="${FREEBSD_MAX_SYMVER#FBSD_1.}" -F . '$2 > max')
+        [ -z "$newer" ] || die "$b needs $newer, newer than FreeBSD 14.0 ($FREEBSD_MAX_SYMVER)"
+    done
+    package "$1" "target/$1/release"
+    add_webjetup "$1" "target/$1/release/webjetup"
 }
 
 # Windows: webjetup expects a zip with wintun.dll next to the programs.
@@ -165,6 +190,7 @@ for t in $TARGETS; do
         *-apple-darwin) build_macos "$t" ;;
         *-linux-gnu) build_linux "$t" ;;
         *-windows-msvc) build_windows "$t" ;;
+        *-unknown-freebsd) build_freebsd "$t" ;;
     esac
 done
 

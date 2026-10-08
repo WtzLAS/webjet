@@ -1,11 +1,13 @@
-# Checks for every push and pull request: formatting, clippy (Linux and
-# Windows, with and without AnyTLS), dependencies (cargo-deny: advisories,
-# licences, sources), the test suite and the fuzz targets' smoke test.
+# Checks for every push and pull request: formatting, clippy (Linux with
+# and without AnyTLS, Windows, FreeBSD and macOS), dependencies (cargo-deny:
+# advisories, licences, sources), the test suite and the fuzz targets' smoke
+# test.
 #
-# Runs on the `ubuntu-latest` runner, in the builder image
-# (ci/builder.Dockerfile), which must be present in the runner's Docker
-# daemon (docs/development.md). webjet-app is left out: GPUI needs
-# X11/Wayland and Vulkan development packages the image doesn't have.
+# Runs on the `ubuntu-latest` runner, in the builder image from the private
+# repository webj8-internal/webjet-builder, pulled with the secrets
+# BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app is left
+# out: GPUI needs X11/Wayland and Vulkan development packages the image
+# doesn't have.
 name: ci
 
 on:
@@ -21,7 +23,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      credentials:
+        username: ${{ secrets.BUILDER_USER }}
+        password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: cargo fmt
@@ -39,11 +44,26 @@ jobs:
           cargo xwin clippy --locked --target x86_64-pc-windows-msvc
           -p webjetd -p webjet-tools -p webjetup
           --all-targets --no-default-features -- -D warnings
+      # FreeBSD (OPNsense), cross-compiled against the image's sysroot.
+      - name: clippy (FreeBSD)
+        run: >
+          scripts/freebsd-cargo.sh clippy --locked
+          -p webjetd -p webjet-tools -p webjetup
+          --all-targets -- -D warnings
+      # macOS, cross-compiled against the image's macOS SDK.
+      - name: clippy (macOS)
+        run: >
+          scripts/macos-cargo.sh aarch64-apple-darwin clippy --locked
+          -p webjetd -p webjet-tools -p webjetup
+          --all-targets -- -D warnings
 
   dependencies:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      credentials:
+        username: ${{ secrets.BUILDER_USER }}
+        password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       # deny.toml; installs a pinned cargo-deny if the image has none.
@@ -53,7 +73,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8/webjet-builder:2
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      credentials:
+        username: ${{ secrets.BUILDER_USER }}
+        password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: cargo test

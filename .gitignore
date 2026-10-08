@@ -5,3 +5,4 @@
 
 # Release archives (scripts/release.sh)
 /dist/
+/target-*/

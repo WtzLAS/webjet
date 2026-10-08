@@ -70,6 +70,7 @@ nothing.
 | Linux | `/etc/webjet/webjetd.toml` | `sudo systemctl restart webjetd` |
 | macOS | `/Library/Application Support/Webjet/webjetd.toml` | `sudo launchctl kickstart -k system/net.webjet.webjetd` |
 | Windows | `%ProgramData%\Webjet\webjetd.toml` | `Restart-Service webjetd` (as Administrator) |
+| FreeBSD, OPNsense | `/usr/local/etc/webjet/webjetd.toml` | `service webjetd restart` (as root) |
 
 The agent reads the file only when it starts, so restart it after every
 change. `webjetd --config <path>` or the `WEBJET_CONFIG` environment
@@ -86,7 +87,7 @@ gives the `webjetctl local config set` command that replaces each one.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `data_dir` | Linux `/var/lib/webjet`, macOS `/Library/Application Support/Webjet/state`, Windows `%ProgramData%\Webjet\state` | Identity key, network state, Raft log (controllers), link history. See the notes below. |
+| `data_dir` | Linux `/var/lib/webjet`, FreeBSD `/var/db/webjet`, macOS `/Library/Application Support/Webjet/state`, Windows `%ProgramData%\Webjet\state` | Identity key, network state, Raft log (controllers), link history. See the notes below. |
 | `control_socket` | `/var/run/webjet/control.sock`; Windows `\\.\pipe\webjet` | The local control channel for `webjetctl` and the desktop app (§13.1). A relative path is relative to `data_dir`. See the notes below. |
 | `log` | `info` | Log filter in `tracing` syntax, for example `info,webjetd::gossip=debug`. The `RUST_LOG` environment variable overrides it. |
 | `log_format` | text | `json` writes one JSON object per line (§19.6). |
@@ -94,7 +95,10 @@ gives the `webjetctl local config set` command that replaces each one.
 **`data_dir`.** If this directory is lost, the node has to be enrolled
 again. A backup restored on another machine doesn't work when the key is
 sealed to the old machine (TPM, Keychain, DPAPI; see [`[key]`](#key)).
-Re-key the node instead (operations guide 2.7).
+Re-key the node instead (operations guide 2.7). On OPNsense, leave
+"Use memory file systems for /var" (System › Settings › Miscellaneous) off,
+or point `data_dir` at a directory outside `/var`: with it on, `/var` is
+emptied at every boot and the node with it.
 
 **`control_socket`.**
 - `webjetctl` and the desktop app use the same default, or `--socket` /
@@ -158,7 +162,7 @@ The overlay network interface.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Create the overlay interface. `false` runs the node without one (a pure relay or controller). `webjetctl local ping` still works without it, because the data plane answers echo requests itself. |
-| `name` | `webjet0`; macOS: the next free `utunN` | Interface name. On macOS only `utunN` names can be used. On Windows the adapter is described as "Webjet". |
+| `name` | `webjet0`; macOS: the next free `utunN` | Interface name. On macOS only `utunN` names can be used. On FreeBSD the interface is created as `tunN` and renamed (a `tunN` name is used as is); a renamed one left behind by an agent that was killed is removed at start. On Windows the adapter is described as "Webjet". |
 | `mtu` | `1280` | Inner MTU. 1280 fits every transport, including IPv6 underlay paths. |
 
 ### `[dns]`
