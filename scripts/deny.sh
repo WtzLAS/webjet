@@ -28,7 +28,7 @@ if ! command -v cargo-deny >/dev/null 2>&1; then
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
 	name="cargo-deny-$VERSION-$target"
-	curl -fsSL --retry 3 -o "$tmp/deny.tgz" \
+	curl -fsSL --retry 5 --retry-all-errors -o "$tmp/deny.tgz" \
 		"https://github.com/EmbarkStudios/cargo-deny/releases/download/$VERSION/$name.tar.gz"
 	echo "$sha  $tmp/deny.tgz" | sha256sum -c - >/dev/null
 	tar -xzf "$tmp/deny.tgz" -C "$tmp"
