@@ -57,7 +57,7 @@ tests.
 - Some code is compiled only on one OS (`cfg(target_os = "linux")`,
   `cfg(windows)`). Clippy on macOS doesn't see it, so check the other targets
   too when you touch platform code:
-  - Linux: `docker run --rm -v "$PWD":/src -w /src rust:1-bookworm cargo clippy --workspace --exclude webjet-app --all-targets` (or build the Docker image). `webjet-app` is left out because GPUI needs X11/Wayland and Vulkan development packages that the plain Rust image doesn't have.
+  - Linux: `docker run --rm -v "$PWD":/src -w /src rust:1-bookworm cargo clippy --workspace --exclude webjet-app --all-targets` (or build the Docker image). `webjet-app` is left out because GPUI links against libxkbcommon, libxkbcommon-x11 and libxcb, which the plain Rust image doesn't have (`apt-get install libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev` adds them; the CI image has them).
   - Windows: `cargo xwin clippy --target x86_64-pc-windows-msvc -p webjetd -p webjet-tools --no-default-features`.
   - FreeBSD (OPNsense): `scripts/freebsd-cargo.sh clippy -p webjetd -p webjet-tools -p webjetup --all-targets -- -D warnings`.
     The script runs cargo for `x86_64-unknown-freebsd` with Clang and lld
@@ -88,6 +88,12 @@ crate (`cargo update -p <crate>`) instead; ignore it only if the vulnerable
 code is unreachable, and say why. Duplicate versions are reported as
 warnings (`scripts/deny.sh bans` lists them). The workspace crates are
 `publish = false`, so path dependencies without a version are fine.
+
+`libc` stays at 0.2.189 in `Cargo.lock`: 0.2.190 dropped the Linux constant
+`libc::ENOATTR`, which `xattr` 0.2.3 (through gpui's HTTP client) still
+uses, so webjet-app no longer builds for Linux. After `cargo update`, run
+`cargo update -p libc --precise 0.2.189` until gpui no longer needs xattr
+0.2.
 
 ## Fuzzing
 
@@ -435,11 +441,11 @@ backslashes or newlines. Everything an operator needs is in docs/docker.md.
 
 `.forgejo/workflows/` runs on the project's Forgejo runner (`linux/amd64`,
 label `ubuntu-latest`), with every job in the builder image
-`forgejo.wolf109909.top/webj8-internal/webjet-builder:4`:
+`forgejo.wolf109909.top/webj8-internal/webjet-builder:5`:
 
 | Workflow | When | What |
 | --- | --- | --- |
-| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS), Windows, FreeBSD and macOS (arm64); `scripts/deny.sh`; `cargo test`; the fuzz targets' smoke test and clippy. `webjet-app` is left out of clippy and tests (GPUI needs X11/Wayland and Vulkan packages). |
+| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS), Windows, FreeBSD and macOS (arm64); `scripts/deny.sh`; `cargo test`; the fuzz targets' smoke test and clippy. `webjet-app` is checked for Linux and FreeBSD only: GPUI's build script makes the Windows and macOS shaders only on a Windows or macOS host, so it can't be cross-built for them here. |
 | `fuzz.yml` | manually only (Run workflow) | Installs nightly Rust and cargo-fuzz, builds the targets, then runs `scripts/fuzz.sh` for 30 minutes in total, split evenly over the targets (input `minutes`); findings are uploaded as an artifact. |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for every target: Linux x86_64 natively; Linux arm64, Windows x86_64, FreeBSD x86_64 and macOS arm64 and x86_64 cross-compiled |
 
@@ -448,7 +454,9 @@ Debian 11+, Ubuntu 20.04+, RHEL 9+) with Rust, the aarch64 cross toolchain,
 LLVM 20 (libclang for bindgen, `clang-cl`/`lld-link` for Windows, Clang and
 lld for FreeBSD and macOS), NASM, CMake 3.31, cargo-xwin with the Microsoft
 CRT and SDK already downloaded, the FreeBSD target with a FreeBSD 14.4
-sysroot (`/opt/freebsd-sysroot`), the
+sysroot (`/opt/freebsd-sysroot`), webjet-app's X11 libraries (libxkbcommon,
+libxkbcommon-x11, libxcb) for Linux amd64 and arm64 and in the FreeBSD
+sysroot, the
 macOS targets with a macOS SDK (`/opt/macos-sdk/MacOSX.sdk`), and Node.js
 for `actions/checkout`. Building it accepts Microsoft's license for the CRT
 and SDK, as cargo-xwin does on first use.
@@ -472,7 +480,12 @@ in the registry before a workflow names it. To change it: edit and push it
 from `webjet-builder` with a new tag (`./build.sh --push`), then bump the
 tag in `ci.yml`, `release.yml` and `fuzz.yml` here.
 `scripts/freebsd-sysroot.sh` exists in both repositories (the image runs
-its copy): keep `FREEBSD_VERSION` and `BASE_SHA256` the same.
+its copy): keep them the same (`FREEBSD_VERSION`, `BASE_SHA256` and the
+pinned packages in `PKGS`). Besides the base system it unpacks the FreeBSD
+packages webjet-app links against (libxkbcommon, libxcb and their
+dependencies) from the release's frozen package set (`release_4` for 14.4),
+each checked against its SHA-256 from the repository catalogue
+(`data.pkg`); GNU tar needs `zstd` to unpack them.
 
 `RELEASE_TOKEN` (repository secret, `write:repository`) is optional; without
 it, `release.yml` publishes with the workflow's automatic token.
@@ -487,8 +500,9 @@ it, `release.yml` publishes with the workflow's automatic token.
 2. Push the tag: `git push origin vX.Y.Z`. `release.yml` tests, builds Linux
    x86_64 and arm64, Windows, FreeBSD and macOS arm64 and x86_64, packages
    `webjet-<tag>-<target>.tar.gz` (Windows: `.zip` with `wintun.dll` and its
-   license), the `webjetup` binaries and `install.sh`, each with a `.sha256`,
-   and creates the Forgejo release.
+   license), the desktop app as `webjet-app-<tag>-<target>.tar.gz` for
+   Linux and FreeBSD (not yet Windows and macOS), the `webjetup` binaries
+   and `install.sh`, each with a `.sha256`, and creates the Forgejo release.
 3. To rebuild one target and replace its files, from a checkout of the tag:
    ```
    WEBJET_FORGEJO_TOKEN=… scripts/release.sh vX.Y.Z --publish \

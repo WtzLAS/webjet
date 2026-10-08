@@ -41,6 +41,11 @@
 #   webjetup-<tag>-<target>          (Windows: webjetup-<tag>-<target>.exe)
 #   install.sh
 #
+# and, for Linux and FreeBSD, the desktop app (webjet-app) in its own
+# archive, so servers installing webjetd don't download it:
+#
+#   webjet-app-<tag>-<target>.tar.gz
+#
 # Publishing needs WEBJET_FORGEJO_TOKEN (a token with write access to the
 # repository). The API and repository come from the origin remote, or from
 # WEBJET_FORGEJO_API (https://host/api/v1) and WEBJET_FORGEJO_REPO
@@ -95,24 +100,36 @@ add_webjetup() { # target path-to-binary
     echo "packaged $DIST/$f"
 }
 
-package() { # target directory-with-binaries
+package() { # target directory-with-binaries [archive-name binary…]
+    t=$1 dir=$2
+    shift 2
+    name=webjet bins=$BINS
+    if [ $# -gt 0 ]; then
+        name=$1
+        shift
+        bins=$*
+    fi
     stage=$(mktemp -d)
-    for b in $BINS; do
-        [ -f "$2/$b" ] || die "$2/$b missing"
-        cp "$2/$b" "$stage/"
+    for b in $bins; do
+        [ -f "$dir/$b" ] || die "$dir/$b missing"
+        cp "$dir/$b" "$stage/"
         chmod 0755 "$stage/$b"
     done
-    f=webjet-$TAG-$1.tar.gz
+    f=$name-$TAG-$t.tar.gz
     if [ "$HOST_OS" = Darwin ]; then
         # macOS tar would add Apple extended attributes, which GNU tar warns about.
-        COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$DIST/$f" -C "$stage" $BINS
+        COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$DIST/$f" -C "$stage" $bins
     else
-        tar --owner=0 --group=0 -czf "$DIST/$f" -C "$stage" $BINS
+        tar --owner=0 --group=0 -czf "$DIST/$f" -C "$stage" $bins
     fi
     (cd "$DIST" && sha256 "$f" > "$f.sha256")
     rm -rf "$stage"
     echo "packaged $DIST/$f"
 }
+
+# The desktop app is built on its own, so its dependencies' features don't
+# change the server binaries (and the other way round).
+APP_BINS=webjet-app
 
 # On a Mac natively; elsewhere cross-compiled against the macOS SDK in
 # WEBJET_MACOS_SDK (scripts/macos-cargo.sh, the CI image).
@@ -127,13 +144,16 @@ build_macos() { # target
 build_linux() { # target
     if [ "$HOST_OS" = Linux ]; then
         cargo build --release --locked --target "$1" -p webjetd -p webjet-tools -p webjetup
+        cargo build --release --locked --target "$1" -p webjet-app
         package "$1" "target/$1/release"
+        package "$1" "target/$1/release" webjet-app $APP_BINS
         add_webjetup "$1" "target/$1/release/webjetup"
     else
         case $1 in aarch64-*) plat=arm64 ;; *) plat=amd64 ;; esac
         out=$(mktemp -d)
         docker buildx build --platform "linux/$plat" -f docker/release.Dockerfile --output "type=local,dest=$out" .
         package "$1" "$out"
+        package "$1" "$out" webjet-app $APP_BINS
         add_webjetup "$1" "$out/webjetup"
         rm -rf "$out"
     fi
@@ -145,13 +165,15 @@ build_linux() { # target
 FREEBSD_MAX_SYMVER=FBSD_1.7
 build_freebsd() { # target
     scripts/freebsd-cargo.sh build --release --locked -p webjetd -p webjet-tools -p webjetup
+    scripts/freebsd-cargo.sh build --release --locked -p webjet-app
     readelf=$(command -v llvm-readelf || command -v readelf || echo /opt/homebrew/opt/llvm/bin/llvm-readelf)
-    for b in $BINS webjetup; do
+    for b in $BINS webjetup $APP_BINS; do
         newer=$("$readelf" -V "target/$1/release/$b" | grep -o 'FBSD_1\.[0-9]*' | sort -u -t . -k 2n |
             awk -v max="${FREEBSD_MAX_SYMVER#FBSD_1.}" -F . '$2 > max')
         [ -z "$newer" ] || die "$b needs $newer, newer than FreeBSD 14.0 ($FREEBSD_MAX_SYMVER)"
     done
     package "$1" "target/$1/release"
+    package "$1" "target/$1/release" webjet-app $APP_BINS
     add_webjetup "$1" "target/$1/release/webjetup"
 }
 

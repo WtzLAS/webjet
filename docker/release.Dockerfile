@@ -8,6 +8,7 @@ ARG RUST_IMAGE=rust:1-bullseye
 FROM ${RUST_IMAGE} AS build
 ARG TARGETPLATFORM
 # clang/libclang (bindgen) and cmake build BoringSSL (AnyTLS) and aws-lc.
+# webjet-app (GPUI) links against libxkbcommon(-x11) and libxcb.
 #
 # Debian 11 is archived. On amd64, libclang's dependencies include the
 # 32-bit multilib libraries (libc6-i386 and friends), which must match the
@@ -25,7 +26,8 @@ RUN set -eu; \
         done; \
     fi; \
     apt-get update; \
-    apt-get install -y --no-install-recommends clang libclang-dev; \
+    apt-get install -y --no-install-recommends clang libclang-dev \
+        libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev; \
     rm -rf /var/lib/apt/lists/* /tmp/stub; \
     curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz" \
         | tar -xz -C /opt; \
@@ -39,8 +41,9 @@ RUN --mount=type=cache,id=webjet-release-registry,target=/usr/local/cargo/regist
     --mount=type=cache,id=webjet-release-target-${TARGETPLATFORM},target=/src/target \
     set -eu; \
     cargo build --release --locked -p webjetd -p webjet-tools -p webjetup; \
+    cargo build --release --locked -p webjet-app; \
     mkdir -p /out; \
-    for b in webjetd webjetctl webjetup; do cp "target/release/$b" /out/; done; \
+    for b in webjetd webjetctl webjetup webjet-app; do cp "target/release/$b" /out/; done; \
     ldd --version | head -1 > /out/.glibc
 
 FROM scratch

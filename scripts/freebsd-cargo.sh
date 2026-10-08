@@ -41,10 +41,16 @@ export CFLAGS_x86_64_unknown_freebsd="--sysroot=$SR"
 export CXXFLAGS_x86_64_unknown_freebsd="--sysroot=$SR -nostdinc++ -isystem $SR/usr/include/c++/v1"
 # bindgen (boring-sys) parses BoringSSL's headers with libclang.
 export BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_freebsd="--sysroot=$SR"
-# Linking: clang drives lld with FreeBSD's crt files and libraries.
+# Linking: clang drives lld with FreeBSD's crt files and libraries, and
+# the packaged ones in usr/local/lib (webjet-app's X11 libraries).
 export CARGO_TARGET_X86_64_UNKNOWN_FREEBSD_LINKER=clang
-export CARGO_TARGET_X86_64_UNKNOWN_FREEBSD_RUSTFLAGS="-C link-arg=--target=$T -C link-arg=--sysroot=$SR -C link-arg=-fuse-ld=lld"
+export CARGO_TARGET_X86_64_UNKNOWN_FREEBSD_RUSTFLAGS="-C link-arg=--target=$T -C link-arg=--sysroot=$SR -C link-arg=-fuse-ld=lld -L native=$SR/usr/local/lib"
 export CARGO_BUILD_TARGET=$T
 
 rustup target list --installed 2>/dev/null | grep -qx "$T" || rustup target add "$T" >&2
+# cargo runs one job per core: on the 208-core runner the default limit
+# of 1024 open files ran out ("Too many open files"), so raise it.
+hard=$(ulimit -Hn)
+if [ "$hard" = unlimited ] || [ "$hard" -gt 65536 ]; then hard=65536; fi
+[ "$(ulimit -n)" != unlimited ] && [ "$(ulimit -n)" -ge "$hard" ] || ulimit -n "$hard" 2>/dev/null || true
 exec cargo "$@"

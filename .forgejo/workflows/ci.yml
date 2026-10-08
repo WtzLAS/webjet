@@ -5,9 +5,10 @@
 #
 # Runs on the `ubuntu-latest` runner, in the builder image from the private
 # repository webj8-internal/webjet-builder, pulled with the secrets
-# BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app is left
-# out: GPUI needs X11/Wayland and Vulkan development packages the image
-# doesn't have.
+# BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app (GPUI)
+# is checked for Linux and FreeBSD, whose X11 libraries the image has; not
+# yet for Windows and macOS (GPUI's build script only makes their shaders
+# on a Windows or macOS host).
 name: ci
 
 on:
@@ -23,7 +24,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
@@ -33,11 +34,11 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy (Linux)
         run: >
-          cargo clippy --locked --workspace --exclude webjet-app
+          cargo clippy --locked --workspace
           --all-targets -- -D warnings
       - name: clippy (Linux, without AnyTLS)
         run: >
-          cargo clippy --locked --workspace --exclude webjet-app
+          cargo clippy --locked --workspace
           --all-targets --no-default-features -- -D warnings
       - name: clippy (Windows)
         run: >
@@ -48,7 +49,7 @@ jobs:
       - name: clippy (FreeBSD)
         run: >
           scripts/freebsd-cargo.sh clippy --locked
-          -p webjetd -p webjet-tools -p webjetup
+          -p webjetd -p webjet-tools -p webjetup -p webjet-app
           --all-targets -- -D warnings
       # macOS, cross-compiled against the image's macOS SDK.
       - name: clippy (macOS)
@@ -60,7 +61,7 @@ jobs:
   dependencies:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
@@ -73,14 +74,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: cargo test
-        run: cargo test --locked --workspace --exclude webjet-app
+        run: cargo test --locked --workspace
       # Every fuzz target on its seeds and random mutations, on stable
       # (fuzz/tests/smoke.rs); the real fuzzing runs in fuzz.yml. The fuzz
       # workspace takes the main Cargo.lock (scripts/fuzz-lock.sh), so no

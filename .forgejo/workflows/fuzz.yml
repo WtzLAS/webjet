@@ -26,7 +26,7 @@ jobs:
     # Fuzzing time plus installing the tools and building the targets.
     timeout-minutes: 90
     container:
-      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}

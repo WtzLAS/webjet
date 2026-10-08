@@ -23,20 +23,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: cargo test
-        run: cargo test --locked --workspace --exclude webjet-app
+        run: cargo test --locked --workspace
 
   release:
     needs: test
     runs-on: ubuntu-latest
     container:
-      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:4
+      image: forgejo.wolf109909.top/webj8-internal/webjet-builder:5
       credentials:
         username: ${{ secrets.BUILDER_USER }}
         password: ${{ secrets.BUILDER_TOKEN }}
