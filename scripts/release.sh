@@ -41,10 +41,10 @@
 #   webjetup-<tag>-<target>          (Windows: webjetup-<tag>-<target>.exe)
 #   install.sh
 #
-# and, for Linux, FreeBSD and macOS, the desktop app (webjet-app) in its own
-# archive, so servers installing webjetd don't download it:
+# and the desktop app (webjet-app) in its own archive, so servers installing
+# webjetd don't download it:
 #
-#   webjet-app-<tag>-<target>.tar.gz
+#   webjet-app-<tag>-<target>.tar.gz     (Windows: .zip)
 #
 # Publishing needs WEBJET_FORGEJO_TOKEN (a token with write access to the
 # repository). The API and repository come from the origin remote, or from
@@ -186,25 +186,29 @@ WINTUN_VERSION=0.14.1
 WINTUN_SHA256=07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
 build_windows() { # target
     if [ "$HOST_OS" = Darwin ]; then
-        PATH="/opt/homebrew/opt/lld/bin:/opt/homebrew/opt/llvm/bin:$PATH" \
-            cargo xwin build --release --locked --target "$1" -p webjetd -p webjet-tools -p webjetup
+        xwin() { PATH="/opt/homebrew/opt/lld/bin:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin "$@"; }
     else
-        cargo xwin build --release --locked --target "$1" -p webjetd -p webjet-tools -p webjetup
+        xwin() { cargo xwin "$@"; }
     fi
+    xwin build --release --locked --target "$1" -p webjetd -p webjet-tools -p webjetup
+    xwin build --release --locked --target "$1" -p webjet-app
     stage=$(mktemp -d)
     curl -fsSL "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip" -o "$stage/wintun.zip"
     echo "$WINTUN_SHA256  $stage/wintun.zip" | sha256 -c - >/dev/null || die "wintun-$WINTUN_VERSION.zip checksum mismatch"
     unzip -q "$stage/wintun.zip" -d "$stage"
-    mkdir "$stage/pkg"
+    mkdir "$stage/pkg" "$stage/app"
     for b in $BINS; do cp "target/$1/release/$b.exe" "$stage/pkg/"; done
     cp "$stage/wintun/bin/amd64/wintun.dll" "$stage/pkg/"
     cp "$stage/wintun/LICENSE.txt" "$stage/pkg/wintun-LICENSE.txt"
-    f=webjet-$TAG-$1.zip
-    (cd "$stage/pkg" && zip -q -X "../$f" ./*)
-    mv "$stage/$f" "$DIST/"
-    (cd "$DIST" && sha256 "$f" > "$f.sha256")
+    for b in $APP_BINS; do cp "target/$1/release/$b.exe" "$stage/app/"; done
+    for name in webjet:pkg webjet-app:app; do
+        f=${name%%:*}-$TAG-$1.zip
+        (cd "$stage/${name#*:}" && zip -q -X "../$f" ./*)
+        mv "$stage/$f" "$DIST/"
+        (cd "$DIST" && sha256 "$f" > "$f.sha256")
+        echo "packaged $DIST/$f"
+    done
     rm -rf "$stage"
-    echo "packaged $DIST/$f"
     add_webjetup "$1" "target/$1/release/webjetup.exe"
 }
 

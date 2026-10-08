@@ -5,6 +5,10 @@
 //! Defaults match `webjetctl`: `WEBJET_SOCKET` / the platform's control
 //! socket, and `WEBJET_KEYS` / `~/.config/webjet/accounts`.
 
+// A GUI program on Windows: no console window next to it. Debug builds keep
+// the console for their output.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -31,7 +31,11 @@ as `mesa-vulkan-drivers`; FreeBSD: `pkg install libxkbcommon vulkan-loader
 mesa-libs`). On macOS (11 or later) it is a plain program, not an `.app`
 bundle, and isn't notarized: a browser download is quarantined, so run
 `xattr -d com.apple.quarantine webjet-app` once (downloads with `curl` aren't
-quarantined). For Windows, build it yourself for now.
+quarantined). On Windows (10 or later) unpack `webjet-app-<tag>-x86_64-pc-windows-msvc.zip`
+and run `webjet-app.exe`; it uses Direct3D 11 and compiles its shaders when
+it starts, with the `d3dcompiler_47.dll` Windows ships. The Windows app is
+cross-built and its unit tests pass under Wine, but it hasn't been started on
+real Windows yet (Wine can't run it: its DirectWrite has no font sets).
 
 Building needs no extra tools on macOS: the app compiles GPUI's Metal shaders
 at run time, so the Xcode Command Line Tools are enough. On Linux, building

@@ -6,8 +6,7 @@
 # Runs on the `ubuntu-latest` runner, in the builder image from the private
 # repository webj8-internal/webjet-builder, pulled with the secrets
 # BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app (GPUI)
-# is checked for Linux, FreeBSD and macOS (with the patched gpui in
-# vendor/); not for Windows, where GPUI's release build needs fxc.exe.
+# is checked for every target, through the patched gpui in vendor/.
 name: ci
 
 on:
@@ -46,7 +45,7 @@ jobs:
       - name: clippy (Windows)
         run: >
           cargo xwin clippy --locked --target x86_64-pc-windows-msvc
-          -p webjetd -p webjet-tools -p webjetup
+          -p webjetd -p webjet-tools -p webjetup -p webjet-app
           --all-targets --no-default-features -- -D warnings
       # FreeBSD (OPNsense), cross-compiled against the image's sysroot.
       - name: clippy (FreeBSD)

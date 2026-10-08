@@ -519,9 +519,10 @@ optional = true
 version = "0.3"
 optional = true
 
-# Webjet: build dependencies for every target (upstream: macOS only, and naga
-# also for Linux/FreeBSD): the build script runs on the build machine and
-# needs them for any target. See vendor/README.md.
+# Webjet: build dependencies for every target (upstream: bindgen and cbindgen
+# for macOS, naga for macOS/Linux/FreeBSD, embed-resource for Windows): the
+# build script runs on the build machine and needs them for any target. See
+# vendor/README.md.
 [build-dependencies.bindgen]
 version = "0.71"
 
@@ -532,6 +533,9 @@ default-features = false
 [build-dependencies.naga]
 version = "25.0"
 features = ["wgsl-in"]
+
+[build-dependencies.embed-resource]
+version = "3.0"
 
 [target.'cfg(target_os = "windows")'.dependencies.flume]
 version = "0.11"
@@ -599,8 +603,6 @@ version = "0.2"
 [target.'cfg(target_os = "windows")'.dependencies.windows-registry]
 version = "0.5"
 
-[target.'cfg(target_os = "windows")'.build-dependencies.embed-resource]
-version = "3.0"
 
 [lints.clippy]
 dbg_macro = "deny"
