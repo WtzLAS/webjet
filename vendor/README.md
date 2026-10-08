@@ -36,3 +36,7 @@ Every changed place has a `Webjet:` comment. To update gpui,
 copy the new version's files over these (`build.rs`, `Cargo.toml`, `src/`,
 `resources/`, `LICENSE-APACHE`, `README.md`), redo the changes above and
 `cargo update -p gpui -p gpui_media`.
+
+`scripts/gpui-vendor-check.sh` tells whether crates.io has a newer gpui or
+gpui_media than these copies; the pre-commit hook (`.githooks/pre-commit`,
+enabled with `git config core.hooksPath .githooks`) runs it once a day.

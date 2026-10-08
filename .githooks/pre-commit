@@ -1,0 +1,12 @@
+#!/bin/sh
+# Webjet pre-commit hook. Enable it once per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# It only warns, never blocks a commit; `git commit --no-verify` skips it.
+
+# A newer gpui on crates.io than the patched copies in vendor/
+# (vendor/README.md). At most one lookup a day, cached in the git directory.
+"$(git rev-parse --show-toplevel)/scripts/gpui-vendor-check.sh" --hook
+
+exit 0

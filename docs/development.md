@@ -95,6 +95,15 @@ uses, so webjet-app no longer builds for Linux. After `cargo update`, run
 `cargo update -p libc --precise 0.2.189` until gpui no longer needs xattr
 0.2.
 
+gpui and gpui_media come from patched copies in `vendor/`
+(`[patch.crates-io]`; `vendor/README.md` says what changed and how to
+update them), so `cargo update` never moves them to a new release.
+`scripts/gpui-vendor-check.sh` asks crates.io whether there is a newer one
+(exit 1 if so). The pre-commit hook in `.githooks/` runs it with `--hook`:
+a warning only, looked up at most once a day and skipped without network.
+Enable the hook once per clone with `git config core.hooksPath .githooks`
+(`WEBJET_SKIP_GPUI_CHECK=1` or `git commit --no-verify` skips it).
+
 ## Fuzzing
 
 `fuzz/` fuzzes every parser that reads bytes from the network or a local
