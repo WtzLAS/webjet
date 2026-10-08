@@ -22,9 +22,10 @@ administrators on Windows, in.) The socket shows the network and passes on
 operations; every change still needs a signature from an account key, which
 the app makes with your key.
 
-Releases include the app for Linux (x86_64, arm64), FreeBSD (x86_64) and
-macOS (arm64, x86_64) as `webjet-app-<tag>-<target>.tar.gz`, next to the
-server archives; unpack it anywhere. On Linux and FreeBSD it needs a
+Releases from 0.11.0 include the app for Linux (x86_64, arm64), FreeBSD
+(x86_64), macOS (arm64, x86_64) and Windows (x86_64) as
+`webjet-app-<tag>-<target>.tar.gz` (Windows: `.zip`), next to the server
+archives; unpack it anywhere. On Linux and FreeBSD it needs a
 graphical session (X11 or Wayland) with Vulkan, plus libxkbcommon and libxcb
 (Debian/Ubuntu: `libxkbcommon-x11-0` `libvulkan1`, and a Vulkan driver such
 as `mesa-vulkan-drivers`; FreeBSD: `pkg install libxkbcommon vulkan-loader

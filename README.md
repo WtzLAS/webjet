@@ -137,14 +137,15 @@ is described in [docs/configuration.md](docs/configuration.md).
 Releases are published at
 <https://forgejo.wolf109909.top/webj8/webjet/releases> with binaries for
 Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+),
-macOS (x86_64 and aarch64), Windows (x86_64) and, from the release after
-0.10.3, FreeBSD 14 / OPNsense 24.7+ (x86_64).
+macOS (x86_64 and aarch64), Windows (x86_64) and, from 0.11.0, FreeBSD 14 /
+OPNsense 24.7+ (x86_64). From 0.11.0 they also include the desktop app
+(`webjet-app-<tag>-<target>`, [docs/app.md](docs/app.md)).
 
 `webjetup` installs, upgrades and removes Webjet. On Linux, macOS and
 FreeBSD, as root:
 
 ```sh
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.10.3/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.0/install.sh | sudo sh
 sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl network node enroll`
 ```
 
@@ -153,7 +154,7 @@ otherwise (Forgejo has no "latest" download link, so the URL names a tag).
 It downloads `webjetup` for the machine, checks it against its `.sha256` and
 runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
-`… | sudo sh -s -- v0.10.3` picks a version.
+`… | sudo sh -s -- v0.11.0` picks a version.
 
 Behind a proxy, `webjetup` (and `webjetctl network node upgrade`) take it
 from the first variable that is set among `https_proxy`, `all_proxy` and
@@ -172,7 +173,7 @@ On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
 release page and, in an Administrator prompt:
 
 ```powershell
-.\webjetup-v0.10.3-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
+.\webjetup-v0.11.0-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
 ```
 
 Then, on any platform:
@@ -192,7 +193,7 @@ repository.
 
 ## Platform notes
 
-| Platform | Linux | macOS | Windows | FreeBSD 14, OPNsense 24.7+ (x86_64; from the first release after 0.10.3) |
+| Platform | Linux | macOS | Windows | FreeBSD 14, OPNsense 24.7+ (x86_64; from 0.11.0) |
 | --- | --- | --- | --- | --- |
 | Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) | `webjetup` (rc.d script `/usr/local/etc/rc.d/webjetd` under `daemon(8)`, root, enabled in `/etc/rc.conf.d/webjetd`; logs to syslog) |
 | Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) | `tun`, renamed to `webjet0` |

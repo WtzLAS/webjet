@@ -7662,7 +7662,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-app"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7680,7 +7680,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-core"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -7707,7 +7707,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-net"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -7734,7 +7734,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-proto"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "hex",
  "planus",
@@ -7745,7 +7745,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-release"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -7763,7 +7763,7 @@ dependencies = [
 
 [[package]]
 name = "webjet-tools"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7794,7 +7794,7 @@ dependencies = [
 
 [[package]]
 name = "webjetd"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -7839,7 +7839,7 @@ dependencies = [
 
 [[package]]
 name = "webjetup"
-version = "0.10.3"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "clap",
