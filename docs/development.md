@@ -41,7 +41,7 @@ cargo clippy --workspace --all-targets
 cargo clippy --workspace --all-targets --no-default-features
 cargo test --workspace
 scripts/deny.sh                                   # dependencies (cargo-deny)
-cargo test --release --manifest-path fuzz/Cargo.toml --no-default-features  # fuzz targets, smoke
+scripts/fuzz-lock.sh && cargo test --release --manifest-path fuzz/Cargo.toml --no-default-features  # fuzz targets, smoke
 ```
 
 All of them must be clean: the workspace has no clippy warnings, including in
@@ -93,6 +93,11 @@ warnings (`scripts/deny.sh bans` lists them). The workspace crates are
 
 `fuzz/` fuzzes every parser that reads bytes from the network or a local
 client (§20). It is its own workspace, outside `cargo test --workspace`.
+Its `Cargo.lock` is not committed: it is a copy of the main `Cargo.lock`
+(`scripts/fuzz-lock.sh`, which CI and `scripts/fuzz.sh` run first), so the
+targets build against the same dependency versions as the programs and the
+lock never needs updating by hand. Without the copy, cargo resolves the
+fuzz workspace on its own (newest versions).
 `fuzz/src/lib.rs` has one function per target:
 
 | Target | What it feeds |
@@ -111,6 +116,7 @@ Two ways to run them:
 
 ```sh
 # Stable, seconds: seeds plus random mutations (CI runs this).
+scripts/fuzz-lock.sh
 cargo test --release --manifest-path fuzz/Cargo.toml --no-default-features
 WEBJET_FUZZ_ITERS=100000 WEBJET_FUZZ_SEED=1 cargo test ...   # longer / repeatable
 

@@ -82,12 +82,15 @@ jobs:
       - name: cargo test
         run: cargo test --locked --workspace --exclude webjet-app
       # Every fuzz target on its seeds and random mutations, on stable
-      # (fuzz/tests/smoke.rs); the real fuzzing runs in fuzz.yml.
+      # (fuzz/tests/smoke.rs); the real fuzzing runs in fuzz.yml. The fuzz
+      # workspace takes the main Cargo.lock (scripts/fuzz-lock.sh), so no
+      # --locked: cargo adds the fuzz-only dependencies to the copy.
       - name: fuzz targets (smoke)
         run: >
-          cargo test --locked --release --manifest-path fuzz/Cargo.toml
+          scripts/fuzz-lock.sh &&
+          cargo test --release --manifest-path fuzz/Cargo.toml
           --no-default-features
       - name: clippy (fuzz targets)
         run: >
-          cargo clippy --locked --manifest-path fuzz/Cargo.toml
+          cargo clippy --manifest-path fuzz/Cargo.toml
           --no-default-features --all-targets -- -D warnings

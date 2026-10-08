@@ -6,3 +6,5 @@
 # Release archives (scripts/release.sh)
 /dist/
 /target-*/
+# A copy of Cargo.lock (scripts/fuzz-lock.sh)
+/fuzz/Cargo.lock

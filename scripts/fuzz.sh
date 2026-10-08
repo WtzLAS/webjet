@@ -14,6 +14,8 @@
 # fuzz/regressions/<target>/ (committed; `cargo test` in fuzz/ replays it).
 set -eu
 
+# The main workspace's dependency versions (fuzz/Cargo.lock isn't committed).
+"$(dirname "$0")/fuzz-lock.sh"
 cd "$(dirname "$0")/../fuzz"
 secs="${1:-60}"
 [ $# -gt 0 ] && shift

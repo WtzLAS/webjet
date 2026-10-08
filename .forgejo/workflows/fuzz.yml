@@ -38,8 +38,7 @@ jobs:
           cargo install --locked cargo-fuzz@0.13.2
       # Build first, so the fuzzing budget isn't spent compiling.
       - name: build the fuzz targets
-        working-directory: fuzz
-        run: cargo +nightly fuzz build -O
+        run: scripts/fuzz-lock.sh && cd fuzz && cargo +nightly fuzz build -O
       - name: fuzz every target
         env:
           MINUTES: ${{ inputs.minutes || '30' }}
