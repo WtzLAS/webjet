@@ -6,9 +6,8 @@
 # Runs on the `ubuntu-latest` runner, in the builder image from the private
 # repository webj8-internal/webjet-builder, pulled with the secrets
 # BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app (GPUI)
-# is checked for Linux and FreeBSD, whose X11 libraries the image has; not
-# yet for Windows and macOS (GPUI's build script only makes their shaders
-# on a Windows or macOS host).
+# is checked for Linux, FreeBSD and macOS (with the patched gpui in
+# vendor/); not for Windows, where GPUI's release build needs fxc.exe.
 name: ci
 
 on:
@@ -59,7 +58,7 @@ jobs:
       - name: clippy (macOS)
         run: >
           scripts/macos-cargo.sh aarch64-apple-darwin clippy --locked
-          -p webjetd -p webjet-tools -p webjetup
+          -p webjetd -p webjet-tools -p webjetup -p webjet-app
           --all-targets -- -D warnings
 
   dependencies:

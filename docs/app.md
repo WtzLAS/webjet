@@ -22,13 +22,16 @@ administrators on Windows, in.) The socket shows the network and passes on
 operations; every change still needs a signature from an account key, which
 the app makes with your key.
 
-Releases include the app for Linux (x86_64, arm64) and FreeBSD (x86_64) as
-`webjet-app-<tag>-<target>.tar.gz`, next to the server archives; unpack
-it anywhere. It needs a graphical session (X11 or Wayland) with Vulkan,
-plus libxkbcommon and libxcb (Debian/Ubuntu: `libxkbcommon-x11-0`
-`libvulkan1`, and a Vulkan driver such as `mesa-vulkan-drivers`; FreeBSD:
-`pkg install libxkbcommon vulkan-loader mesa-libs`). For Windows and macOS,
-build it yourself for now.
+Releases include the app for Linux (x86_64, arm64), FreeBSD (x86_64) and
+macOS (arm64, x86_64) as `webjet-app-<tag>-<target>.tar.gz`, next to the
+server archives; unpack it anywhere. On Linux and FreeBSD it needs a
+graphical session (X11 or Wayland) with Vulkan, plus libxkbcommon and libxcb
+(Debian/Ubuntu: `libxkbcommon-x11-0` `libvulkan1`, and a Vulkan driver such
+as `mesa-vulkan-drivers`; FreeBSD: `pkg install libxkbcommon vulkan-loader
+mesa-libs`). On macOS (11 or later) it is a plain program, not an `.app`
+bundle, and isn't notarized: a browser download is quarantined, so run
+`xattr -d com.apple.quarantine webjet-app` once (downloads with `curl` aren't
+quarantined). For Windows, build it yourself for now.
 
 Building needs no extra tools on macOS: the app compiles GPUI's Metal shaders
 at run time, so the Xcode Command Line Tools are enough. On Linux, building

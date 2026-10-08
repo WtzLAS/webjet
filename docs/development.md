@@ -445,7 +445,7 @@ label `ubuntu-latest`), with every job in the builder image
 
 | Workflow | When | What |
 | --- | --- | --- |
-| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS), Windows, FreeBSD and macOS (arm64); `scripts/deny.sh`; `cargo test`; the fuzz targets' smoke test and clippy. `webjet-app` is checked for Linux and FreeBSD only: GPUI's build script makes the Windows and macOS shaders only on a Windows or macOS host, so it can't be cross-built for them here. |
+| `ci.yml` | push to `main`, pull requests | `cargo fmt --check`; clippy with `-D warnings` for Linux (with and without AnyTLS), Windows, FreeBSD and macOS (arm64); `scripts/deny.sh`; `cargo test`; the fuzz targets' smoke test and clippy. `webjet-app` is checked for Linux, FreeBSD and macOS, not Windows: GPUI's Windows release build needs `fxc.exe` to compile its shaders. macOS cross-builds through the patched gpui in `vendor/` (`vendor/README.md`). |
 | `fuzz.yml` | manually only (Run workflow) | Installs nightly Rust and cargo-fuzz, builds the targets, then runs `scripts/fuzz.sh` for 30 minutes in total, split evenly over the targets (input `minutes`); findings are uploaded as an artifact. |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for every target: Linux x86_64 natively; Linux arm64, Windows x86_64, FreeBSD x86_64 and macOS arm64 and x86_64 cross-compiled |
 
@@ -501,7 +501,7 @@ it, `release.yml` publishes with the workflow's automatic token.
    x86_64 and arm64, Windows, FreeBSD and macOS arm64 and x86_64, packages
    `webjet-<tag>-<target>.tar.gz` (Windows: `.zip` with `wintun.dll` and its
    license), the desktop app as `webjet-app-<tag>-<target>.tar.gz` for
-   Linux and FreeBSD (not yet Windows and macOS), the `webjetup` binaries
+   Linux, FreeBSD and macOS (not yet Windows), the `webjetup` binaries
    and `install.sh`, each with a `.sha256`, and creates the Forgejo release.
 3. To rebuild one target and replace its files, from a checkout of the tag:
    ```

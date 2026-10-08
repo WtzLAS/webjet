@@ -41,7 +41,7 @@
 #   webjetup-<tag>-<target>          (Windows: webjetup-<tag>-<target>.exe)
 #   install.sh
 #
-# and, for Linux and FreeBSD, the desktop app (webjet-app) in its own
+# and, for Linux, FreeBSD and macOS, the desktop app (webjet-app) in its own
 # archive, so servers installing webjetd don't download it:
 #
 #   webjet-app-<tag>-<target>.tar.gz
@@ -137,7 +137,9 @@ build_macos() { # target
     [ "$HOST_OS" = Darwin ] || [ -n "${WEBJET_MACOS_SDK:-}" ] ||
         die "$1 needs a Mac or a macOS SDK in WEBJET_MACOS_SDK"
     scripts/macos-cargo.sh "$1" build --release --locked -p webjetd -p webjet-tools -p webjetup
+    scripts/macos-cargo.sh "$1" build --release --locked -p webjet-app
     package "$1" "target/$1/release"
+    package "$1" "target/$1/release" webjet-app $APP_BINS
     add_webjetup "$1" "target/$1/release/webjetup"
 }
 

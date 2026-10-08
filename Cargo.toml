@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# Patched copies of crates.io crates (vendor/README.md), not ours to lint.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.10.3"
@@ -61,3 +63,10 @@ expect_used = "warn"
 opt-level = 3
 [profile.dev.package.blake2]
 opt-level = 3
+
+# gpui's build scripts pick their steps by the build machine's OS, so the
+# macOS app can't be cross-compiled on Linux with the crates.io versions.
+# These copies decide by the target instead (vendor/README.md).
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
+gpui_media = { path = "vendor/gpui_media" }
