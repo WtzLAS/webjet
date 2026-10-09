@@ -467,7 +467,7 @@ has every crate in `Cargo.lock`: the sparse index of TUNA (a
 MirrorZ endpoint `mirrors.cernet.edu.cn` itself doesn't answer from the
 runner), then USTC, then crates.io. TUNA syncs periodically, so for a few
 hours after a `cargo update` it may lack the newest versions; USTC proxies
-crates.io live but rate-limits (HTTP 429), which is why it isn't first. The
+crates.io live but rate-limits (HTTP 429), which is why it isn't first. Cargo retries each request up to 10 times (`net.retry`), and when no source works the script goes through the list again, up to three times a minute apart: the jobs of a run start together from one address. The
 choice is a source replacement in `$CARGO_HOME/config.toml`, so the later
 steps use it and the crates are already downloaded. `Cargo.lock` still
 names crates.io and cargo checks every crate against its checksum there,

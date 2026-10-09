@@ -35,6 +35,8 @@ begin="# --- cargo-mirror.sh begin"
 end="# --- cargo-mirror.sh end"
 
 # Remove an earlier choice of this script; refuse other replacements.
+# cargo retries a failed request (HTTP 429 from a rate-limited mirror, a
+# connection reset) `net.retry` times with backoff.
 use() {
 	sed "/^$begin\$/,/^$end\$/d" "$config" >"$config.tmp"
 	mv "$config.tmp" "$config"
@@ -43,9 +45,13 @@ use() {
 		cat "$config" >&2
 		exit 1
 	fi
-	[ "$1" = crates.io ] && return
-	cat >>"$config" <<EOF
-$begin
+	{
+		echo "$begin"
+		echo "[net]"
+		echo "retry = 10"
+		if [ "$1" != crates.io ]; then
+			cat <<EOF
+
 [source.crates-io]
 replace-with = "mirror"
 
@@ -54,21 +60,29 @@ registry = "$1"
 
 [registries.mirror]
 index = "$1"
-$end
 EOF
+		fi
+		echo "$end"
+	} >>"$config"
 }
 
+# Several jobs start at once and share the runner's address, so a mirror
+# can rate-limit all of them: go through the list up to three times, a
+# minute apart. A failed fetch keeps what it downloaded.
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
-for url in "$@"; do
-	use "$url"
-	echo "cargo-mirror: trying $url"
-	if cargo fetch --locked >"$log" 2>&1; then
-		echo "cargo-mirror: using $url ($config)"
-		exit 0
-	fi
-	echo "cargo-mirror: $url failed:" >&2
-	grep -v '^ *Downloaded ' "$log" | tail -8 >&2
+for round in 1 2 3; do
+	for url in "$@"; do
+		use "$url"
+		echo "cargo-mirror: trying $url"
+		if cargo fetch --locked >"$log" 2>&1; then
+			echo "cargo-mirror: using $url ($config)"
+			exit 0
+		fi
+		echo "cargo-mirror: $url failed:" >&2
+		grep -v '^ *Downloaded ' "$log" | grep -v '^[[:space:]]*<' | tail -6 >&2
+	done
+	[ $round = 3 ] || sleep 60
 done
 echo "cargo-mirror: no source worked" >&2
 exit 1
