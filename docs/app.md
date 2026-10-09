@@ -237,7 +237,9 @@ either side more room, double-click it to put it back. On the Nodes tab
 that is the line between the graph and the node details, the one between
 the graph and the circuits, and the one between the circuit list and the
 selected circuit; on the other tabs it is the line beside the details
-column (on the Config tab, beside the list of configurations) (on the Merkle tab also the one beside the operation log, on the
+column (on the Config tab, beside the list of configurations) (on the Merkle tab also the one beside the operation log, the one
+below the tree summary and the two between the signed head, the genesis
+and the signing keys, whose panels scroll when made short; on the
 Dashboard the ones beside the hops and the relay load). A pane
 keeps the size you gave it when the window is resized, giving way only
 when the other side would get too small. Sizes last until the app quits.
@@ -273,6 +275,9 @@ wheel zoom),
 the agents' answers captured from `scripts/local-net.sh 4`. Capture it again
 after changing what the agent reports. `nodes_tab_fits` checks the Nodes
 tab's layout at several window sizes and drags its three separators.
+`merkle_separators_move` drags every Merkle separator at several window
+sizes, and `the_node_list_scrolls_alone` checks that the wheel over the
+node finder's list doesn't also scroll the node details around it.
 `circuit_details_do_not_overlap` checks that a selected circuit's details
 (long node names, narrow pane) wrap inside their own rows, and
 `graph_labels_do_not_overlap` that no two node labels in the drawn graph

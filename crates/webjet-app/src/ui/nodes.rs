@@ -906,7 +906,10 @@ impl WebjetApp {
     fn render_node_side(&self, s: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         let filter = self.node_filter.read(cx).text().to_string();
         let shown: Vec<&Node> = s.nodes.iter().filter(|n| n.matches(&filter)).collect();
-        let mut list = scroll("node-list").gap(px(1.)).max_h(px(200.));
+        let mut list = nested_scroll("node-list", &self.node_list_scroll)
+            .debug_selector(|| "node-list".into())
+            .gap(px(1.))
+            .max_h(px(200.));
         for n in &shown {
             let sel = self.selected.as_deref() == Some(n.id.as_str());
             let id = n.id.clone();

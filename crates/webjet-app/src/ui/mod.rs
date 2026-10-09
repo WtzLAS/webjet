@@ -192,6 +192,8 @@ pub struct WebjetApp {
     config: config::ConfigTab,
     /// Sizes of the panes beside the movable separators.
     splits: split::Splits,
+    /// The node finder's list, which scrolls inside the node details.
+    node_list_scroll: gpui::ScrollHandle,
 }
 
 impl WebjetApp {
@@ -277,6 +279,7 @@ impl WebjetApp {
             account: None,
             config: config::ConfigTab::new(cx),
             splits: split::Splits::default(),
+            node_list_scroll: gpui::ScrollHandle::new(),
         };
         // Refresh now and then periodically while the window exists.
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -753,6 +756,21 @@ fn scroll(id: &str) -> gpui::Stateful<gpui::Div> {
         .flex_1()
         .min_h(px(0.))
         .overflow_y_scroll()
+}
+
+/// A scrolling list inside another scrolling column. While the list has
+/// more than it shows, the wheel scrolls only the list, never the column
+/// around it too (GPUI hands the wheel to every scrollable element under
+/// the pointer). A list that shows everything lets the column scroll.
+fn nested_scroll(id: &str, handle: &gpui::ScrollHandle) -> gpui::Stateful<gpui::Div> {
+    let h = handle.clone();
+    scroll(id)
+        .track_scroll(handle)
+        .on_scroll_wheel(move |_, _, cx| {
+            if h.max_offset().height > px(0.) {
+                cx.stop_propagation();
+            }
+        })
 }
 
 /// The color for a link's quality: round-trip time and loss.
@@ -1554,6 +1572,161 @@ mod tests {
         }
         frame(cx);
         assert_eq!(b(cx, "node-side").size.width, px(420.));
+    }
+
+    /// Every separator of the Merkle tab moves, also in a small window
+    /// (where the tree summary used to push the panes below out of sight).
+    #[gpui::test]
+    fn merkle_separators_move(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        view.update(cx, |app, _| {
+            app.loaded(snap.clone());
+            app.signed_in = Some(si);
+            app.tab = Tab::Merkle;
+            app.log = Some(Ok(merkle::sample_log()));
+        });
+        let leaf = view.update(cx, |app, _| match &app.merkle {
+            Some(Ok(m)) => m.leaves[0].path,
+            _ => panic!("the tree is loaded"),
+        });
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        let b = |cx: &mut gpui::VisualTestContext, s: &'static str| {
+            cx.debug_bounds(s).unwrap_or_else(|| panic!("{s} drawn"))
+        };
+        let drag = |cx: &mut gpui::VisualTestContext, handle: &'static str, by: Point<Pixels>| {
+            let at = b(cx, handle).center();
+            cx.simulate_mouse_down(at, gpui::MouseButton::Left, Default::default());
+            for i in 1..=4 {
+                let p = at + point(by.x * (i as f32 / 4.), by.y * (i as f32 / 4.));
+                cx.simulate_mouse_move(p, gpui::MouseButton::Left, Default::default());
+            }
+            cx.simulate_mouse_up(at + by, gpui::MouseButton::Left, Default::default());
+            frame(cx);
+        };
+        // Each one toward shrinking the pane it sizes, which works even
+        // when the window already squeezes the other pane.
+        let handles = [
+            ("split-merkle-summary", point(px(0.), px(-30.))),
+            ("split-merkle-head", point(px(30.), px(0.))),
+            ("split-merkle-keys", point(px(30.), px(0.))),
+            ("split-merkle-ops", point(px(30.), px(0.))),
+            ("split-merkle-detail", point(px(30.), px(0.))),
+        ];
+        for (w, h, sel) in [
+            (1435., 852., 0),
+            (1280., 820., 1),
+            (1100., 760., 2),
+            (1000., 640., 0),
+        ] {
+            view.update(cx, |app, _| {
+                app.leaf = (sel == 1).then_some(leaf);
+                app.op = (sel == 2).then_some(3);
+            });
+            cx.simulate_resize(size(px(w), px(h)));
+            frame(cx);
+            for (handle, by) in handles {
+                let at = b(cx, handle);
+                assert!(
+                    at.size.width > px(0.) && at.size.height > px(0.),
+                    "{w}×{h}: {handle} {at:?} can be grabbed"
+                );
+                assert!(
+                    at.bottom() <= px(h) && at.right() <= px(w),
+                    "{w}×{h}: {handle} {at:?} inside the window"
+                );
+                drag(cx, handle, by);
+                let moved = b(cx, handle).origin - at.origin;
+                assert_eq!(moved, by, "{w}×{h}: {handle} follows the pointer");
+                drag(cx, handle, point(-by.x, -by.y));
+            }
+        }
+    }
+
+    /// The node finder's list scrolls by itself: the wheel over it doesn't
+    /// scroll the node details around it too, unless the list shows
+    /// everything.
+    #[gpui::test]
+    fn the_node_list_scrolls_alone(cx: &mut TestAppContext) {
+        let rt = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            WebjetApp::new(
+                rt,
+                "/nonexistent/control.sock".into(),
+                "/nonexistent".into(),
+                cx,
+            )
+        });
+        let mut snap = fixture();
+        let si = admin(&mut snap);
+        // Enough nodes for the list to scroll.
+        let first = snap.nodes[0].clone();
+        for i in 0..30 {
+            let mut n = first.clone();
+            n.id = format!("{:064x}", i + 1);
+            n.name = format!("extra-{i:02}");
+            snap.nodes.push(n);
+        }
+        let node = snap.nodes.iter().find(|n| n.control).unwrap().id.clone();
+        view.update(cx, |app, _| {
+            app.loaded(snap.clone());
+            app.signed_in = Some(si);
+            app.tab = Tab::Nodes;
+            app.selected = Some(node);
+        });
+        // Short enough for the node details to scroll as well.
+        cx.simulate_resize(size(px(1280.), px(600.)));
+        let frame = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        frame(cx);
+        let wheel = |cx: &mut gpui::VisualTestContext| {
+            let at = cx
+                .debug_bounds("node-list")
+                .expect("node list drawn")
+                .center();
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: at,
+                delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-60.))),
+                ..Default::default()
+            });
+            frame(cx);
+        };
+        let list0 = cx.debug_bounds("node-list").unwrap();
+        wheel(cx);
+        let list_scrolled = view.update(cx, |app, _| app.node_list_scroll.offset().y);
+        assert_eq!(list_scrolled, px(-60.), "the list scrolled");
+        assert_eq!(
+            cx.debug_bounds("node-list").unwrap(),
+            list0,
+            "the details around it stayed put"
+        );
+        // A list that shows everything passes the wheel on.
+        view.update(cx, |app, cx| {
+            app.node_filter
+                .update(cx, |f, cx| f.set_text("extra-00", cx));
+        });
+        frame(cx);
+        let list1 = cx.debug_bounds("node-list").unwrap();
+        wheel(cx);
+        assert_eq!(
+            cx.debug_bounds("node-list").unwrap().origin.y,
+            list1.origin.y - px(60.),
+            "the details scrolled"
+        );
     }
 
     /// The graph as drawn: no two node labels overlap, and every node is

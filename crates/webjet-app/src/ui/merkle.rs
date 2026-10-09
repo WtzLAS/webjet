@@ -33,6 +33,42 @@ const MERKLE_OPS: Split = Split {
     rest_min: 260.0 + split::HANDLE + 240.0,
 };
 
+/// The tree summary (head, genesis, signing keys) above the leaves, the
+/// details and the log.
+const MERKLE_SUMMARY: Split = Split {
+    id: "merkle-summary",
+    axis: Axis::Column,
+    sized_first: true,
+    default: 240.0,
+    min: 100.0,
+    rest_min: 200.0,
+};
+
+/// The signing keys beside the head and the genesis.
+const MERKLE_KEYS: Split = Split {
+    id: "merkle-keys",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 380.0,
+    min: 200.0,
+    rest_min: 260.0 + split::HANDLE + 200.0,
+};
+
+/// The genesis beside the signed tree head.
+const MERKLE_HEAD: Split = Split {
+    id: "merkle-head",
+    axis: Axis::Row,
+    sized_first: false,
+    default: 360.0,
+    min: 200.0,
+    rest_min: 260.0,
+};
+
+/// A panel of the tree summary: scrolls when its pane is too short.
+fn summary_panel(id: &str) -> gpui::Stateful<gpui::Div> {
+    scroll(id).p_3().rounded_md().bg(rgb(theme::PANEL)).gap_1()
+}
+
 fn short_hex(b: &Bytes32) -> String {
     hex::encode(&b[..8])
 }
@@ -135,35 +171,32 @@ impl WebjetApp {
                     .into_any_element();
             }
         };
-        let summary = self.render_tree_summary(&m);
+        let summary = self.render_tree_summary(&m, cx);
         let leaves = self.render_leaves(&m, cx);
         let detail = self.render_merkle_detail(&m, cx);
         let ops = self.render_ops(cx);
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .size_full()
-            .child(summary)
-            .child(
-                self.split(
-                    MERKLE_OPS,
-                    self.split(MERKLE_DETAIL, leaves, detail, cx)
-                        .flex_1()
-                        .min_h(px(0.)),
-                    ops,
-                    cx,
-                )
-                .flex_1()
-                .min_h(px(0.)),
+        let below = self
+            .split(
+                MERKLE_OPS,
+                self.split(MERKLE_DETAIL, leaves, detail, cx)
+                    .flex_1()
+                    .min_h(px(0.)),
+                ops,
+                cx,
             )
+            .flex_1()
+            .min_h(px(0.));
+        self.split(MERKLE_SUMMARY, summary.flex_1().min_h(px(0.)), below, cx)
+            .size_full()
             .into_any_element()
     }
 
-    fn render_tree_summary(&self, m: &Merkle) -> gpui::Div {
+    /// The signed head, genesis and signing keys side by side, each
+    /// scrolling, with movable separators between them.
+    fn render_tree_summary(&self, m: &Merkle, cx: &mut Context<Self>) -> gpui::Div {
         let w = &m.wire;
         let ahead = w.source == "controller";
-        let mut head = panel().flex_1().min_w(px(0.)).child(
+        let mut head = summary_panel("merkle-head").child(
             div()
                 .flex()
                 .gap_2()
@@ -219,9 +252,7 @@ impl WebjetApp {
         ));
 
         let g = &w.genesis;
-        let genesis = panel()
-            .w(px(360.))
-            .flex_shrink_0()
+        let genesis = summary_panel("merkle-genesis")
             .child(heading("Genesis"))
             .child(label_value("Root key", g.root_key.clone()))
             .child(label_value(
@@ -242,10 +273,7 @@ impl WebjetApp {
                 },
             ));
 
-        let mut certs = panel()
-            .w(px(380.))
-            .flex_shrink_0()
-            .child(heading("Controller signing keys"));
+        let mut certs = summary_panel("merkle-certs").child(heading("Controller signing keys"));
         if w.certs.is_empty() {
             certs = certs.child(muted("No certificates known."));
         }
@@ -280,13 +308,8 @@ impl WebjetApp {
                 muted(format!("{} signing key(s) revoked", w.key_tombstones.len())).text_xs(),
             );
         }
-        div()
-            .flex()
-            .gap_3()
-            .flex_shrink_0()
-            .child(head)
-            .child(genesis)
-            .child(certs)
+        let left = self.split(MERKLE_HEAD, head, genesis, cx);
+        self.split(MERKLE_KEYS, left.flex_1().min_h(px(0.)), certs, cx)
     }
 
     /// The bucket map (256 subtrees at depth 8) and the leaf list.
