@@ -145,7 +145,7 @@ OPNsense 24.7+ (x86_64). From 0.11.0 they also include the desktop app
 FreeBSD, as root:
 
 ```sh
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.1/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.2/install.sh | sudo sh
 sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl network node enroll`
 ```
 
@@ -154,7 +154,7 @@ otherwise (Forgejo has no "latest" download link, so the URL names a tag).
 It downloads `webjetup` for the machine, checks it against its `.sha256` and
 runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
-`… | sudo sh -s -- v0.11.1` picks a version.
+`… | sudo sh -s -- v0.11.2` picks a version.
 
 Behind a proxy, `webjetup` (and `webjetctl network node upgrade`) take it
 from the first variable that is set among `https_proxy`, `all_proxy` and
@@ -173,7 +173,7 @@ On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
 release page and, in an Administrator prompt:
 
 ```powershell
-.\webjetup-v0.11.1-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
+.\webjetup-v0.11.2-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
 ```
 
 Then, on any platform:
