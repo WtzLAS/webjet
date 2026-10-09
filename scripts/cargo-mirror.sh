@@ -66,19 +66,40 @@ EOF
 	} >>"$config"
 }
 
+# Whether a source answers at all, in a few seconds: a mirror that blocks
+# the runner (USTC sometimes stops answering instead of sending a 429)
+# would otherwise hold cargo, which waits on a silent connection for
+# minutes per request.
+answers() {
+	case $1 in
+	crates.io) probe=https://index.crates.io/config.json ;;
+	*) probe="${1#sparse+}config.json" ;;
+	esac
+	curl -fsS -o /dev/null --connect-timeout 5 --max-time 10 "$probe"
+}
+
 # Several jobs start at once and share the runner's address, so a mirror
 # can rate-limit all of them: go through the list up to three times, a
-# minute apart. A failed fetch keeps what it downloaded.
+# minute apart. A fetch gets at most $FETCH_TIMEOUT seconds (default 10
+# minutes); a failed one keeps what it downloaded.
+FETCH_TIMEOUT=${FETCH_TIMEOUT:-600}
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 for round in 1 2 3; do
 	for url in "$@"; do
-		use "$url"
 		echo "cargo-mirror: trying $url"
-		if cargo fetch --locked >"$log" 2>&1; then
+		if ! answers "$url" 2>"$log"; then
+			echo "cargo-mirror: $url doesn't answer: $(cat "$log")" >&2
+			continue
+		fi
+		use "$url"
+		if timeout -k 10 "$FETCH_TIMEOUT" cargo fetch --locked >"$log" 2>&1; then
 			echo "cargo-mirror: using $url ($config)"
 			exit 0
+		else
+			rc=$?
 		fi
+		[ $rc = 124 ] && echo "cargo-mirror: $url timed out after ${FETCH_TIMEOUT}s" >&2
 		echo "cargo-mirror: $url failed:" >&2
 		grep -v '^ *Downloaded ' "$log" | grep -v '^[[:space:]]*<' | tail -6 >&2
 	done
