@@ -80,9 +80,10 @@ answers() {
 
 # Several jobs start at once and share the runner's address, so a mirror
 # can rate-limit all of them: go through the list up to three times, a
-# minute apart. A fetch gets at most $FETCH_TIMEOUT seconds (default 10
-# minutes); a failed one keeps what it downloaded.
-FETCH_TIMEOUT=${FETCH_TIMEOUT:-600}
+# minute apart. A fetch gets at most $FETCH_TIMEOUT seconds (default 60:
+# a mirror that stalls costs a minute, not the job); a failed one keeps
+# what it downloaded, so the next attempt continues where it stopped.
+FETCH_TIMEOUT=${FETCH_TIMEOUT:-60}
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 for round in 1 2 3; do
