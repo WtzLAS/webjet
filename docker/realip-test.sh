@@ -14,7 +14,7 @@
 set -eu
 IMG=${IMG:-webjet:test}
 P=wjr
-cleanup() { docker rm -f $P-ctl $P-a $P-b $P-cli >/dev/null 2>&1 || true; docker network rm $P-wan >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f $P-ctl $P-a $P-b $P-cli $P-srv >/dev/null 2>&1 || true; docker network rm $P-wan $P-lan >/dev/null 2>&1 || true; }
 cleanup
 [ "${1:-}" = "clean" ] && exit 0
 # WAN: the test network (WAN_PREFIX.0.0/24), in case 172.30 is taken.
@@ -29,6 +29,11 @@ run $P-ctl ctl-01
 run $P-a node-a
 run $P-b node-b
 docker run -d --name $P-cli --network $P-wan $IMG sh -c 'exec sleep infinity' >/dev/null
+# A game server in a container on node-b, its port published with DNAT
+# (as `docker run -p 27017:27017/udp`), on a network with MTU 1500 > tun MTU.
+docker network create --subnet 10.99.0.0/24 $P-lan >/dev/null
+docker network connect --ip 10.99.0.2 $P-lan $P-b
+docker run -d --name $P-srv --network $P-lan --ip 10.99.0.3 --cap-add NET_ADMIN $IMG sh -c 'exec sleep infinity' >/dev/null
 sleep 1
 x() { c=$1; shift; docker exec $c "$@"; }
 bg() { c=$1; shift; docker exec -d $c sh -c "$* >> /var/log/webjetd.log 2>&1"; }
@@ -64,7 +69,7 @@ id = "a-to-b"
 action = "allow"
 src = ["node:node-a"]
 dst = ["node:node-b"]
-ports = ["icmp", "tcp:8080", "udp:27015", "tcp:8081", "udp:27016"]
+ports = ["icmp", "tcp:8080", "udp:27015", "tcp:8081", "udp:27016", "udp:27017"]
 
 [[seeds]]
 node = "ctl-01"
@@ -109,6 +114,14 @@ protocol = "udp"
 listen_port = 27016
 target = ["node:node-b"]
 target_port = 27016
+
+# To the container behind the DNAT on node-b.
+[[proxy]]
+name = "game-docker"
+protocol = "udp"
+listen_port = 27017
+target = ["node:node-b"]
+target_port = 27017
 EOT'
 W local config --node node-a apply /root/node-a.toml
 A_IP=$(x $P-a hostname -i | tr " " "\n" | grep "^$WAN\." | head -1)
@@ -249,6 +262,46 @@ echo "== 4. flows that kept running move to the client's address"
 long_src "$CLI_IP"
 x $P-cli grep -q "ConnectionResetError" /tmp/client.log || { echo "FAIL: the TCP connection wasn't reset"; x $P-cli cat /tmp/client.log; exit 1; }
 x $P-cli grep -c connected /tmp/client.log | sed 's/^/client connections: /'
+
+echo "== 4b. a server in a container (DNAT) answers big replies"
+# Replies bigger than the tun MTU make node-b send the container ICMP
+# "fragmentation needed"; that must reach it, not go into the tun.
+x $P-srv ip route replace default via 10.99.0.2
+x $P-b iptables -t nat -A PREROUTING -i webjet0 -p udp --dport 27017 -j DNAT --to-destination 10.99.0.3:27017
+docker exec -i $P-srv sh -c 'cat > /tmp/dsrv.py' <<'EOT'
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("0.0.0.0", 27017))
+log = open("/tmp/dsrv.log", "a", buffering=1)
+while True:
+    d, a = s.recvfrom(65535)
+    n = int(d.split(b" ")[1])
+    log.write("%s\n" % a[0])
+    s.sendto(d[:16].ljust(n, b"r"), a)
+EOT
+docker exec -d $P-srv python3 /tmp/dsrv.py
+docker exec -i $P-cli sh -c 'cat > /tmp/dcli.py' <<'EOT'
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("0.0.0.0", 27007))
+s.settimeout(1)
+lost = 0
+for rnd in range(5):
+    for n in (100, 1200, 1400, 3000):
+        s.sendto(b"%05d %d" % (rnd, n), (sys.argv[1], 27017))
+        try:
+            if len(s.recv(65535)) != n:
+                lost += 1
+        except socket.timeout:
+            lost += 1
+# The first big reply may be lost while the server learns the path MTU.
+print("lost replies:", lost)
+sys.exit(lost > 2)
+EOT
+sleep 0.5
+x $P-cli python3 /tmp/dcli.py "$A_IP" || { echo "FAIL: replies from the container are lost"; x $P-b iptables -t mangle -S; x $P-srv ip route get "$CLI_IP"; diag; exit 1; }
+s=$(x $P-srv sort -u /tmp/dsrv.log); echo "container sees: $s"
+[ "$s" = "$CLI_IP" ] || { echo "FAIL: the container sees '$s', not $CLI_IP"; exit 1; }
 
 echo "== 5. accept_real_ip off again: back to node-a's address"
 x $P-b sh -c 'sed -i "/^\[proxy\]/,\$d" "$WEBJET_CONFIG"'

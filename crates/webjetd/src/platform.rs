@@ -584,6 +584,11 @@ pub fn proxy_real_ip(tun: &str, pool: &[IpNet]) -> bool {
             REAL_IP_IN,
             &args(&["-j", "CONNMARK", "--set-xmark", REAL_IP_MARK]),
         );
+        // Only the reply direction: packets towards the server (the ICMP
+        // "fragmentation needed" this host sends a container whose reply is
+        // too big for the tun interface, related to the connection) must
+        // take the normal route, or the server never learns the path MTU
+        // and every full-size reply is lost.
         ok &= ipt_run(
             bin,
             "mangle",
@@ -594,6 +599,10 @@ pub fn proxy_real_ip(tun: &str, pool: &[IpNet]) -> bool {
                 "connmark",
                 "--mark",
                 REAL_IP_MARK,
+                "-m",
+                "conntrack",
+                "--ctdir",
+                "REPLY",
                 "-j",
                 "MARK",
                 "--set-xmark",
