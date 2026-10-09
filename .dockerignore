@@ -1,5 +1,7 @@
 # Keep the build context small: only sources go into the image build.
 target
+target-*
+dist
 .git
 .pi
 **/*.swp

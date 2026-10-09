@@ -86,6 +86,9 @@ pub struct Proxy {
     reply_routes: Mutex<HashSet<Flow>>,
     /// Adding such a route failed once (warned).
     reply_route_failed: AtomicBool,
+    /// TCP resets for segments of flows no table knows (either end
+    /// restarted, or a flow was closed): rate limit.
+    reset_bucket: Mutex<packet::Bucket>,
     counters: Mutex<BTreeMap<(Role, String, Bytes32), Counters>>,
 }
 
@@ -156,6 +159,7 @@ impl Proxy {
             cleaned: AtomicBool::new(false),
             reply_routes: Mutex::new(HashSet::new()),
             reply_route_failed: AtomicBool::new(false),
+            reset_bucket: Mutex::new(packet::Bucket::new(100.0, 200.0)),
             counters: Mutex::new(BTreeMap::new()),
         }
     }
@@ -166,6 +170,26 @@ impl Proxy {
             .lock()
             .entry((role, rule.to_string(), owner))
             .or_default());
+    }
+
+    /// A TCP reset for `p`, a segment of a flow no table here knows
+    /// (`None`: not one to answer — not TCP, a reset itself, a SYN that may
+    /// open a flow, over the rate limit). Either end of a proxy flow may
+    /// have restarted or closed the flow (its rule, the policy or the
+    /// target's real-address support changed); the reset makes both ends
+    /// drop their connection, and the client opens a new one.
+    fn reset_for(&self, p: &[u8], parsed: &Parsed, reply: bool) -> Option<Vec<u8>> {
+        if parsed.flow.proto != PROTO_TCP
+            || parsed.icmp.is_some()
+            || parsed.tcp_flags & tcpf::RST != 0
+            || parsed.tcp_flags & (tcpf::SYN | tcpf::ACK) == tcpf::SYN
+        {
+            return None;
+        }
+        if !self.reset_bucket.lock().take() {
+            return None;
+        }
+        packet::tcp_reset(p, reply)
     }
 
     /// A packet from the tun interface to the proxy address with a foreign
@@ -298,8 +322,14 @@ impl Proxy {
             .map(|r| r.rule.clone())
             .find(|r| r.proto == client.proto && r.listen_port == client.dport);
         let Some(rule) = rule else { return };
-        // Only flow starts open a flow (TCP: a SYN).
+        // Only flow starts open a flow (TCP: a SYN). Any other segment
+        // belongs to a connection this node no longer tracks (it restarted,
+        // or closed the flow): reset it, so the client opens a new one.
         if client.proto == PROTO_TCP && parsed.tcp_flags & (tcpf::SYN | tcpf::ACK) != tcpf::SYN {
+            if let Some(r) = self.reset_for(&p, &parsed, true) {
+                tracing::debug!(rule = %rule.name, "reverse proxy: reset {}: no such flow", client.src);
+                dp.write_tun_raw(r);
+            }
             return;
         }
         let refuse = |why: &str| {
@@ -543,6 +573,21 @@ impl Proxy {
         now: Instant,
     ) {
         let flow = parsed.flow;
+        let v = self.table.lock().ct.classify(peer, &parsed, false, now);
+        if v == Ct::Invalid {
+            // A TCP segment of a connection we don't track: this node
+            // restarted or closed the flow, or the peer did (a reply to an
+            // ingress that forgot it). Reset it at the peer's end.
+            if let Some(r) = self.reset_for(&p, &parsed, true) {
+                tracing::debug!(
+                    "reverse proxy: reset {} from {}: no such flow",
+                    endpoint(&flow.dst, flow.dport),
+                    n.name_of(peer)
+                );
+                send(n, peer, &r);
+            }
+            return;
+        }
         let mine = dp.is_mine(&flow.dst);
         let gw = if mine {
             None
@@ -552,7 +597,6 @@ impl Proxy {
                 None => return,
             }
         };
-        let v = self.table.lock().ct.classify(peer, &parsed, false, now);
         let mut reply_route = false;
         let rule = match v {
             Ct::Invalid => return,
@@ -1081,9 +1125,29 @@ impl Proxy {
         }
     }
 
-    /// Close flows whose rule is gone or whose policy no longer allows them.
+    /// Close flows whose rule is gone, whose policy no longer allows them,
+    /// or whose source no longer matches what their target accepts: a
+    /// target that turned `accept_real_ip` on (or off, or restarted
+    /// without it) gets new flows with the source it takes now. The
+    /// client's next datagram opens a new flow; its next TCP segment gets
+    /// a reset ([`Proxy::reset_for`]), and it reconnects.
     fn reevaluate(&self, n: &Arc<Node>) {
         let mine: Vec<Rule> = self.rules.read().iter().map(|r| r.rule.clone()).collect();
+        // Per target node: does it take real client addresses (`None`: its
+        // record isn't known, keep its flows as they are).
+        let takes_real: BTreeMap<Bytes32, bool> = n
+            .records
+            .lock()
+            .endpoints
+            .iter()
+            .map(|(id, (r, _))| {
+                let real = r
+                    .features
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(|x| x == FEATURE_REAL_IP));
+                (*id, real)
+            })
+            .collect();
         let s = n.store.read();
         let v = s.view();
         let Some(me) = v.nodes.get(&n.me).map(|x| v.subject(x)) else {
@@ -1111,7 +1175,16 @@ impl Proxy {
                         Some(t) => Dest::Node(t),
                         None => Dest::Addr(f.dst),
                     };
+                    // The source the flow has (client's, or translated)
+                    // and the one a new flow would get (as `choose`).
+                    let real = info.client.is_some_and(|c| c.src == f.src);
+                    let is_node = target.is_some_and(|t| t.id == k.peer);
+                    let source_ok = match takes_real.get(&k.peer) {
+                        Some(takes) => real == (r.real_ip && is_node && *takes),
+                        None => true,
+                    };
                     still
+                        && source_ok
                         && v.policy.evaluate(&me, dest, f.proto, f.dport).decision
                             == Decision::Allow
                 }
@@ -1142,7 +1215,9 @@ impl Proxy {
             }
         });
         if closed > 0 {
-            tracing::info!("reverse proxy: closed {closed} flows after a rule or policy change");
+            tracing::info!(
+                "reverse proxy: closed {closed} flows after a rule, policy or target change"
+            );
         }
     }
 
@@ -1502,9 +1577,20 @@ mod tests {
         dp.outbound(tcp4(CLIENT, pa, 5555, 8080, tcpf::SYN));
         assert!(n.e2e.queued_for_test(&web).is_empty());
         assert_eq!(counters(&dp.proxy).refused, 1);
-        // Only a SYN starts a flow.
+        // Only a SYN starts a flow; another segment gets a reset.
         dp.outbound(tcp4(CLIENT, pa, 5556, 8080, tcpf::ACK));
         assert_eq!(counters(&dp.proxy).refused, 1);
+        let rst: Vec<_> = drain(&mut tun)
+            .iter()
+            .map(|p| packet::parse(p).unwrap())
+            .filter(|p| p.icmp.is_none())
+            .collect();
+        assert_eq!(rst.len(), 1);
+        assert_eq!(rst[0].tcp_flags, tcpf::RST);
+        assert_eq!(
+            (rst[0].flow.dst, rst[0].flow.dport),
+            (IpAddr::from(CLIENT), 5556)
+        );
         // A source address that only an overlay node could have.
         let spoofed = tcp4([10, 7, 0, 9], pa, 5557, 8080, tcpf::SYN);
         assert!(dp.proxy.is_capture(&dp, &packet::parse(&spoofed).unwrap()));
@@ -1635,6 +1721,128 @@ mod tests {
         let s = status(&n);
         let w = s["rules"][0]["warnings"][0].as_str().unwrap();
         assert!(w.contains("no node or gateway has 192.0.2.80"), "{w}");
+    }
+
+    fn set_features(n: &Node, id: Bytes32, features: &[&str]) {
+        let r = wp::EndpointRecord {
+            node_id: Some(crypto::k32(&id)),
+            features: Some(features.iter().map(|f| f.to_string()).collect()),
+            ..Default::default()
+        };
+        n.records.lock().endpoints.insert(id, (r, Vec::new()));
+    }
+
+    /// The last frame queued for `peer`, parsed.
+    fn last_sent(n: &Node, peer: &Bytes32) -> Parsed {
+        let q = n.e2e.queued_for_test(peer);
+        packet::parse(&q.last().expect("a frame").1).unwrap()
+    }
+
+    /// A target that turns `accept_real_ip` on (restarting its agent) gets
+    /// the clients' addresses on flows that were already running: the
+    /// ingress closes their translated flows, the client's next datagram
+    /// opens a new flow, its next TCP segment gets a reset. Turned off
+    /// again, the flows go back to translated sources.
+    #[tokio::test]
+    async fn ingress_closes_flows_when_the_target_changes_real_ip() {
+        use webjet_core::testutil::packets::udp4;
+        let mut t = net();
+        t.c.set_policy(policy(vec![
+            allow("web", "tag:ingress", "tag:web", "tcp:80"),
+            allow("game", "tag:ingress", "tag:web", "udp:27015"),
+        ]))
+        .unwrap();
+        t.c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&t.ing.0)),
+            proxy: Some(vec![
+                wp::ProxyRule {
+                    real_ip: true,
+                    ..web_rule()
+                },
+                wp::ProxyRule {
+                    name: Some("game".into()),
+                    protocol: PROTO_UDP,
+                    listen_port: 27015,
+                    target_port: 27015,
+                    real_ip: true,
+                    ..web_rule()
+                },
+            ]),
+            ..Default::default()
+        })
+        .unwrap();
+        let web = t.web.0;
+        let ing = t.ing.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &ing, web, &[FEATURE]);
+        let pa = proxy_addr(&dp);
+        let datagram = |b: &[u8]| udp4(CLIENT, pa, 5555, 27015, b);
+
+        // The target doesn't take real addresses: both flows translated.
+        dp.outbound(datagram(b"1"));
+        assert_eq!(last_sent(&n, &web).flow.src, IpAddr::from(ING));
+        dp.outbound(tcp4(CLIENT, pa, 6666, 8080, tcpf::SYN));
+        assert_eq!(last_sent(&n, &web).flow.src, IpAddr::from(ING));
+        dp.proxy.refresh(&n, &dp);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 2, "nothing changed");
+
+        // It restarts with accept_real_ip: its record says so.
+        set_features(&n, web, &[FEATURE, FEATURE_REAL_IP]);
+        dp.proxy.refresh(&n, &dp);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 0, "both flows closed");
+        dp.outbound(datagram(b"2"));
+        let f = last_sent(&n, &web).flow;
+        assert_eq!((f.src, f.sport), (IpAddr::from(CLIENT), 5555));
+        // The TCP connection is gone: the client gets a reset from the
+        // proxy address (the kernel un-DNATs it), the target nothing.
+        let sent = n.e2e.queued_for_test(&web).len();
+        dp.outbound(tcp4(CLIENT, pa, 6666, 8080, tcpf::ACK));
+        assert_eq!(n.e2e.queued_for_test(&web).len(), sent);
+        let out = drain(&mut tun);
+        assert_eq!(out.len(), 1);
+        let rst = packet::parse(&out[0]).unwrap();
+        assert_eq!(rst.tcp_flags & tcpf::RST, tcpf::RST);
+        assert_eq!((rst.flow.src, rst.flow.sport), (IpAddr::from(pa), 8080));
+        assert_eq!((rst.flow.dst, rst.flow.dport), (IpAddr::from(CLIENT), 6666));
+        // It reconnects with the real address.
+        dp.outbound(tcp4(CLIENT, pa, 6667, 8080, tcpf::SYN));
+        assert_eq!(last_sent(&n, &web).flow.src, IpAddr::from(CLIENT));
+        dp.proxy.refresh(&n, &dp);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 2, "the new flows stay");
+
+        // Turned off again: back to translated sources.
+        set_features(&n, web, &[FEATURE]);
+        dp.proxy.refresh(&n, &dp);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 0);
+        dp.outbound(datagram(b"3"));
+        assert_eq!(last_sent(&n, &web).flow.src, IpAddr::from(ING));
+
+        // A target whose record isn't known keeps its flows.
+        n.records.lock().endpoints.remove(&web);
+        dp.proxy.refresh(&n, &dp);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 1);
+    }
+
+    /// A TCP segment of a flow the target doesn't track (it restarted, or
+    /// the ingress kept a flow it closed) gets a reset back to the ingress,
+    /// which passes it to the client.
+    #[tokio::test]
+    async fn target_resets_segments_of_unknown_flows() {
+        let mut t = net();
+        let ing = t.ing.0;
+        let web = t.web.clone();
+        let (n, dp, mut tun, _d) = agent(&mut t, &web, ing, &[FEATURE]);
+        dp.proxy
+            .from_peer(&n, &dp, &ing, tcp4(ING, WEB, 40000, 80, tcpf::ACK));
+        assert!(drain(&mut tun).is_empty(), "not written to the tun");
+        let rst = last_sent(&n, &ing);
+        assert_eq!(rst.tcp_flags, tcpf::RST);
+        assert_eq!((rst.flow.src, rst.flow.sport), (IpAddr::from(WEB), 80));
+        assert_eq!((rst.flow.dst, rst.flow.dport), (IpAddr::from(ING), 40000));
+        // Resets aren't answered.
+        dp.proxy
+            .from_peer(&n, &dp, &ing, tcp4(ING, WEB, 40000, 80, tcpf::RST));
+        assert_eq!(n.e2e.queued_for_test(&ing).len(), 1);
+        assert_eq!(dp.proxy.table.lock().ct.len(), 0);
     }
 
     #[test]

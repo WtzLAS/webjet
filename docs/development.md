@@ -363,6 +363,7 @@ few seconds; nothing needs root, a network or Docker.
 | `scripts/soak-test.sh [s]` | nothing | Runs the local network past the e2e re-key interval (120 s) and checks every agent still answers. Catches timer-driven deadlocks. |
 | `cargo test -p webjet-app --test live` | `scripts/local-net.sh 2` | The app's sign-in and operations against a live network (admin vs. normal account), and the data behind its tabs. Skipped without a network. |
 | `docker/e2e.sh` | Docker, image `webjet:test` | Real tun interfaces: kernel ping, magic DNS, policy, subnet gateway. |
+| `docker/realip-test.sh` | Docker, image `webjet:test` | Reverse proxy real client addresses (architecture §11.11): a target without `accept_real_ip` sees the ingress, then turns it on and restarts its agent; new TCP/UDP flows and flows that kept running (UDP moves, TCP is reset and reconnects) get the client's address; turned off again, back to the ingress. `WAN_PREFIX=10.88` if 172.30.0.0/24 is taken. |
 | `docker/multicast-test.sh` | Docker, image `webjet:test` | Broadcast and multicast on five nodes (architecture §9.5.1): Bedrock-style discovery pings with unicast pongs, the pool broadcast, IGMP membership, the echo guard, the per-node budget and its alarm, turning it off per node. `docker/mcast.py` sends and counts datagrams. |
 | `docker/capture-test.sh` | Docker, image `webjet:test`; Go (or the `golang` image) builds `docker/raknet-lan` | Capture (architecture §9.5.2) on four nodes: Bedrock clients broadcasting from `0.0.0.0` out of eth0, as the real game does. No world found without capture; with `[multicast] capture` every world found within seconds and RakNet play works; a node's `capture = []` override; a datagram sent both ways carried once. About 3 minutes. |
 | `docker/mdns-test.sh` | Docker, image `webjet:test` (adds Avahi, nss-mdns and D-Bus as `webjet:mdns`) | mDNS/DNS-SD on five nodes with Avahi on the tun interface, IPv4 and IPv6 pools: service browsing, `.local` names, ping and connect, policy keeping a node out, a node that hasn't joined 224.0.0.251 receiving nothing, goodbyes, steady-state bandwidth. About 3 minutes. |
@@ -380,7 +381,7 @@ Notes:
   `/tmp/webjet-local/keys`. Query a node with
   `target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local status`.
 - macOS has no `timeout`; use `perl -e 'alarm shift; exec @ARGV' 5 <cmd>`.
-- `docker/e2e.sh`, `docker/multicast-test.sh`, `docker/nat-test.sh` and `docker/load-test.sh` use the `test` image: `docker build --target test -t webjet:test .`
+- `docker/e2e.sh`, `docker/realip-test.sh`, `docker/multicast-test.sh`, `docker/nat-test.sh` and `docker/load-test.sh` use the `test` image: `docker build --target test -t webjet:test .`
 - `docker/tpm-test.sh` sets `TPM2TOOLS_TCTI` to the software TPM and runs
   the TPM unit test with `WEBJET_TEST_TPM=1`. Without a kernel resource
   manager, every TPM operation must flush transient objects or the TPM runs

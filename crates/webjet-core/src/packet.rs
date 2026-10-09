@@ -703,6 +703,79 @@ pub fn icmp_unreachable(orig: &[u8], why: Unreach) -> Option<Vec<u8>> {
     }
 }
 
+/// Build a TCP reset for `orig`, a TCP segment of a connection the caller
+/// doesn't know (RFC 9293 3.10.7.1, a closed connection). `reply`: the
+/// reset goes back to `orig`'s sender (sequence numbers it accepts);
+/// otherwise it goes on to `orig`'s receiver, as if the sender reset
+/// (sequence number = `orig`'s, which the receiver expects next).
+/// `None` for resets, non-TCP packets, fragments and non-unicast addresses.
+pub fn tcp_reset(orig: &[u8], reply: bool) -> Option<Vec<u8>> {
+    let parsed = parse(orig)?;
+    if parsed.flow.proto != PROTO_TCP
+        || parsed.fragment != Fragment::Whole
+        || parsed.tcp_flags & tcpf::RST != 0
+        || !is_unicast(&parsed.flow.src)
+        || !is_unicast(&parsed.flow.dst)
+    {
+        return None;
+    }
+    let off = parsed.l4_offset;
+    let l4 = orig.get(off..)?;
+    let seq = crate::bytes::be_u32(l4, 4)?;
+    let ack = crate::bytes::be_u32(l4, 8)?;
+    let hlen = ((l4[12] >> 4) as usize) * 4;
+    let total = if version(orig) == Some(4) {
+        u16::from_be_bytes([orig[2], orig[3]]) as usize
+    } else {
+        40 + u16::from_be_bytes([orig[4], orig[5]]) as usize
+    };
+    let data = total.min(orig.len()).saturating_sub(off + hlen) as u32;
+    let f = parsed.flow;
+    // (source, destination, flags, sequence, acknowledgment)
+    let (src, dst, sport, dport, flags, s, a) = if !reply {
+        (f.src, f.dst, f.sport, f.dport, tcpf::RST, seq, 0)
+    } else if parsed.tcp_flags & tcpf::ACK != 0 {
+        (f.dst, f.src, f.dport, f.sport, tcpf::RST, ack, 0)
+    } else {
+        let len = data
+            + u32::from(parsed.tcp_flags & tcpf::SYN != 0)
+            + u32::from(parsed.tcp_flags & tcpf::FIN != 0);
+        (
+            f.dst,
+            f.src,
+            f.dport,
+            f.sport,
+            tcpf::RST | tcpf::ACK,
+            0,
+            seq.wrapping_add(len),
+        )
+    };
+    let mut tcp = Vec::with_capacity(20);
+    tcp.extend_from_slice(&sport.to_be_bytes());
+    tcp.extend_from_slice(&dport.to_be_bytes());
+    tcp.extend_from_slice(&s.to_be_bytes());
+    tcp.extend_from_slice(&a.to_be_bytes());
+    tcp.extend_from_slice(&[0x50, flags, 0, 0, 0, 0, 0, 0]);
+    let mut p = match (src, dst) {
+        (IpAddr::V4(s), IpAddr::V4(d)) => {
+            let mut h = vec![0x45, 0, 0, 40, 0, 0, 0x40, 0, 64, PROTO_TCP, 0, 0];
+            h.extend_from_slice(&s.octets());
+            h.extend_from_slice(&d.octets());
+            h
+        }
+        (IpAddr::V6(s), IpAddr::V6(d)) => {
+            let mut h = vec![0x60, 0, 0, 0, 0, 20, PROTO_TCP, 64];
+            h.extend_from_slice(&s.octets());
+            h.extend_from_slice(&d.octets());
+            h
+        }
+        _ => return None,
+    };
+    p.extend_from_slice(&tcp);
+    fix_checksums(&mut p);
+    Some(p)
+}
+
 /// Simple token bucket for rate-limiting ICMP replies and logs.
 #[derive(Clone, Debug)]
 pub struct Bucket {
@@ -805,6 +878,70 @@ pub fn echo_reply(req: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn tcp_resets() {
+        use crate::testutil::packets::{tcp4, udp4};
+        let valid = |p: &[u8]| {
+            let mut f = p.to_vec();
+            fix_checksums(&mut f);
+            assert_eq!(p, &f[..], "checksums");
+        };
+        let fields = |p: &[u8]| {
+            let x = parse(p).unwrap();
+            let l4 = &p[x.l4_offset..];
+            (
+                x.flow,
+                x.tcp_flags,
+                crate::bytes::be_u32(l4, 4).unwrap(),
+                crate::bytes::be_u32(l4, 8).unwrap(),
+            )
+        };
+        let (a, b) = ([10, 0, 0, 1], [10, 0, 0, 2]);
+        // A SYN (seq 1) gets RST|ACK acknowledging it.
+        let r = tcp_reset(&tcp4(a, b, 5000, 80, tcpf::SYN), true).unwrap();
+        valid(&r);
+        let (f, flags, seq, ack) = fields(&r);
+        assert_eq!(
+            (f.src, f.sport, f.dst, f.dport),
+            (b.into(), 80, a.into(), 5000)
+        );
+        assert_eq!((flags, seq, ack), (tcpf::RST | tcpf::ACK, 0, 2));
+        // A segment with ACK (ack 0): RST with seq = its ack.
+        let mut seg = tcp4(a, b, 5000, 80, tcpf::ACK);
+        seg[28..32].copy_from_slice(&77u32.to_be_bytes());
+        fix_checksums(&mut seg);
+        let (_, flags, seq, _) = fields(&tcp_reset(&seg, true).unwrap());
+        assert_eq!((flags, seq), (tcpf::RST, 77));
+        // Onwards: from the sender, its sequence number.
+        let r = tcp_reset(&seg, false).unwrap();
+        valid(&r);
+        let (f, flags, seq, _) = fields(&r);
+        assert_eq!(
+            (f.src, f.sport, f.dst, f.dport),
+            (a.into(), 5000, b.into(), 80)
+        );
+        assert_eq!((flags, seq), (tcpf::RST, 1));
+        // IPv6.
+        let mut v6 = Vec::new();
+        let (s6, d6): (Ipv6Addr, Ipv6Addr) =
+            ("fd00::1".parse().unwrap(), "fd00::2".parse().unwrap());
+        v6.extend_from_slice(&[0x60, 0, 0, 0, 0, 20, PROTO_TCP, 64]);
+        v6.extend_from_slice(&s6.octets());
+        v6.extend_from_slice(&d6.octets());
+        v6.extend_from_slice(&tcp4(a, b, 5000, 80, tcpf::ACK)[20..]);
+        fix_checksums(&mut v6);
+        let r = tcp_reset(&v6, true).unwrap();
+        valid(&r);
+        assert_eq!(fields(&r).0.dst, IpAddr::V6(s6));
+        // Never for resets, other protocols, fragments.
+        assert!(tcp_reset(&tcp4(a, b, 5000, 80, tcpf::RST), true).is_none());
+        assert!(tcp_reset(&udp4(a, b, 5000, 80, b"x"), true).is_none());
+        let mut first = tcp4(a, b, 5000, 80, tcpf::ACK);
+        first[6] = 0x20;
+        fix_checksums(&mut first);
+        assert!(tcp_reset(&first, true).is_none());
+    }
 
     #[test]
     fn oversized_echo_is_not_built() {

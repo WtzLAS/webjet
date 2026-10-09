@@ -858,6 +858,11 @@ real_ip = false                        # targets see the ingress's overlay addre
   address instead, and the rule shows a warning. With `real_ip = false` all
   targets see the ingress's overlay address. The ingress then uses source
   ports 61000 to 65535.
+- **Changing `accept_real_ip`.** After a target's agent restarts with
+  `accept_real_ip` turned on or off, the ingress closes the flows whose
+  source no longer fits, within about 10 seconds. A UDP client's next
+  datagram starts a new flow with the right source; open TCP connections
+  are reset, and clients reconnect.
 - **Not from the ingress itself.** The ingress doesn't capture connections
   that its own host makes to `listen_port`; test from another machine.
 - **Watching it.** `webjetctl local proxy` on the ingress shows each rule's

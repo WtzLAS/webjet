@@ -5,7 +5,8 @@
 set -eu
 NAME=$1; GW=${2:-}
 CONF=${WEBJET_CONFIG:-/etc/webjet/webjetd.toml}
-IP=$(hostname -i | tr " " "\n" | grep "^172\.30\." | head -1)
+# WAN_PREFIX: the test network's first two octets (default 172.30).
+IP=$(hostname -i | tr " " "\n" | grep "^$(echo "${WAN_PREFIX:-172.30}" | sed 's/\./\\./g')\." | head -1)
 mkdir -p /var/lib/webjet "$(dirname "$CONF")"
 cat > "$CONF" <<EOT
 data_dir = "/var/lib/webjet"
