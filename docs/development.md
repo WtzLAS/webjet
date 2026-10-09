@@ -459,13 +459,21 @@ label `ubuntu-latest`), with every job in the builder image
 | `fuzz.yml` | manually only (Run workflow) | Installs nightly Rust and cargo-fuzz, builds the targets, then runs `scripts/fuzz.sh` for 30 minutes in total, split evenly over the targets (input `minutes`); findings are uploaded as an artifact. |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for every target: Linux x86_64 natively; Linux arm64, Windows x86_64, FreeBSD x86_64 and macOS arm64 and x86_64 cross-compiled |
 
-Every job of `ci.yml` and `release.yml` first runs `scripts/cargo-mirror.sh`,
-which makes cargo fetch crates from the USTC mirror
-(`sparse+https://mirrors.ustc.edu.cn/crates.io-index/`, a source
-replacement in `$CARGO_HOME/config.toml`): the runners are in China, where
-crates.io is slow. `Cargo.lock` still names crates.io and cargo checks every
-crate against its checksum there, so `--locked` and cargo-deny's source
-check work as before. Another sparse index: `scripts/cargo-mirror.sh <URL>`.
+Every job of `ci.yml` and `release.yml` first runs `scripts/cargo-mirror.sh`:
+the runners are in China, where crates.io is slow. It tries one
+`cargo fetch --locked` from each source in turn and keeps the first that
+has every crate in `Cargo.lock`: the sparse index of TUNA (a
+[MirrorZ](https://help.mirrors.cernet.edu.cn/crates.io-index/) member; the
+MirrorZ endpoint `mirrors.cernet.edu.cn` itself doesn't answer from the
+runner), then USTC, then crates.io. TUNA syncs periodically, so for a few
+hours after a `cargo update` it may lack the newest versions; USTC proxies
+crates.io live but rate-limits (HTTP 429), which is why it isn't first. The
+choice is a source replacement in `$CARGO_HOME/config.toml`, so the later
+steps use it and the crates are already downloaded. `Cargo.lock` still
+names crates.io and cargo checks every crate against its checksum there,
+so `--locked` and cargo-deny's source check work as before. Other sources:
+`scripts/cargo-mirror.sh <URL>...` (`crates.io` for none). The runner's job
+environment (`runner-config.yml`) lists the mirrors in `NO_PROXY`.
 `fuzz.yml` doesn't use the mirror.
 
 The builder image is Debian 11 (glibc 2.31, so the Linux binaries run on
