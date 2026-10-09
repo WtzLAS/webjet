@@ -2,9 +2,9 @@
 # Install Webjet: downloads webjetup (the installation manager) for this
 # machine, checks it and runs `webjetup install`.
 #
-#   curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.3/install.sh | sudo sh
+#   curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.4/install.sh | sudo sh
 #   curl -fsSL …/install.sh | sudo sh -s -- --enroll 'wj1:…'     # install and enroll
-#   curl -fsSL …/install.sh | sudo sh -s -- v0.11.3               # a specific version
+#   curl -fsSL …/install.sh | sudo sh -s -- v0.11.4               # a specific version
 #
 # Every argument is passed to `webjetup install`. Environment:
 #   WEBJET_REPO     repository to install from (default below)
