@@ -7,6 +7,8 @@
 # repository webj8-internal/webjet-builder, pulled with the secrets
 # BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app (GPUI)
 # is checked for every target, through the patched gpui in vendor/.
+#
+# Crates come from the USTC crates.io mirror (scripts/cargo-mirror.sh).
 name: ci
 
 on:
@@ -32,6 +34,8 @@ jobs:
         password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - name: crates.io mirror (USTC)
+        run: scripts/cargo-mirror.sh
       - name: cargo fmt
         run: cargo fmt --all --check
       - name: clippy (Linux)
@@ -69,6 +73,8 @@ jobs:
         password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - name: crates.io mirror (USTC)
+        run: scripts/cargo-mirror.sh
       # deny.toml; installs a pinned cargo-deny if the image has none.
       - name: cargo deny
         run: scripts/deny.sh
@@ -82,6 +88,8 @@ jobs:
         password: ${{ secrets.BUILDER_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - name: crates.io mirror (USTC)
+        run: scripts/cargo-mirror.sh
       - name: cargo test
         run: cargo test --locked --workspace
       # Every fuzz target on its seeds and random mutations, on stable

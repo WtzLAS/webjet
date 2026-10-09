@@ -459,6 +459,15 @@ label `ubuntu-latest`), with every job in the builder image
 | `fuzz.yml` | manually only (Run workflow) | Installs nightly Rust and cargo-fuzz, builds the targets, then runs `scripts/fuzz.sh` for 30 minutes in total, split evenly over the targets (input `minutes`); findings are uploaded as an artifact. |
 | `release.yml` | a pushed `v*` tag | tests, then `scripts/release.sh <tag> --publish` for every target: Linux x86_64 natively; Linux arm64, Windows x86_64, FreeBSD x86_64 and macOS arm64 and x86_64 cross-compiled |
 
+Every job of `ci.yml` and `release.yml` first runs `scripts/cargo-mirror.sh`,
+which makes cargo fetch crates from the USTC mirror
+(`sparse+https://mirrors.ustc.edu.cn/crates.io-index/`, a source
+replacement in `$CARGO_HOME/config.toml`): the runners are in China, where
+crates.io is slow. `Cargo.lock` still names crates.io and cargo checks every
+crate against its checksum there, so `--locked` and cargo-deny's source
+check work as before. Another sparse index: `scripts/cargo-mirror.sh <URL>`.
+`fuzz.yml` doesn't use the mirror.
+
 The builder image is Debian 11 (glibc 2.31, so the Linux binaries run on
 Debian 11+, Ubuntu 20.04+, RHEL 9+) with Rust, the aarch64 cross toolchain,
 LLVM 20 (libclang for bindgen, `clang-cl`/`lld-link` for Windows, Clang and
