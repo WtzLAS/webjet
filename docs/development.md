@@ -366,7 +366,7 @@ few seconds; nothing needs root, a network or Docker.
 | `docker/mdns-test.sh` | Docker, image `webjet:test` (adds Avahi, nss-mdns and D-Bus as `webjet:mdns`) | mDNS/DNS-SD on five nodes with Avahi on the tun interface, IPv4 and IPv6 pools: service browsing, `.local` names, ping and connect, policy keeping a node out, a node that hasn't joined 224.0.0.251 receiving nothing, goodbyes, steady-state bandwidth. About 3 minutes. |
 | `docker/raknet-storm-test.sh` | Docker, image `webjet:test`; Go (or the `golang` image) builds `docker/raknet-lan` | Minecraft Bedrock LAN discovery on five nodes with real RakNet (go-raknet): every world seen, 20 RakNet connections, and whether it storms: aggressive clients, naive LAN bridges rebroadcasting every ping (exact and changed). Measures wire bandwidth against an idle baseline. About 5 minutes. |
 | `docker/nat-test.sh` | Docker, image `webjet:test` | Hole punching through two NAT routers (`MODE=symmetric` for a symmetric NAT), a public node without NAT, a fake `wg0` VPN that must not be used as a direct path, and loopback pings. |
-| `docker/load-test.sh` | Docker, image `webjet:test` | Path stability under load: two data nodes behind shaped access links (netem), two relays. A bulk transfer must keep its circuit (at most one path switch), the busy circuit's probes pause, the idle one keeps being probed (§11.2, §11.4). `SECS=`, `RATE=`, `DELAY=` adjust it. |
+| `docker/load-test.sh` | Docker, image `webjet:test` | Path stability under load: two data nodes behind shaped access links (netem), two relays. A bulk transfer must keep its circuit (at most one path switch), the busy circuit's probes pause, the idle one keeps being probed at the backup rate (§11.2, §11.4). `SECS=`, `RATE=`, `DELAY=` adjust it. |
 | `docker/deploy-test.sh` | Docker | The deployment image as documented in docs/docker.md. |
 | `docker/tpm-test.sh` | Docker | TPM key sealing against a software TPM (swtpm), refusal by another TPM. |
 | `docker/windows-test.sh` | Docker, `cargo-xwin`, LLVM | Windows unit tests under Wine. |
@@ -379,6 +379,11 @@ Notes:
   `target/debug/webjetctl --socket /tmp/webjet-local/node-02/control.sock local status`.
 - macOS has no `timeout`; use `perl -e 'alarm shift; exec @ARGV' 5 <cmd>`.
 - `docker/e2e.sh`, `docker/realip-test.sh`, `docker/multicast-test.sh`, `docker/nat-test.sh` and `docker/load-test.sh` use the `test` image: `docker build --target test -t webjet:test .`
+- When the host already uses the test subnets, move them: `WAN_PREFIX=10.88`
+  (first two octets) for `e2e.sh`, `realip-test.sh`, `multicast-test.sh`,
+  `capture-test.sh`, `mdns-test.sh` and `raknet-storm-test.sh`;
+  `INET_PREFIX=10.89.0` for `nat-test.sh`; `NET_PREFIX=10.89.0` for
+  `deploy-test.sh` (first three octets).
 - `docker/tpm-test.sh` sets `TPM2TOOLS_TCTI` to the software TPM and runs
   the TPM unit test with `WEBJET_TEST_TPM=1`. Without a kernel resource
   manager, every TPM operation must flush transient objects or the TPM runs

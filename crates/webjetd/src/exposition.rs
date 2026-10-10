@@ -423,6 +423,27 @@ impl Exposition {
                     ts,
                 );
             }
+            for (name, help, v) in [
+                (
+                    "webjet_link_lane_tx_records",
+                    "Records sent once, without retransmission, on a KCP hop's unreliable lane.",
+                    l.lane_tx,
+                ),
+                (
+                    "webjet_link_lane_rx_records",
+                    "Records received on a KCP hop's unreliable lane.",
+                    l.lane_rx,
+                ),
+                (
+                    "webjet_link_lane_incomplete",
+                    "Pieces dropped on a KCP hop's unreliable lane because another piece of their record was lost.",
+                    l.lane_incomplete,
+                ),
+            ] {
+                if let Some(v) = v {
+                    self.counter(name, help, &ll, v, ts);
+                }
+            }
             if let Some(v) = l.fec_ratio_pct {
                 self.gauge(
                     "webjet_link_fec_ratio",

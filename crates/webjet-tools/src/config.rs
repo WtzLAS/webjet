@@ -220,6 +220,10 @@ pub struct TransportSection {
     pub padding: Option<PaddingFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compression: Option<CompressionFile>,
+    /// KCP hops retransmit inner traffic (§17.5); built-in false: inner
+    /// packets and probes go once, with FEC as the only repair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retransmit: Option<bool>,
 }
 
 /// `[transport.compression]` (§9.8): `control` = `zstd` | `off` (built-in
@@ -269,7 +273,11 @@ impl CompressionFile {
 #[serde(deny_unknown_fields)]
 pub struct PriorityOverrideFile {
     pub select: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub priority: BTreeMap<String, u8>,
+    /// KCP hop retransmission for the selected nodes (§17.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retransmit: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -394,7 +402,7 @@ impl ConfigFile {
             return Ok(());
         }
         bail!(
-            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, limits.value, seeds, dns.record, dns.forward, multicast.capture and proxy",
+            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, transport.retransmit, limits.value, seeds, dns.record, dns.forward, multicast.capture and proxy",
             bad.join(", ")
         )
     }
@@ -415,9 +423,16 @@ impl ConfigFile {
                 t.overrides
                     .iter()
                     .map(|o| {
+                        if o.priority.is_empty() && o.retransmit.is_none() {
+                            bail!(
+                                "a [[transport.override]] for {:?} sets nothing: give it priority or retransmit",
+                                o.select
+                            );
+                        }
                         Ok(wp::PriorityOverride {
                             select: Some(o.select.clone()),
                             values: Some(priorities(&o.priority)?),
+                            retransmit: o.retransmit,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -443,6 +458,7 @@ impl ConfigFile {
                 .as_ref()
                 .map(|m| m.to_wire().map(Box::new))
                 .transpose()?,
+            retransmit: t.retransmit,
         };
         webjet_core::validate::transport(&transport)?;
         let limits = wp::Limits {
@@ -535,6 +551,7 @@ impl ConfigFile {
                 .filter(|m| m.capture.is_some())
                 .map(|m| m.to_wire().map(Box::new))
                 .transpose()?,
+            retransmit: self.transport.as_ref().and_then(|t| t.retransmit),
         })
     }
 
@@ -1030,10 +1047,13 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
             .map(|o| PriorityOverrideFile {
                 select: o.select.clone().unwrap_or_default(),
                 priority: prio_map(&o.values.clone().unwrap_or_default()),
+                retransmit: o.retransmit,
             })
             .collect(),
         camouflage,
         padding,
+        // Spelled out: the built-in is off (§17.5).
+        retransmit: tr.retransmit.or(fill.then_some(false)),
     };
     let lim = lim.unwrap_or_default();
     let set = limit_map(&lim.defaults.clone().unwrap_or_default());
@@ -1133,11 +1153,14 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
             ..Default::default()
         }),
         seeds: Some(seeds_out(&c.seeds.clone().unwrap_or_default())).filter(|v| !v.is_empty()),
-        transport: (!priority.is_empty() || compression.is_some()).then(|| TransportSection {
-            priority,
-            compression,
-            ..Default::default()
-        }),
+        transport: (!priority.is_empty() || compression.is_some() || c.retransmit.is_some()).then(
+            || TransportSection {
+                priority,
+                compression,
+                retransmit: c.retransmit,
+                ..Default::default()
+            },
+        ),
         limits: (!value.is_empty()).then(|| LimitsSection {
             value,
             ..Default::default()
@@ -1254,7 +1277,8 @@ pub fn render_node(name: &str, c: Option<&wp::NodeConfig>) -> Result<String> {
         "# Configuration of node {name} (webjetctl local config)."
     );
     s.push_str("# Overrides the network configuration for this node: transport.priority,\n");
-    s.push_str("# transport.compression, limits.value, multicast.capture; adds seeds\n");
+    s.push_str("# transport.compression, transport.retransmit, limits.value,\n");
+    s.push_str("# multicast.capture; adds seeds\n");
     s.push_str("# (tried first),\n");
     s.push_str("# dns.record and dns.forward;\n");
     s.push_str("# [[proxy]] makes the node a reverse proxy (Linux data nodes; see\n");
@@ -1312,6 +1336,7 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
         transport: Some(TransportSection {
             priority,
             compression: serde_json::from_value(e["compression"].clone()).ok(),
+            retransmit: e["retransmit"].as_bool(),
             ..Default::default()
         }),
         limits: Some(LimitsSection {
@@ -2077,6 +2102,7 @@ value = { circuits_global = 9000 }
             padding: None,
             compression: None,
             multicast: None,
+            retransmit: None,
         };
         let mut tree = empty_tree();
         tree["network_version"] = json!(5);

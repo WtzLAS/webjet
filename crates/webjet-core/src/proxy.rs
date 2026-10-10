@@ -209,6 +209,13 @@ pub struct FlowInfo {
 pub const FRAG_TIMEOUT: Duration = Duration::from_secs(30);
 /// At most this many datagrams' fragment routes at once.
 pub const FRAG_CAP: usize = 8192;
+/// Later fragments that arrive before their datagram's first one (the path
+/// reordered them: the internet, or a KCP hop that doesn't retransmit,
+/// §17.5.1) wait this long for it, at most [`EARLY_CAP`] datagrams and
+/// [`EARLY_PER_DATAGRAM`] fragments each.
+pub const EARLY_TIMEOUT: Duration = Duration::from_secs(2);
+pub const EARLY_CAP: usize = 256;
+pub const EARLY_PER_DATAGRAM: usize = 64;
 
 /// One fragmented datagram as it arrives at one point of the proxy: from
 /// the tun interface (`from: None`) or in a PROXY frame from a peer.
@@ -263,6 +270,10 @@ pub struct Table {
     /// Translated sources in use: (protocol, source, port, target, port).
     snat_used: HashSet<(u8, IpAddr, u16, IpAddr, u16)>,
     frags: HashMap<FragKey, (FragRoute, Instant)>,
+    /// Later fragments waiting for their first: since when, and the packets.
+    early: HashMap<FragKey, (Instant, Vec<Vec<u8>>)>,
+    /// Held fragments whose first came: to be routed like it.
+    ready: Vec<(Option<Bytes32>, Vec<u8>)>,
 }
 
 impl Default for Table {
@@ -280,6 +291,8 @@ impl Table {
             by_flow: HashMap::new(),
             snat_used: HashSet::new(),
             frags: HashMap::new(),
+            early: HashMap::new(),
+            ready: Vec::new(),
         }
     }
 
@@ -386,6 +399,43 @@ impl Table {
         }
         self.frags
             .retain(|_, (_, t)| now.duration_since(*t) < FRAG_TIMEOUT);
+        self.early
+            .retain(|_, (t, _)| now.duration_since(*t) < EARLY_TIMEOUT);
+    }
+
+    /// Hold a later fragment (`p`, as it arrived) whose datagram's first
+    /// fragment hasn't come this way yet. False when there is no room or it
+    /// isn't a later fragment.
+    pub fn hold_early(
+        &mut self,
+        from: Option<&Bytes32>,
+        p: &Parsed,
+        packet: &[u8],
+        now: Instant,
+    ) -> bool {
+        if p.fragment != Fragment::Later {
+            return false;
+        }
+        let key = FragKey::of(from, p);
+        if !self.early.contains_key(&key) && self.early.len() >= EARLY_CAP {
+            self.early
+                .retain(|_, (t, _)| now.duration_since(*t) < EARLY_TIMEOUT);
+            if self.early.len() >= EARLY_CAP {
+                return false;
+            }
+        }
+        let (_, held) = self.early.entry(key).or_insert_with(|| (now, Vec::new()));
+        if held.len() >= EARLY_PER_DATAGRAM {
+            return false;
+        }
+        held.push(packet.to_vec());
+        true
+    }
+
+    /// Later fragments that were held for a first fragment that has since
+    /// opened their route ([`Self::add_frag`]), with where they arrived.
+    pub fn take_ready(&mut self) -> Vec<(Option<Bytes32>, Vec<u8>)> {
+        std::mem::take(&mut self.ready)
     }
 
     /// Remember where a first fragment went (`p`: the fragment as it
@@ -401,7 +451,12 @@ impl Table {
                 return;
             }
         }
-        self.frags.insert(FragKey::of(from, p), (route, now));
+        let key = FragKey::of(from, p);
+        self.frags.insert(key, (route, now));
+        if let Some((_, held)) = self.early.remove(&key) {
+            self.ready
+                .extend(held.into_iter().map(|q| (from.copied(), q)));
+        }
     }
 
     /// Where a later fragment goes, if its first fragment came this way.
@@ -672,5 +727,50 @@ mod tests {
         assert_eq!(t.frag_route(Some(&[9; 32]), &later, now), None);
         t.expire(now + FRAG_TIMEOUT);
         assert_eq!(t.frag_route(None, &later, now + FRAG_TIMEOUT), None);
+    }
+
+    #[test]
+    fn later_fragments_before_their_first_wait_for_it() {
+        let mut t = Table::new();
+        let now = Instant::now();
+        let mut p = udp4([203, 0, 113, 7], [10, 7, 255, 53], 4000, 27015, &[0; 64]);
+        p[4..6].copy_from_slice(&7u16.to_be_bytes());
+        p[6] = 0x20;
+        let first = parse(&p).unwrap();
+        p[6] = 0;
+        p[7] = 4;
+        let later_bytes = p.clone();
+        let later = parse(&p).unwrap();
+        let route = FragRoute {
+            peer: Some([9; 32]),
+            src: None,
+            dst: Some("10.7.0.2".parse().unwrap()),
+            role: Role::Ingress,
+            rule: "game".into(),
+            owner: [1; 32],
+        };
+        let peer = [9; 32];
+        // Not a later fragment: nothing to hold.
+        assert!(!t.hold_early(Some(&peer), &first, &p, now));
+        assert!(t.hold_early(Some(&peer), &later, &later_bytes, now));
+        // Another arrival point's first fragment doesn't release it.
+        t.add_frag(None, &first, route.clone(), now);
+        assert!(t.take_ready().is_empty());
+        t.add_frag(Some(&peer), &first, route.clone(), now);
+        assert_eq!(t.take_ready(), vec![(Some(peer), later_bytes.clone())]);
+        assert!(t.take_ready().is_empty());
+        // Bounded per datagram, and dropped when the first never comes.
+        let mut q = later_bytes.clone();
+        q[4..6].copy_from_slice(&8u16.to_be_bytes());
+        let other = parse(&q).unwrap();
+        for _ in 0..EARLY_PER_DATAGRAM {
+            assert!(t.hold_early(None, &other, &q, now));
+        }
+        assert!(!t.hold_early(None, &other, &q, now));
+        t.expire(now + EARLY_TIMEOUT);
+        q[6] = 0x20;
+        q[7] = 0;
+        t.add_frag(None, &parse(&q).unwrap(), route, now + EARLY_TIMEOUT);
+        assert!(t.take_ready().is_empty());
     }
 }

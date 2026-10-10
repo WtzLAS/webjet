@@ -156,8 +156,21 @@ impl Drop for HandshakeSlot<'_> {
     }
 }
 
-/// Re-read the limits that live in the transport layer (after a tree change).
+/// Re-read the limits and settings that live in the transport layer (after
+/// a tree change): the KCP rate ceiling and handshake limit, and whether
+/// this node retransmits unreliable-class frames (§17.5).
 pub fn apply_limits(n: &Node) {
+    let rt = n.store.read().view().retransmit(&n.me);
+    if n.retransmit.swap(rt, std::sync::atomic::Ordering::Relaxed) != rt {
+        tracing::info!(
+            "KCP hops {} inner traffic",
+            if rt {
+                "retransmit"
+            } else {
+                "no longer retransmit"
+            }
+        );
+    }
     if let Some(ep) = n.udp.get() {
         let ceiling = crate::metrics::limit_opt(n, "rate_ceiling_mbps").unwrap_or(0);
         ep.rate_ceiling_bps.store(

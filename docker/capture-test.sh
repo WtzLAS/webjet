@@ -26,6 +26,9 @@
 set -eu
 IMG=${IMG:-webjet:test}
 P=wjc
+# WAN_PREFIX: the test network's first two octets (WAN_PREFIX.11.0/24), in
+# case 172.30 is taken on the host.
+WAN=${WAN_PREFIX:-172.30}
 NODES="ctl p1 p2 p3"
 cleanup() {
   for c in $NODES; do docker rm -f $P-$c >/dev/null 2>&1 || true; done
@@ -49,13 +52,13 @@ else
     -e CGO_ENABLED=0 -e GOARCH=$ARCH golang:1 go build -o /out/raknet-lan .
 fi
 
-docker network create --subnet 172.30.11.0/24 $P-wan >/dev/null
+docker network create --subnet $WAN.11.0/24 $P-wan >/dev/null
 for c in $NODES; do
   case $c in
     ctl) name=ctl-01 ;;
     *) name="p-${c#p}" ;;
   esac
-  docker run -d --name $P-$c --hostname $name --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun \
+  docker run -d --name $P-$c --hostname $name --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun -e WAN_PREFIX=$WAN \
     -e RUST_LOG=info -e WEBJET_ROOT_PASSPHRASE=r -e WEBJET_ACCOUNT_PASSPHRASE=a -e WEBJET_KEYS=/root/keys \
     $IMG /opt/webjet/docker/node.sh $name >/dev/null
   docker cp "$ROOT/target/raknet-lan" $P-$c:/usr/local/bin/raknet-lan

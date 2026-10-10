@@ -176,6 +176,7 @@ table TransportPriority {
 table PriorityOverride {
     select: [string];
     values: [TransportPriority];
+    retransmit: bool = null;           // KCP hop retransmission (§17.5); unset: not changed here
 }
 
 enum CamouflageMode : ubyte { Website = 1, Refuse = 2 }
@@ -218,6 +219,7 @@ table TransportConfig {
     padding: PaddingScheme;
     compression: CompressionConfig;
     multicast: MulticastConfig;        // TOML [multicast]
+    retransmit: bool = null;           // KCP hops retransmit unreliable-class frames (§17.5); built-in false
 }
 
 // How the leader manages the controller cluster's membership (§7.5).
@@ -259,6 +261,7 @@ table NodeConfig {
     proxy: [ProxyRule];                // reverse proxy ports this node listens on
     compression: CompressionConfig;    // replaces the network's, per plane
     multicast: MulticastConfig;        // capture replaces the network's
+    retransmit: bool = null;           // replaces the network's and its overrides (§17.5)
 }
 
 // A reverse proxy rule (§11.11): a Linux data node listens on `listen_port`
@@ -472,6 +475,11 @@ table LinkMetrics {
     queue_delay_ms: uint32;
     rtt_ms: uint32;
     loss_pct: ubyte;
+    // The KCP hop's unreliable lane (§17.5): records sent, received, and
+    // received pieces dropped because a piece of their record was lost.
+    lane_tx: uint64 = null;
+    lane_rx: uint64 = null;
+    lane_incomplete: uint64 = null;
 }
 
 table RuleHit { rule_id: string; decision: Action = Allow; flows: uint64; }

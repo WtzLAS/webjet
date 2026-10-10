@@ -4,7 +4,7 @@
 # link (netem: 15 ms, 20 Mbit/s). A bulk TCP transfer fills the circuit in
 # use; it must keep its circuit (no switching to the idle one because the
 # loaded one looks slow), its probes must pause while it is busy, and the
-# idle circuit must keep being probed.
+# idle circuit must keep being probed (every 15 s, §11.4).
 #
 #   ctl-01  controller + relay   on core, net-a, net-b
 #   relay-2 relay                on core, net-a, net-b
@@ -188,7 +188,8 @@ else:
         fail.append("the loaded circuit's cost went infinite")
     elif costs and max(costs) > 3 * min(costs) + 30:
         fail.append(f"the loaded circuit's cost swung from {min(costs):.0f} to {max(costs):.0f}")
-    # Probes pause while the circuit is busy; the idle one keeps them.
+    # Probes pause while the circuit is busy; the idle one keeps them, at
+    # the backup rate (circuit::PROBE_BACKUP, 15 s, since 0.10.2).
     def probes(s, primary):
         return sum(c["probes"] for c in s["circuits"] if c["primary"] == primary)
     if len(via) == 1 and len(snaps) >= 3:
@@ -198,7 +199,7 @@ else:
         print(f"probes over {span} s: loaded circuit {busy}, idle circuit {idle}")
         if busy > span // 4:
             fail.append(f"the busy circuit was probed {busy} times")
-        if idle < span // 2:
+        if idle < span // 15:
             fail.append(f"the idle circuit was probed only {idle} times")
 if fail:
     print("FAIL: " + "; ".join(fail))

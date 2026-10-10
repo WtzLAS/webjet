@@ -967,6 +967,9 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
             dev_name = name;
         }
         tracing::info!("tun interface {dev_name} up, mtu {}", n.cfg.tun.mtu);
+        if let Some(w) = crate::config::mtu_warning(n.cfg.tun.mtu) {
+            tracing::warn!("{w}");
+        }
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4096);
         let d2 = dev.clone();
         n.tasks.service("tun-writer", async move {

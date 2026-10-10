@@ -6,7 +6,7 @@
 use crate::gate::{
     self, GateResult, ReplayCache, SharedEpochs, TCP_PREAMBLE, check_tcp_preamble, tcp_preamble,
 };
-use crate::kcp::{KcpStats, UdpEndpoint};
+use crate::kcp::{KcpStats, LaneIo, UdpEndpoint};
 use crate::meter::{Meter, MeteredTcp};
 use crate::tls::{self, PeerTrust};
 use anyhow::{Context, Result, anyhow, bail};
@@ -47,6 +47,39 @@ pub struct Established {
     pub kcp_stats: Option<Arc<KcpStats>>,
     /// The transport's own RTT and loss (§11.2), where it can be read.
     pub meter: Option<Meter>,
+    /// A KCP hop's unreliable lane (§17.5), when both ends run it: started,
+    /// for whole records sent once and received in any order.
+    pub lane: Option<LaneIo>,
+}
+
+/// Start a KCP session's lane if the handshake chose [`tls::ALPN_HOP_LANE`]:
+/// keys exported from the hop's TLS session, the first half for what the
+/// client sends.
+fn start_lane(
+    mut lane: LaneIo,
+    conn: &rustls::CommonState,
+    exporter: impl FnOnce(&mut [u8; 64]) -> bool,
+    client: bool,
+) -> Option<LaneIo> {
+    if conn.alpn_protocol() != Some(tls::ALPN_HOP_LANE) {
+        return None;
+    }
+    let mut m = [0u8; 64];
+    if !exporter(&mut m) {
+        return None;
+    }
+    let (mut c2s, mut s2c) = ([0u8; 32], [0u8; 32]);
+    c2s.copy_from_slice(&m[..32]);
+    s2c.copy_from_slice(&m[32..]);
+    let started = if client {
+        lane.start(c2s, s2c)
+    } else {
+        lane.start(s2c, c2s)
+    };
+    zeroize::Zeroize::zeroize(&mut m);
+    zeroize::Zeroize::zeroize(&mut c2s);
+    zeroize::Zeroize::zeroize(&mut s2c);
+    started.then_some(lane)
 }
 
 pub async fn read_record<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8, Vec<u8>)> {
@@ -160,6 +193,7 @@ pub async fn dial_tls(
             bootstrap: false,
             kcp_stats: None,
             meter: Some(Meter::Tcp(meter)),
+            lane: None,
         })
     };
     tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
@@ -295,6 +329,7 @@ pub async fn accept_tls(
         bootstrap: gate_res.bootstrap(),
         kcp_stats: None,
         meter: Some(Meter::Tcp(meter)),
+        lane: None,
     }))
 }
 
@@ -309,12 +344,23 @@ pub async fn dial_kcp(
 ) -> Result<Established> {
     let fut = async {
         let c = ep.dial(addr);
-        let cfg = tls::client_config(kp, expected, trust, tls::ALPN_HOP)?;
-        let tls = tokio_rustls::TlsConnector::from(cfg)
+        let mut cfg = (*tls::client_config(kp, expected, trust, tls::ALPN_HOP)?).clone();
+        cfg.alpn_protocols = vec![tls::ALPN_HOP_LANE.to_vec(), tls::ALPN_HOP.to_vec()];
+        let tls = tokio_rustls::TlsConnector::from(Arc::new(cfg))
             .connect(tls::server_name(), c.stream)
             .await?;
-        tls::check_pq(tls.get_ref().1)?;
-        let peer = tls::peer_key(tls.get_ref().1).ok_or_else(|| anyhow!("no peer key"))?;
+        let conn = tls.get_ref().1;
+        tls::check_pq(conn)?;
+        let peer = tls::peer_key(conn).ok_or_else(|| anyhow!("no peer key"))?;
+        let lane = start_lane(
+            c.lane,
+            conn,
+            |m| {
+                conn.export_keying_material(m, tls::LANE_EXPORTER, None)
+                    .is_ok()
+            },
+            true,
+        );
         Ok::<_, anyhow::Error>(Established {
             io: Box::new(tls),
             peer_key: peer,
@@ -323,6 +369,7 @@ pub async fn dial_kcp(
             bootstrap: false,
             meter: Some(Meter::Kcp(c.stats.clone())),
             kcp_stats: Some(c.stats),
+            lane,
         })
     };
     tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
@@ -337,15 +384,25 @@ pub async fn accept_kcp(
 ) -> Result<Established> {
     // The endpoint's handshake slot is held until the handshake ends.
     let _slot = c.handshake;
-    let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP])?;
+    let cfg = tls::server_config(kp, trust, None, &[tls::ALPN_HOP_LANE, tls::ALPN_HOP])?;
     let tls = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         tokio_rustls::TlsAcceptor::from(cfg).accept(c.stream),
     )
     .await
     .map_err(|_| anyhow!("KCP TLS accept timeout"))??;
-    tls::check_pq(tls.get_ref().1)?;
-    let peer = tls::peer_key(tls.get_ref().1).ok_or_else(|| anyhow!("no peer key"))?;
+    let conn = tls.get_ref().1;
+    tls::check_pq(conn)?;
+    let peer = tls::peer_key(conn).ok_or_else(|| anyhow!("no peer key"))?;
+    let lane = start_lane(
+        c.lane,
+        conn,
+        |m| {
+            conn.export_keying_material(m, tls::LANE_EXPORTER, None)
+                .is_ok()
+        },
+        false,
+    );
     Ok(Established {
         io: Box::new(tls),
         peer_key: peer,
@@ -354,6 +411,7 @@ pub async fn accept_kcp(
         bootstrap: c.gate.bootstrap(),
         meter: Some(Meter::Kcp(c.stats.clone())),
         kcp_stats: Some(c.stats),
+        lane,
     })
 }
 

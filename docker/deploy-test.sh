@@ -18,8 +18,11 @@ cd "$(dirname "$0")/.."
 IMG=${IMG:-webjet:deploy-test}
 P=wjd
 NET=$P-net
-CTL_IP=172.31.0.10
-A_IP=172.31.0.11
+# NET_PREFIX: the test network's first three octets (NET_PREFIX.0/24), in
+# case 172.31.0 is taken on the host.
+NETP=${NET_PREFIX:-172.31.0}
+CTL_IP=$NETP.10
+A_IP=$NETP.11
 
 cleanup() {
     docker rm -f "$P-ctl" "$P-a" "$P-bad" >/dev/null 2>&1 || true
@@ -53,7 +56,7 @@ wait_healthy() { # container seconds
 echo "== build $IMG"
 docker build -q -t "$IMG" . >/dev/null
 
-docker network create --subnet 172.31.0.0/24 "$NET" >/dev/null
+docker network create --subnet "$NETP.0/24" "$NET" >/dev/null
 ADMIN_ENV="-e WEBJET_ROOT_PASSPHRASE=root-pass -e WEBJET_ACCOUNT_PASSPHRASE=acct-pass -e WEBJET_KEYS=/admin/keys"
 
 echo "== root key, admin account and genesis (offline steps)"

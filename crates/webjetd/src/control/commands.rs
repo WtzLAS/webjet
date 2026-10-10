@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 use webjet_core::crypto::{self, Bytes32};
+use webjet_net::kcp::KcpStats;
 use webjet_proto::{self as wp, RpcBody};
 
 /// Run one parsed request.
@@ -129,6 +130,7 @@ pub fn status(n: &Arc<Node>) -> Value {
         "alarms": n.alarms.lock().iter().map(|(k, (sev, since))| json!({"name": k, "severity": sev, "since": since})).collect::<Vec<_>>(),
         "controller": n.controller.get().map(|c| c.status()),
         "compression": compression_status(n),
+        "retransmit": n.retransmit.load(Relaxed),
         "uptime_s": n.started.elapsed().as_secs(),
         "version": env!("CARGO_PKG_VERSION"),
     })
@@ -165,6 +167,12 @@ fn peers(n: &Node) -> Value {
         .values()
         .map(|h| {
             let st = h.stats.lock();
+            let lane = |f: fn(&KcpStats) -> &std::sync::atomic::AtomicU64| {
+                h.kcp_stats
+                    .as_deref()
+                    .filter(|_| h.lane)
+                    .map_or(0, |k| f(k).load(Relaxed))
+            };
             json!({
                 "peer": n.name_of(&h.peer),
                 "id": hex::encode(h.peer),
@@ -182,6 +190,12 @@ fn peers(n: &Node) -> Value {
                 "tx_bytes": h.tx_bytes.load(Relaxed),
                 "rx_bytes": h.rx_bytes.load(Relaxed),
                 "restricted": h.restricted,
+                // Flat, like the rest of the entry: scripts pick a peer's
+                // entry out with a `{[^{}]*}` match (docker/nat-test.sh).
+                "lane": h.lane,
+                "lane_tx_records": lane(|k| &k.lane_tx),
+                "lane_rx_records": lane(|k| &k.lane_rx),
+                "lane_incomplete": lane(|k| &k.lane_incomplete),
             })
         })
         .collect();
@@ -297,6 +311,7 @@ fn node_config(n: &Node, id: Bytes32) -> Result<Value> {
                 "data": webjet_core::compress::algo::name(compression.data),
             },
             "capture": view.capture_ports(&id),
+            "retransmit": view.retransmit(&id),
             "suffix": view.suffix(),
             "resolver": ips(view.resolver_ips(&s.overlay_pool)),
         },

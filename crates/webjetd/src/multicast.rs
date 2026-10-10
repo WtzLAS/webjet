@@ -378,7 +378,8 @@ pub(crate) fn on_report(n: &Arc<Node>, peer: &Bytes32, b: &[u8]) {
 
 // ---------------------------------------------------------------- upkeep
 
-/// After a tree change: has this node started or stopped taking
+/// After a tree change: the budget follows the limits at once (not at the
+/// next upkeep, up to 10 s later). Has this node started or stopped taking
 /// broadcast and multicast since its EndpointRecord was published? Then
 /// the record must be published again (returns true), and the senders
 /// holding our report get a new one at once.
@@ -386,9 +387,11 @@ pub(crate) fn refresh(n: &Arc<Node>) -> bool {
     let Some(dp) = n.dataplane.get() else {
         return false;
     };
+    let (pps, bps) = limits(n);
     let now_on = on(n, dp);
     let (report, peers) = {
         let mut st = dp.mcast.lock();
+        st.set_limits(pps, bps);
         let changed = st.advertised.is_some_and(|a| a != now_on);
         st.advertised = Some(now_on);
         if !changed {

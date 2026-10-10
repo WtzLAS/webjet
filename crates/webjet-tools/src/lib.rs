@@ -963,6 +963,7 @@ mod tests {
             padding: None,
             compression: None,
             multicast: None,
+            retransmit: None,
         };
         webjet_core::validate::transport(&t).unwrap();
     }

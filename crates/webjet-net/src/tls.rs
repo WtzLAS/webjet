@@ -17,6 +17,12 @@ use webjet_core::crypto::{Bytes32, KeyPair, spki_der, spki_to_key};
 
 /// ALPN for hop sessions (§15.8).
 pub const ALPN_HOP: &[u8] = b"webjet/1";
+/// ALPN for KCP hop sessions that also run the unreliable lane (§17.5).
+/// A KCP dialer offers it before [`ALPN_HOP`]; an older listener picks
+/// `ALPN_HOP`, and neither side sends on the lane.
+pub const ALPN_HOP_LANE: &[u8] = b"webjet/1+lane";
+/// Exporter label for the lane's keys.
+pub const LANE_EXPORTER: &[u8] = b"webjet kcp lane v1";
 /// ALPN for end-to-end sessions (§15.8).
 pub const ALPN_E2E: &[u8] = b"webjet-e2e/1";
 /// ALPN for the enrollment endpoint (unauthenticated client).

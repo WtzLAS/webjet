@@ -47,9 +47,13 @@
 //! - **Measurements from the protocol itself:** the raw round trip of each
 //!   new segment (socket to acknowledgement, less the time the peer held
 //!   it; Karn's rule), bytes delivered, and retransmissions.
+//! - **An unreliable lane** ([`super::lane`]): records sent once in
+//!   segments of their own commands, UPUSH and UACK, that the crate it came
+//!   from doesn't know; they go only to peers that take them.
 //! - No panics, unwraps or unsafe code; sequence numbers and timestamps
 //!   wrap by design and use wrapping arithmetic.
 
+use super::lane::{self, Lane, LaneStats};
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -60,6 +64,9 @@ const CMD_PUSH: u8 = 81;
 const CMD_ACK: u8 = 82;
 const CMD_WASK: u8 = 83;
 const CMD_WINS: u8 = 84;
+/// A piece of the unreliable lane, and its acknowledgement (§17.5).
+const CMD_UPUSH: u8 = 85;
+const CMD_UACK: u8 = 86;
 
 const ASK_SEND: u32 = 1;
 const ASK_TELL: u32 = 2;
@@ -168,6 +175,9 @@ pub struct Kcp {
     rtt_samples: Vec<Duration>,
     delivered: usize,
     retransmits: u64,
+
+    /// The unreliable lane, once its keys are set.
+    lane: Option<Lane>,
 }
 
 impl Kcp {
@@ -201,6 +211,7 @@ impl Kcp {
             rtt_samples: Vec::new(),
             delivered: 0,
             retransmits: 0,
+            lane: None,
         }
     }
 
@@ -245,16 +256,54 @@ impl Kcp {
         }
     }
 
-    /// Bytes queued and not sent yet.
+    /// Bytes queued and not sent yet, on the stream and the lane.
     pub fn queued_bytes(&self) -> usize {
-        self.queued_bytes
+        self.queued_bytes + self.lane.as_ref().map_or(0, |l| l.queued_bytes)
     }
 
     /// How long the oldest queued byte has waited (§17.7).
     pub fn backlog_age(&self, now_us: u64) -> Duration {
-        self.snd_queue.front().map_or(Duration::ZERO, |s| {
-            Duration::from_micros(now_us.saturating_sub(s.queued_us))
+        let oldest = [
+            self.snd_queue.front().map(|s| s.queued_us),
+            self.lane
+                .as_ref()
+                .and_then(|l| l.queue.front())
+                .map(|p| p.queued_us),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        oldest.map_or(Duration::ZERO, |t| {
+            Duration::from_micros(now_us.saturating_sub(t))
         })
+    }
+
+    // ------------------------------------------------------------ the lane
+
+    /// Turn the unreliable lane on, with the keys for each direction.
+    pub fn set_lane_keys(&mut self, tx: [u8; 32], rx: [u8; 32]) {
+        self.lane = Some(Lane::new(tx, rx));
+    }
+
+    pub fn lane_ready(&self) -> bool {
+        self.lane.is_some()
+    }
+
+    /// Queue a record on the lane: false when there is no lane or the
+    /// record is empty or over [`lane::MAX_RECORD`].
+    pub fn send_unreliable(&mut self, record: &[u8], now_us: u64) -> bool {
+        self.lane
+            .as_mut()
+            .is_some_and(|l| l.queue_record(record, now_us))
+    }
+
+    /// The next record that came on the lane (in arrival order).
+    pub fn recv_unreliable(&mut self) -> Option<Vec<u8>> {
+        self.lane.as_mut()?.received.pop_front()
+    }
+
+    pub fn lane_stats(&self) -> LaneStats {
+        self.lane.as_ref().map(|l| l.stats).unwrap_or_default()
     }
 
     /// Segments sent and not acknowledged.
@@ -263,9 +312,10 @@ impl Kcp {
         self.snd_buf.len()
     }
 
-    /// Segments queued or in flight.
+    /// Segments queued or in flight (lane pieces only while queued: they
+    /// are never resent).
     pub fn wait_snd(&self) -> usize {
-        self.snd_buf.len() + self.snd_queue.len()
+        self.snd_buf.len() + self.snd_queue.len() + self.lane.as_ref().map_or(0, |l| l.queue.len())
     }
 
     /// Too many transmissions of one segment: the path is gone.
@@ -278,9 +328,24 @@ impl Kcp {
     }
 
     fn header(&self, buf: &mut Vec<u8>, cmd: u8, wnd: u16, ts: u32, sn: u32, len: usize) {
+        // frg 0: stream mode
+        self.header_frg(buf, cmd, 0, wnd, ts, sn, len);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn header_frg(
+        &self,
+        buf: &mut Vec<u8>,
+        cmd: u8,
+        frg: u8,
+        wnd: u16,
+        ts: u32,
+        sn: u32,
+        len: usize,
+    ) {
         buf.extend_from_slice(&self.conv.to_le_bytes());
         buf.push(cmd);
-        buf.push(0); // frg: stream mode
+        buf.push(frg);
         buf.extend_from_slice(&wnd.to_le_bytes());
         buf.extend_from_slice(&ts.to_le_bytes());
         buf.extend_from_slice(&sn.to_le_bytes());
@@ -306,6 +371,11 @@ impl Kcp {
         for (sn, ts) in std::mem::take(&mut self.acklist) {
             push(&mut out.control, &mut buf, OVERHEAD);
             self.header(&mut buf, CMD_ACK, wnd, ts, sn, 0);
+        }
+        let lane_acks = self.lane.as_mut().map(|l| std::mem::take(&mut l.acks));
+        for (sn, ts) in lane_acks.unwrap_or_default() {
+            push(&mut out.control, &mut buf, OVERHEAD);
+            self.header(&mut buf, CMD_UACK, wnd, ts, sn, 0);
         }
         self.probe_wnd_size();
         for (flag, cmd) in [(ASK_SEND, CMD_WASK), (ASK_TELL, CMD_WINS)] {
@@ -352,7 +422,51 @@ impl Kcp {
         }
         self.retransmits += sends.len() as u64;
         let cwnd = self.snd_wnd.min(self.rmt_wnd) as u32;
-        while spent < budget && self.snd_nxt.wrapping_sub(self.snd_una) < cwnd {
+        // New data from the stream and the lane, oldest first; lane pieces
+        // are sealed and go at once, the stream's are packed below.
+        let mut pieces: Vec<Vec<u8>> = Vec::new();
+        while spent < budget {
+            let stream_at = (self.snd_nxt.wrapping_sub(self.snd_una) < cwnd)
+                .then(|| self.snd_queue.front().map(|s| s.queued_us))
+                .flatten();
+            let lane_at = self
+                .lane
+                .as_ref()
+                .and_then(|l| l.queue.front())
+                .map(|p| p.queued_us);
+            let from_lane = match (stream_at, lane_at) {
+                (_, None) => false,
+                (None, Some(_)) => true,
+                (Some(s), Some(l)) => l < s,
+            };
+            if from_lane {
+                let Some(p) = self.lane.as_mut().and_then(Lane::pop) else {
+                    break;
+                };
+                let sealed_len = p.data.len() + lane::TAG;
+                let mut seg = Vec::with_capacity(OVERHEAD + sealed_len);
+                self.header_frg(
+                    &mut seg,
+                    CMD_UPUSH,
+                    p.frg,
+                    wnd,
+                    current,
+                    p.counter as u32,
+                    sealed_len,
+                );
+                seg.extend_from_slice(&p.data);
+                let Some(l) = self.lane.as_mut() else { break };
+                if l.seal(p.counter, &mut seg).is_none() {
+                    continue;
+                }
+                l.on_sent(p.counter, now_us, p.data.len());
+                spent += seg.len();
+                pieces.push(seg);
+                continue;
+            }
+            if stream_at.is_none() {
+                break;
+            }
             let Some(mut seg) = self.snd_queue.pop_front() else {
                 break;
             };
@@ -378,6 +492,12 @@ impl Kcp {
             if let Some(seg) = self.snd_buf.get(i) {
                 buf.extend_from_slice(&seg.data);
             }
+        }
+        // A piece shares a packet up to the stream's MTU; a larger one
+        // (up to the lane's) goes alone.
+        for p in pieces {
+            push(&mut out.data, &mut buf, p.len());
+            buf.extend_from_slice(&p);
         }
         if !buf.is_empty() {
             out.data.push(buf);
@@ -452,14 +572,25 @@ impl Kcp {
             if conv != self.conv {
                 return Err(Error::Conv(conv));
             }
-            if !matches!(cmd, CMD_PUSH | CMD_ACK | CMD_WASK | CMD_WINS)
-                || (cmd == CMD_PUSH && !data_allowed)
-            {
+            // Lane segments before the lane has keys (the peer finished its
+            // handshake first) are skipped below, not refused: the rest of
+            // the packet still counts.
+            let known = matches!(
+                cmd,
+                CMD_PUSH | CMD_ACK | CMD_WASK | CMD_WINS | CMD_UPUSH | CMD_UACK
+            );
+            if !known || (matches!(cmd, CMD_PUSH | CMD_UPUSH) && !data_allowed) {
                 return Err(Error::Cmd(cmd));
             }
-            // A segment never carries more than one MSS: a larger one is
-            // the peer padding our buffers, not data we sent for.
-            if len > self.mss {
+            // A segment never carries more than one MSS (a lane piece one
+            // piece and its tag): a larger one is the peer padding our
+            // buffers, not data we sent for.
+            let max = if cmd == CMD_UPUSH {
+                lane::PIECE + lane::TAG
+            } else {
+                self.mss
+            };
+            if len > max {
                 return Err(Error::Oversize(len));
             }
             self.rmt_wnd = wnd;
@@ -489,6 +620,25 @@ impl Kcp {
                     }
                 }
                 CMD_WASK => self.probe |= ASK_TELL,
+                CMD_UPUSH => {
+                    let hdr = &pkt[start - OVERHEAD..start];
+                    let frg = pkt[start - OVERHEAD + 5];
+                    if let Some(l) = self.lane.as_mut() {
+                        l.on_piece(hdr, sn, ts, frg, data, arrived_us);
+                    }
+                }
+                CMD_UACK => {
+                    if let Some((rtt, len)) = self
+                        .lane
+                        .as_mut()
+                        .and_then(|l| l.on_ack(sn, arrived_us, held))
+                    {
+                        self.delivered += len;
+                        if let Some(rtt) = rtt {
+                            self.rtt_samples.push(rtt);
+                        }
+                    }
+                }
                 _ => {} // WINS: the window came with the header
             }
         }

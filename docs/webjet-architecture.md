@@ -487,7 +487,8 @@ TransportConfig {
     version: u64
     priorities: {                              // §9.6
         defaults:   { transport → u8 }
-        overrides:  [{ select: [Selector], values: { transport → u8 } }]
+        overrides:  [{ select: [Selector], values: { transport → u8 },
+                       retransmit: bool? }]    // §17.5.1
     }
     camouflage: {                              // §9.7.2
         mode:         WEBSITE | REFUSE
@@ -500,6 +501,7 @@ TransportConfig {
         control:  UNSET | OFF | ZSTD           // built-in ZSTD
         data:     UNSET | OFF | LZ4            // built-in OFF
     }
+    retransmit: bool?                          // §17.5.1; built-in false
 }
 ```
 
@@ -538,6 +540,7 @@ NodeConfig {
     dns_forward: [ForwardZone]        // forwarded by this node's resolver only
     proxy:       [ProxyRule]          // reverse proxy ports (§11.11)
     compression: { control, data }    // replace the network's, per plane (§9.8)
+    retransmit:  bool?                // replaces the network's and its overrides (§17.5.1)
 }
 ```
 
@@ -848,7 +851,9 @@ Each rekey is a full new handshake in the background over the current circuit, g
 
 #### 9.4.7 MTU
 
-Per-packet overhead is 29 bytes (e2e) + 5 bytes (relay frame header) + the hop transport's own overhead. The e2e layer never fragments. Compression (§9.8) only ever makes a frame smaller, so it doesn't change the MTU. The tun MTU defaults to **1280 bytes**, the IPv6 minimum, which fits through every hop type; admins may raise it after measuring their paths.
+Per-packet overhead is 29 bytes (e2e) + 5 bytes (relay frame header) + the hop transport's own overhead. The e2e layer never fragments. Compression (§9.8) only ever makes a frame smaller, so it doesn't change the MTU. The tun MTU defaults to **1280 bytes**, the IPv6 minimum, which fits through every hop type.
+
+On a KCP hop that doesn't retransmit (the default, §17.5.1), a frame goes in one datagram of its own only up to that size: a 1280-byte packet becomes a 1314-byte relay frame, one lane piece of 1354 bytes with its KCP header and tag, and a 1412-byte UDP payload (1460 bytes on the wire over IPv6). A larger packet is split over two datagrams and is lost if either is, so raising the tun MTU above 1280 raises the loss rate of large packets on lossy KCP hops (webjetd logs a warning). Values below 576 are refused.
 
 ### 9.5 Cryptokey routing (mandatory, at the endpoint)
 
@@ -1608,7 +1613,7 @@ An address behind a gateway never gets the client's address: the LAN host would 
 
 **Traffic.** Proxied packets travel in end-to-end frames of type `PROXY` (9), not `DATA`, over the ingress's session with the target. Both ends keep proxy flows in their own connection tracking table (the same state machine and timeouts as §14.4; `conntrack_global`, `conntrack_new_per_sec`, `snat_*` limits apply to it separately), and count them apart from overlay traffic: they are not in `tun_rx`/`tun_tx`, `conntrack`, rule hits or the Connections tab's overlay flows. The control call `proxy` (`webjetctl local proxy`) lists the rules with their status and warnings, the flows on each side and the counters; metric reports carry them as `ProxyMetrics` (§12.5).
 
-**Fragments.** Datagrams larger than the tun MTU (game servers' UDP, for one) reach the agent as IP fragments, and only the first fragment carries the ports a flow is found by. Wherever a first fragment of a proxy flow passes (client → ingress, ingress → target, target's reply, reply → client), the agent remembers the datagram (where it came from, protocol, addresses, fragment id) with where it sent it and the addresses it gave it; the later fragments of that datagram follow it with the same addresses, for up to 30 s, at most 8192 datagrams per node. The rewritten first fragment's UDP/TCP checksum is updated for the changed addresses and ports, since it covers the whole datagram. A later fragment whose first fragment didn't come this way is dropped.
+**Fragments.** Datagrams larger than the tun MTU (game servers' UDP, for one) reach the agent as IP fragments, and only the first fragment carries the ports a flow is found by. Wherever a first fragment of a proxy flow passes (client → ingress, ingress → target, target's reply, reply → client), the agent remembers the datagram (where it came from, protocol, addresses, fragment id) with where it sent it and the addresses it gave it; the later fragments of that datagram follow it with the same addresses, for up to 30 s, at most 8192 datagrams per node. The rewritten first fragment's UDP/TCP checksum is updated for the changed addresses and ports, since it covers the whole datagram. A later fragment that arrives before its first fragment (the internet reorders packets, and so does a KCP hop that doesn't retransmit, §17.5.1) waits up to 2 s for it, at most 256 datagrams and 64 fragments each per node, and then follows it; a later fragment whose first fragment doesn't come is dropped.
 
 **Limits.**
 - Linux only, with the tun interface, on both the ingress and real-IP targets. Other platforms keep the rules but don't listen (alarm `proxy_unsupported`).
@@ -2260,7 +2265,7 @@ value = { circuits_global = 200000 }
 
 Every hop transport is a reliable stream, which hides packet loss from the traffic inside it. Three layers could react to congestion (the application's own TCP inside the tunnel, the end-to-end session, and each hop), and if they all did, they would work against each other. Each has one job:
 
-- **Hops hide random loss.** KCP retransmission and FEC, or TCP on the TCP transports, turn line loss into a small delay.
+- **Hops hide random loss, and only once.** FEC on KCP hops, or TCP on the TCP transports, turns line loss into a small delay. KCP hops don't retransmit inner packets by default (§17.5.1): the inner flows retransmit for themselves, and a hop that did so too would send the same data twice for one loss and hold every flow behind the lost packet.
 - **Queues signal real congestion.** When a hop can't send as fast as traffic arrives, its queue marks or drops frames early instead of buffering them.
 - **Inner flows do the congestion control.** The application's TCP (or QUIC) reacts to those marks and drops. The end-to-end session adds no congestion control of its own.
 
@@ -2305,9 +2310,36 @@ KCP's own congestion window is turned off. It backs off on every loss, which col
 
 The bandwidth estimates also feed the relay capacity estimate used by load-aware routing (§11.8.1).
 
+#### 17.5.1 Retransmission and the unreliable lane
+
+Most traffic through the overlay is TCP or QUIC, which recover their own losses. A hop that retransmits as well turns one line loss into two retransmissions (the hop's and, once the delay passes the inner RTO, the flow's), and its in-order stream holds every circuit behind a lost segment. So by default **KCP hops carry inner packets without retransmission**, and FEC is their only repair.
+
+A KCP hop session has two lanes:
+
+- **The stream**: the reliable, in-order KCP stream that carries the hop's TLS session (§9.2) and in it every hop record: control messages, relay frames that must arrive, and everything else when the peer has no lane.
+- **The unreliable lane**: relay frames sent once. Each frame goes in one or more *pieces*; a piece is a KCP segment with commands of its own (`UPUSH` 85, `UACK` 86) and the usual 24-byte header (`frg` gives the pieces left in the frame, its top bit marks the first; `sn` is the piece counter's low 32 bits; `ts` as usual). Pieces go through the same pacer and FEC as the stream's segments, oldest first, but not through the stream's send window: nothing waits for them. The receiver acknowledges each piece, so the hop keeps its raw RTT (§11.2) and BBR its delivery rate, and hands complete frames on as they arrive, in any order (like an IP path; the reverse proxy waits for a reordered first fragment, §11.11); a piece that FEC can't recover loses its frame. Pieces of a frame that doesn't complete within 1 s are dropped.
+
+**What goes on the lane** is decided by frame type, which is outside the end-to-end encryption (§6.9), so relays decide the same way as the source: `DATA`, `DATA_LZ4`, `PROXY`, `PROXY_LZ4`, `MCAST`, `PROBE` and `PROBE_ACK`. `HANDSHAKE`, `RPC`, `RPC_ZSTD`, `PUNCH_*`, `GROUPS` and `CLOSE` always take the stream, as do frames over 64 pieces. Probes take the lane so that a circuit's measured loss is what its packets see. Relays decide per hop: a frame that crossed a TCP hop goes on the lane again at the next KCP hop.
+
+**Protection.** The stream is protected by TLS. Lane pieces are sealed with ChaCha20-Poly1305 under keys exported from the hop's TLS session (label `webjet kcp lane v1`, 64 bytes: the first half for what the TLS client sends), with the 64-bit piece counter as the nonce and the KCP header as associated data. A replay window of 8,192 pieces drops duplicates, including pieces FEC recovers after they arrived. A piece is acknowledged only once it is authentic. A forged or altered piece, from anyone holding the network PSK, is dropped like any other bad datagram.
+
+**Negotiation.** A KCP dialer offers the ALPN `webjet/1+lane` before `webjet/1`. A listener that knows it chooses it, and both ends start the lane once the handshake is done; with an older peer the stream carries everything, as before.
+
+**Turning retransmission back on.** The setting is a property of the **sending node** and applies to every KCP hop it sends on. Each direction of a hop follows its sender, and a relay follows its own setting, not the source's. First match wins:
+1. the node's own configuration (`retransmit`, §6.19)
+2. the first override in the TransportConfig (§6.17) whose selectors match the node and which sets `retransmit` (an override that only sets priorities doesn't count)
+3. the TransportConfig's `retransmit`
+4. built-in: off
+
+With retransmission on, the node sends every frame on the stream. A node on lossy links that carries traffic with no recovery of its own is the usual candidate, for example a node whose flows are UDP media, or a gateway in front of devices with poor TCP stacks.
+
+**Metrics.** Per hop: records sent and received on the lane and pieces dropped because their frame lost another piece (`local peers`: `lane`, `lane_tx_records`, `lane_rx_records`, `lane_incomplete`; Prometheus `webjet_link_lane_{tx_records,rx_records,incomplete}`). `local status` shows `retransmit`. `kcp_retrans` counts only the stream's retransmissions.
+
+**Upgrading.** No order is needed for the default: the lane is negotiated per hop. Upgrade every controller before the first `retransmit` setting, at either scope, because older controllers drop the field when they re-encode a configuration and halt on divergence.
+
 ### 17.6 Adaptive FEC
 
-- **Coding:** Reed–Solomon parity over groups of KCP packets, below KCP, so KCP sees fewer losses and retransmits less.
+- **Coding:** Reed–Solomon parity over groups of KCP packets, below KCP, so KCP sees fewer losses and retransmits less. On the unreliable lane (§17.5.1) FEC is the only repair, which is why the ratio aims at a low residual loss.
 - **Adaptive ratio.** The share of parity follows the hop's measured loss, aiming for under **0.1% residual loss** after recovery. It ranges from **0 to 30%** and changes gradually. A clean link sends almost no parity. The loss is measured by the receiver before recovery, from the gaps in each parity group's data packets (a group whose parity hasn't flowed yet counts up to its highest packet seen), and reported to the sender (`STATS`) once a second while there is loss and for 10 s after the last, otherwise every 10 s.
 - **Parity counts toward the paced rate** (§17.5), so FEC can never push a link past its capacity or make real congestion worse.
 - Packets recovered by FEC don't count as loss for the rate controller.
@@ -2329,7 +2361,7 @@ Relays can't see inner packets, so they can't set the IP header's ECN mark, and 
 
 ### 17.8 Head-of-line blocking
 
-All circuits between two nodes share one stream per transport. A lost packet on a TCP hop briefly stalls every circuit on that hop; on KCP, FEC and fast retransmit keep such stalls short. This is accepted. Opening parallel connections would add state and, on AnyTLS, look less like a browser.
+All circuits between two nodes share one stream per transport. A lost packet on a TCP hop briefly stalls every circuit on that hop. On KCP, inner packets and probes don't wait for each other (§17.5.1); the reliable stream beside them, which carries control traffic, uses FEC and fast retransmit to keep its stalls short. This is accepted. Opening parallel connections would add state and, on AnyTLS, look less like a browser.
 
 ### 17.9 Observability
 

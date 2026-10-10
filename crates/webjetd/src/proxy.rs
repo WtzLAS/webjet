@@ -210,6 +210,28 @@ impl Proxy {
                 .any(|r| r.rule.proto == f.proto && r.rule.listen_port == f.dport)
     }
 
+    /// A later fragment from a client or a peer: where its first fragment
+    /// went, or held until that first fragment comes (the path reordered
+    /// them, §11.11).
+    fn later_or_hold(&self, n: &Arc<Node>, from: Option<&Bytes32>, p: &[u8], parsed: &Parsed) {
+        if !self.later_fragment(n, from, p, parsed) {
+            self.table
+                .lock()
+                .hold_early(from, parsed, p, Instant::now());
+        }
+    }
+
+    /// Send on the later fragments that waited for a first fragment that
+    /// has now opened their route.
+    fn release_early(&self, n: &Arc<Node>) {
+        let ready = self.table.lock().take_ready();
+        for (from, q) in ready {
+            if let Some(parsed) = packet::parse(&q) {
+                self.later_fragment(n, from.as_ref(), &q, &parsed);
+            }
+        }
+    }
+
     /// A later fragment of a datagram (it has no ports, so no flow finds
     /// it) goes where its first fragment went, with the same addresses.
     /// `from`: the peer it came from, `None` for the tun interface. False
@@ -261,9 +283,14 @@ impl Proxy {
     /// A client's packet (ingress): an existing flow's or a new one.
     pub fn from_client(&self, n: &Arc<Node>, dp: &Dataplane, p: Vec<u8>, parsed: Parsed) {
         if parsed.fragment == Fragment::Later {
-            self.later_fragment(n, None, &p, &parsed);
+            self.later_or_hold(n, None, &p, &parsed);
             return;
         }
+        self.client_packet(n, dp, p, parsed);
+        self.release_early(n);
+    }
+
+    fn client_packet(&self, n: &Arc<Node>, dp: &Dataplane, p: Vec<u8>, parsed: Parsed) {
         let now = Instant::now();
         let error = parsed.icmp == Some(IcmpKind::Error);
         // An ICMP error from the client quotes a reply we sent it.
@@ -509,9 +536,21 @@ impl Proxy {
             return;
         };
         if parsed.fragment == Fragment::Later {
-            self.later_fragment(n, Some(peer), &p, &parsed);
+            self.later_or_hold(n, Some(peer), &p, &parsed);
             return;
         }
+        self.peer_packet(n, dp, peer, p, parsed);
+        self.release_early(n);
+    }
+
+    fn peer_packet(
+        &self,
+        n: &Arc<Node>,
+        dp: &Dataplane,
+        peer: &Bytes32,
+        p: Vec<u8>,
+        parsed: Parsed,
+    ) {
         let now = Instant::now();
         let error = parsed.icmp == Some(IcmpKind::Error);
         // A reply's flow reversed, or the flow an ICMP error quotes, is the
@@ -1987,5 +2026,14 @@ mod tests {
             !dp.proxy
                 .from_local(&n, &other, &packet::parse(&other).unwrap())
         );
+
+        // A KCP hop that doesn't retransmit (§17.5.1), like the internet,
+        // may deliver a later fragment first: it waits for its first.
+        let req = udp4(ING, WEB, 61000, 27015, &[6u8; 1400]);
+        let (a, b) = frag4(&req, 0x0404, 1200);
+        dp.proxy.from_peer(&n, &dp, &ing, b.clone());
+        assert!(drain(&mut tun).is_empty(), "held for its first fragment");
+        dp.proxy.from_peer(&n, &dp, &ing, a.clone());
+        assert_eq!(drain(&mut tun), vec![a, b], "both go once the first came");
     }
 }

@@ -53,6 +53,7 @@ in the desktop app's Config tab ([app.md](app.md)).
 | Prefer or forbid a transport (UDP, TLS, AnyTLS) | [`[transport.priority]`](#transport-priorities) at network or node scope |
 | Change what AnyTLS ports show to strangers | Network scope [`[transport.camouflage]`](#camouflage-transportcamouflage) |
 | Compress traffic | [`[transport.compression]`](#compression-transportcompression) at network or node scope |
+| Let KCP hops retransmit packets again | [`transport.retransmit`](#retransmission-transportretransmit) at network or node scope, or in a `[[transport.override]]` |
 | Raise or lower a resource limit, or set a relay's capacity | [`[limits]`](#limits) at network or node scope |
 | Change how the controller cluster manages its members | Network scope [`[controllers]`](#controllers) |
 
@@ -163,7 +164,7 @@ The overlay network interface.
 | --- | --- | --- |
 | `enabled` | `true` | Create the overlay interface. `false` runs the node without one (a pure relay or controller). `webjetctl local ping` still works without it, because the data plane answers echo requests itself. |
 | `name` | `webjet0`; macOS: the next free `utunN` | Interface name. On macOS only `utunN` names can be used. On FreeBSD the interface is created as `tunN` and renamed (a `tunN` name is used as is); a renamed one left behind by an agent that was killed is removed at start. On Windows the adapter is described as "Webjet". |
-| `mtu` | `1280` | Inner MTU. 1280 fits every transport, including IPv6 underlay paths. |
+| `mtu` | `1280` | Inner MTU, at least 576. 1280 fits every transport, including IPv6 underlay paths, and is the largest packet that crosses a KCP hop without retransmission in one datagram ([retransmission](#retransmission-transportretransmit)). Above it, larger packets take two datagrams on such hops and are lost if either is; webjetd logs a warning. |
 
 ### `[dns]`
 
@@ -452,6 +453,9 @@ rewrite = ["192.168.1.0/24=10.2.2.0/24"]
 node = "ctl-01"
 addrs = ["tls:203.0.113.10:443", "kcp:203.0.113.10:443", "kcp:ctl.example.net:4883"]
 
+[transport]
+retransmit = false                 # §17.5.1; the built-in value
+
 [transport.priority]               # §9.6; these are the built-in values
 kcp = 30
 anytls = 20
@@ -460,6 +464,10 @@ tls = 10
 [[transport.override]]
 select = ["tag:relay", "role:control"]
 priority = { tls = 40 }
+
+[[transport.override]]
+select = ["tag:voip"]
+retransmit = true
 
 [transport.camouflage]             # §9.7.2
 mode = "refuse"
@@ -595,15 +603,19 @@ higher number is preferred, and 0 means never use it. `kcp` is UDP + KCP +
 FEC, `anytls` is TCP + AnyTLS, `tls` is TCP + TLS. The built-in values are
 `kcp = 30`, `anytls = 20` and `tls = 10`.
 
-`[[transport.override]]` gives different priorities to some nodes:
+`[[transport.override]]` gives different priorities, or a different
+[retransmission](#retransmission-transportretransmit) setting, to some nodes:
 
 | Key | Meaning |
 | --- | --- |
 | `select` | [Selectors](#selectors) for the nodes it applies to (no `cidr:`). |
 | `priority` | The transports it changes, for example `{ tls = 40 }`. |
+| `retransmit` | `true` or `false`: whether the selected nodes' KCP hops retransmit packets. |
 
-For each transport, the first override that selects the node and names that
-transport wins. Transports the override doesn't name keep their values.
+An override needs at least one of `priority` and `retransmit`. For each
+transport, the first override that selects the node and names that
+transport wins, and likewise the first that selects the node and sets
+`retransmit`. Transports the override doesn't name keep their values.
 Overrides are network scope only, but a node's own configuration can set
 `transport.priority.<transport>`, which beats every override. Nodes publish
 their priorities, and peers use them when choosing how to connect.
@@ -676,6 +688,31 @@ and the bytes saved, and Prometheus gets `webjet_compression_*`.
 
 At node scope, `transport.compression.control` or `.data` replaces the
 network's value for that one setting; the other keeps the network's value.
+
+#### Retransmission (`transport.retransmit`)
+
+From 0.12.0, KCP hops send packets between nodes **once** (§17.5.1). Most
+traffic is TCP or QUIC, which retransmit what is lost themselves; a hop that
+retransmitted as well would send the same data twice for one loss and hold
+up every flow behind it. FEC still repairs most loss on the hop, and the hop
+still measures its round trip and loss. Control traffic (gossip, Raft,
+end-to-end handshakes, operations) is always retransmitted, as are packets
+on TCP and AnyTLS hops, where TCP does it.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `retransmit` | `false` | `true`: the node's KCP hops retransmit lost packets too, in order, as before 0.12.0. |
+
+Turn it on for nodes whose traffic doesn't recover from loss by itself and
+whose links lose packets, for example nodes carrying UDP voice or video, or
+a gateway in front of old devices. It applies to the packets a node sends:
+the other end of a hop, and every relay on the path, follows its own
+setting. Set it for some nodes with a `[[transport.override]]`
+(`select` + `retransmit`), or at node scope as `transport.retransmit`, which
+beats every override. Upgrade every controller before the first change to
+it. `webjetctl local status` shows `retransmit` in force, and `webjetctl
+local peers` shows for each KCP hop whether it runs without retransmission
+(`lane`) and how many packets it sent, received and lost that way.
 
 #### `[limits]`
 
@@ -773,6 +810,7 @@ only. It holds a subset of the keys:
 | --- | --- |
 | `transport.priority.<transport>` | Replaces the network's priority and any override. Other nodes see it too: the node publishes its priorities, and peers use them when choosing a transport. |
 | `transport.compression.control`, `.data` | Replaces the network's value for that setting; the other keeps the network's value. |
+| `transport.retransmit` | Replaces the network's value and any override. |
 | `limits.value.<name>` | Replaces the network's value and overrides. |
 | `[[seeds]]` | Tried before the network's seeds. |
 | `[[dns.record]]`, `[[dns.forward]]` | Answered or forwarded by this node's resolver only, before the network's. Checked like the network's (inside the suffix or a forwarded zone, no shadowing of magic DNS names). |
@@ -789,6 +827,7 @@ webjetctl local config show --effective                   # everything in force 
 webjetctl local config set transport.priority.kcp 0       # never UDP from this node
 webjetctl local config set limits.value.relay_capacity_mbps 900
 webjetctl local config set transport.compression.data lz4 # compress packets to and from this node
+webjetctl local config set transport.retransmit true      # KCP hops retransmit this node's packets
 webjetctl local config unset transport.priority.kcp       # back to the network's value
 webjetctl local config --node relay-fra edit              # another node
 ```
@@ -880,8 +919,8 @@ For each value, the first one that is set wins:
 
 1. the node's own configuration (node scope)
 2. a matching network override: for priorities, the first override that
-   names the transport; for limits, the highest value of all matching
-   overrides
+   names the transport; for `retransmit`, the first override that sets it;
+   for limits, the highest value of all matching overrides
 3. the network's value
 4. the built-in default
 

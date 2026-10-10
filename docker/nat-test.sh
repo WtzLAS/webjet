@@ -1,7 +1,8 @@
 #!/bin/sh
 # Hole punching end to end (architecture §11.7) on Linux containers:
 #
-#   ctl-01, rly-02   relays on the "internet" (172.31.0.0/24)
+#   ctl-01, rly-02   relays on the "internet" ($INET.0/24; INET_PREFIX, default
+#                    172.31.0, in case that is taken on the host)
 #   nat-a, nat-b     NAT routers between the internet and a private LAN each
 #   node-a           data node behind nat-a (10.71.1.0/24), port-restricted
 #                    cone NAT (MASQUERADE keeps ports, filters by endpoint)
@@ -22,6 +23,7 @@ set -eu
 IMG=${IMG:-webjet:test}
 MODE=${MODE:-cone}
 P=wjn
+INET=${INET_PREFIX:-172.31.0}
 NETS="$P-inet $P-lana $P-lanb $P-vpn"
 cleanup() {
   docker rm -f $P-ctl $P-rly $P-nata $P-natb $P-a $P-b $P-c >/dev/null 2>&1 || true
@@ -30,7 +32,7 @@ cleanup() {
 cleanup
 [ "${1:-}" = "clean" ] && exit 0
 trap 'echo "== logs"; for c in a b c; do echo "-- node-$c"; docker exec $P-$c tail -30 /var/log/webjetd.log 2>/dev/null || true; done' EXIT
-docker network create --subnet 172.31.0.0/24 $P-inet >/dev/null
+docker network create --subnet $INET.0/24 $P-inet >/dev/null
 # Not --internal: Docker then drops (bridged) packets leaving the subnet,
 # which is all the NAT routers' traffic. The default routes point at them.
 docker network create --subnet 10.71.1.0/24 $P-lana >/dev/null
@@ -43,13 +45,13 @@ x() { c=$1; shift; docker exec $c "$@"; }
 bg() { c=$1; shift; docker exec -d $c sh -c "$* > /var/log/webjetd.log 2>&1"; }
 
 # Relays on the internet.
-idle $P-ctl ctl-01 "--network $P-inet --ip 172.31.0.10"
-idle $P-rly rly-02 "--network $P-inet --ip 172.31.0.11"
-idle $P-c pub-c "--network $P-inet --ip 172.31.0.30"
+idle $P-ctl ctl-01 "--network $P-inet --ip $INET.10"
+idle $P-rly rly-02 "--network $P-inet --ip $INET.11"
+idle $P-c pub-c "--network $P-inet --ip $INET.30"
 # NAT routers: WAN on the internet, LAN on the private network.
-idle $P-nata nat-a "--network $P-inet --ip 172.31.0.21"
+idle $P-nata nat-a "--network $P-inet --ip $INET.21"
 docker network connect --ip 10.71.1.2 $P-lana $P-nata
-idle $P-natb nat-b "--network $P-inet --ip 172.31.0.22"
+idle $P-natb nat-b "--network $P-inet --ip $INET.22"
 docker network connect --ip 10.71.2.2 $P-lanb $P-natb
 # Data nodes behind them, plus the fake VPN between them.
 idle $P-a node-a "--network $P-lana --ip 10.71.1.10"
@@ -79,9 +81,9 @@ nat() { # router wan-if-ip lan-prefix symmetric?
   x $1 iptables -A INPUT -i $wan -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   x $1 iptables -A INPUT -i $wan -j DROP
 }
-nat $P-nata 172.31.0.21 10.71.1.0/24 no
+nat $P-nata $INET.21 10.71.1.0/24 no
 SYM=no; [ "$MODE" = symmetric ] && SYM=yes
-nat $P-natb 172.31.0.22 10.71.2.0/24 "$SYM"
+nat $P-natb $INET.22 10.71.2.0/24 "$SYM"
 
 conf() { # container listen? public-ip
   if [ -n "$3" ]; then
@@ -109,8 +111,8 @@ configure_system = false
 EOT'
   fi
 }
-conf $P-ctl yes 172.31.0.10
-conf $P-rly yes 172.31.0.11
+conf $P-ctl yes $INET.10
+conf $P-rly yes $INET.11
 conf $P-a "" ""
 conf $P-b "" ""
 conf $P-c "" ""
@@ -127,7 +129,7 @@ W() { x $P-ctl $E webjetctl --account alice "$@"; }
 i=0; until W --json network controller list 2>/dev/null | grep -q '"valid_until": [1-9]'; do sleep 0.5; i=$((i+1)); [ $i -lt 60 ] || { echo "controller did not start"; x $P-ctl cat /var/log/webjetd.log; exit 1; }; done
 x $P-ctl sh -c 'cd /root && webjetctl network account keygen --name infra --pub-out infra.pub >/dev/null'
 W network account create --name infra --key /root/infra.pub >/dev/null
-T=$(W --json network node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller tls:172.31.0.10:443 | sed -n 's/.*"enroll": "\(.*\)".*/\1/p')
+T=$(W --json network node enroll --owner infra --name ctl-01 --ip 10.7.0.1 --roles data,relay,control --controller tls:$INET.10:443 | sed -n 's/.*"enroll": "\(.*\)".*/\1/p')
 x $P-ctl $E webjetctl local enroll "$T" >/dev/null
 W network controller certify ctl-01 >/dev/null
 x $P-ctl sh -c 'cat > /root/network.toml <<EOT
@@ -138,18 +140,18 @@ default = "allow"
 
 [[seeds]]
 node = "ctl-01"
-addrs = ["tls:172.31.0.10:443", "kcp:172.31.0.10:443"]
+addrs = ["tls:'"$INET"'.10:443", "kcp:'"$INET"'.10:443"]
 EOT'
 W network config apply /root/network.toml >/dev/null
 enroll() { # container name ip roles
-  T=$(W --json network node enroll --owner infra --name $2 --ip $3 --roles $4 --controller tls:172.31.0.10:443 | sed -n 's/.*"enroll": "\(.*\)".*/\1/p')
+  T=$(W --json network node enroll --owner infra --name $2 --ip $3 --roles $4 --controller tls:$INET.10:443 | sed -n 's/.*"enroll": "\(.*\)".*/\1/p')
   x $1 $E webjetctl local enroll "$T" >/dev/null
   bg $1 $E webjetd run
 }
 enroll $P-rly rly-02 10.7.0.2 data,relay
 sleep 3
 # A seed must name an existing node: add rly-02 now.
-W network config set seeds '[{node = "ctl-01", addrs = ["tls:172.31.0.10:443", "kcp:172.31.0.10:443"]}, {node = "rly-02", addrs = ["tls:172.31.0.11:443", "kcp:172.31.0.11:443"]}]' >/dev/null
+W network config set seeds "[{node = \"ctl-01\", addrs = [\"tls:$INET.10:443\", \"kcp:$INET.10:443\"]}, {node = \"rly-02\", addrs = [\"tls:$INET.11:443\", \"kcp:$INET.11:443\"]}]" >/dev/null
 enroll $P-a node-a 10.7.0.10 data
 enroll $P-b node-b 10.7.0.11 data
 enroll $P-c pub-c 10.7.0.12 data

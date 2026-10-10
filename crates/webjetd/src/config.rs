@@ -310,7 +310,22 @@ fn nets<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ipnet::IpNet>, D::
         .collect()
 }
 fn default_mtu() -> u16 {
-    1280
+    webjet_net::kcp::LANE_INNER_MAX as u16
+}
+
+/// The smallest tun MTU: IPv4's minimum datagram.
+pub const MIN_MTU: u16 = 576;
+
+/// Why a tun MTU above the default costs reliability (§9.4.7): on KCP hops
+/// that don't retransmit (§17.5), a packet over 1280 bytes takes two
+/// datagrams and is lost with either.
+pub fn mtu_warning(mtu: u16) -> Option<String> {
+    let max = webjet_net::kcp::LANE_INNER_MAX;
+    (usize::from(mtu) > max).then(|| {
+        format!(
+            "[tun] mtu {mtu} is above {max}: on KCP hops without retransmission (the default) a packet over {max} bytes is sent in two datagrams and lost if either is"
+        )
+    })
 }
 fn default_head_hours() -> u64 {
     48
@@ -369,6 +384,13 @@ impl Config {
         let mut c: Config = toml::from_str(&s).with_context(|| format!("parse {}", p.display()))?;
         c.check_removed()
             .with_context(|| format!("in {}", p.display()))?;
+        if c.tun.mtu < MIN_MTU {
+            anyhow::bail!(
+                "in {}: [tun] mtu {} is below {MIN_MTU}",
+                p.display(),
+                c.tun.mtu
+            );
+        }
         if c.control_socket.is_relative() {
             c.control_socket = c.data_dir.join(&c.control_socket);
         }
@@ -495,6 +517,21 @@ transport = "kcp"
             let t = format!("[[public]]\naddr = \"{bad}\"\ntransport = \"kcp\"\n");
             assert!(toml::from_str::<Config>(&t).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn tun_mtu_bounds() {
+        assert_eq!(Config::default().tun.mtu, 1280);
+        assert!(mtu_warning(1280).is_none());
+        assert!(mtu_warning(1281).unwrap().contains("two datagrams"));
+        let dir = std::env::temp_dir().join(format!("webjet-mtu-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("webjetd.toml");
+        std::fs::write(&p, "[tun]\nmtu = 500\n").unwrap();
+        assert!(Config::load(Some(&p)).is_err());
+        std::fs::write(&p, "[tun]\nmtu = 1400\n").unwrap();
+        assert_eq!(Config::load(Some(&p)).unwrap().tun.mtu, 1400);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

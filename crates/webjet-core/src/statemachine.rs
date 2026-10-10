@@ -1215,7 +1215,8 @@ impl Machine {
                 .compression
                 .as_ref()
                 .is_none_or(|c| c.control == 0 && c.data == 0)
-            && cfg.multicast.as_ref().is_none_or(|m| m.capture.is_none());
+            && cfg.multicast.as_ref().is_none_or(|m| m.capture.is_none())
+            && cfg.retransmit.is_none();
         if empty {
             if current == 0 {
                 return rej("the node has no configuration to clear");
@@ -3278,6 +3279,7 @@ mod tests {
                         transport: wp::Transport::TcpTls,
                         priority: 50,
                     }]),
+                    retransmit: None,
                 }]),
                 camouflage: None,
                 padding: None,
@@ -3288,6 +3290,7 @@ mod tests {
                 multicast: Some(Box::new(wp::MulticastConfig {
                     capture: Some(vec!["udp:19132".into()]),
                 })),
+                retransmit: None,
             })),
             controllers: None,
         }
@@ -3424,6 +3427,7 @@ mod tests {
             proxy: None,
             compression: None,
             multicast: None,
+            retransmit: None,
         }
     }
 
@@ -3549,6 +3553,51 @@ mod tests {
         })))
         .unwrap();
         assert!(h.m.tree.get(kind::NODE_CONFIG, &b).is_none());
+    }
+
+    #[test]
+    fn retransmit_network_overrides_and_node() {
+        let mut h = H::new();
+        let a = enroll(&mut h, "a", "10.7.0.5", &KeyPair::generate());
+        let b = enroll(&mut h, "b", "10.7.0.6", &KeyPair::generate());
+        // Built-in: off.
+        assert!(!h.m.view().retransmit(&a));
+        // On for the network, off again for node a by an override that
+        // names only it (a priority-only override before it doesn't count).
+        let mut c = net_config(1);
+        if let Some(t) = c.transport.as_mut() {
+            t.retransmit = Some(true);
+            t.overrides
+                .get_or_insert_default()
+                .push(wp::PriorityOverride {
+                    select: Some(vec!["node:a".into()]),
+                    values: None,
+                    retransmit: Some(false),
+                });
+        }
+        set_network(&mut h, c).unwrap();
+        let v = h.m.view();
+        assert!(!v.retransmit(&a) && v.retransmit(&b));
+        // Node a's own setting beats the override; on its own it is a
+        // node configuration, and unsetting it clears the leaf.
+        let only = |version, r| wp::NodeConfig {
+            node_id: Some(crypto::k32(&a)),
+            version,
+            retransmit: r,
+            ..Default::default()
+        };
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(only(1, Some(true)))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_some());
+        assert!(h.m.view().retransmit(&a));
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(only(2, None))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_none());
+        assert!(!h.m.view().retransmit(&a));
     }
 
     #[test]

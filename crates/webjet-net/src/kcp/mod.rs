@@ -32,7 +32,10 @@
 //! silently (§9.1). KCP runs with its congestion window off and is paced by
 //! a BBR-style controller.
 
+mod lane;
 mod proto;
+
+pub use lane::LaneStats;
 
 use crate::fec;
 use crate::gate::{GateResult, ReplayCache, SharedEpochs, UdpObfs, small_packet_padding};
@@ -109,6 +112,11 @@ pub struct KcpStats {
     pub bw_estimate_kbps: AtomicU64,
     /// How long the oldest unsent byte has waited in KCP, µs (§17.7).
     pub backlog_us: AtomicU64,
+    /// Records sent and received on the unreliable lane (§17.5), and
+    /// records lost to a missing piece.
+    pub lane_tx: AtomicU64,
+    pub lane_rx: AtomicU64,
+    pub lane_incomplete: AtomicU64,
     /// Raw RTT samples and loss counts since the last [`Self::take_sample`].
     meas: Mutex<Measured>,
 }
@@ -137,8 +145,87 @@ impl KcpStats {
     }
 }
 
+/// A session's unreliable lane (§17.5): whole hop records that are sent
+/// once and delivered in any order. It carries nothing until
+/// [`LaneIo::start`] gives it keys; until then, and with peers that don't
+/// take it, everything goes on the stream.
+pub struct LaneIo {
+    keys: Option<tokio::sync::oneshot::Sender<([u8; 32], [u8; 32])>>,
+    /// Records to send. Small, like the stream's pipe: what can't go yet
+    /// waits in the hop queue.
+    pub tx: mpsc::Sender<Vec<u8>>,
+    /// Records that arrived.
+    pub rx: mpsc::Receiver<Vec<u8>>,
+}
+
+impl LaneIo {
+    /// Start the lane with the keys for what we send and what we receive.
+    pub fn start(&mut self, tx_key: [u8; 32], rx_key: [u8; 32]) -> bool {
+        self.keys
+            .take()
+            .is_some_and(|k| k.send((tx_key, rx_key)).is_ok())
+    }
+}
+
+impl std::fmt::Debug for LaneIo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaneIo")
+            .field("started", &self.keys.is_none())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The record bytes one lane piece carries: a record up to this long is
+/// sent in one datagram, a longer one in several, and lost with any of them.
+pub const LANE_PIECE: usize = lane::PIECE;
+/// The largest record the lane takes; a longer one goes on the stream.
+pub const LANE_MAX_RECORD: usize = lane::MAX_RECORD;
+/// The largest inner packet whose relay frame (relay header and end-to-end
+/// frame around it) is one lane piece: 1280, the default tun MTU. With a
+/// larger tun MTU, bigger packets cross KCP hops in two datagrams, and the
+/// loss of either loses the packet (§9.4.7).
+pub const LANE_INNER_MAX: usize =
+    LANE_PIECE - webjet_core::frames::OVERHEAD - webjet_core::frames::RELAY_HEADER;
+const _: () = assert!(LANE_INNER_MAX == 1280);
+/// Records the lane takes from the hop writer ahead of KCP.
+const LANE_PIPE: usize = 16;
+/// Received lane records waiting for the hop reader.
+const LANE_RECEIVED: usize = 1024;
+
+/// What a new session hands its user, and the session task keeps.
+struct SessionEnds {
+    stream: DuplexStream,
+    lane: LaneIo,
+}
+
+/// The session task's side of the lane.
+struct LaneTask {
+    keys: tokio::sync::oneshot::Receiver<([u8; 32], [u8; 32])>,
+    out: mpsc::Receiver<Vec<u8>>,
+    delivered: mpsc::Sender<Vec<u8>>,
+}
+
+fn lane_pair() -> (LaneIo, LaneTask) {
+    let (keys_tx, keys) = tokio::sync::oneshot::channel();
+    let (tx, out) = mpsc::channel(LANE_PIPE);
+    let (delivered, rx) = mpsc::channel(LANE_RECEIVED);
+    (
+        LaneIo {
+            keys: Some(keys_tx),
+            tx,
+            rx,
+        },
+        LaneTask {
+            keys,
+            out,
+            delivered,
+        },
+    )
+}
+
 pub struct KcpConn {
     pub stream: DuplexStream,
+    pub lane: LaneIo,
     pub peer: SocketAddr,
     pub gate: GateResult,
     pub stats: Arc<KcpStats>,
@@ -357,7 +444,7 @@ impl UdpEndpoint {
             }
             // Another receive task may have opened it meanwhile (OPENs are
             // resent): then this OPEN goes to that session.
-            let Some((stream, tx, stats, id)) = self.clone().spawn_session(from, conv) else {
+            let Some((ends, tx, stats, id)) = self.clone().spawn_session(from, conv) else {
                 let tx = self.sessions.lock().get(&key).map(|h| h.tx.clone());
                 if let Some(tx) = tx {
                     let mut d = vec![K_OPEN];
@@ -372,7 +459,8 @@ impl UdpEndpoint {
             if self
                 .accept_tx
                 .try_send(KcpConn {
-                    stream,
+                    stream: ends.stream,
+                    lane: ends.lane,
                     peer: from,
                     gate,
                     stats,
@@ -421,10 +509,11 @@ impl UdpEndpoint {
     /// Dial a peer: returns a byte stream over KCP.
     pub fn dial(self: &Arc<Self>, to: SocketAddr) -> KcpConn {
         let conv = rand::random::<u32>() | 1;
-        let (stream, _tx, stats, _) = self.clone().start_session(to, conv, true);
+        let (ends, _tx, stats, _) = self.clone().start_session(to, conv, true);
         let gate = GateResult::Normal(self.epochs.read().current);
         KcpConn {
-            stream,
+            stream: ends.stream,
+            lane: ends.lane,
             peer: to,
             gate,
             stats,
@@ -437,7 +526,7 @@ impl UdpEndpoint {
         self: Arc<Self>,
         peer: SocketAddr,
         conv: u32,
-    ) -> Option<(DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64)> {
+    ) -> Option<(SessionEnds, mpsc::Sender<Arrived>, Arc<KcpStats>, u64)> {
         let mut sessions = self.sessions.lock();
         if sessions.contains_key(&(peer, conv)) {
             return None;
@@ -454,7 +543,7 @@ impl UdpEndpoint {
         peer: SocketAddr,
         conv: u32,
         dialer: bool,
-    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
+    ) -> (SessionEnds, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
         let mut sessions = self.sessions.lock();
         self.clone()
             .start_session_locked(&mut sessions, peer, conv, dialer)
@@ -468,20 +557,21 @@ impl UdpEndpoint {
         peer: SocketAddr,
         conv: u32,
         dialer: bool,
-    ) -> (DuplexStream, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
+    ) -> (SessionEnds, mpsc::Sender<Arrived>, Arc<KcpStats>, u64) {
         static SESSION_IDS: AtomicU64 = AtomicU64::new(1);
         let id = SESSION_IDS.fetch_add(1, Ordering::Relaxed);
         let (user, inner) = tokio::io::duplex(DUPLEX);
+        let (lane, lane_task) = lane_pair();
         let (tx, rx) = mpsc::channel(4096);
         sessions.insert((peer, conv), SessionHandle { tx: tx.clone(), id });
         let stats = Arc::new(KcpStats::default());
         let st = stats.clone();
         tokio::spawn(async move {
             let ep = self.clone();
-            run_session(ep, peer, conv, dialer, inner, rx, st).await;
+            run_session(ep, peer, conv, dialer, (inner, lane_task), rx, st).await;
             self.forget_session((peer, conv), id);
         });
-        (user, tx, stats, id)
+        (SessionEnds { stream: user, lane }, tx, stats, id)
     }
 }
 
@@ -843,10 +933,19 @@ async fn run_session(
     peer: SocketAddr,
     conv: u32,
     dialer: bool,
-    user: DuplexStream,
+    (user, lane): (DuplexStream, LaneTask),
     mut rx: mpsc::Receiver<Arrived>,
     stats: Arc<KcpStats>,
 ) {
+    let LaneTask {
+        keys: mut lane_keys,
+        out: mut lane_out,
+        delivered: lane_delivered,
+    } = lane;
+    // The keys come once the hop's TLS handshake is done, or never (the
+    // sender is dropped).
+    let mut lane_keys_open = true;
+    let mut lane_open = true;
     let mut kcp = proto::Kcp::new(conv, KCP_MTU);
     kcp.set_wndsize(256, 1024);
     let start = Instant::now();
@@ -911,12 +1010,35 @@ async fn run_session(
     loop {
         // Take more user data only while KCP holds a few milliseconds of it
         // (§17.2): the rest waits in the hop queue, where CoDel sees it.
-        let can_take = user_open && kcp.queued_bytes() < queue_limit(rate);
+        let room = kcp.queued_bytes() < queue_limit(rate);
+        let can_take = user_open && room;
+        let lane_takes = lane_open && room && kcp.lane_ready();
         tokio::select! {
             r = rd.read(&mut user_buf), if can_take => {
                 match r {
                     Ok(0) | Err(_) => { user_open = false; }
                     Ok(n) => kcp.send(&user_buf[..n], us(Instant::now())),
+                }
+            }
+            k = &mut lane_keys, if lane_keys_open => {
+                lane_keys_open = false;
+                if let Ok((tx, rx)) = k {
+                    kcp.set_lane_keys(tx, rx);
+                }
+            }
+            r = lane_out.recv(), if lane_takes => {
+                match r {
+                    Some(rec) => {
+                        let now_us = us(Instant::now());
+                        kcp.send_unreliable(&rec, now_us);
+                        // Take what else is waiting, while there's room.
+                        while kcp.queued_bytes() < queue_limit(rate)
+                            && let Ok(rec) = lane_out.try_recv()
+                        {
+                            kcp.send_unreliable(&rec, now_us);
+                        }
+                    }
+                    None => lane_open = false,
                 }
             }
             d = rx.recv() => {
@@ -991,6 +1113,17 @@ async fn run_session(
                     pending.extend_from_slice(&b);
                 }
             }
+        }
+        // Lane records go to the reader as they come; a reader that can't
+        // keep up loses them, as the line would.
+        while let Some(r) = kcp.recv_unreliable() {
+            let _ = lane_delivered.try_send(r);
+        }
+        if kcp.lane_ready() {
+            let l = kcp.lane_stats();
+            stats.lane_tx.store(l.tx_records, Ordering::Relaxed);
+            stats.lane_rx.store(l.rx_records, Ordering::Relaxed);
+            stats.lane_incomplete.store(l.incomplete, Ordering::Relaxed);
         }
         let now = Instant::now();
         // What KCP measured: raw round trips (§11.2), retransmissions and
@@ -1483,6 +1616,144 @@ mod tests {
             s.stats.fec_recovered.load(Ordering::Relaxed) > 0,
             "receiver recovered"
         );
+    }
+
+    /// The lane over a lossy link: records go once (no retransmission), FEC
+    /// recovers most of what is lost, the rest stays lost; the acknowledged
+    /// pieces give round trips; the stream beside it stays reliable.
+    #[tokio::test]
+    async fn the_lane_sends_once_and_fec_repairs() {
+        let ep_a = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), false)
+            .await
+            .unwrap();
+        let ep_b = UdpEndpoint::bind("127.0.0.1:0".parse().unwrap(), &[1; 32], epochs(), true)
+            .await
+            .unwrap();
+        // A proxy dropping every 10th datagram in each direction, and
+        // `blackout` datagrams in a row towards the listener when asked.
+        let proxy = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let blackout = Arc::new(AtomicU64::new(0));
+        let (b_addr, p, bo) = (ep_b.local_addr().unwrap(), proxy.clone(), blackout.clone());
+        tokio::spawn(async move {
+            let (mut buf, mut a_addr, mut n) = (vec![0u8; 65536], None, 0u64);
+            while let Ok((len, from)) = p.recv_from(&mut buf).await {
+                n += 1;
+                let to = if from == b_addr {
+                    a_addr
+                } else {
+                    a_addr = Some(from);
+                    if bo
+                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| b.checked_sub(1))
+                        .is_ok()
+                    {
+                        continue;
+                    }
+                    Some(b_addr)
+                };
+                if n % 10 != 0
+                    && let Some(to) = to
+                {
+                    let _ = p.send_to(&buf[..len], to).await;
+                }
+            }
+        });
+        let mut c = ep_a.dial(proxy.local_addr().unwrap());
+        let stats = c.stats.clone();
+        // The stream opens the session (the listener accepts on an OPEN).
+        c.stream.write_all(b"hello").await.unwrap();
+        let mut s = tokio::time::timeout(Duration::from_secs(5), async {
+            ep_b.accept_rx.lock().await.recv().await.unwrap()
+        })
+        .await
+        .unwrap();
+        let mut hello = [0u8; 5];
+        s.stream.read_exact(&mut hello).await.unwrap();
+        assert!(c.lane.start([1; 32], [2; 32]));
+        assert!(s.lane.start([2; 32], [1; 32]));
+        assert!(!c.lane.start([1; 32], [2; 32]), "keys are set once");
+        // Let FEC learn the loss from the stream first.
+        let w = tokio::spawn(async move {
+            for _ in 0..20 {
+                c.stream.write_all(&[7u8; 50_000]).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            c
+        });
+        let mut got = vec![0u8; 20 * 50_000];
+        tokio::time::timeout(Duration::from_secs(30), s.stream.read_exact(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
+        let c = w.await.unwrap();
+        // Until FEC is on (loss reports go every second) and the stream has
+        // stopped retransmitting its tail (its acknowledgements are lost
+        // too): what the stream does after this isn't the lane's.
+        let mut retrans_before = stats.retrans.load(Ordering::Relaxed);
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let r = stats.retrans.load(Ordering::Relaxed);
+            if r == retrans_before && stats.fec_ratio_pct.load(Ordering::Relaxed) > 0 {
+                break;
+            }
+            retrans_before = r;
+        }
+        assert!(stats.fec_ratio_pct.load(Ordering::Relaxed) > 0, "FEC on");
+        // 2000 one-piece records and 100 three-piece ones.
+        const ONE: usize = 2000;
+        const THREE: usize = 100;
+        let sender = tokio::spawn(async move {
+            for i in 0..ONE + THREE {
+                let len = if i < ONE { 1200 } else { 3 * LANE_PIECE - 7 };
+                let mut r = vec![(i % 251) as u8; len];
+                r[..4].copy_from_slice(&(i as u32).to_be_bytes());
+                c.lane.tx.send(r).await.unwrap();
+                if i % 20 == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                // Halfway: 30 datagrams in a row lost, whole FEC groups
+                // (8 data shards and at most 30 % parity): only a
+                // retransmission could bring them back.
+                if i == ONE / 2 {
+                    blackout.store(30, Ordering::Relaxed);
+                }
+            }
+            c
+        });
+        let mut seen = std::collections::HashSet::new();
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(r) = s.lane.rx.recv().await {
+                let i = u32::from_be_bytes(r[..4].try_into().unwrap()) as usize;
+                let len = if i < ONE { 1200 } else { 3 * LANE_PIECE - 7 };
+                assert_eq!(r.len(), len, "record {i} whole");
+                assert!(r[4..].iter().all(|b| *b == (i % 251) as u8));
+                assert!(seen.insert(i), "record {i} once");
+                if seen.len() == ONE + THREE {
+                    break;
+                }
+            }
+        })
+        .await;
+        let _c = sender.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let n = seen.len();
+        // 10% line loss each way; FEC repairs most of it. The blackout's
+        // records are gone (at least two whole FEC groups).
+        assert!(n > (ONE + THREE) * 9 / 10, "most records arrived: {n}");
+        assert!(
+            n <= ONE + THREE - 2 * fec::GROUP_DATA,
+            "the blackout's records are lost for good: {n}"
+        );
+        // Some hundred pieces were lost; none was sent again.
+        assert_eq!(
+            stats.retrans.load(Ordering::Relaxed),
+            retrans_before,
+            "lane pieces are never retransmitted"
+        );
+        assert!(s.stats.fec_recovered.load(Ordering::Relaxed) > 0);
+        assert_eq!(stats.lane_tx.load(Ordering::Relaxed), (ONE + THREE) as u64);
+        assert_eq!(s.stats.lane_rx.load(Ordering::Relaxed), n as u64);
+        let rtt = stats.take_sample().rtt_ms;
+        assert!(rtt.is_some(), "acknowledged pieces give round trips");
     }
 
     /// Over a 20 Mbit/s path, the bandwidth estimate never goes far above

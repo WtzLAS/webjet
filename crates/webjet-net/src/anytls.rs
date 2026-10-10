@@ -197,6 +197,7 @@ pub async fn dial(
             bootstrap: false,
             kcp_stats: None,
             meter: Some(meter),
+            lane: None,
         })
     };
     tokio::time::timeout(Duration::from_secs(15), fut)
@@ -322,6 +323,7 @@ pub async fn accept(s: TcpStream, remote: SocketAddr, ctx: &AcceptCtx<'_>) -> Re
                 bootstrap: gr.bootstrap(),
                 kcp_stats: None,
                 meter: Some(Meter::Tcp(meter)),
+                lane: None,
             }))
         }
         Some(PwResult::Enroll) => {

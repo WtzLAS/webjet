@@ -11,21 +11,24 @@
 set -eu
 IMG=${IMG:-webjet:test}
 P=wjt
+# WAN_PREFIX: the test network's first two octets (WAN_PREFIX.0.0/24), in
+# case 172.30 is taken on the host.
+WAN=${WAN_PREFIX:-172.30}
 cleanup() { docker rm -f $P-ctl $P-a $P-b $P-gw $P-lan $P-cli >/dev/null 2>&1 || true; docker network rm $P-wan $P-lan >/dev/null 2>&1 || true; }
 cleanup
 [ "${1:-}" = "clean" ] && exit 0
-docker network create --subnet 172.30.0.0/24 $P-wan >/dev/null
+docker network create --subnet $WAN.0.0/24 $P-wan >/dev/null
 docker network create --subnet 192.168.50.0/24 $P-lan >/dev/null
 run() { # container name gw
   docker run -d --name $1 --hostname $2 --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun \
-    --sysctl net.ipv4.ip_forward=1 -e RUST_LOG=info -e WEBJET_ROOT_PASSPHRASE=r -e WEBJET_ACCOUNT_PASSPHRASE=a -e WEBJET_KEYS=/root/keys \
+    --sysctl net.ipv4.ip_forward=1 -e WAN_PREFIX=$WAN -e RUST_LOG=info -e WEBJET_ROOT_PASSPHRASE=r -e WEBJET_ACCOUNT_PASSPHRASE=a -e WEBJET_KEYS=/root/keys \
     $IMG /opt/webjet/docker/node.sh $2 $3 >/dev/null
 }
 run $P-ctl ctl-01 ""
 run $P-a node-a ""
 run $P-b node-b ""
 docker create --name $P-gw --hostname gw --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun --sysctl net.ipv4.ip_forward=1 \
-  -e RUST_LOG=info $IMG /opt/webjet/docker/node.sh gw 192.168.50.0/24 >/dev/null
+  -e WAN_PREFIX=$WAN -e RUST_LOG=info $IMG /opt/webjet/docker/node.sh gw 192.168.50.0/24 >/dev/null
 docker network connect --ip 192.168.50.2 $P-lan $P-gw
 docker start $P-gw >/dev/null
 docker run -d --name $P-lan --network $P-lan --ip 192.168.50.10 --cap-add NET_ADMIN $IMG sh -c 'exec sleep infinity' >/dev/null
@@ -162,7 +165,7 @@ target = ["192.168.50.10"]
 target_port = 9100
 EOT'
 W local config --node node-a apply /root/node-a.toml
-A_IP=$(x $P-a hostname -i | tr " " "\n" | grep "^172\.30\." | head -1)
+A_IP=$(x $P-a hostname -i | tr " " "\n" | grep -F "$WAN." | head -1)
 CLI_IP=$(x $P-cli hostname -i | awk '{print $1}')
 i=0; until x $P-a webjetctl --json local proxy | grep -q '"listening on tcp port 8080'; do sleep 1; i=$((i+1)); [ $i -lt 30 ] || { echo "FAIL: node-a does not listen"; x $P-a webjetctl local proxy; exit 1; }; done
 x $P-a webjetctl local proxy | sed -n '/^rules:/,/^total:/p'

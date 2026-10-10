@@ -264,6 +264,15 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                 queue_delay_ms: (h.queue_delay_us.load(Ordering::Relaxed) / 1000) as u32,
                 rtt_ms: st.effective().map_or(0, |e| e.0.ceil() as u32),
                 loss_pct: st.effective().map_or(0, |e| (e.1 * 100.0).round() as u8),
+                lane_tx: k
+                    .filter(|_| h.lane)
+                    .map(|k| k.lane_tx.load(Ordering::Relaxed)),
+                lane_rx: k
+                    .filter(|_| h.lane)
+                    .map(|k| k.lane_rx.load(Ordering::Relaxed)),
+                lane_incomplete: k
+                    .filter(|_| h.lane)
+                    .map(|k| k.lane_incomplete.load(Ordering::Relaxed)),
             }
         })
         .collect();

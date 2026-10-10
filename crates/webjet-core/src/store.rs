@@ -300,6 +300,27 @@ impl View {
         )
     }
 
+    /// Whether a node retransmits unreliable-class frames (§17.5) on the KCP
+    /// hops it sends on, first found: the node's own configuration, the
+    /// first of the network's matching overrides that sets it, the
+    /// network's value, built-in off.
+    pub fn retransmit(&self, node: &Bytes32) -> bool {
+        if let Some(r) = self.node_configs.get(node).and_then(|c| c.retransmit) {
+            return r;
+        }
+        let Some(tc) = &self.transport else {
+            return false;
+        };
+        for o in tc.overrides.as_deref().unwrap_or_default() {
+            if let Some(r) = o.retransmit
+                && self.selected(&o.select, node)
+            {
+                return r;
+            }
+        }
+        tc.retransmit.unwrap_or(false)
+    }
+
     /// The UDP ports whose broadcasts and multicasts a node captures from
     /// its other interfaces (§9.5.2): the node's own `capture`, else the
     /// network's, else none.

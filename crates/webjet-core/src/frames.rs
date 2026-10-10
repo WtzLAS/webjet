@@ -33,6 +33,19 @@ pub mod ftype {
     /// Which broadcasts and groups the sender takes (§9.5.1), answering
     /// MCAST frames: `webjet_core::multicast::encode_report`.
     pub const GROUPS: u8 = 14;
+
+    /// Frame types a hop may lose (§17.5): inner packets, whose own
+    /// protocols recover from loss, and probes, which measure it. KCP hops
+    /// send them without retransmission unless the sending node turns it on;
+    /// everything else (handshakes, RPCs, hole punching, group reports,
+    /// CLOSE) always goes reliably. The type is outside the end-to-end
+    /// encryption, so relays classify frames the same way.
+    pub fn unreliable(ty: u8) -> bool {
+        matches!(
+            ty,
+            DATA | DATA_LZ4 | PROXY | PROXY_LZ4 | MCAST | PROBE | PROBE_ACK
+        )
+    }
 }
 
 /// type(1) + key_id(4) + counter(8)
@@ -102,6 +115,35 @@ impl SessionKey {
         buf.copy_within(start..start + n, 0);
         buf.truncate(n);
         Some(buf)
+    }
+
+    /// Seal `buf[from..]` in place with `counter` as the nonce and `aad`
+    /// authenticated alongside, appending the tag. For other layers that
+    /// use the same AEAD (KCP hop datagrams, §17.5); a key must never see
+    /// one counter twice.
+    pub fn seal_in_place(
+        &self,
+        counter: u64,
+        aad: &[u8],
+        buf: &mut Vec<u8>,
+        from: usize,
+    ) -> Option<()> {
+        let body = buf.get_mut(from..)?;
+        let tag = self
+            .cipher
+            .seal_in_place_separate_tag(Self::nonce(counter), Aad::from(aad), body)
+            .ok()?;
+        buf.extend_from_slice(tag.as_ref());
+        Some(())
+    }
+
+    /// Open what [`Self::seal_in_place`] sealed (ciphertext and tag) in
+    /// place; the plaintext's length, or `None` if it isn't authentic.
+    pub fn open_in_place(&self, counter: u64, aad: &[u8], body: &mut [u8]) -> Option<usize> {
+        self.cipher
+            .open_in_place(Self::nonce(counter), Aad::from(aad), body)
+            .ok()
+            .map(|p| p.len())
     }
 
     /// Open a frame whose header was already parsed. Does not touch any
@@ -291,6 +333,12 @@ pub fn relay_header(circuit: u32, hop_limit: u8, ecn: u8) -> [u8; RELAY_HEADER] 
     h[..4].copy_from_slice(&circuit.to_be_bytes());
     h[4] = (hop_limit.min(63) << 2) | (ecn & 3);
     h
+}
+
+/// Whether a relay frame (header and end-to-end frame) is of an
+/// unreliable type ([`ftype::unreliable`]).
+pub fn relay_unreliable(f: &[u8]) -> bool {
+    f.get(RELAY_HEADER).is_some_and(|t| ftype::unreliable(*t))
 }
 
 pub fn parse_relay(f: &[u8]) -> Option<(u32, u8, u8, &[u8])> {

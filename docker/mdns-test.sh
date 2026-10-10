@@ -28,6 +28,9 @@
 set -eu
 IMG=${IMG:-webjet:mdns}
 P=wjd
+# WAN_PREFIX: the test network's first two octets (WAN_PREFIX.10.0/24), in
+# case 172.30 is taken on the host.
+WAN=${WAN_PREFIX:-172.30}
 NODES="ctl h1 h2 h3 o1"
 cleanup() {
   for c in $NODES; do docker rm -f $P-$c >/dev/null 2>&1 || true; done
@@ -45,14 +48,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 EOF
 
-docker network create --subnet 172.30.10.0/24 $P-wan >/dev/null
+docker network create --subnet $WAN.10.0/24 $P-wan >/dev/null
 for c in $NODES; do
   case $c in
     ctl) name=ctl-01 ;;
     h*) name="h-${c#h}" ;;
     *) name="o-${c#o}" ;;
   esac
-  docker run -d --name $P-$c --hostname $name --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun \
+  docker run -d --name $P-$c --hostname $name --network $P-wan --cap-add NET_ADMIN --device /dev/net/tun -e WAN_PREFIX=$WAN \
     --sysctl net.ipv6.conf.all.disable_ipv6=0 \
     -e RUST_LOG=info -e WEBJET_ROOT_PASSPHRASE=r -e WEBJET_ACCOUNT_PASSPHRASE=a -e WEBJET_KEYS=/root/keys \
     $IMG /opt/webjet/docker/node.sh $name >/dev/null

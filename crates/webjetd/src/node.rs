@@ -135,6 +135,9 @@ pub struct Hop {
     pub stats: Mutex<LinkStats>,
     pub last_rx: Mutex<Instant>,
     pub kcp_stats: Option<Arc<KcpStats>>,
+    /// A KCP hop whose unreliable lane runs (§17.5): unreliable-class
+    /// relay frames go on it unless this node retransmits.
+    pub lane: bool,
     /// The transport's own RTT and loss (§11.2), read every keepalive.
     pub meter: Option<webjet_net::meter::Meter>,
     pub tx_bytes: AtomicU64,
@@ -310,6 +313,9 @@ pub struct Node {
     /// its own task, bounded so a flood can't spawn without limit.
     pub rpc_tasks: Arc<tokio::sync::Semaphore>,
     pub dns_tasks: Arc<tokio::sync::Semaphore>,
+    /// This node retransmits unreliable-class frames on its KCP hops
+    /// (§17.5): from the tree, `View::retransmit`.
+    pub retransmit: AtomicBool,
     #[cfg(feature = "anytls")]
     pub anytls_acceptor: Mutex<
         Option<(
@@ -386,6 +392,7 @@ impl Node {
             punch: Default::default(),
             rpc_tasks: Arc::new(tokio::sync::Semaphore::new(crate::rpc::MAX_INBOUND)),
             dns_tasks: Arc::new(tokio::sync::Semaphore::new(crate::dns::MAX_INFLIGHT)),
+            retransmit: AtomicBool::new(false),
             #[cfg(feature = "anytls")]
             anytls_acceptor: Mutex::new(None),
             me_weak: OnceLock::new(),
@@ -533,7 +540,11 @@ impl Node {
 
     /// Take over an authenticated hop stream: identify the peer, register it
     /// and start its reader, writer and keepalive tasks.
-    pub fn register_hop(self: &Arc<Self>, est: Established, outbound: bool) -> Result<Arc<Hop>> {
+    pub fn register_hop(
+        self: &Arc<Self>,
+        mut est: Established,
+        outbound: bool,
+    ) -> Result<Arc<Hop>> {
         let peer = {
             let s = self.store.read();
             let v = s.view();
@@ -617,6 +628,7 @@ impl Node {
                         stats: Mutex::new(LinkStats::with_history(history)),
                         last_rx: Mutex::new(Instant::now()),
                         kcp_stats: est.kcp_stats.clone(),
+                        lane: est.lane.is_some(),
                         meter: est.meter.clone(),
                         tx_bytes: AtomicU64::new(0),
                         rx_bytes: AtomicU64::new(0),
@@ -646,13 +658,22 @@ impl Node {
             }
         };
         tracing::info!(peer = %self.name_of(&peer), transport = est.transport.name(), remote = %est.remote, outbound, "hop up");
+        let (lane_tx, lane_rx) = match est.lane.take() {
+            Some(l) => (Some(l.tx), Some(l.rx)),
+            None => (None, None),
+        };
         let (r, w) = tokio::io::split(est.io);
         let n = self.clone();
         let h = hop.clone();
-        tokio::spawn(async move { writer(n, h, w, rx, ctl_rx).await });
+        tokio::spawn(async move { writer(n, h, w, lane_tx, rx, ctl_rx).await });
         let n = self.clone();
         let h = hop.clone();
         tokio::spawn(async move { reader(n, h, r).await });
+        if let Some(lane_rx) = lane_rx {
+            let n = self.clone();
+            let h = hop.clone();
+            tokio::spawn(async move { lane_reader(n, h, lane_rx).await });
+        }
         let n = self.clone();
         let h = hop.clone();
         tokio::spawn(async move { keepalive(n, h).await });
@@ -914,10 +935,21 @@ impl Node {
 
 // ---------------------------------------------------------------- per-hop tasks
 
+/// Whether a relay record popped from the hop queue goes on the hop's
+/// unreliable lane (§17.5): an unreliable-class frame, small enough, while
+/// this node doesn't retransmit. Everything else goes on the stream.
+fn on_lane(n: &Node, record: &[u8]) -> bool {
+    record.first() == Some(&rec::RELAY)
+        && record.len() - 4 <= webjet_net::kcp::LANE_MAX_RECORD
+        && webjet_core::frames::relay_unreliable(&record[4..])
+        && !n.retransmit.load(Ordering::Relaxed)
+}
+
 async fn writer(
     n: Arc<Node>,
     hop: Arc<Hop>,
     mut w: WriteHalf<BoxIo>,
+    lane: Option<mpsc::Sender<Vec<u8>>>,
     mut rx: mpsc::Receiver<Out>,
     mut ctl_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 ) {
@@ -991,9 +1023,19 @@ async fn writer(
             Duration::from_micros(k.backlog_us.load(Ordering::Relaxed))
         });
         let mut batch = Vec::with_capacity(64 * 1024);
+        // Relay frames for the lane: sent once, never retransmitted (§17.5).
+        let mut unreliable: Vec<Vec<u8>> = Vec::new();
+        let mut unreliable_bytes = 0usize;
         let now = Instant::now();
-        while batch.len() < 64 * 1024 {
-            let Some(item) = q.pop(now) else { break };
+        while batch.len() + unreliable_bytes < 64 * 1024 {
+            let Some(mut item) = q.pop(now) else { break };
+            if lane.is_some() && on_lane(&n, &item) {
+                unreliable_bytes += item.len();
+                // The lane carries the relay frame without the record header.
+                item.drain(..4);
+                unreliable.push(item);
+                continue;
+            }
             batch.extend_from_slice(&item);
             pkt_no += 1;
             // Padding for the first packets of the session (§9.7.4).
@@ -1017,16 +1059,26 @@ async fn writer(
             std::mem::take(&mut q.stats.dropped_aqm) + std::mem::take(&mut q.stats.dropped_full),
             Ordering::Relaxed,
         );
-        if batch.is_empty() {
+        if batch.is_empty() && unreliable.is_empty() {
             continue;
         }
         hop.tx_bytes
-            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            .fetch_add((batch.len() + unreliable_bytes) as u64, Ordering::Relaxed);
         // A peer that stops reading must not hold the writer (and what it
         // has queued) forever.
         let wrote = tokio::time::timeout(WRITE_DEADLINE, async {
-            w.write_all(&batch).await?;
-            w.flush().await
+            if !batch.is_empty() {
+                w.write_all(&batch).await?;
+                w.flush().await?;
+            }
+            if let Some(l) = &lane {
+                for f in unreliable {
+                    l.send(f).await.map_err(|_| {
+                        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "KCP session gone")
+                    })?;
+                }
+            }
+            Ok::<(), std::io::Error>(())
         })
         .await;
         if !matches!(wrote, Ok(Ok(()))) {
@@ -1084,6 +1136,22 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
         }
     }
     n.hop_down(&hop);
+}
+
+/// Relay frames from a KCP hop's unreliable lane (§17.5), delivered in the
+/// order they arrived. The hop ends with its reader; this only stops then.
+async fn lane_reader(n: Arc<Node>, hop: Arc<Hop>, mut rx: mpsc::Receiver<Vec<u8>>) {
+    while let Some(frame) = rx.recv().await {
+        if !hop.alive() {
+            break;
+        }
+        *hop.last_rx.lock() = Instant::now();
+        hop.rx_bytes
+            .fetch_add(frame.len() as u64 + 4, Ordering::Relaxed);
+        if !hop.restricted {
+            crate::circuit::on_relay_frame(&n, &hop, frame);
+        }
+    }
 }
 
 /// The keepalive interval for `hop` now: fast for its first
@@ -1311,6 +1379,7 @@ impl Node {
             stats: Mutex::new(LinkStats::default()),
             last_rx: Mutex::new(Instant::now()),
             kcp_stats: None,
+            lane: false,
             meter: None,
             tx_bytes: AtomicU64::new(0),
             rx_bytes: AtomicU64::new(0),
