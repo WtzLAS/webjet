@@ -12,6 +12,33 @@ pub struct Sys {
     pub dry: bool,
 }
 
+/// Whether setting up a service (re)starts it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// Register it only.
+    No,
+    /// Restart it (new programs).
+    Yes,
+    /// Restart it only when its service definition changed (an install of
+    /// the version that is installed already: its programs stayed).
+    IfChanged,
+}
+
+impl Start {
+    pub fn from_bool(start: bool) -> Start {
+        if start { Start::Yes } else { Start::No }
+    }
+
+    /// Whether to (re)start now, given whether the definition `changed`.
+    pub fn now(self, changed: bool) -> bool {
+        match self {
+            Start::No => false,
+            Start::Yes => true,
+            Start::IfChanged => changed,
+        }
+    }
+}
+
 /// Whether `prog` is on `PATH`.
 pub fn have(prog: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else {
@@ -358,40 +385,132 @@ fn windows_service_command(l: &Layout) -> String {
 /// Split-DNS (NRPT) rules webjetd tags with the comment `webjet`.
 const WINDOWS_NRPT_CLEANUP: &str = "Get-DnsClientNrptRule | Where-Object { $_.Comment -eq 'webjet' } | Remove-DnsClientNrptRule -Force; Clear-DnsClientCache";
 
-/// Register webjetd as an automatic LocalSystem service that starts after
-/// the time and DNS client services (§18.6), restarting after failures.
-fn create_windows_service(sys: &Sys, l: &Layout) -> Result<()> {
-    sys.run(
-        "sc.exe",
-        &[
-            "create",
-            SERVICE,
-            "binPath=",
-            &windows_service_command(l),
-            "start=",
-            "auto",
-            "depend=",
-            &agent_depends(query("sc.exe", &["query", crate::layout::SIGNER_SERVICE]).is_some()),
-            "DisplayName=",
-            crate::layout::SERVICE_DISPLAY_NAME,
-        ],
-    )?;
-    sys.try_run(
-        "sc.exe",
-        &["description", SERVICE, crate::layout::SERVICE_DESCRIPTION],
-    );
+/// A Windows service's settings, as webjetup registers them.
+pub struct WindowsService<'a> {
+    pub name: &'a str,
+    pub command: String,
+    pub display_name: &'a str,
+    pub description: &'a str,
+    /// `sc.exe depend=` (services separated by `/`); `None` leaves them.
+    pub depends: Option<String>,
+    /// `sc.exe failure actions=`.
+    pub failure_actions: &'a str,
+}
+
+/// Whether `sc.exe qc` output (an existing service's configuration) already
+/// has the command line, automatic start and dependencies of `s`.
+fn windows_service_current(qc: &str, s: &WindowsService) -> bool {
+    let field = |key: &str| {
+        qc.lines()
+            .find_map(|l| l.trim().strip_prefix(key))
+            .and_then(|r| r.trim_start().strip_prefix(':'))
+            .map(str::trim)
+    };
+    let deps_ok = s.depends.as_deref().is_none_or(|want| {
+        // The first dependency is on the DEPENDENCIES line, every further
+        // one on a line of its own.
+        let mut have: Vec<String> = Vec::new();
+        let mut in_deps = false;
+        for l in qc.lines() {
+            let t = l.trim();
+            if let Some(r) = t.strip_prefix("DEPENDENCIES") {
+                in_deps = true;
+                let r = r.trim_start().trim_start_matches(':').trim();
+                if !r.is_empty() {
+                    have.push(r.to_ascii_lowercase());
+                }
+            } else if in_deps {
+                match t.strip_prefix(':') {
+                    Some(r) if !r.trim().is_empty() => have.push(r.trim().to_ascii_lowercase()),
+                    _ => in_deps = false,
+                }
+            }
+        }
+        let mut want: Vec<String> = want
+            .split('/')
+            .filter(|d| !d.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        want.sort();
+        have.sort();
+        want == have
+    });
+    field("BINARY_PATH_NAME") == Some(s.command.as_str())
+        && field("START_TYPE").is_some_and(|t| t.contains("AUTO_START"))
+        && field("DISPLAY_NAME") == Some(s.display_name)
+        && deps_ok
+}
+
+/// Register `s` as an automatic LocalSystem service, or bring an existing
+/// one's command line, start type, dependencies and display name up to
+/// date; description and failure actions are always set again. Whether it
+/// was created or changed.
+pub fn windows_service(sys: &Sys, s: &WindowsService) -> Result<bool> {
+    let changed = match query("sc.exe", &["qc", s.name]) {
+        None => {
+            let mut args = vec![
+                "create",
+                s.name,
+                "binPath=",
+                &s.command,
+                "start=",
+                "auto",
+                "DisplayName=",
+                s.display_name,
+            ];
+            if let Some(d) = &s.depends {
+                args.extend(["depend=", d]);
+            }
+            sys.run("sc.exe", &args)?;
+            true
+        }
+        Some(qc) if windows_service_current(&qc, s) => false,
+        Some(_) => {
+            let mut args = vec![
+                "config",
+                s.name,
+                "binPath=",
+                &s.command,
+                "start=",
+                "auto",
+                "DisplayName=",
+                s.display_name,
+            ];
+            if let Some(d) = &s.depends {
+                args.extend(["depend=", d]);
+            }
+            sys.run("sc.exe", &args)?;
+            true
+        }
+    };
+    sys.try_run("sc.exe", &["description", s.name, s.description]);
     sys.try_run(
         "sc.exe",
         &[
             "failure",
-            SERVICE,
+            s.name,
             "reset=",
             "86400",
             "actions=",
-            "restart/5000/restart/5000/restart/30000",
+            s.failure_actions,
         ],
     );
-    Ok(())
+    Ok(changed)
+}
+
+/// webjetd as a service that starts after the time and DNS client services
+/// (§18.6), and the signer when there is one, restarting after failures.
+fn agent_windows_service(l: &Layout) -> WindowsService<'static> {
+    WindowsService {
+        name: SERVICE,
+        command: windows_service_command(l),
+        display_name: crate::layout::SERVICE_DISPLAY_NAME,
+        description: crate::layout::SERVICE_DESCRIPTION,
+        depends: Some(agent_depends(
+            query("sc.exe", &["query", crate::layout::SIGNER_SERVICE]).is_some(),
+        )),
+        failure_actions: "restart/5000/restart/5000/restart/30000",
+    }
 }
 
 fn windows_service_exists() -> bool {
@@ -451,6 +570,12 @@ pub fn stop(sys: &Sys, l: &Layout) {
     }
 }
 
+/// What webjetd may do as its unprivileged user on Linux: create the tun
+/// interface and set routes (NET_ADMIN), listen on ports below 1024 as a
+/// relay (NET_BIND_SERVICE), and capture outgoing broadcast and multicast
+/// with a packet socket (NET_RAW, §9.5.2).
+pub const AGENT_CAPABILITIES: &str = "CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW";
+
 /// `tss` owns /dev/tpmrm0; an identity key sealed in the TPM (§8.3) needs it.
 fn systemd_unit(l: &Layout, tss_group: bool) -> String {
     let groups = if tss_group {
@@ -470,8 +595,8 @@ ExecStart={bin} run
 Restart=on-failure
 RestartSec=5
 User={LINUX_USER}
-{groups}AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+{groups}AmbientCapabilities={caps}
+CapabilityBoundingSet={caps}
 StateDirectory=webjet
 StateDirectoryMode=0700
 RuntimeDirectory=webjet
@@ -486,7 +611,8 @@ LimitMEMLOCK=1M
 [Install]
 WantedBy=multi-user.target
 ",
-        bin = l.program("webjetd").display()
+        bin = l.program("webjetd").display(),
+        caps = AGENT_CAPABILITIES
     )
 }
 
@@ -549,20 +675,34 @@ pub fn fix_linux_ownership(sys: &Sys, l: &Layout) -> Result<()> {
     Ok(())
 }
 
-/// Register the service (if it isn't yet) and, when `start`, (re)start it.
-pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
+/// Write a service definition when it differs from `want`: each release's
+/// is the one it was tested with, so an upgrade replaces an older one.
+/// Whether it changed.
+pub fn write_if_changed(sys: &Sys, path: &Path, want: &str, mode: u32) -> Result<bool> {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(want) {
+        return Ok(false);
+    }
+    if path.exists() {
+        println!("    updating {}", path.display());
+    }
+    if let Some(d) = path.parent() {
+        sys.mkdir(d, false)?;
+    }
+    sys.write(path, want, mode)?;
+    Ok(true)
+}
+
+/// Register the agent's service, or bring its definition up to date, and
+/// (re)start it as `start` says. Whether it was (re)started.
+pub fn setup_service(sys: &Sys, l: &Layout, start: Start) -> Result<bool> {
     if cfg!(target_os = "macos") {
         let plist = l
             .service_file
             .clone()
             .unwrap_or_else(|| PathBuf::from("/Library/LaunchDaemons/net.webjet.webjetd.plist"));
-        // Rewrite an outdated plist (up to 0.4.2 it didn't capture stdout,
-        // where webjetd logs); launchd reads it again on bootstrap.
-        let want = launchd_plist(l);
-        if std::fs::read_to_string(&plist).ok().as_deref() != Some(want.as_str()) {
-            sys.write(&plist, &want, 0o644)?;
-        }
-        if start {
+        // launchd reads the plist again on bootstrap.
+        let go = start.now(write_if_changed(sys, &plist, &launchd_plist(l), 0o644)?);
+        if go {
             sys.try_run(
                 "launchctl",
                 &["bootout", "system", &plist.to_string_lossy()],
@@ -572,51 +712,45 @@ pub fn setup_service(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
                 &["bootstrap", "system", &plist.to_string_lossy()],
             )?;
         }
+        Ok(go)
     } else if cfg!(windows) {
-        if windows_service_exists() {
-            if start {
-                sys.run("sc.exe", &["start", SERVICE])?;
-            }
-        } else {
-            create_windows_service(sys, l)?;
-            if start {
-                sys.run("sc.exe", &["start", SERVICE])?;
-            }
+        let go = start.now(windows_service(sys, &agent_windows_service(l))?);
+        if go {
+            stop(sys, l);
+            sys.run("sc.exe", &["start", SERVICE])?;
         }
+        Ok(go)
     } else if cfg!(target_os = "freebsd") {
         let name = crate::freebsd::AGENT;
-        crate::freebsd::install(sys, name, &crate::freebsd::agent_script(l))?;
-        if start {
+        let go = start.now(crate::freebsd::install(
+            sys,
+            name,
+            &crate::freebsd::agent_script(l),
+        )?);
+        if go {
             crate::freebsd::restart(sys, name)?;
         }
+        Ok(go)
     } else {
         let unit = l
             .service_file
             .clone()
             .unwrap_or_else(|| PathBuf::from("/etc/systemd/system/webjetd.service"));
-        // Rewrite an outdated unit (daemon-reload follows), as the plist on
-        // macOS: each release's unit is the one it was tested with.
         let tss = query("getent", &["group", "tss"]).is_some();
-        let want = systemd_unit(l, tss);
-        if std::fs::read_to_string(&unit).ok().as_deref() != Some(want.as_str()) {
-            if unit.exists() {
-                println!("    updating {}", unit.display());
-            }
-            sys.write(&unit, &want, 0o644)?;
-        }
+        let go = start.now(write_if_changed(sys, &unit, &systemd_unit(l, tss), 0o644)?);
         if !have("systemctl") {
             println!(
                 "    systemd isn't running here: start the agent yourself (webjetd run as user {LINUX_USER})"
             );
-            return Ok(());
+            return Ok(false);
         }
         sys.run("systemctl", &["daemon-reload"])?;
         sys.run("systemctl", &["enable", SERVICE])?;
-        if start {
+        if go {
             sys.run("systemctl", &["restart", SERVICE])?;
         }
+        Ok(go)
     }
-    Ok(())
 }
 
 /// Stop the agent and unregister the service. webjetd cleans up its routes
@@ -686,6 +820,42 @@ pub fn windows_path(sys: &Sys, dir: &Path, add: bool) -> Result<()> {
             &windows_path_script(dir, add),
         ],
     )
+}
+
+/// PowerShell that creates the shortcut `lnk` to `target`.
+fn windows_shortcut_script(lnk: &Path, target: &Path) -> String {
+    let q = |p: &Path| p.to_string_lossy().replace('\'', "''");
+    format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.Description='Webjet'; $s.Save()",
+        q(lnk),
+        q(target)
+    )
+}
+
+/// The Start menu shortcut to the desktop app: created when `target` is
+/// installed, removed otherwise. A failure is only a note.
+pub fn windows_shortcut(sys: &Sys, lnk: &Path, target: &Path) -> Result<()> {
+    if !(target.exists() || sys.dry) {
+        return sys.remove_file(lnk);
+    }
+    if lnk.exists() {
+        return Ok(());
+    }
+    sys.say(&format!("create the shortcut {}", lnk.display()));
+    if !sys.dry
+        && !sys.try_run(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &windows_shortcut_script(lnk, target),
+            ],
+        )
+    {
+        println!("    note: creating {} failed", lnk.display());
+    }
+    Ok(())
 }
 
 /// Restrict a directory to SYSTEM and Administrators (§19.1).
@@ -891,12 +1061,12 @@ mod tests {
         let l = Layout::system();
         let unit = systemd_unit(&l, false);
         assert!(unit.contains(&format!("ExecStart={} run", l.program("webjetd").display())));
+        assert!(unit.contains(
+            "User=webjet\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\n"
+        ));
         assert!(
-            unit.contains("User=webjet\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\n")
-        );
-        assert!(
-            unit.contains("CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\n"),
-            "relays listen on 443"
+            unit.contains("CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\n"),
+            "relays listen on 443; multicast capture needs a packet socket"
         );
         assert!(systemd_unit(&l, true).contains("User=webjet\nSupplementaryGroups=tss\n"));
         let plist = launchd_plist(&l);
@@ -913,6 +1083,86 @@ mod tests {
             "<string>{}</string><string>run</string>",
             l.program("webjetd").display()
         )));
+    }
+
+    #[test]
+    fn start_modes() {
+        assert!(!Start::No.now(true) && !Start::No.now(false));
+        assert!(Start::Yes.now(false) && Start::Yes.now(true));
+        assert!(Start::IfChanged.now(true) && !Start::IfChanged.now(false));
+    }
+
+    #[test]
+    fn service_definitions_are_rewritten_only_when_they_differ() {
+        let d = tempfile::tempdir().unwrap();
+        let sys = Sys { dry: false };
+        let unit = d.path().join("dir/webjetd.service");
+        assert!(
+            write_if_changed(&sys, &unit, "old", 0o644).unwrap(),
+            "created"
+        );
+        assert!(
+            !write_if_changed(&sys, &unit, "old", 0o644).unwrap(),
+            "unchanged"
+        );
+        assert!(
+            write_if_changed(&sys, &unit, "new", 0o644).unwrap(),
+            "updated"
+        );
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), "new");
+        let dry = Sys { dry: true };
+        assert!(write_if_changed(&dry, &unit, "newer", 0o644).unwrap());
+        assert_eq!(std::fs::read_to_string(&unit).unwrap(), "new");
+    }
+
+    /// `sc.exe qc` output of a service an older webjetup registered.
+    const SC_QC: &str = r#"[SC] QueryServiceConfig SUCCESS
+
+SERVICE_NAME: webjetd
+        TYPE               : 10  WIN32_OWN_PROCESS
+        START_TYPE         : 2   AUTO_START
+        ERROR_CONTROL      : 1   NORMAL
+        BINARY_PATH_NAME   : "C:\Program Files\Webjet\webjetd.exe" --config "C:\ProgramData\Webjet\webjetd.toml" service
+        LOAD_ORDER_GROUP   :
+        TAG                : 0
+        DISPLAY_NAME       : Webjet agent
+        DEPENDENCIES       : W32Time
+                           : Dnscache
+        SERVICE_START_NAME : LocalSystem
+"#;
+
+    #[test]
+    fn windows_services_are_compared_with_what_is_registered() {
+        let svc = |command: &str, depends: Option<&str>| WindowsService {
+            name: "webjetd",
+            command: command.to_string(),
+            display_name: "Webjet agent",
+            description: "",
+            depends: depends.map(str::to_string),
+            failure_actions: "",
+        };
+        let cmd = r#""C:\Program Files\Webjet\webjetd.exe" --config "C:\ProgramData\Webjet\webjetd.toml" service"#;
+        assert!(windows_service_current(
+            SC_QC,
+            &svc(cmd, Some("W32Time/Dnscache"))
+        ));
+        assert!(windows_service_current(
+            SC_QC,
+            &svc(cmd, Some("dnscache/w32time"))
+        ));
+        assert!(windows_service_current(SC_QC, &svc(cmd, None)));
+        assert!(
+            !windows_service_current(SC_QC, &svc(cmd, Some("W32Time/Dnscache/webjet-signer"))),
+            "a new dependency"
+        );
+        assert!(
+            !windows_service_current(SC_QC, &svc(&cmd.replace(" service", " run"), None)),
+            "another command line"
+        );
+        assert!(!windows_service_current(
+            &SC_QC.replace("2   AUTO_START", "3   DEMAND_START"),
+            &svc(cmd, None)
+        ));
     }
 
     #[test]

@@ -29,22 +29,18 @@
 #                    lld against a FreeBSD 14.4 sysroot; in the CI image, on
 #                    a Mac with Homebrew's llvm and lld)
 #
-# Each archive holds webjetd and webjetctl at the
-# top level, next to a `.sha256` file:
+# Each archive holds webjetd, webjetctl and the desktop app (webjet-app) at
+# the top level, next to a `.sha256` file:
 #
 #   webjet-<tag>-<target>.tar.gz          (Windows: .zip, with wintun.dll and
 #   webjet-<tag>-<target>.tar.gz.sha256    its license)
 #
-# plus the installation manager for each target and the script that fetches
+# plus the installation manager for each target and the scripts that fetch
 # it, each with a `.sha256`:
 #
 #   webjetup-<tag>-<target>          (Windows: webjetup-<tag>-<target>.exe)
-#   install.sh
-#
-# and the desktop app (webjet-app) in its own archive, so servers installing
-# webjetd don't download it:
-#
-#   webjet-app-<tag>-<target>.tar.gz     (Windows: .zip)
+#   install.sh                       (Linux, macOS, FreeBSD)
+#   install.ps1                      (Windows)
 #
 # Publishing needs WEBJET_FORGEJO_TOKEN (a token with write access to the
 # repository). The API and repository come from the origin remote, or from
@@ -69,7 +65,7 @@ while [ $# -gt 0 ]; do
 done
 VERSION=${TAG#v}
 DIST=dist/$TAG
-BINS="webjetd webjetctl"
+BINS="webjetd webjetctl webjet-app"
 HOST_OS=$(uname -s)
 
 die() { echo "release: $*" >&2; exit 1; }
@@ -100,22 +96,15 @@ add_webjetup() { # target path-to-binary
     echo "packaged $DIST/$f"
 }
 
-package() { # target directory-with-binaries [archive-name binary…]
-    t=$1 dir=$2
-    shift 2
-    name=webjet bins=$BINS
-    if [ $# -gt 0 ]; then
-        name=$1
-        shift
-        bins=$*
-    fi
+package() { # target directory-with-binaries
+    t=$1 dir=$2 bins=$BINS
     stage=$(mktemp -d)
     for b in $bins; do
         [ -f "$dir/$b" ] || die "$dir/$b missing"
         cp "$dir/$b" "$stage/"
         chmod 0755 "$stage/$b"
     done
-    f=$name-$TAG-$t.tar.gz
+    f=webjet-$TAG-$t.tar.gz
     if [ "$HOST_OS" = Darwin ]; then
         # macOS tar would add Apple extended attributes, which GNU tar warns about.
         COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$DIST/$f" -C "$stage" $bins
@@ -127,9 +116,9 @@ package() { # target directory-with-binaries [archive-name binary…]
     echo "packaged $DIST/$f"
 }
 
-# The desktop app is built on its own, so its dependencies' features don't
-# change the server binaries (and the other way round).
-APP_BINS=webjet-app
+# The desktop app is built on its own (a second cargo run), so its
+# dependencies' features don't change the server binaries (and the other way
+# round); it is packaged with them.
 
 # On a Mac natively; elsewhere cross-compiled against the macOS SDK in
 # WEBJET_MACOS_SDK (scripts/macos-cargo.sh, the CI image).
@@ -139,7 +128,6 @@ build_macos() { # target
     scripts/macos-cargo.sh "$1" build --release --locked -p webjetd -p webjet-tools -p webjetup
     scripts/macos-cargo.sh "$1" build --release --locked -p webjet-app
     package "$1" "target/$1/release"
-    package "$1" "target/$1/release" webjet-app $APP_BINS
     add_webjetup "$1" "target/$1/release/webjetup"
 }
 
@@ -148,14 +136,12 @@ build_linux() { # target
         cargo build --release --locked --target "$1" -p webjetd -p webjet-tools -p webjetup
         cargo build --release --locked --target "$1" -p webjet-app
         package "$1" "target/$1/release"
-        package "$1" "target/$1/release" webjet-app $APP_BINS
         add_webjetup "$1" "target/$1/release/webjetup"
     else
         case $1 in aarch64-*) plat=arm64 ;; *) plat=amd64 ;; esac
         out=$(mktemp -d)
         docker buildx build --platform "linux/$plat" -f docker/release.Dockerfile --output "type=local,dest=$out" .
         package "$1" "$out"
-        package "$1" "$out" webjet-app $APP_BINS
         add_webjetup "$1" "$out/webjetup"
         rm -rf "$out"
     fi
@@ -169,13 +155,12 @@ build_freebsd() { # target
     scripts/freebsd-cargo.sh build --release --locked -p webjetd -p webjet-tools -p webjetup
     scripts/freebsd-cargo.sh build --release --locked -p webjet-app
     readelf=$(command -v llvm-readelf || command -v readelf || echo /opt/homebrew/opt/llvm/bin/llvm-readelf)
-    for b in $BINS webjetup $APP_BINS; do
+    for b in $BINS webjetup; do
         newer=$("$readelf" -V "target/$1/release/$b" | grep -o 'FBSD_1\.[0-9]*' | sort -u -t . -k 2n |
             awk -v max="${FREEBSD_MAX_SYMVER#FBSD_1.}" -F . '$2 > max')
         [ -z "$newer" ] || die "$b needs $newer, newer than FreeBSD 14.0 ($FREEBSD_MAX_SYMVER)"
     done
     package "$1" "target/$1/release"
-    package "$1" "target/$1/release" webjet-app $APP_BINS
     add_webjetup "$1" "target/$1/release/webjetup"
 }
 
@@ -196,18 +181,15 @@ build_windows() { # target
     curl -fsSL "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip" -o "$stage/wintun.zip"
     echo "$WINTUN_SHA256  $stage/wintun.zip" | sha256 -c - >/dev/null || die "wintun-$WINTUN_VERSION.zip checksum mismatch"
     unzip -q "$stage/wintun.zip" -d "$stage"
-    mkdir "$stage/pkg" "$stage/app"
+    mkdir "$stage/pkg"
     for b in $BINS; do cp "target/$1/release/$b.exe" "$stage/pkg/"; done
     cp "$stage/wintun/bin/amd64/wintun.dll" "$stage/pkg/"
     cp "$stage/wintun/LICENSE.txt" "$stage/pkg/wintun-LICENSE.txt"
-    for b in $APP_BINS; do cp "target/$1/release/$b.exe" "$stage/app/"; done
-    for name in webjet:pkg webjet-app:app; do
-        f=${name%%:*}-$TAG-$1.zip
-        (cd "$stage/${name#*:}" && zip -q -X "../$f" ./*)
-        mv "$stage/$f" "$DIST/"
-        (cd "$DIST" && sha256 "$f" > "$f.sha256")
-        echo "packaged $DIST/$f"
-    done
+    f=webjet-$TAG-$1.zip
+    (cd "$stage/pkg" && zip -q -X "../$f" ./*)
+    mv "$stage/$f" "$DIST/"
+    (cd "$DIST" && sha256 "$f" > "$f.sha256")
+    echo "packaged $DIST/$f"
     rm -rf "$stage"
     add_webjetup "$1" "target/$1/release/webjetup.exe"
 }
@@ -222,8 +204,10 @@ for t in $TARGETS; do
     esac
 done
 
-cp scripts/install.sh "$DIST/install.sh"
-(cd "$DIST" && sha256 install.sh > install.sh.sha256)
+for f in install.sh install.ps1; do
+    cp "scripts/$f" "$DIST/$f"
+    (cd "$DIST" && sha256 "$f" > "$f.sha256")
+done
 
 # A binary that runs here must report the tag's version.
 case "$HOST_OS-$(uname -m)" in
@@ -278,3 +262,4 @@ for f in "$DIST"/*; do
 done
 echo "published: $WEB/$repo/releases/tag/$TAG"
 echo "install:   curl -fsSL $WEB/$repo/releases/download/$TAG/install.sh | sudo sh"
+echo "Windows:   irm $WEB/$repo/releases/download/$TAG/install.ps1 | iex   (as Administrator)"

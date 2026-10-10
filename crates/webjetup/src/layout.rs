@@ -5,6 +5,11 @@ use std::path::PathBuf;
 /// The programs of a Webjet installation.
 pub const PROGRAMS: [&str; 2] = ["webjetd", "webjetctl"];
 
+/// Programs installed when the release has them: the desktop app came into
+/// the release archives in 0.12.0. A release without it removes an
+/// installed copy, so the app never runs against an older agent.
+pub const OPTIONAL_PROGRAMS: [&str; 1] = ["webjet-app"];
+
 /// Programs of releases before 0.3.0, merged into `webjetctl root` and
 /// `webjetd signer` since; removed when found.
 pub const RETIRED_PROGRAMS: [&str; 2] = ["webjet-root", "webjet-signer"];
@@ -92,6 +97,15 @@ pub struct Layout {
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
     std::env::var_os(var).map_or_else(|| PathBuf::from(default), PathBuf::from)
+}
+
+/// The Start menu shortcut to the desktop app, for all users (Windows).
+pub fn app_shortcut() -> Option<PathBuf> {
+    cfg!(windows).then(|| {
+        env_dir("ProgramData", r"C:\ProgramData")
+            .join(r"Microsoft\Windows\Start Menu\Programs")
+            .join("Webjet.lnk")
+    })
 }
 
 impl Layout {

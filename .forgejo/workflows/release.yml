@@ -6,7 +6,7 @@
 # Runs the tests, then builds every target in the builder image (Linux
 # x86_64 natively; Linux arm64, Windows x86_64, FreeBSD x86_64 and macOS
 # arm64 and x86_64 cross-compiled) and creates the Forgejo release with
-# their files, webjetup and install.sh (scripts/release.sh).
+# their files, webjetup, install.sh and install.ps1 (scripts/release.sh).
 # Crates come from a crates.io mirror (scripts/cargo-mirror.sh: TUNA,
 # else USTC, else crates.io).
 #

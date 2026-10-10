@@ -134,7 +134,8 @@ dials out. Relays and controllers need it.
 Even without `kcp`, the agent keeps one UDP socket for dialing and hole
 punching. Listening on a port below 1024 as the `webjet` user needs
 `CAP_NET_BIND_SERVICE`, which the systemd unit installed by `webjetup`
-grants.
+grants (with `CAP_NET_ADMIN` for the tun interface and `CAP_NET_RAW` for
+multicast capture).
 
 ### `[[public]]`
 
@@ -762,7 +763,9 @@ capture = ["udp:19132", "udp:7551"]   # Minecraft Bedrock, a game lobby
 | --- | --- | --- |
 | `capture` | `[]` | UDP port specs (`udp:19132`, `udp:4000-4010`, `udp` for every port). Ports 67, 68, 137, 138, 1900, 3702, 5353 and 5355 are never captured. |
 
-Capture runs on Linux (`AF_PACKET`, needs `CAP_NET_RAW`), macOS (BPF) and
+Capture runs on Linux (`AF_PACKET`, needs `CAP_NET_RAW`, which the systemd
+unit `webjetup` installs grants from 0.12.0; run `webjetup upgrade` on nodes
+set up by an older one), macOS (BPF) and
 Windows (a raw socket on the loopback address; limited broadcasts only).
 The source of a captured datagram becomes the node's overlay address, so
 replies come back through the overlay; LAN players keep seeing the game.

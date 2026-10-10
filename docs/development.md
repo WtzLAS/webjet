@@ -523,15 +523,16 @@ it, `release.yml` publishes with the workflow's automatic token.
 
 1. Set the version in the workspace `Cargo.toml` (`version = "X.Y.Z"`),
    update the version in the install commands in `README.md`,
-   `scripts/install.sh` and `docs/webjet-operations-guide.md`, commit, and
+   `scripts/install.sh`, `scripts/install.ps1` and
+   `docs/webjet-operations-guide.md`, commit, and
    tag the commit: `git tag -a vX.Y.Z` with release notes as the message
    (they become the release's description).
 2. Push the tag: `git push origin vX.Y.Z`. `release.yml` tests, builds Linux
    x86_64 and arm64, Windows, FreeBSD and macOS arm64 and x86_64, packages
-   `webjet-<tag>-<target>.tar.gz` (Windows: `.zip` with `wintun.dll` and its
-   license), the desktop app as `webjet-app-<tag>-<target>.tar.gz` (Windows:
-   `.zip`), the `webjetup` binaries
-   and `install.sh`, each with a `.sha256`, and creates the Forgejo release.
+   `webjet-<tag>-<target>.tar.gz` with `webjetd`, `webjetctl` and the
+   desktop app `webjet-app` (Windows: `.zip`, also with `wintun.dll` and its
+   license), the `webjetup` binaries, `install.sh` and `install.ps1`, each
+   with a `.sha256`, and creates the Forgejo release.
 3. To rebuild one target and replace its files, from a checkout of the tag:
    ```
    WEBJET_FORGEJO_TOKEN=… scripts/release.sh vX.Y.Z --publish \
@@ -555,9 +556,11 @@ Before tagging, `docker/webjetup-test.sh` tests webjetup and `install.sh`
 from the working tree end to end: it builds the Linux release files, serves
 them from a stand-in for the Forgejo release pages, starts a controller, and
 on a container that boots systemd runs `curl … install.sh | sh` with an
-enrollment string, checks the agent runs as `webjet` and pings the
-controller, then reinstall, `remove` (identity kept), install again and
-`nuke`. `docker/runbook-test.sh` without `RELEASE` does the same for the
+enrollment string, checks the agent runs as `webjet` with its capabilities
+and pings the controller, then reinstall (an outdated unit is replaced,
+also by the upgrade helper), `remove` (identity kept), install again, remote
+upgrades (the release's `webjetup` sets the node up), a hand-over from an
+older `webjetup`, and `nuke`. `install.ps1` has no automated test. `docker/runbook-test.sh` without `RELEASE` does the same for the
 operations guide.
 
 Building Windows on a Mac needs `cargo install cargo-xwin` and Homebrew's `llvm` and

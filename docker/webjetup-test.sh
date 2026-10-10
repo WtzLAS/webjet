@@ -9,7 +9,9 @@
 #   1. curl …/install.sh | sh -s -- --enroll <string>   install and enroll
 #   2. the agent runs under systemd and reaches the controller (ping);
 #      an ordinary user can use webjetctl
-#   3. webjetup install again: "already installed"; --force reinstalls
+#   3. webjetup install again: "already installed", but an outdated systemd
+#      unit is replaced (CAP_NET_RAW), also by the upgrade helper; --force
+#      reinstalls
 #   4. webjetup remove: programs and service gone, identity kept
 #   5. webjetup install: back up without enrolling again
 #   6. remote upgrades (§19.8) from the controller with webjetctl network
@@ -88,12 +90,15 @@ EOF
 echo "== release pages at $REPO"
 www=$out/www
 api=$www/api/v1/repos/webj8/webjet/releases
+# macOS's bsdtar would add extended attributes and AppleDouble files.
+tar_flags=
+[ "$(uname -s)" = Darwin ] && tar_flags="--no-xattrs --no-mac-metadata"
 publish() { # tag directory-with-binaries
     dl=$www/webj8/webjet/releases/download/$1
     mkdir -p "$dl" "$api/tags/$1"
     stage=$(mktemp -d)
-    for b in webjetd webjetctl; do cp "$2/$b" "$stage/"; done
-    COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$dl/webjet-$1-$target.tar.gz" -C "$stage" webjetd webjetctl
+    for b in webjetd webjetctl webjet-app; do cp "$2/$b" "$stage/"; done
+    COPYFILE_DISABLE=1 tar $tar_flags -czf "$dl/webjet-$1-$target.tar.gz" -C "$stage" webjetd webjetctl webjet-app
     rm -rf "$stage"
     cp "$2/webjetup" "$dl/webjetup-$1-$target"
     cp scripts/install.sh "$dl/install.sh"
@@ -161,6 +166,22 @@ on_host "curl -fsSL $REPO/releases/download/$TAG/install.sh | WEBJET_REPO=$REPO 
 echo "== 2. the agent runs under systemd and reaches the controller"
 on_host 'systemctl is-active webjetd' | grep -qx active || fail "webjetd is not active"
 on_host 'systemctl show -p MainPID --value webjetd | xargs -I{} stat -c %U /proc/{}' | grep -qx webjet || fail "webjetd does not run as user webjet"
+# CAP_NET_BIND_SERVICE (10), CAP_NET_ADMIN (12), CAP_NET_RAW (13: multicast capture).
+caps() { on_host 'grep CapAmb /proc/$(systemctl show -p MainPID --value webjetd)/status 2>/dev/null' | awk '{print $2}'; }
+# expect_caps HEX MESSAGE: the agent's ambient capabilities become HEX (a
+# just-restarted agent may not have exec'd yet).
+expect_caps() {
+    i=0
+    until [ "$(caps)" = "$1" ]; do
+        sleep 0.5
+        i=$((i + 1))
+        [ $i -lt 20 ] || fail "$2 (ambient capabilities $(caps), wanted $1)"
+    done
+}
+expect_caps 0000000000003400 "webjetd lacks NET_BIND_SERVICE NET_ADMIN NET_RAW"
+on_host 'test -x /usr/local/bin/webjet-app' || fail "webjet-app is not installed"
+# For 6d: this webjetup, older than v$NEXT.
+on_host 'cp /usr/local/bin/webjetup /root/webjetup-old' 
 i=0
 until on_host 'webjetctl local ping ctl-01 -c 1' 2>/dev/null | grep -q "reply from"; do
     sleep 1
@@ -180,13 +201,33 @@ on_host 'stat -c %U /var/lib/webjet-upgrade/queue; stat -c %U /var/lib/webjet-up
 on_host 'grep -q "\"node_id\"" /var/lib/webjet-upgrade/trust.json' || fail "trust.json not written after enrolling"
 
 echo "== 3. reinstall"
-on_host "webjetup --repo $REPO install" | grep -q "already installed" || fail "second install should be a no-op"
+# Output goes to a file before grep: `grep -q` would end `docker exec` at
+# the first match and leave webjetup running on in the container.
+on_host "webjetup --repo $REPO install" >/tmp/$P-re.txt 2>&1 || { cat /tmp/$P-re.txt; fail "second install"; }
+grep -q "already installed" /tmp/$P-re.txt || fail "second install should keep the programs"
+# An older release's unit (without CAP_NET_RAW) is replaced and the agent
+# restarted with it, as by a fresh install.
+old_unit() { on_host 'sed -i "s/ CAP_NET_RAW//" /etc/systemd/system/webjetd.service && systemctl daemon-reload && systemctl restart webjetd'; }
+old_unit
+expect_caps 0000000000001400 "test setup: the old unit didn't take"
+on_host "webjetup --repo $REPO install" >/tmp/$P-re.txt 2>&1 || { cat /tmp/$P-re.txt; fail "install over an old unit"; }
+grep -q "updating /etc/systemd/system/webjetd.service" /tmp/$P-re.txt || { cat /tmp/$P-re.txt; fail "the outdated unit was not updated"; }
+expect_caps 0000000000003400 "the agent didn't get CAP_NET_RAW after the install"
+# The same through the upgrade helper, after an older helper's upgrade
+# (it set up the new release with its own definitions).
+old_unit
+expect_caps 0000000000001400 "test setup: the old unit didn't take"
+on_host 'rm /var/lib/webjet-upgrade/setup-version && webjetup apply-upgrade' >/tmp/$P-re.txt 2>&1
+grep -q "Setting up the installation" /tmp/$P-re.txt || { cat /tmp/$P-re.txt; fail "the helper didn't set up again"; }
+expect_caps 0000000000003400 "the agent didn't get CAP_NET_RAW from the helper"
+on_host 'webjetup apply-upgrade' >/tmp/$P-re.txt 2>&1
+grep -q "Setting up" /tmp/$P-re.txt && fail "the helper sets up only once per version"
 on_host "webjetup --repo $REPO install --force" >/dev/null || fail "forced reinstall"
 on_host 'systemctl is-active webjetd' | grep -qx active || fail "webjetd not active after reinstall"
 
 echo "== 4. remove keeps the identity"
 on_host 'webjetup remove --yes' >/dev/null || fail "remove"
-on_host 'test ! -e /usr/local/bin/webjetd && test ! -e /etc/systemd/system/webjetd.service' || fail "programs or unit left after remove"
+on_host 'test ! -e /usr/local/bin/webjetd && test ! -e /usr/local/bin/webjet-app && test ! -e /etc/systemd/system/webjetd.service' || fail "programs or unit left after remove"
 on_host 'test -f /var/lib/webjet/node.json && test -x /usr/local/bin/webjetup' || fail "remove deleted the identity or webjetup"
 
 echo "== 5. install again: no new enrollment needed"
@@ -206,6 +247,8 @@ U upgrade "v$NEXT" laptop | tee /tmp/$P-up.txt || fail "remote upgrade to v$NEXT
 grep -q "laptop: runs v$NEXT" /tmp/$P-up.txt || fail "the rollout didn't see v$NEXT running"
 on_host 'webjetd --version' | grep -q "$NEXT" || fail "webjetd is not $NEXT after the remote upgrade"
 on_host 'webjetup --version' | grep -q "$NEXT" || fail "webjetup was not replaced by the release's"
+on_host 'cat /var/lib/webjet-upgrade/setup-version' | grep -qx "$NEXT" || fail "the release's webjetup didn't set up the upgraded node"
+expect_caps 0000000000003400 "capabilities after the remote upgrade"
 on_host 'webjetctl --json local status' | grep -q "\"version\": \"$NEXT\"" || fail "the agent doesn't run $NEXT"
 on_host 'grep -q "\"state\": \"done\"" /var/lib/webjet-upgrade/status.json' || fail "helper status is not done"
 docker exec "$P-ctl" webjetctl network node upgrade-status laptop | grep -q "state: done" || fail "upgrade-status over the overlay"
@@ -221,8 +264,9 @@ on_host "webjetup --repo $REPO install $TAG" >/tmp/$P-down.txt 2>&1 && fail "a d
 grep -q "older than the installed" /tmp/$P-down.txt || { cat /tmp/$P-down.txt; fail "downgrade: wrong error"; }
 on_host 'webjetd --version' | grep -q "$NEXT" || fail "a refused downgrade changed webjetd"
 on_host 'systemctl is-active webjetd' | grep -qx active || fail "a refused downgrade stopped webjetd"
-echo "== 6d. opted out"
-on_host "webjetup --repo $REPO install v$NEXT --no-remote-upgrade" >/dev/null || fail "install --no-remote-upgrade"
+echo "== 6d. opted out, with an older webjetup that hands over to the release's"
+on_host "/root/webjetup-old --repo $REPO install v$NEXT --no-remote-upgrade" >/tmp/$P-hand.txt 2>&1 || { cat /tmp/$P-hand.txt; fail "install --no-remote-upgrade"; }
+grep -q "Handing over to the release's webjetup $NEXT" /tmp/$P-hand.txt || { cat /tmp/$P-hand.txt; fail "the older webjetup didn't hand over"; }
 on_host 'grep -q "remote = false" /etc/webjet/webjetd.toml' || fail "[upgrade] remote = false not written"
 on_host 'test ! -e /var/lib/webjet-upgrade && test ! -e /etc/systemd/system/webjet-upgrade.path' || fail "the helper is still installed"
 i=0
@@ -243,7 +287,7 @@ on_host 'webjetup nuke --dry-run' | grep -q "would remove /var/lib/webjet" || fa
 [ "$before" = "$(on_host 'ls /usr/local/bin /var/lib/webjet /etc/webjet | md5sum')" ] || fail "dry run changed something"
 on_host 'webjetup nuke' >/dev/null 2>&1 && fail "nuke without a terminal must ask (and refuse)"
 on_host 'webjetup nuke --yes' >/dev/null || fail "nuke"
-for p in /usr/local/bin/webjetd /usr/local/bin/webjetctl /usr/local/bin/webjetup /var/lib/webjet /etc/webjet /etc/systemd/system/webjetd.service /var/lib/webjet-upgrade /etc/systemd/system/webjet-upgrade.service; do
+for p in /usr/local/bin/webjetd /usr/local/bin/webjetctl /usr/local/bin/webjet-app /usr/local/bin/webjetup /var/lib/webjet /etc/webjet /etc/systemd/system/webjetd.service /var/lib/webjet-upgrade /etc/systemd/system/webjet-upgrade.service; do
     on_host "test ! -e $p" || fail "$p still exists after nuke"
 done
 on_host 'id webjet' >/dev/null 2>&1 && fail "user webjet still exists after nuke"

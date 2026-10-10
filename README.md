@@ -139,7 +139,9 @@ Releases are published at
 Linux (x86_64 and aarch64, glibc 2.31+: Debian 11+, Ubuntu 20.04+, RHEL 9+),
 macOS (x86_64 and aarch64), Windows (x86_64) and, from 0.11.0, FreeBSD 14 /
 OPNsense 24.7+ (x86_64). From 0.11.0 they also include the desktop app
-(`webjet-app-<tag>-<target>`, [docs/app.md](docs/app.md)).
+([docs/app.md](docs/app.md)); after 0.11.6 it is in the same archive as
+`webjetd` and `webjetctl`, and `webjetup` installs it with them (before, it
+was a separate `webjet-app-<tag>-<target>` archive).
 
 `webjetup` installs, upgrades and removes Webjet. On Linux, macOS and
 FreeBSD, as root:
@@ -169,18 +171,25 @@ as `socks5h://`. If a download fails with "invalid peer certificate", the
 machine reached something other than the release server: a proxy that isn't
 used, a filter or a wrong DNS answer.
 
-On Windows, download `webjetup-<tag>-x86_64-pc-windows-msvc.exe` from the
-release page and, in an Administrator prompt:
+On Windows, `install.ps1` does the same, in an elevated PowerShell (Run as
+Administrator):
 
 ```powershell
-.\webjetup-v0.11.6-x86_64-pc-windows-msvc.exe install --enroll "wj1:…"
+irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.ps1 | iex
+webjetup enroll "wj1:…"
 ```
+
+With arguments for `webjetup install`, run it as a script block:
+`& ([scriptblock]::Create((irm …/install.ps1))) --enroll "wj1:…"` (or save it
+and run `.\install.ps1 --enroll "wj1:…"`). Like `install.sh` it takes
+`WEBJET_REPO` and `WEBJET_VERSION` from the environment and checks
+`webjetup` against its `.sha256`.
 
 Then, on any platform:
 
 | Command | What it does |
 | --- | --- |
-| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs and starts it again. Sets up the systemd unit and `webjet` user (Linux), the launchd daemon (macOS), the service, PATH and folder ACLs (Windows) or the rc.d service (FreeBSD). `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. On a controller, `--signer` adds the signer service, which holds the signing key in its own process (`webjetd signer`), and points the agent at it; later upgrades keep it. From 0.9.0 it also sets up the remote upgrade helper, which lets admins upgrade the node with `webjetctl network node upgrade` (signed per node, pinned checksums, forward only, automatic rollback); `--no-remote-upgrade` turns that off and `--remote-upgrade` back on, and later upgrades keep the choice. |
+| `webjetup install [VERSION]` (alias `upgrade`) | Install or upgrade to VERSION (default: latest). When the release's `webjetup` is newer than the running one, it hands over to it first (downloaded and checked like the archive), so every release is installed by its own `webjetup`, which then replaces the installed one. Downloads `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`), checks its SHA-256, checks that the new `webjetd` runs, then stops the agent, replaces the programs (`webjetd`, `webjetctl`, and `webjet-app` when the release has it) and starts it again. Every install and upgrade then does all of a fresh install again: the systemd unit and `webjet` user (Linux), the launchd daemon (macOS), the service, PATH, Start menu shortcut and folder ACLs (Windows) or the rc.d service (FreeBSD), the signer and the remote upgrade helper; an outdated service definition is replaced and the service restarted with it. Running it for the installed version keeps the programs and only does this setup. `--enroll` enrolls in the same step, `--from` installs from a local archive or directory, `--force` reinstalls the same version. On a controller, `--signer` adds the signer service, which holds the signing key in its own process (`webjetd signer`), and points the agent at it; later upgrades keep it. From 0.9.0 it also sets up the remote upgrade helper, which lets admins upgrade the node with `webjetctl network node upgrade` (signed per node, pinned checksums, forward only, automatic rollback); `--no-remote-upgrade` turns that off and `--remote-upgrade` back on, and later upgrades keep the choice. |
 | `webjetup enroll <STRING>` | Enroll this node (or re-key it, operations guide 2.7) and start the agent. |
 | `webjetup status` | Installed version, service state, enrollment, remote upgrades and the last one, this node's name and addresses. |
 | `webjetup list` | Published releases. |
@@ -195,7 +204,7 @@ repository.
 
 | Platform | Linux | macOS | Windows | FreeBSD 14, OPNsense 24.7+ (x86_64; from 0.11.0) |
 | --- | --- | --- | --- | --- |
-| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) | `webjetup` (rc.d script `/usr/local/etc/rc.d/webjetd` under `daemon(8)`, root, enabled in `/etc/rc.conf.d/webjetd`; logs to syslog) |
+| Install / upgrade | `webjetup` (systemd unit, `webjet` user, `CAP_NET_ADMIN`, `CAP_NET_BIND_SERVICE`, `CAP_NET_RAW`) | `webjetup` (launchd daemon) | `webjetup` (LocalSystem service, registered with `sc.exe`) | `webjetup` (rc.d script `/usr/local/etc/rc.d/webjetd` under `daemon(8)`, root, enabled in `/etc/rc.conf.d/webjetd`; logs to syslog) |
 | Interface | `/dev/net/tun` | `utun` | Wintun (`wintun.dll` next to `webjetd.exe`) | `tun`, renamed to `webjet0` |
 | Split DNS | `resolvectl` | `/etc/resolver/<domain>` | NRPT rules tagged `webjet` | not set (Unbound query forwarding by hand) |
 | Control channel (open to every local user; changes need a signature) | Unix socket, 0666 | Unix socket, 0666 | named pipe `\\.\pipe\webjet`, everyone reads and writes | Unix socket, 0666 |

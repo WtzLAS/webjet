@@ -23,17 +23,21 @@ operations; every change still needs a signature from an account key, which
 the app makes with your key.
 
 Releases from 0.11.0 include the app for Linux (x86_64, arm64), FreeBSD
-(x86_64), macOS (arm64, x86_64) and Windows (x86_64) as
-`webjet-app-<tag>-<target>.tar.gz` (Windows: `.zip`), next to the server
-archives; unpack it anywhere. On Linux and FreeBSD it needs a
+(x86_64), macOS (arm64, x86_64) and Windows (x86_64). After 0.11.6 it is in
+the release archive `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`) next to
+`webjetd` and `webjetctl`, and `webjetup install` puts it with them
+(`/usr/local/bin/webjet-app`; on Windows `C:\Program Files\Webjet\webjet-app.exe`
+with a "Webjet" Start menu shortcut), so it is upgraded with the agent; it
+can also be unpacked from the archive and run from anywhere. Releases
+0.11.0 to 0.11.6 had it in a separate `webjet-app-<tag>-<target>` archive.
+On Linux and FreeBSD it needs a
 graphical session (X11 or Wayland) with Vulkan, plus libxkbcommon and libxcb
 (Debian/Ubuntu: `libxkbcommon-x11-0` `libvulkan1`, and a Vulkan driver such
 as `mesa-vulkan-drivers`; FreeBSD: `pkg install libxkbcommon vulkan-loader
 mesa-libs`). On macOS (11 or later) it is a plain program, not an `.app`
 bundle, and isn't notarized: a browser download is quarantined, so run
 `xattr -d com.apple.quarantine webjet-app` once (downloads with `curl` aren't
-quarantined). On Windows (10 or later) unpack `webjet-app-<tag>-x86_64-pc-windows-msvc.zip`
-and run `webjet-app.exe`; it uses Direct3D 11 and compiles its shaders when
+quarantined). On Windows (10 or later) it runs as `webjet-app.exe`; it uses Direct3D 11 and compiles its shaders when
 it starts, with the `d3dcompiler_47.dll` Windows ships. The Windows app is
 cross-built and its unit tests pass under Wine, but it hasn't been started on
 real Windows yet (Wine can't run it: its DirectWrite has no font sets).

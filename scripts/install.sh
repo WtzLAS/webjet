@@ -9,8 +9,8 @@
 # Every argument is passed to `webjetup install`. Environment:
 #   WEBJET_REPO     repository to install from (default below)
 #   WEBJET_VERSION  release to take webjetup from (default: latest)
-# Linux, macOS and FreeBSD (OPNsense); on Windows download webjetup-<tag>-x86_64-pc-windows-msvc.exe
-# from the release page and run `webjetup install` as Administrator.
+# Linux, macOS and FreeBSD (OPNsense); on Windows use install.ps1 from the
+# same release page (in an elevated PowerShell: irm …/install.ps1 | iex).
 set -eu
 
 REPO=${WEBJET_REPO:-https://forgejo.wolf109909.top/webj8/webjet}
@@ -26,7 +26,7 @@ case "$(uname -s)" in
     Linux) os=unknown-linux-gnu ;;
     Darwin) os=apple-darwin ;;
     FreeBSD) os=unknown-freebsd ;;
-    *) die "unsupported system $(uname -s); see the release page for Windows" ;;
+    *) die "unsupported system $(uname -s); on Windows use install.ps1" ;;
 esac
 case "$(uname -m)" in
     x86_64 | amd64) arch=x86_64 ;;

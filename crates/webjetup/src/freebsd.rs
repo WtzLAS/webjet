@@ -186,15 +186,11 @@ PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 }
 
 /// Write the rc.d script `name` (when it changed) and enable it at boot.
-pub fn install(sys: &Sys, name: &str, script: &str) -> Result<()> {
+/// Whether the script changed.
+pub fn install(sys: &Sys, name: &str, script: &str) -> Result<bool> {
     let path = rc_script_path(name);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(script) {
-        if path.exists() {
-            println!("    updating {}", path.display());
-        }
-        sys.mkdir(Path::new(RC_DIR), false)?;
-        sys.write(&path, script, 0o755)?;
-    }
+    sys.mkdir(Path::new(RC_DIR), false)?;
+    let changed = crate::system::write_if_changed(sys, &path, script, 0o755)?;
     sys.run(
         "sysrc",
         &[
@@ -202,7 +198,8 @@ pub fn install(sys: &Sys, name: &str, script: &str) -> Result<()> {
             &rc_conf_path(name).to_string_lossy(),
             &format!("{name}_enable=YES"),
         ],
-    )
+    )?;
+    Ok(changed)
 }
 
 /// (Re)start service `name`.

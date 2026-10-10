@@ -18,8 +18,9 @@
 //! when webjetup set it up, refuses downgrades and replays, downloads only
 //! the files whose SHA-256 the admin signed, keeps the previous programs,
 //! and puts them back when the new agent doesn't report the new version
-//! within [`HEALTH_TIMEOUT`]. It also replaces webjetup itself (the one
-//! exception to "webjetup never updates itself").
+//! within [`HEALTH_TIMEOUT`]. It also replaces webjetup itself, and the new
+//! webjetup sets up the new version (`webjetup setup`) as a fresh install
+//! of the release would.
 //!
 //! On by default; `webjetup install --no-remote-upgrade` turns it off (no
 //! helper, and `[upgrade] remote = false` so the agent refuses too).
@@ -28,7 +29,7 @@ use crate::layout::{
     LINUX_USER, Layout, SELF, SERVICE, UPGRADE_LAUNCHD_LABEL, UPGRADE_SERVICE, UPGRADE_TASK,
 };
 use crate::release::{Client, Repo};
-use crate::system::{self, Sys, have, query};
+use crate::system::{self, Start, Sys, have, query};
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -56,6 +57,9 @@ const PREVIOUS_DIR: &str = "previous";
 /// Exists while the helper replaces the programs (in the spool), so the
 /// next run finishes an upgrade that was cut short ([`recover`]).
 const INSTALLING_FILE: &str = "installing.json";
+/// The version of the webjetup that last set up the installation (in the
+/// spool; [`note_setup`]).
+const SETUP_FILE: &str = "setup-version";
 /// Held while a helper runs (in the spool; Unix).
 #[cfg(unix)]
 const LOCK_FILE: &str = "helper.lock";
@@ -210,6 +214,19 @@ fn windows_task_command(l: &Layout) -> String {
     format!("\"{}\" apply-upgrade", l.program(SELF).display())
 }
 
+/// Whether the scheduled task's XML (`schtasks /Query /XML`) runs this
+/// webjetup's `apply-upgrade` as SYSTEM every minute. The XML may come as
+/// UTF-16: NULs are dropped first.
+fn windows_task_current(xml: &str, l: &Layout) -> bool {
+    let xml: String = xml.chars().filter(|c| *c != '\0').collect();
+    let exe = l.program(SELF).display().to_string();
+    xml.contains(&exe)
+        && xml.contains("<Arguments>apply-upgrade</Arguments>")
+        && xml.contains("<Interval>PT1M</Interval>")
+        && xml.contains("<UserId>S-1-5-18</UserId>")
+        && xml.contains("<RunLevel>HighestAvailable</RunLevel>")
+}
+
 // ---------------------------------------------------------------- setup and removal
 
 /// Set up (or keep, or remove) the helper after an install or enrollment.
@@ -222,7 +239,7 @@ fn windows_task_command(l: &Layout) -> String {
 pub fn setup(
     sys: &Sys,
     l: &Layout,
-    repo: &Repo,
+    repo: Option<&Repo>,
     want: Option<bool>,
     enrolled_now: bool,
 ) -> Result<()> {
@@ -276,8 +293,9 @@ pub fn setup(
 /// from the node's state. That state belongs to the agent's user, so it is
 /// pinned once, after an enrollment (`force`) or when there is none yet, and
 /// a later install keeps it: an agent taken over in between can't swap in
-/// its own root key. Only the repository is updated.
-fn write_trust(sys: &Sys, l: &Layout, repo: &Repo, force: bool) -> Result<()> {
+/// its own root key. Only the repository is updated, to `repo` when given
+/// (`None` keeps the pinned one, or takes the default for a new pin).
+fn write_trust(sys: &Sys, l: &Layout, repo: Option<&Repo>, force: bool) -> Result<()> {
     if sys.dry {
         sys.say(&format!(
             "write {}",
@@ -306,13 +324,14 @@ fn write_trust(sys: &Sys, l: &Layout, repo: &Repo, force: bool) -> Result<()> {
     };
     let t = match kept {
         Some(t) => rel::Trust {
-            repo: repo.web.clone(),
+            repo: repo.map_or(t.repo.clone(), |r| r.web.clone()),
             ..t
         },
         None => {
             let node = read(l.data_dir.join("node.json"))?;
             let genesis = read(l.data_dir.join("genesis.wj"))?;
-            rel::Trust::from_state(&node, &genesis, &repo.web)?
+            let web = repo.map_or(crate::release::DEFAULT_REPO, |r| r.web.as_str());
+            rel::Trust::from_state(&node, &genesis, web)?
         }
     };
     let want = serde_json::to_vec_pretty(&t)?;
@@ -346,25 +365,31 @@ fn install_trigger(sys: &Sys, l: &Layout) -> Result<()> {
             )?;
         }
     } else if cfg!(windows) {
-        sys.run(
-            "schtasks.exe",
-            &[
-                "/Create",
-                "/TN",
-                UPGRADE_TASK,
-                "/SC",
-                "MINUTE",
-                "/MO",
-                "1",
-                "/RU",
-                "SYSTEM",
-                "/RL",
-                "HIGHEST",
-                "/TR",
-                &windows_task_command(l),
-                "/F",
-            ],
-        )?;
+        // Created again (/F replaces it) only when it isn't as wanted: the
+        // helper itself may be the task's running instance.
+        let current = query("schtasks.exe", &["/Query", "/TN", UPGRADE_TASK, "/XML"])
+            .is_some_and(|xml| windows_task_current(&xml, l));
+        if !current {
+            sys.run(
+                "schtasks.exe",
+                &[
+                    "/Create",
+                    "/TN",
+                    UPGRADE_TASK,
+                    "/SC",
+                    "MINUTE",
+                    "/MO",
+                    "1",
+                    "/RU",
+                    "SYSTEM",
+                    "/RL",
+                    "HIGHEST",
+                    "/TR",
+                    &windows_task_command(l),
+                    "/F",
+                ],
+            )?;
+        }
     } else if cfg!(target_os = "freebsd") {
         // cron picks up new and changed files in its directories itself.
         let path = crate::freebsd::cron_path();
@@ -558,6 +583,41 @@ fn clear_queue(l: &Layout, older_than: Option<Duration>) {
     }
 }
 
+/// Note that this webjetup set up the installation (`webjetup setup`, an
+/// install): with remote upgrades on, the helper does it otherwise.
+pub fn note_setup(l: &Layout) {
+    if l.upgrade_spool.is_dir() {
+        let _ = rel::write_atomic(
+            &l.upgrade_spool,
+            SETUP_FILE,
+            env!("CARGO_PKG_VERSION").as_bytes(),
+            0o644,
+        );
+    }
+}
+
+/// Set up the installation (service definitions and the rest of
+/// `webjetup setup`) when another webjetup did it last: a helper of an older
+/// release replaces webjetup in a remote upgrade but sets up the new
+/// version with its own, older definitions. Restarts only what changed.
+fn set_up_if_outdated(sys: &Sys, l: &Layout) {
+    let path = l.upgrade_spool.join(SETUP_FILE);
+    let done = std::fs::read_to_string(&path).is_ok_and(|v| v.trim() == env!("CARGO_PKG_VERSION"));
+    if done || crate::installed_version(l).is_none() {
+        return;
+    }
+    println!(
+        "==> Setting up the installation with webjetup {}",
+        env!("CARGO_PKG_VERSION")
+    );
+    if let Err(e) = crate::setup(sys, l, Start::IfChanged) {
+        println!("    {e:#}");
+    }
+    // Once per version, also after a failure (`webjetup install --force`
+    // repairs): the helper runs every minute on some systems.
+    note_setup(l);
+}
+
 /// `webjetup apply-upgrade`: take the queued request, if any, and carry it
 /// out. Always removes the request, so the trigger doesn't fire again.
 /// `only_recover`: only finish an upgrade a helper was cut short in.
@@ -569,6 +629,7 @@ pub fn apply(sys: &Sys, l: &Layout, only_recover: bool) -> Result<()> {
     };
     if !sys.dry {
         recover(sys, l);
+        set_up_if_outdated(sys, l);
     }
     if only_recover {
         return Ok(());
@@ -846,7 +907,7 @@ fn upgrade(
             &plan.archive.sha256,
             stage.path(),
         )?;
-        crate::release::extract(&archive, stage.path(), &crate::wanted_files())?;
+        crate::release::extract(&archive, stage.path(), &crate::all_files())?;
         let up = c.fetch_pinned(
             repo,
             &plan.version,
@@ -880,7 +941,16 @@ fn upgrade(
         if !sys.dry {
             mark(l, &job)?;
         }
-        restart(sys, l)
+        // The new webjetup sets up what the new release needs (service
+        // definitions, users, the signer, this helper) and starts it, as a
+        // fresh install of it would.
+        let up = l.program(SELF).to_string_lossy().into_owned();
+        if query(&up, &["setup", "--help"]).is_some() {
+            sys.run(&up, &["setup", "--start", "yes"])
+        } else {
+            crate::setup_system(sys, l)?;
+            restart(sys, l)
+        }
     };
     let want = plan.version.trim_start_matches('v');
     let problem = match install() {
@@ -920,11 +990,13 @@ fn roll_back(sys: &Sys, l: &Layout, problem: anyhow::Error) -> Outcome {
     }
 }
 
+/// Set up and start the installed version with this webjetup (the previous
+/// version after a rollback, or the new one when this helper is it).
 fn restart(sys: &Sys, l: &Layout) -> Result<()> {
     if crate::signer::configured(l) {
-        crate::signer::setup(sys, l, true)?;
+        crate::signer::setup(sys, l, Start::Yes)?;
     }
-    crate::start_after_install(sys, l, true)
+    crate::start_after_install(sys, l, Start::Yes)
 }
 
 fn previous(l: &Layout) -> PathBuf {
@@ -932,7 +1004,7 @@ fn previous(l: &Layout) -> PathBuf {
 }
 
 fn backed_up_files() -> Vec<String> {
-    let mut v = crate::wanted_files();
+    let mut v = crate::all_files();
     v.push(crate::layout::exe(SELF));
     v
 }
@@ -967,6 +1039,14 @@ pub fn restore(sys: &Sys, l: &Layout, dir: &Path) -> Vec<String> {
     for f in backed_up_files() {
         let src = dir.join(&f);
         if !src.exists() {
+            // A program the previous version didn't have goes (the app
+            // must not run against an older agent).
+            let optional = crate::layout::OPTIONAL_PROGRAMS
+                .iter()
+                .any(|p| crate::layout::exe(p) == f);
+            if optional && let Err(e) = sys.remove_file(&l.bin_dir.join(&f)) {
+                println!("    note: {e:#}");
+            }
             continue;
         }
         let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
@@ -1065,6 +1145,64 @@ mod tests {
             (get(&l, "webjetd"), get(&l, "webjetctl")),
             ("d1".into(), "c1".into())
         );
+    }
+
+    #[test]
+    fn a_rollback_removes_the_app_the_previous_version_lacked() {
+        let d = tempfile::tempdir().unwrap();
+        let l = layout_in(d.path());
+        let sys = Sys { dry: false };
+        put(&l, &[("webjetd", "d1"), ("webjetctl", "c1")]);
+        let prev = previous(&l);
+        backup(&sys, &l, &prev).unwrap();
+        put(
+            &l,
+            &[("webjetd", "d2"), ("webjetctl", "c2"), ("webjet-app", "a2")],
+        );
+        assert!(restore(&sys, &l, &prev).is_empty());
+        assert_eq!(get(&l, "webjetd"), "d1");
+        assert!(!l.bin_dir.join(crate::layout::exe("webjet-app")).exists());
+        // With the app in the backup it comes back.
+        put(&l, &[("webjet-app", "a1")]);
+        backup(&sys, &l, &prev).unwrap();
+        put(&l, &[("webjet-app", "a2")]);
+        assert!(restore(&sys, &l, &prev).is_empty());
+        assert_eq!(get(&l, "webjet-app"), "a1");
+    }
+
+    #[test]
+    fn setup_is_noted_per_webjetup_version() {
+        let d = tempfile::tempdir().unwrap();
+        let mut l = layout_in(d.path());
+        note_setup(&l);
+        assert_eq!(
+            std::fs::read_to_string(l.upgrade_spool.join(SETUP_FILE)).unwrap(),
+            env!("CARGO_PKG_VERSION")
+        );
+        // No spool (remote upgrades off): nothing is written.
+        l.upgrade_spool = d.path().join("none");
+        note_setup(&l);
+        assert!(!l.upgrade_spool.exists());
+    }
+
+    #[test]
+    fn the_scheduled_task_is_compared_with_what_is_registered() {
+        let l = Layout::system();
+        let exe = l.program(SELF).display().to_string();
+        let xml = format!(
+            "<Task><Triggers><TimeTrigger><Repetition><Interval>PT1M</Interval></Repetition></TimeTrigger></Triggers>\
+             <Principals><Principal><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>\
+             <Actions><Exec><Command>{exe}</Command><Arguments>apply-upgrade</Arguments></Exec></Actions></Task>"
+        );
+        assert!(windows_task_current(&xml, &l));
+        // schtasks writes UTF-16.
+        let wide: String = xml.chars().flat_map(|c| [c, '\0']).collect();
+        assert!(windows_task_current(&wide, &l));
+        assert!(!windows_task_current(&xml.replace("PT1M", "PT5M"), &l));
+        assert!(!windows_task_current(
+            &xml.replace(&exe, "C:\\old\\webjetup.exe"),
+            &l
+        ));
     }
 
     #[test]

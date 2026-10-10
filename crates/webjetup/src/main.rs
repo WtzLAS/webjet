@@ -2,7 +2,10 @@
 //! Windows from the published releases.
 //!
 //!   webjetup install [VERSION]     install or upgrade (default: latest);
-//!                                  --signer adds the signer service
+//!                                  --signer adds the signer service. A
+//!                                  newer release's webjetup takes over
+//!                                  the install; every install sets the
+//!                                  machine up as a fresh one would
 //!   webjetup enroll <STRING>       enroll this node and start the agent
 //!   webjetup status                what's installed and running
 //!   webjetup list                  published releases
@@ -20,11 +23,11 @@ mod system;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use layout::{Layout, PROGRAMS, RETIRED_PROGRAMS, SELF};
+use layout::{Layout, OPTIONAL_PROGRAMS, PROGRAMS, RETIRED_PROGRAMS, SELF};
 use release::{Client, Repo};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use system::Sys;
+use system::{Start, Sys};
 
 #[derive(Parser)]
 #[command(
@@ -119,6 +122,34 @@ enum Cmd {
         #[arg(long)]
         recover: bool,
     },
+    /// Set up everything but the programs again, with this webjetup's
+    /// definitions: users, directories, the services, the signer and the
+    /// remote upgrade helper (run by the upgrade helper with the new
+    /// webjetup it installed).
+    #[command(hide = true)]
+    Setup {
+        /// Whether to (re)start the agent and the signer.
+        #[arg(long, value_enum, default_value = "if-changed")]
+        start: StartArg,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum StartArg {
+    Yes,
+    No,
+    /// Only when its service definition changed.
+    IfChanged,
+}
+
+impl From<StartArg> for Start {
+    fn from(a: StartArg) -> Start {
+        match a {
+            StartArg::Yes => Start::Yes,
+            StartArg::No => Start::No,
+            StartArg::IfChanged => Start::IfChanged,
+        }
+    }
 }
 
 fn main() {
@@ -154,6 +185,12 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             system::require_privileges(sys.dry)?;
             let repo = Repo::parse(&cli.repo)?;
+            if let Some(code) = hand_over(&sys, &repo, version.as_deref(), from.as_deref())? {
+                if code == 0 {
+                    return Ok(());
+                }
+                std::process::exit(code);
+            }
             install(
                 &sys,
                 &layout,
@@ -162,9 +199,15 @@ fn run(cli: Cli) -> Result<()> {
                 from.as_deref(),
                 if force { Mode::Force } else { Mode::Normal },
             )?;
+            // From here on as a fresh install, also when this version is
+            // installed already: service definitions of an older release
+            // are replaced, missing pieces added, and the services
+            // restarted with them.
+            let start = Start::from_bool(!no_start);
+            setup_system(&sys, &layout)?;
             // The signer starts first: the controller asks it for its key.
             if signer || signer::configured(&layout) {
-                signer::setup(&sys, &layout, !no_start)?;
+                signer::setup(&sys, &layout, start)?;
             }
             // Before the agent starts: it reads `[upgrade]` and its
             // sandbox setting then.
@@ -173,14 +216,19 @@ fn run(cli: Cli) -> Result<()> {
                 (_, true) => Some(false),
                 _ => None,
             };
-            remote::setup(&sys, &layout, &repo, want, false)?;
+            remote::setup(&sys, &layout, Some(&repo), want, false)?;
             if let Some(s) = enroll {
                 do_enroll(&sys, &layout, &s, !no_start)?;
-                remote::setup(&sys, &layout, &repo, None, true)?;
+                remote::setup(&sys, &layout, Some(&repo), None, true)?;
             } else {
-                start_after_install(&sys, &layout, !no_start)?;
+                start_after_install(&sys, &layout, start)?;
             }
+            remote::note_setup(&layout);
             Ok(())
+        }
+        Cmd::Setup { start } => {
+            system::require_privileges(sys.dry)?;
+            setup(&sys, &layout, start.into())
         }
         Cmd::Enroll { string } => {
             system::require_privileges(sys.dry)?;
@@ -191,7 +239,7 @@ fn run(cli: Cli) -> Result<()> {
             };
             do_enroll(&sys, &layout, &s, true)?;
             // The helper pins the node id, known now (a re-key keeps it).
-            remote::setup(&sys, &layout, &Repo::parse(&cli.repo)?, None, true)
+            remote::setup(&sys, &layout, Some(&Repo::parse(&cli.repo)?), None, true)
         }
         Cmd::ApplyUpgrade { recover } => remote::apply(&sys, &layout, recover),
         Cmd::Status => status(&layout),
@@ -275,15 +323,28 @@ fn installed_version(l: &Layout) -> Option<String> {
 
 // ---------------------------------------------------------------- install
 
+/// The files of a release every installation has.
 fn wanted_files() -> Vec<String> {
     let mut v: Vec<String> = PROGRAMS.iter().map(|p| layout::exe(p)).collect();
     v.extend(layout::extra_files().iter().map(|s| s.to_string()));
     v
 }
 
+/// The files of a release some releases have ([`OPTIONAL_PROGRAMS`]).
+fn optional_files() -> Vec<String> {
+    OPTIONAL_PROGRAMS.iter().map(|p| layout::exe(p)).collect()
+}
+
+/// Every file webjetup installs from a release.
+fn all_files() -> Vec<String> {
+    let mut v = wanted_files();
+    v.extend(optional_files());
+    v
+}
+
 /// Unpack (or copy) the release files into `stage`.
 fn stage_from(from: &Path, stage: &Path) -> Result<()> {
-    let wanted = wanted_files();
+    let wanted = all_files();
     if from.is_dir() {
         for f in &wanted {
             let src = from.join(f);
@@ -296,6 +357,88 @@ fn stage_from(from: &Path, stage: &Path) -> Result<()> {
         release::extract(from, stage, &wanted)?;
     }
     Ok(())
+}
+
+/// The release tag `version` names (`None` and `latest`: the latest one).
+fn resolve_tag(client: &Client, repo: &Repo, version: Option<&str>) -> Result<String> {
+    match version.map(release::normalize_version) {
+        None => client.latest(repo),
+        Some(v) if v == "latest" => client.latest(repo),
+        Some(v) => Ok(v),
+    }
+}
+
+/// Set in the environment of the webjetup an install hands over to, so it
+/// doesn't hand over again.
+const HANDED_OVER_ENV: &str = "WEBJETUP_HANDED_OVER";
+
+/// Hand an install over to the release's own webjetup when that is newer
+/// than this one: a release is set up by the webjetup it was tested with
+/// (its service definitions, capabilities and install steps), and that
+/// webjetup installs itself. The new webjetup gets the same arguments.
+/// Returns its exit code, or `None` to go on here.
+fn hand_over(
+    sys: &Sys,
+    repo: &Repo,
+    version: Option<&str>,
+    from: Option<&Path>,
+) -> Result<Option<i32>> {
+    if std::env::var_os(HANDED_OVER_ENV).is_some() {
+        return Ok(None);
+    }
+    let ours = env!("CARGO_PKG_VERSION");
+    let dir = tempfile::tempdir()?;
+    let new = match (from, version) {
+        (Some(from), _) => {
+            // An unpacked release directory with a webjetup in it.
+            let p = from.join(layout::exe(SELF));
+            if !from.is_dir() || !p.is_file() {
+                return Ok(None);
+            }
+            p
+        }
+        (None, _) => {
+            let client = Client::new();
+            let tag = resolve_tag(&client, repo, version)?;
+            if webjet_release::is_upgrade(ours, &tag) != Some(true) {
+                return Ok(None);
+            }
+            let target =
+                layout::target().ok_or_else(|| anyhow!("no Webjet release for this platform"))?;
+            client.check_release(repo, &tag)?;
+            client.fetch_verified(
+                repo,
+                &tag,
+                &webjet_release::webjetup_name(&tag, target),
+                dir.path(),
+            )?
+        }
+    };
+    // Run from a copy: `--from` may name a directory webjetup can't
+    // execute from, and the download has the release's file name.
+    let exe = dir.path().join(format!("new-{}", layout::exe(SELF)));
+    if new != exe {
+        std::fs::copy(&new, &exe).with_context(|| format!("copy {}", new.display()))?;
+    }
+    system::make_executable(&exe)?;
+    let Some(out) = system::query(&exe.to_string_lossy(), &["--version"]) else {
+        if from.is_some() {
+            return Ok(None);
+        }
+        bail!("the release's webjetup doesn't run on this machine");
+    };
+    let theirs = out.split_whitespace().nth(1).unwrap_or("").to_string();
+    if webjet_release::is_upgrade(ours, &theirs) != Some(true) {
+        return Ok(None);
+    }
+    println!("==> Handing over to the release's webjetup {theirs} (this one is {ours})");
+    sys.say(&format!("run webjetup {theirs} with the same arguments"));
+    let status = std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .env(HANDED_OVER_ENV, "1")
+        .status()
+        .with_context(|| format!("run {}", exe.display()))?;
+    Ok(Some(status.code().unwrap_or(1)))
 }
 
 /// How [`install`] treats what is installed already.
@@ -311,6 +454,9 @@ enum Mode {
     Helper,
 }
 
+/// Put the programs of a release in place (and only them: the rest of an
+/// install is [`setup_system`] and the services). Whether it replaced them
+/// (not when this version is installed already).
 fn install(
     sys: &Sys,
     l: &Layout,
@@ -318,7 +464,7 @@ fn install(
     version: Option<&str>,
     from: Option<&Path>,
     mode: Mode,
-) -> Result<()> {
+) -> Result<bool> {
     let force = mode != Mode::Normal;
     let target = layout::target().ok_or_else(|| anyhow!("no Webjet release for this platform"))?;
     let stage = tempfile::tempdir()?;
@@ -330,14 +476,12 @@ fn install(
         }
         None => {
             let client = Client::new();
-            let tag = match version.map(release::normalize_version) {
-                None => client.latest(repo)?,
-                Some(v) if v == "latest" => client.latest(repo)?,
-                Some(v) => v,
-            };
+            let tag = resolve_tag(&client, repo, version)?;
             if !force && have.as_deref() == Some(tag.trim_start_matches('v')) {
-                println!("Webjet {tag} is already installed (use --force to reinstall).");
-                return Ok(());
+                println!(
+                    "Webjet {tag} is already installed (use --force to reinstall); setting it up again."
+                );
+                return Ok(false);
             }
             client.check_release(repo, &tag)?;
             println!("==> Webjet {tag} for {target}");
@@ -347,7 +491,7 @@ fn install(
                 &layout::archive_name(&tag, target),
                 stage.path(),
             )?;
-            release::extract(&archive, stage.path(), &wanted_files())?;
+            release::extract(&archive, stage.path(), &all_files())?;
         }
     }
     for f in wanted_files() {
@@ -358,11 +502,7 @@ fn install(
     // The new agent must run here before we replace the old one.
     if !sys.dry {
         let staged = stage.path().join(layout::exe("webjetd"));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
-        }
+        system::make_executable(&staged)?;
         let v = system::query(&staged.to_string_lossy(), &["--version"])
             .ok_or_else(|| anyhow!("the downloaded webjetd doesn't run on this machine"))?;
         println!("    {}", v.trim());
@@ -399,6 +539,16 @@ fn install(
             let mode = if f.ends_with(".txt") { 0o644 } else { 0o755 };
             sys.install_file(&stage.path().join(&f), &l.bin_dir.join(&f), mode)?;
         }
+        // A release without one removes an installed copy: it belongs to
+        // another version.
+        for f in optional_files() {
+            let staged = stage.path().join(&f);
+            if staged.exists() {
+                sys.install_file(&staged, &l.bin_dir.join(&f), 0o755)?;
+            } else {
+                sys.remove_file(&l.bin_dir.join(&f))?;
+            }
+        }
         Ok(())
     })();
     if let Err(e) = replaced {
@@ -413,21 +563,32 @@ fn install(
                 errors.join("; ")
             );
         }
-        if let Err(e2) = start_after_install(sys, l, true) {
+        if let Err(e2) = start_after_install(sys, l, Start::Yes) {
             bail!("{e:#}; the installed version is back, but starting it failed: {e2:#}");
         }
         bail!("{e:#}; the installed version is back and running");
     }
-    drop(previous);
+    Ok(true)
+}
+
+/// The system side of an install, done on every install and upgrade so an
+/// upgraded machine ends up as a fresh install of the release would: users,
+/// directories and their permissions, PATH, shortcut, a default
+/// configuration, retired programs gone, and webjetup itself installed.
+fn setup_system(sys: &Sys, l: &Layout) -> Result<()> {
     remove_retired(sys, l)?;
     // webjetup installs itself next to the programs, so `webjetup` keeps
-    // working after install.sh's temporary copy is gone.
+    // working after install.sh's (or install.ps1's) temporary copy is gone,
+    // and an older webjetup is replaced by the one doing the install.
     install_self(sys, l)?;
     sys.mkdir(&l.config_dir, false)?;
     sys.mkdir(&l.data_dir, true)?;
     if cfg!(windows) {
         system::windows_restrict(sys, &l.config_dir)?;
         system::windows_path(sys, &l.bin_dir, true)?;
+        if let Some(lnk) = layout::app_shortcut() {
+            system::windows_shortcut(sys, &lnk, &l.program("webjet-app"))?;
+        }
     }
     if cfg!(target_os = "linux") {
         system::ensure_linux_user(sys)?;
@@ -435,6 +596,23 @@ fn install(
     if !l.config.exists() {
         sys.write(&l.config, "# webjetd configuration: see docs/configuration.md.\n# Everything has a default; an empty file is a valid configuration.\n", 0o644)?;
     }
+    Ok(())
+}
+
+/// Everything of an install but the programs and the enrollment, with this
+/// webjetup's definitions (`webjetup setup`; the upgrade helper runs it with
+/// the webjetup of the release it installed).
+fn setup(sys: &Sys, l: &Layout, start: Start) -> Result<()> {
+    if installed_version(l).is_none() && !sys.dry {
+        bail!("Webjet isn't installed: run `webjetup install`");
+    }
+    setup_system(sys, l)?;
+    if signer::configured(l) {
+        signer::setup(sys, l, start)?;
+    }
+    remote::setup(sys, l, None, None, false)?;
+    start_after_install(sys, l, start)?;
+    remote::note_setup(l);
     Ok(())
 }
 
@@ -455,19 +633,18 @@ fn install_self(sys: &Sys, l: &Layout) -> Result<()> {
     sys.install_file(&me, &dest, 0o755)
 }
 
-fn start_after_install(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
+fn start_after_install(sys: &Sys, l: &Layout, start: Start) -> Result<()> {
     if l.enrolled() {
         if cfg!(target_os = "linux") {
             system::fix_linux_ownership(sys, l)?;
         }
-        system::setup_service(sys, l, start)?;
-        if start {
+        if system::setup_service(sys, l, start)? {
             println!("==> Webjet agent (re)started.");
         }
     } else {
         // Without an identity the agent can't run: register the service but
         // let `webjetup enroll` start it.
-        system::setup_service(sys, l, false)?;
+        system::setup_service(sys, l, Start::No)?;
         println!("==> Installed. Enroll this node to start the agent:");
         println!(
             "      {}webjetup enroll '<enrollment string>'",
@@ -514,7 +691,7 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
     if cfg!(target_os = "linux") {
         system::fix_linux_ownership(sys, l)?;
     }
-    system::setup_service(sys, l, start)?;
+    system::setup_service(sys, l, Start::from_bool(start))?;
     if start {
         println!("==> Enrolled; the agent is running. Check with `webjetctl local status`.");
     }
@@ -623,7 +800,10 @@ fn remove(sys: &Sys, l: &Layout) -> Result<()> {
     signer::remove(sys, l)?;
     remote::remove(sys, l)?;
     println!("==> Removing the programs");
-    for f in wanted_files() {
+    if let Some(lnk) = layout::app_shortcut() {
+        sys.remove_file(&lnk)?;
+    }
+    for f in all_files() {
         sys.remove_file(&l.bin_dir.join(&f))?;
         // Left over from replacing running programs on Windows.
         sys.remove_file(&l.bin_dir.join(&f).with_extension("webjetup-old"))?;
@@ -736,15 +916,29 @@ mod tests {
     }
 
     #[test]
+    fn the_app_is_optional() {
+        let all = all_files();
+        assert!(all.contains(&layout::exe("webjet-app")));
+        assert!(!wanted_files().contains(&layout::exe("webjet-app")));
+        assert!(Cli::try_parse_from(["webjetup", "setup", "--start", "if-changed"]).is_ok());
+        assert!(matches!(
+            Cli::try_parse_from(["webjetup", "setup"]).unwrap().cmd,
+            Cmd::Setup {
+                start: StartArg::IfChanged
+            }
+        ));
+    }
+
+    #[test]
     fn stage_from_directory() {
         let src = tempfile::tempdir().unwrap();
         let stage = tempfile::tempdir().unwrap();
-        for f in wanted_files() {
+        for f in all_files() {
             std::fs::write(src.path().join(&f), f.as_bytes()).unwrap();
         }
         std::fs::write(src.path().join("unrelated"), "x").unwrap();
         stage_from(src.path(), stage.path()).unwrap();
-        for f in wanted_files() {
+        for f in all_files() {
             assert!(stage.path().join(&f).exists());
         }
         assert!(!stage.path().join("unrelated").exists());

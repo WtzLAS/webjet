@@ -18,7 +18,7 @@
 use crate::layout::{
     LINUX_USER, Layout, SERVICE, SIGNER_LAUNCHD_LABEL, SIGNER_SERVICE, SIGNER_USER,
 };
-use crate::system::{self, Sys, have, query};
+use crate::system::{self, Start, Sys, have, query};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -157,9 +157,9 @@ fn adopt_key(sys: &Sys, l: &Layout) -> Result<()> {
     sys.remove_file(&old)
 }
 
-/// Install (or update) the signer's service, point webjetd at it, and when
-/// `start`, (re)start it. Run before the agent starts.
-pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
+/// Install the signer's service or bring it up to date, point webjetd at
+/// it, and (re)start it as `start` says. Run before the agent starts.
+pub fn setup(sys: &Sys, l: &Layout, start: Start) -> Result<()> {
     println!("==> Signer service ({SIGNER_SERVICE})");
     adopt_key(sys, l)?;
     let text = system::read_config(l)?;
@@ -175,11 +175,8 @@ pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
                 "/Library/LaunchDaemons/{SIGNER_LAUNCHD_LABEL}.plist"
             ))
         });
-        let want = launchd_plist(l);
-        if std::fs::read_to_string(&plist).ok().as_deref() != Some(want.as_str()) {
-            sys.write(&plist, &want, 0o644)?;
-        }
-        if start {
+        let changed = system::write_if_changed(sys, &plist, &launchd_plist(l), 0o644)?;
+        if start.now(changed) {
             sys.try_run(
                 "launchctl",
                 &["bootout", "system", &plist.to_string_lossy()],
@@ -194,48 +191,26 @@ pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
             sys.mkdir(d, true)?;
             system::windows_restrict(sys, d)?;
         }
-        if query("sc.exe", &["query", SIGNER_SERVICE]).is_none() {
-            sys.run(
-                "sc.exe",
-                &[
-                    "create",
-                    SIGNER_SERVICE,
-                    "binPath=",
-                    &windows_command(l),
-                    "start=",
-                    "auto",
-                    "DisplayName=",
-                    "Webjet signer",
-                ],
-            )?;
-            sys.try_run(
-                "sc.exe",
-                &[
-                    "description",
-                    SIGNER_SERVICE,
-                    "Holds the Webjet controller's signing key",
-                ],
-            );
-            sys.try_run(
-                "sc.exe",
-                &[
-                    "failure",
-                    SIGNER_SERVICE,
-                    "reset=",
-                    "86400",
-                    "actions=",
-                    "restart/2000/restart/5000/restart/30000",
-                ],
-            );
-        }
+        let changed = system::windows_service(
+            sys,
+            &system::WindowsService {
+                name: SIGNER_SERVICE,
+                command: windows_command(l),
+                display_name: "Webjet signer",
+                description: "Holds the Webjet controller's signing key",
+                depends: None,
+                failure_actions: "restart/2000/restart/5000/restart/30000",
+            },
+        )?;
         system::windows_agent_depends(sys, true);
-        if start {
+        if start.now(changed) {
+            sys.try_run("sc.exe", &["stop", SIGNER_SERVICE]);
             sys.try_run("sc.exe", &["start", SIGNER_SERVICE]);
         }
     } else if cfg!(target_os = "freebsd") {
         let name = crate::freebsd::SIGNER;
-        crate::freebsd::install(sys, name, &crate::freebsd::signer_script(l))?;
-        if start {
+        let changed = crate::freebsd::install(sys, name, &crate::freebsd::signer_script(l))?;
+        if start.now(changed) {
             crate::freebsd::restart(sys, name)?;
         }
     } else {
@@ -256,10 +231,7 @@ pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
         let unit = l.signer_service_file.clone().unwrap_or_else(|| {
             PathBuf::from(format!("/etc/systemd/system/{SIGNER_SERVICE}.service"))
         });
-        let want = systemd_unit(l);
-        if std::fs::read_to_string(&unit).ok().as_deref() != Some(want.as_str()) {
-            sys.write(&unit, &want, 0o644)?;
-        }
+        let changed = system::write_if_changed(sys, &unit, &systemd_unit(l), 0o644)?;
         if !have("systemctl") {
             println!(
                 "    systemd isn't running here: start the signer yourself (as user {SIGNER_USER}, before webjetd)"
@@ -268,7 +240,7 @@ pub fn setup(sys: &Sys, l: &Layout, start: bool) -> Result<()> {
         }
         sys.run("systemctl", &["daemon-reload"])?;
         sys.run("systemctl", &["enable", SIGNER_SERVICE])?;
-        if start {
+        if start.now(changed) {
             sys.run("systemctl", &["restart", SIGNER_SERVICE])?;
         }
     }
