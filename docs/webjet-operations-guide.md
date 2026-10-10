@@ -32,7 +32,7 @@ Files move to and from the offline computer on removable media only.
 On every Linux or macOS machine that joins the network, as root:
 
 ```
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.5/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh
 ```
 
 This installs `webjetd`, `webjetctl` and `webjetup` into `/usr/local/bin` and sets up the `webjetd` service (systemd on Linux, running as the `webjet` user; launchd on macOS). On Windows, download `webjetup-<version>-x86_64-pc-windows-msvc.exe` from the release page and run `webjetup install` in an Administrator prompt. `sudo webjetup status` shows what is installed and running. Upgrades are described in section 3.3, and `webjetup remove` or `webjetup nuke` take Webjet off a machine again.
@@ -307,7 +307,7 @@ A node is one machine in the network, owned by an account. Its **roles** decide 
    ```
 4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it. A node initialized with the genesis file runs the controller role from the start; every later controller gets it from the `control` role (section 2.4).
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.5/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml
    ```
    ```toml
@@ -471,12 +471,12 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    The string is valid for 24 hours (`--expires-hours` changes that) and can be used once. Treat it like a password until then: whoever redeems it first gets the device's place in the network. Send it to the person over a channel you trust.
 3. On the device, install Webjet and enroll it in one step. On Linux and macOS:
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.5/install.sh \
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh \
                   | sudo sh -s -- --enroll '<enrollment string>'
    ```
-   On Windows, download `webjetup-v0.11.5-x86_64-pc-windows-msvc.exe` from the release page and run, in an Administrator prompt:
+   On Windows, download `webjetup-v0.11.6-x86_64-pc-windows-msvc.exe` from the release page and run, in an Administrator prompt:
    ```
-   [node]     webjetup-v0.11.5-x86_64-pc-windows-msvc.exe install --enroll "<enrollment string>"
+   [node]     webjetup-v0.11.6-x86_64-pc-windows-msvc.exe install --enroll "<enrollment string>"
    ```
    On a device that already has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same. A device doesn't need a public address or open ports: it reaches the network through relays, and connects directly to other nodes where NAT allows (§10).
 4. If the person will administer their own devices from it (rename, revoke, re-key), they run `webjetctl` there with their key; see "Running `webjetctl`" above.
@@ -506,7 +506,7 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    ```
 3. On the host, install Webjet without starting it. In `/etc/webjet/webjetd.toml`, set the addresses others reach it on and the listen addresses. Then enroll.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.5/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml       # [[public]], [listen]
    [node]     sudo webjetup enroll '<enrollment string>'
    ```
@@ -663,7 +663,7 @@ A gateway is a node on that LAN that forwards overlay traffic into it. Connectio
    Add `--revoke-old-now` if the old machine was lost or stolen, or its key may have been copied: the old key stops working at once, and the node is offline until step 2. Without it, the old key works until the token is redeemed.
 2. On the new installation, redeem it.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.5/install.sh | sudo sh -s -- --enroll '<enrollment string>'
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh -s -- --enroll '<enrollment string>'
    ```
    On a machine that still has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same. A node in a container is re-keyed as described in [docker.md](docker.md).
 3. **If the old key may have been stolen:** rotate the PSK twice (section 3.1).
@@ -800,8 +800,8 @@ Each release speaks the current and the previous wire protocol, so a network run
 **Remote upgrade** (admin, nodes from 0.9.0):
 
 ```
-[admin]    webjetctl network node upgrade v0.11.5 --all --dry-run     # shows the order
-[admin]    webjetctl network node upgrade v0.11.5 --all               # or: <node> …, --tag edge
+[admin]    webjetctl network node upgrade v0.11.6 --all --dry-run     # shows the order
+[admin]    webjetctl network node upgrade v0.11.6 --all               # or: <node> …, --tag edge
 [admin]    webjetctl network node upgrade-status ctl-01 node-02
 ```
 
@@ -814,13 +814,13 @@ A node refuses when it runs a version older than 0.9.0 (upgrade it with `webjetu
 1. Read the release notes. `webjetup upgrade` installs the new `webjetd` and `webjetctl` but keeps the installed `webjetup` (only a remote upgrade replaces `webjetup` too). When the notes say the release fixes `webjetup` (for example its service files), upgrade with that release's `install.sh` instead, which installs the new `webjetup` and then upgrades the same way.
 2. Upgrade the controllers one at a time: learners first, then voters, the leader last. After each, confirm it has rejoined and caught up (`webjetctl network controller list`).
    ```
-   [node]     sudo webjetup upgrade v0.11.5        # Windows: webjetup upgrade v0.11.5 as Administrator
+   [node]     sudo webjetup upgrade v0.11.6        # Windows: webjetup upgrade v0.11.6 as Administrator
    ```
    or, to update `webjetup` too:
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.5/install.sh | sudo sh
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh
    ```
-   Behind a proxy, pass its variable through `sudo`, which drops it: `sudo env all_proxy=socks5://127.0.0.1:1080 webjetup upgrade v0.11.5` (README, "Installing a release"). The remote upgrade helper runs as a service and has no proxy variables, so nodes that only reach the release server through a proxy are upgraded by hand.
+   Behind a proxy, pass its variable through `sudo`, which drops it: `sudo env all_proxy=socks5://127.0.0.1:1080 webjetup upgrade v0.11.6` (README, "Installing a release"). The remote upgrade helper runs as a service and has no proxy variables, so nodes that only reach the release server through a proxy are upgraded by hand.
 3. Upgrade relays, then the other nodes, in stages by tag. Watch software versions (`webjet_node_info`, or the version under each node in webjet-app's Nodes tab) and alarms between stages. When a release raises the minimum gossip protocol (its release notes say so), upgraded nodes ignore the endpoint, link-state and attachment records of nodes that haven't been upgraded yet (architecture §10.6.5). Those nodes are shown as `outdated` and no routes go through them until they are upgraded, so upgrade relays without delay.
 4. Upgrade `webjetctl` on admins' machines and on the offline computer (from the release archive, as in "Installing the programs").
 
@@ -851,7 +851,7 @@ A node refuses when it runs a version older than 0.9.0 (upgrade it with `webjetu
    ```
 7. Watch for the "doesn't support the active StateVersion" alarm, and upgrade any node that raises it.
 
-**Releases without a StateVersion step.** Some releases add operations or tree records without a new StateVersion; their release notes say which order they need instead. 0.4.0 (one network configuration, node configurations) is one: upgrade every controller before the first `webjetctl network config apply`, and every node before the first `webjetctl local config` change, because older software can't apply or sync them. Compression (0.6.0) is another: upgrade every controller before the first change to `[transport.compression]`, network-wide or for a node, because controllers that don't know the setting compute different leaf bytes and halt on divergence. Nodes need no order: compressed messages go only to peers that advertise support, and control compression (on by default) needs no configuration change. Reverse proxy rules (0.6.0) are a third: upgrade every controller before the first `[[proxy]]` rule in a node's configuration, because older controllers drop the field when they re-encode it; older nodes are never chosen as proxy targets. Automatic controller membership (0.7.0) needs no order: the leader changes nothing until every reachable controller runs 0.7.0, but upgrade every controller before the first change to `[controllers]`, because older controllers can't apply that leaf. The gossip protocol floor (0.7.1) needs no order either. From 0.7.1, nodes ignore the endpoint, link-state and attachment records of 0.6.x and older nodes (architecture §10.6.5), so upgrade those nodes, relays first, before or together with 0.7.1. 0.7.0 and 0.7.1 work together. Controller recovery (0.8.0) needs no order for normal operation, but `webjetctl network controller snapshot` needs a 0.8.0 controller to answer, and after `force-new-cluster` or `restore` (section 4.1) every controller that rejoins must run 0.8.0, because older controllers can't read the entry that starts the new cluster. `webjetup install --signer` needs the 0.8.0 webjetup: run install.sh again rather than `webjetup upgrade`. 0.9.0 needs no order. Its link measurement (architecture §11.2) works with older peers, which only measure less precisely until they are upgraded. Use DNS names in seed addresses only once every node runs 0.9.0, because older nodes can't dial them. Remote upgrades work only on nodes whose helper was installed by the 0.9.0 `install.sh` or `webjetup`, so run install.sh rather than `webjetup upgrade` for the move to 0.9.0. 0.10.0 needs no order either, but reverse-proxied datagrams larger than the tun MTU get through only when both the ingress and the target run 0.10.0, and a real-IP UDP server listening on a wildcard address answers its clients only from a 0.10.0 target on Linux 4.17 or later. 0.10.1 needs no order: only `webjetctl network node upgrade` changed (it skips nodes that can't take the request instead of stopping). 0.10.2 needs no order: its quieter keepalives, probes and KCP acknowledgements (architecture §11.2, §11.4) are used only towards peers that show they take them, and older peers are answered the way they expect. 0.10.3 needs no order: only `webjetctl network node upgrade` changed (it asks the nodes of a batch at the same time). 0.11.0 needs no order for nodes: broadcast and multicast (architecture §9.5.1) go only to peers that advertise them, so older nodes are left out until they are upgraded. Upgrade every controller before the first `multicast_*` limit or `[multicast]` capture setting in a configuration, because older controllers refuse the limit names and don't know the capture setting. 0.11.1 needs no order: only the desktop app changed. 0.11.2 needs no order: upgrade the reverse proxy ingress nodes to have their running flows follow a target's `accept_real_ip` change; targets on 0.11.2 also reset TCP segments of connections they lost in a restart. 0.11.3 needs no order: upgrade the nodes with `[proxy] accept_real_ip = true` so a server in a container (a port published with `docker run -p`) gets the replies' path MTU and its large replies reach the clients. 0.11.4 needs no order: only dependency updates. 0.11.5 needs no order: only the desktop app changed. Before upgrading a node, move any `[transport]` or `[limits]` section out of its `webjetd.toml` (0.4.0 refuses to start with them and names the replacement): for example `[transport] kcp = 0` becomes `webjetctl local config --node <name> set transport.priority.kcp 0`.
+**Releases without a StateVersion step.** Some releases add operations or tree records without a new StateVersion; their release notes say which order they need instead. 0.4.0 (one network configuration, node configurations) is one: upgrade every controller before the first `webjetctl network config apply`, and every node before the first `webjetctl local config` change, because older software can't apply or sync them. Compression (0.6.0) is another: upgrade every controller before the first change to `[transport.compression]`, network-wide or for a node, because controllers that don't know the setting compute different leaf bytes and halt on divergence. Nodes need no order: compressed messages go only to peers that advertise support, and control compression (on by default) needs no configuration change. Reverse proxy rules (0.6.0) are a third: upgrade every controller before the first `[[proxy]]` rule in a node's configuration, because older controllers drop the field when they re-encode it; older nodes are never chosen as proxy targets. Automatic controller membership (0.7.0) needs no order: the leader changes nothing until every reachable controller runs 0.7.0, but upgrade every controller before the first change to `[controllers]`, because older controllers can't apply that leaf. The gossip protocol floor (0.7.1) needs no order either. From 0.7.1, nodes ignore the endpoint, link-state and attachment records of 0.6.x and older nodes (architecture §10.6.5), so upgrade those nodes, relays first, before or together with 0.7.1. 0.7.0 and 0.7.1 work together. Controller recovery (0.8.0) needs no order for normal operation, but `webjetctl network controller snapshot` needs a 0.8.0 controller to answer, and after `force-new-cluster` or `restore` (section 4.1) every controller that rejoins must run 0.8.0, because older controllers can't read the entry that starts the new cluster. `webjetup install --signer` needs the 0.8.0 webjetup: run install.sh again rather than `webjetup upgrade`. 0.9.0 needs no order. Its link measurement (architecture §11.2) works with older peers, which only measure less precisely until they are upgraded. Use DNS names in seed addresses only once every node runs 0.9.0, because older nodes can't dial them. Remote upgrades work only on nodes whose helper was installed by the 0.9.0 `install.sh` or `webjetup`, so run install.sh rather than `webjetup upgrade` for the move to 0.9.0. 0.10.0 needs no order either, but reverse-proxied datagrams larger than the tun MTU get through only when both the ingress and the target run 0.10.0, and a real-IP UDP server listening on a wildcard address answers its clients only from a 0.10.0 target on Linux 4.17 or later. 0.10.1 needs no order: only `webjetctl network node upgrade` changed (it skips nodes that can't take the request instead of stopping). 0.10.2 needs no order: its quieter keepalives, probes and KCP acknowledgements (architecture §11.2, §11.4) are used only towards peers that show they take them, and older peers are answered the way they expect. 0.10.3 needs no order: only `webjetctl network node upgrade` changed (it asks the nodes of a batch at the same time). 0.11.0 needs no order for nodes: broadcast and multicast (architecture §9.5.1) go only to peers that advertise them, so older nodes are left out until they are upgraded. Upgrade every controller before the first `multicast_*` limit or `[multicast]` capture setting in a configuration, because older controllers refuse the limit names and don't know the capture setting. 0.11.1 needs no order: only the desktop app changed. 0.11.2 needs no order: upgrade the reverse proxy ingress nodes to have their running flows follow a target's `accept_real_ip` change; targets on 0.11.2 also reset TCP segments of connections they lost in a restart. 0.11.3 needs no order: upgrade the nodes with `[proxy] accept_real_ip = true` so a server in a container (a port published with `docker run -p`) gets the replies' path MTU and its large replies reach the clients. 0.11.4 needs no order: only dependency updates. 0.11.5 needs no order: only the desktop app changed. 0.11.6 needs no order: only dependency updates. Before upgrading a node, move any `[transport]` or `[limits]` section out of its `webjetd.toml` (0.4.0 refuses to start with them and names the replacement): for example `[transport] kcp = 0` becomes `webjetctl local config --node <name> set transport.priority.kcp 0`.
 
 **Rollback:** binaries can be downgraded freely **until step 6** (`sudo webjetup install <older version> --force`). After activation there is no way back; fix forward.
 
