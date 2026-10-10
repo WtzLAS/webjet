@@ -64,6 +64,10 @@ copies decide by `CARGO_CFG_TARGET_OS` instead:
   registers `magnifyWithEvent:` and `gpui/src/platform/mac/events.rs` turns
   `NSEventTypeMagnify` into it. Listen with `window.on_mouse_event` (there
   is no element method). Windows sends pinches as Ctrl + wheel already.
+- `gpui/src/taffy.rs`: the grid template's `length(0.0)`/`fr(1.0)` take
+  explicit `f32` literals; rustc warns that falling back to `f32` there
+  (`float_literal_f32_fallback`, rust-lang/rust#154024) will become an
+  error.
 - `gpui_media/build.rs`: generates its CoreMedia/CoreVideo bindings for macOS
   targets on any build machine. On Linux, `xcrun --show-sdk-path` is
   macos-cargo.sh's stand-in and bindgen takes the target from

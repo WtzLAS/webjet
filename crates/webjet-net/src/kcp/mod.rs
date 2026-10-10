@@ -1642,10 +1642,10 @@ mod tests {
                     a_addr
                 } else {
                     a_addr = Some(from);
-                    if bo
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| b.checked_sub(1))
-                        .is_ok()
-                    {
+                    // Only this task counts it down.
+                    let b = bo.load(Ordering::Relaxed);
+                    if b > 0 {
+                        bo.store(b - 1, Ordering::Relaxed);
                         continue;
                     }
                     Some(b_addr)
