@@ -50,6 +50,12 @@ copies decide by `CARGO_CFG_TARGET_OS` instead:
   dependencies for every target, as the build machine needs them whatever
   the target is. The example and test targets are removed (their sources
   aren't copied).
+- `gpui/Cargo.toml` and `gpui_media/Cargo.toml`: `core-foundation` is
+  `0.10` instead of exactly `=0.10.0`, because netconfig-rs 0.1.6 (through
+  tun-rs in webjetd) needs 0.10.1; `taffy` is `0.9` instead of `=0.9.0`
+  (0.9.2 is a bug-fix release). `cocoa` and `cocoa-foundation` stay pinned
+  at `=0.26.0`/`=0.2.0`: cocoa 0.26.1 deprecates its whole API in favour of
+  objc2, which floods the macOS build with hundreds of warnings.
 - Trackpad pinch: upstream drops macOS magnify events, so a two-finger
   pinch did nothing. `gpui/src/interactive.rs` adds `PinchEvent` (position,
   `delta` = NSEvent `magnification`, modifiers, phase) and
@@ -68,6 +74,21 @@ copy the new version's files over these (`build.rs`, `Cargo.toml`, `src/`,
 `resources/`, `LICENSE-APACHE`, `README.md`), redo the changes above and
 `cargo update -p gpui -p gpui_media`.
 
-`scripts/gpui-vendor-check.sh` tells whether crates.io has a newer gpui or
-gpui_media than these copies; the pre-commit hook (`.githooks/pre-commit`,
+`scripts/gpui-vendor-check.sh` tells whether crates.io has a newer gpui,
+gpui_media or gpui_http_client than these copies; the pre-commit hook (`.githooks/pre-commit`,
 enabled with `git config core.hooksPath .githooks`) runs it once a day.
+
+## gpui_http_client 0.2.2
+
+Upstream: same repository (`crates/http_client`), Apache-2.0, as published
+on crates.io. Unchanged except `Cargo.toml`: its `zed-async-tar`
+dependency has `default-features = false`. The default feature `xattr`
+pulled in `xattr` 0.2.3, which uses `libc::ENOATTR`; libc 0.2.190 removed
+that constant on Linux, so webjet-app no longer built for Linux and libc
+had to stay at 0.2.189. Only `github_download` uses the tar crate (to
+unpack downloads), gpui never calls it, and extended attributes in tar
+files don't matter to Webjet.
+
+To update it, copy the new version's `Cargo.toml`, `src/` and
+`LICENSE-APACHE` over this copy, set `default-features = false` again (it
+has a `Webjet:` comment) and `cargo update -p gpui_http_client`.

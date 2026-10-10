@@ -67,6 +67,9 @@ opt-level = 3
 # gpui's build scripts pick their steps by the build machine's OS, so the
 # macOS app can't be cross-compiled on Linux with the crates.io versions.
 # These copies decide by the target instead (vendor/README.md).
+# gpui_http_client's copy drops xattr 0.2, which doesn't build for Linux
+# with libc 0.2.190 or later.
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
 gpui_media = { path = "vendor/gpui_media" }
+gpui_http_client = { path = "vendor/gpui_http_client" }

@@ -21,7 +21,7 @@ webjet-release = { path = "../webjet-release", features = ["http"] }
 sha2 = "0.11"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3"
 toml.workspace = true
 # Setting `[controller] signer_socket` in webjetd.toml, keeping its comments.

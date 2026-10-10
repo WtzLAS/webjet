@@ -37,7 +37,8 @@ version = "1.0.86"
 version = "0.71"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-foundation]
-version = "=0.10.0"
+# Webjet: was "=0.10.0"; netconfig-rs 0.1.6 (tun-rs, webjetd) needs 0.10.1.
+version = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-video]
 version = "0.4.3"

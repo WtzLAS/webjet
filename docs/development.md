@@ -89,15 +89,12 @@ code is unreachable, and say why. Duplicate versions are reported as
 warnings (`scripts/deny.sh bans` lists them). The workspace crates are
 `publish = false`, so path dependencies without a version are fine.
 
-`libc` stays at 0.2.189 in `Cargo.lock`: 0.2.190 dropped the Linux constant
-`libc::ENOATTR`, which `xattr` 0.2.3 (through gpui's HTTP client) still
-uses, so webjet-app no longer builds for Linux. After `cargo update`, run
-`cargo update -p libc --precise 0.2.189` until gpui no longer needs xattr
-0.2.
-
-gpui and gpui_media come from patched copies in `vendor/`
+gpui, gpui_media and gpui_http_client come from patched copies in `vendor/`
 (`[patch.crates-io]`; `vendor/README.md` says what changed and how to
 update them), so `cargo update` never moves them to a new release.
+gpui_http_client is patched only so that it no longer pulls in `xattr` 0.2,
+which needs the Linux constant `libc::ENOATTR` that libc 0.2.190 removed;
+`libc` can be updated freely.
 `scripts/gpui-vendor-check.sh` asks crates.io whether there is a newer one
 (exit 1 if so). The pre-commit hook in `.githooks/` runs it with `--hook`:
 a warning only, looked up at most once a day and skipped without network.
