@@ -23,7 +23,7 @@ operations; every change still needs a signature from an account key, which
 the app makes with your key.
 
 Releases from 0.11.0 include the app for Linux (x86_64, arm64), FreeBSD
-(x86_64), macOS (arm64, x86_64) and Windows (x86_64). After 0.11.6 it is in
+(x86_64), macOS (arm64, x86_64) and Windows (x86_64). From 0.12.0 it is in
 the release archive `webjet-<tag>-<target>.tar.gz` (Windows: `.zip`) next to
 `webjetd` and `webjetctl`, and `webjetup install` puts it with them
 (`/usr/local/bin/webjet-app`; on Windows `C:\Program Files\Webjet\webjet-app.exe`

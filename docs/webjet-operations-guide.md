@@ -32,13 +32,13 @@ Files move to and from the offline computer on removable media only.
 On every Linux or macOS machine that joins the network, as root:
 
 ```
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.sh | sudo sh
 ```
 
 This installs `webjetd`, `webjetctl`, the desktop app `webjet-app` and `webjetup` into `/usr/local/bin` and sets up the `webjetd` service (systemd on Linux, running as the `webjet` user; launchd on macOS). On Windows, run in an elevated PowerShell (Run as Administrator):
 
 ```
-irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.ps1 | iex
+irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.ps1 | iex
 ```
 
 which installs into `C:\Program Files\Webjet` and registers the `webjetd` service. `sudo webjetup status` shows what is installed and running. Upgrades are described in section 3.3, and `webjetup remove` or `webjetup nuke` take Webjet off a machine again.
@@ -313,7 +313,7 @@ A node is one machine in the network, owned by an account. Its **roles** decide 
    ```
 4. Start the first controller as a one-member cluster. Install Webjet without starting the agent, give the addresses others reach it on in `/etc/webjet/webjetd.toml`, initialize it with the genesis file, and start it. A node initialized with the genesis file runs the controller role from the start; every later controller gets it from the `control` role (section 2.4).
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml
    ```
    ```toml
@@ -477,12 +477,12 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    The string is valid for 24 hours (`--expires-hours` changes that) and can be used once. Treat it like a password until then: whoever redeems it first gets the device's place in the network. Send it to the person over a channel you trust.
 3. On the device, install Webjet and enroll it in one step. On Linux and macOS:
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh \
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.sh \
                   | sudo sh -s -- --enroll '<enrollment string>'
    ```
    On Windows, in an elevated PowerShell:
    ```
-   [node]     & ([scriptblock]::Create((irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.ps1))) --enroll "<enrollment string>"
+   [node]     & ([scriptblock]::Create((irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.ps1))) --enroll "<enrollment string>"
    ```
    On a device that already has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same. A device doesn't need a public address or open ports: it reaches the network through relays, and connects directly to other nodes where NAT allows (§10).
 4. If the person will administer their own devices from it (rename, revoke, re-key), they run `webjetctl` there with their key; see "Running `webjetctl`" above.
@@ -512,7 +512,7 @@ A data node is the default kind of node: it sends and receives its own traffic, 
    ```
 3. On the host, install Webjet without starting it. In `/etc/webjet/webjetd.toml`, set the addresses others reach it on and the listen addresses. Then enroll.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh -s -- --no-start
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.sh | sudo sh -s -- --no-start
    [node]     sudoedit /etc/webjet/webjetd.toml       # [[public]], [listen]
    [node]     sudo webjetup enroll '<enrollment string>'
    ```
@@ -669,7 +669,7 @@ A gateway is a node on that LAN that forwards overlay traffic into it. Connectio
    Add `--revoke-old-now` if the old machine was lost or stolen, or its key may have been copied: the old key stops working at once, and the node is offline until step 2. Without it, the old key works until the token is redeemed.
 2. On the new installation, redeem it.
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh -s -- --enroll '<enrollment string>'
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.sh | sudo sh -s -- --enroll '<enrollment string>'
    ```
    On a machine that still has Webjet installed, `sudo webjetup enroll '<enrollment string>'` does the same. A node in a container is re-keyed as described in [docker.md](docker.md).
 3. **If the old key may have been stolen:** rotate the PSK twice (section 3.1).
@@ -806,8 +806,8 @@ Each release speaks the current and the previous wire protocol, so a network run
 **Remote upgrade** (admin, nodes from 0.9.0):
 
 ```
-[admin]    webjetctl network node upgrade v0.11.6 --all --dry-run     # shows the order
-[admin]    webjetctl network node upgrade v0.11.6 --all               # or: <node> …, --tag edge
+[admin]    webjetctl network node upgrade v0.12.0 --all --dry-run     # shows the order
+[admin]    webjetctl network node upgrade v0.12.0 --all               # or: <node> …, --tag edge
 [admin]    webjetctl network node upgrade-status ctl-01 node-02
 ```
 
@@ -820,13 +820,13 @@ A node refuses when it runs a version older than 0.9.0 (upgrade it with `webjetu
 1. Read the release notes. `webjetup upgrade` hands over to the release's `webjetup` when that is newer, which installs the programs and itself and then sets the machine up as a fresh install of the release would: an older release's service definition (for example a systemd unit without a capability the new agent needs) is replaced and the service restarted with it, and missing pieces (users, the signer's service, the remote upgrade helper, on Windows the PATH entry and Start menu shortcut) are added. Running it for the version that is installed already keeps the programs and only does this setup. A `webjetup` up to 0.11.6 can't hand over yet: for the move to 0.12.0 run that release's `install.sh` (Windows: `install.ps1`) once, or let a remote upgrade do it.
 2. Upgrade the controllers one at a time: learners first, then voters, the leader last. After each, confirm it has rejoined and caught up (`webjetctl network controller list`).
    ```
-   [node]     sudo webjetup upgrade v0.11.6        # Windows: webjetup upgrade v0.11.6 as Administrator
+   [node]     sudo webjetup upgrade v0.12.0        # Windows: webjetup upgrade v0.12.0 as Administrator
    ```
    or, from a `webjetup` up to 0.11.6:
    ```
-   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.11.6/install.sh | sudo sh
+   [node]     curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.0/install.sh | sudo sh
    ```
-   Behind a proxy, pass its variable through `sudo`, which drops it: `sudo env all_proxy=socks5://127.0.0.1:1080 webjetup upgrade v0.11.6` (README, "Installing a release"). The remote upgrade helper runs as a service and has no proxy variables, so nodes that only reach the release server through a proxy are upgraded by hand.
+   Behind a proxy, pass its variable through `sudo`, which drops it: `sudo env all_proxy=socks5://127.0.0.1:1080 webjetup upgrade v0.12.0` (README, "Installing a release"). The remote upgrade helper runs as a service and has no proxy variables, so nodes that only reach the release server through a proxy are upgraded by hand.
 3. Upgrade relays, then the other nodes, in stages by tag. Watch software versions (`webjet_node_info`, or the version under each node in webjet-app's Nodes tab) and alarms between stages. When a release raises the minimum gossip protocol (its release notes say so), upgraded nodes ignore the endpoint, link-state and attachment records of nodes that haven't been upgraded yet (architecture §10.6.5). Those nodes are shown as `outdated` and no routes go through them until they are upgraded, so upgrade relays without delay.
 4. Upgrade `webjetctl` on admins' machines and on the offline computer (from the release archive, as in "Installing the programs").
 
