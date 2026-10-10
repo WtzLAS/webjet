@@ -169,6 +169,11 @@ unsafe fn build_classes() {
                     sel!(swipeWithEvent:),
                     handle_view_event as extern "C" fn(&Object, Sel, id),
                 );
+                // Webjet: trackpad pinch gestures (events.rs NSEventTypeMagnify).
+                decl.add_method(
+                    sel!(magnifyWithEvent:),
+                    handle_view_event as extern "C" fn(&Object, Sel, id),
+                );
                 decl.add_method(
                     sel!(flagsChanged:),
                     handle_view_event as extern "C" fn(&Object, Sel, id),

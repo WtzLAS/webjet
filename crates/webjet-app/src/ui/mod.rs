@@ -1434,6 +1434,21 @@ mod tests {
                 "the wheel zooms: {:?}",
                 app.viewport
             );
+        });
+        frame(cx);
+        // A trackpad pinch zooms out again (and in).
+        let before = view.update(cx, |app, _| app.viewport.zoom);
+        cx.simulate_event(gpui::PinchEvent {
+            position: point(corner.x + px(200.), corner.y + px(100.)),
+            delta: -0.5,
+            ..Default::default()
+        });
+        view.update(cx, |app, _| {
+            assert!(
+                (app.viewport.zoom - before * 0.5).abs() < 1e-3,
+                "a pinch zooms: {before} -> {:?}",
+                app.viewport
+            );
             app.reset_layout();
             assert!(app.pinned.is_empty() && app.viewport == Viewport::default());
         });

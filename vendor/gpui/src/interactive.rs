@@ -390,6 +390,43 @@ impl Deref for ScrollWheelEvent {
     }
 }
 
+// Webjet: trackpad pinch (magnify) gestures. Upstream gpui 0.2.2 dropped
+// macOS NSEventTypeMagnify events, so two-finger pinch could not zoom.
+/// A trackpad pinch (magnify) gesture from the platform. Only macOS sends
+/// these; other platforms report pinches, if at all, as scroll wheel events
+/// with the control modifier held.
+#[derive(Clone, Debug, Default)]
+pub struct PinchEvent {
+    /// The position of the mouse on the window.
+    pub position: Point<Pixels>,
+
+    /// How much the content should be magnified by this event, relative to
+    /// its current size: 0.1 means 10% larger, -0.1 10% smaller.
+    pub delta: f32,
+
+    /// The modifiers that were held down during the gesture.
+    pub modifiers: Modifiers,
+
+    /// The phase of the gesture.
+    pub phase: TouchPhase,
+}
+
+impl Sealed for PinchEvent {}
+impl InputEvent for PinchEvent {
+    fn to_platform_input(self) -> PlatformInput {
+        PlatformInput::Pinch(self)
+    }
+}
+impl MouseEvent for PinchEvent {}
+
+impl Deref for PinchEvent {
+    type Target = Modifiers;
+
+    fn deref(&self) -> &Self::Target {
+        &self.modifiers
+    }
+}
+
 /// The scroll delta for a scroll wheel event.
 #[derive(Clone, Copy, Debug)]
 pub enum ScrollDelta {
@@ -561,6 +598,8 @@ pub enum PlatformInput {
     MouseExited(MouseExitEvent),
     /// The scroll wheel was used.
     ScrollWheel(ScrollWheelEvent),
+    /// A trackpad pinch gesture (Webjet: added).
+    Pinch(PinchEvent),
     /// Files were dragged and dropped onto the window.
     FileDrop(FileDropEvent),
 }
@@ -576,6 +615,7 @@ impl PlatformInput {
             PlatformInput::MouseMove(event) => Some(event),
             PlatformInput::MouseExited(event) => Some(event),
             PlatformInput::ScrollWheel(event) => Some(event),
+            PlatformInput::Pinch(event) => Some(event),
             PlatformInput::FileDrop(event) => Some(event),
         }
     }
@@ -590,6 +630,7 @@ impl PlatformInput {
             PlatformInput::MouseMove(_) => None,
             PlatformInput::MouseExited(_) => None,
             PlatformInput::ScrollWheel(_) => None,
+            PlatformInput::Pinch(_) => None,
             PlatformInput::FileDrop(_) => None,
         }
     }

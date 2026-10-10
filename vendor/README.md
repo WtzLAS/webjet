@@ -50,6 +50,14 @@ copies decide by `CARGO_CFG_TARGET_OS` instead:
   dependencies for every target, as the build machine needs them whatever
   the target is. The example and test targets are removed (their sources
   aren't copied).
+- Trackpad pinch: upstream drops macOS magnify events, so a two-finger
+  pinch did nothing. `gpui/src/interactive.rs` adds `PinchEvent` (position,
+  `delta` = NSEvent `magnification`, modifiers, phase) and
+  `PlatformInput::Pinch`; `gpui/src/window.rs` `dispatch_event` tracks its
+  position like a scroll wheel event; `gpui/src/platform/mac/window.rs`
+  registers `magnifyWithEvent:` and `gpui/src/platform/mac/events.rs` turns
+  `NSEventTypeMagnify` into it. Listen with `window.on_mouse_event` (there
+  is no element method). Windows sends pinches as Ctrl + wheel already.
 - `gpui_media/build.rs`: generates its CoreMedia/CoreVideo bindings for macOS
   targets on any build machine. On Linux, `xcrun --show-sdk-path` is
   macos-cargo.sh's stand-in and bindgen takes the target from

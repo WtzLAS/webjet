@@ -1,7 +1,7 @@
 use crate::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels,
-    PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
+    PinchEvent, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
     platform::mac::{
         LMGetKbdType, NSStringExt, TISCopyCurrentKeyboardLayoutInputSource,
         TISGetInputSourceProperty, UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
@@ -286,6 +286,27 @@ impl PlatformInput {
 
                         pressed_button: None,
                         modifiers: read_modifiers(native_event),
+                    })
+                }),
+                // Webjet: trackpad pinch (magnifyWithEvent:), dropped upstream.
+                NSEventType::NSEventTypeMagnify => window_height.map(|window_height| {
+                    let phase = match native_event.phase() {
+                        NSEventPhase::NSEventPhaseMayBegin | NSEventPhase::NSEventPhaseBegan => {
+                            TouchPhase::Started
+                        }
+                        NSEventPhase::NSEventPhaseEnded | NSEventPhase::NSEventPhaseCancelled => {
+                            TouchPhase::Ended
+                        }
+                        _ => TouchPhase::Moved,
+                    };
+                    Self::Pinch(PinchEvent {
+                        position: point(
+                            px(native_event.locationInWindow().x as f32),
+                            window_height - px(native_event.locationInWindow().y as f32),
+                        ),
+                        delta: native_event.magnification() as f32,
+                        modifiers: read_modifiers(native_event),
+                        phase,
                     })
                 }),
                 _ => None,

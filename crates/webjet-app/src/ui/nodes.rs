@@ -6,8 +6,9 @@ use super::*;
 use crate::graph::{Edge, Viewport};
 use crate::model::{Action, Circuit, Node, Sessions};
 use gpui::{
-    Bounds, CursorStyle, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathBuilder, Pixels, Point, ScrollDelta, ScrollWheelEvent, canvas, point,
+    Bounds, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PathBuilder, PinchEvent, Pixels, Point, ScrollDelta,
+    ScrollWheelEvent, canvas, point,
 };
 
 /// What a drag on the graph moves.
@@ -109,18 +110,26 @@ fn kind_text(kind: &str) -> &'static str {
     }
 }
 
+/// Window-wide listeners of the bottom edges canvas.
+struct Listen {
+    app: Entity<WebjetApp>,
+    /// A drag is on: follow the pointer anywhere in the window.
+    dragging: bool,
+}
+
 /// The edges, drawn through the viewport. The bottom layer's canvas also
 /// records the area's bounds (to turn pointer positions into graph
-/// positions) and, while a drag is on, follows the pointer anywhere in the
-/// window.
+/// positions), zooms on trackpad pinches over the area and, while a drag is
+/// on, follows the pointer anywhere in the window.
 fn edges_canvas(
     lines: Vec<Line>,
     vp: Viewport,
     bounds: Option<Rc<Cell<[f32; 4]>>>,
-    dragging: Option<Entity<WebjetApp>>,
+    listen: Option<Listen>,
 ) -> impl IntoElement {
+    let has_listen = listen.is_some();
     canvas(
-        move |b: Bounds<Pixels>, _, _| {
+        move |b: Bounds<Pixels>, window, _| {
             if let Some(bounds) = bounds {
                 bounds.set([
                     f32::from(b.origin.x),
@@ -129,9 +138,10 @@ fn edges_canvas(
                     f32::from(b.size.height),
                 ]);
             }
-            lines
+            let hitbox = has_listen.then(|| window.insert_hitbox(b, HitboxBehavior::Normal));
+            (lines, hitbox)
         },
-        move |b: Bounds<Pixels>, lines, window, _| {
+        move |b: Bounds<Pixels>, (lines, hitbox), window, _| {
             let at = |p: (f32, f32)| {
                 let v = vp.to_view(p);
                 point(
@@ -154,8 +164,18 @@ fn edges_canvas(
                     window.paint_path(p, gpui::Hsla::from(rgb(l.color)).opacity(l.opacity));
                 }
             }
-            if let Some(app) = dragging {
-                let up = app.clone();
+            let Some(listen) = listen else { return };
+            if let Some(hitbox) = hitbox {
+                let app = listen.app.clone();
+                window.on_mouse_event(move |e: &PinchEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
+                        app.update(cx, |this, cx| this.pinch_graph(e, cx));
+                    }
+                });
+            }
+            if listen.dragging {
+                let app = listen.app.clone();
+                let up = listen.app;
                 window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Bubble {
                         app.update(cx, |this, cx| {
@@ -406,6 +426,13 @@ impl WebjetApp {
         cx.notify();
     }
 
+    /// A trackpad pinch zooms around the pointer.
+    pub(super) fn pinch_graph(&mut self, e: &PinchEvent, cx: &mut Context<Self>) {
+        let at = self.graph_pos(e.position);
+        self.viewport.zoom_at(1.0 + e.delta, at);
+        cx.notify();
+    }
+
     /// Forget moved nodes and go back to the computed layout and view.
     pub(super) fn reset_layout(&mut self) {
         self.pinned.clear();
@@ -523,7 +550,10 @@ impl WebjetApp {
             }
         }
         let panning = self.drag.as_ref().is_some_and(|d| d.moved);
-        let listen = self.drag.is_some().then(|| cx.entity());
+        let listen = Listen {
+            app: cx.entity(),
+            dragging: self.drag.is_some(),
+        };
         let mut area = div()
             .id("graph-area")
             .debug_selector(|| "graph-area-box".into())
@@ -556,7 +586,7 @@ impl WebjetApp {
             }));
         // Two layers, each edges, then delays, then nodes: everything else
         // below, what is in focus on top.
-        let mut listen = listen;
+        let mut listen = Some(listen);
         for (layer, (ls, edge_labels)) in lines.into_iter().zip(labels).enumerate() {
             if layer == 0 {
                 area = area.child(edges_canvas(
@@ -628,7 +658,7 @@ impl WebjetApp {
             );
         let hint = muted(
             "Drag the background to move the picture, drag a node to place it · scroll to move, \
-             mouse wheel or ⌘/Ctrl + scroll to zoom · nodes stay where they are, new ones \
+             pinch, mouse wheel or ⌘/Ctrl + scroll to zoom · nodes stay where they are, new ones \
              appear next to their links; Re-layout arranges the whole picture again",
         )
         .text_xs();

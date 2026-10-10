@@ -162,9 +162,9 @@ isn't available.
   always gets the same picture.
 
   The graph moves: drag the background (or scroll with two fingers) to move
-  the picture, and use the mouse wheel, ⌘/Ctrl + scroll or the − / + buttons
-  to zoom around the pointer. *Fit* goes back to the whole picture. Drag a
-  node to place it; a short press without moving selects it. Placed nodes
+  the picture, and pinch the trackpad, use the mouse wheel, ⌘/Ctrl + scroll
+  or the − / + buttons to zoom around the pointer. *Fit* goes back to the
+  whole picture. Drag a node to place it; a short press without moving selects it. Placed nodes
   stay where you put them until *Re-layout*, which also resets the zoom and
   lays the graph out from scratch for the area's current size. The circuit area
   below lists this agent's circuits, with ★ on the one a session sends on.
@@ -271,7 +271,7 @@ They are skipped when no local network runs.
 
 The headless render test draws every tab from `tests/fixtures/node-02.json`
 and drives the graph with simulated mouse events (drag a node, click it, pan,
-wheel zoom),
+wheel and pinch zoom),
 the agents' answers captured from `scripts/local-net.sh 4`. Capture it again
 after changing what the agent reports. `nodes_tab_fits` checks the Nodes
 tab's layout at several window sizes and drags its three separators.
