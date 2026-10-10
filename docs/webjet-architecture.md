@@ -2579,6 +2579,7 @@ Wherever this document says a node "raises an alarm", this is what happens:
 | Camouflage certificate expires in under 14 days (§9.7.2) | High |
 | Clock offset above 30 s (§18.6) | Medium |
 | Fewer than two seeds reachable (§10.7); relay overloaded for a long period (§11.8.4); repeated limit hits (§16.5) | Medium |
+| A relay or controller with no `[listen]` address and no router port mapping (`not_listening`): other nodes can reach it only by hole punching (§10.6) | Medium |
 
 A node that can't reach any controller can't deliver its alarms. The metrics store therefore also alerts on **missing reports**: a node that should be online but hasn't reported (§12.6).
 

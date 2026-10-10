@@ -377,7 +377,14 @@ impl Config {
         let Some(p) = path else {
             return Ok(Config::default());
         };
-        if !p.exists() {
+        // `exists()` is false for a file the agent can't reach (a directory
+        // it may not enter, say): it would start with the defaults, without
+        // `[listen]` or `[[public]]`, and say nothing. Only a file that is
+        // really missing means the defaults.
+        let found = p
+            .try_exists()
+            .with_context(|| format!("can't access {}", p.display()))?;
+        if !found {
             return Ok(Config::default());
         }
         let s = std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?;
@@ -531,6 +538,28 @@ transport = "kcp"
         assert!(Config::load(Some(&p)).is_err());
         std::fs::write(&p, "[tun]\nmtu = 1400\n").unwrap();
         assert_eq!(Config::load(Some(&p)).unwrap().tun.mtu, 1400);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_file_means_defaults_an_unreachable_one_an_error() {
+        let dir = std::env::temp_dir().join(format!("webjet-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("webjetd.toml");
+        assert!(Config::load(Some(&p)).unwrap().listen.kcp.is_none());
+        std::fs::write(&p, "[listen]\nkcp = \"0.0.0.0:6969\"\n").unwrap();
+        assert!(Config::load(Some(&p)).unwrap().listen.kcp.is_some());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+            // Root enters any directory: nothing to test then.
+            if std::fs::metadata(&p).is_err() {
+                let e = format!("{:#}", Config::load(Some(&p)).unwrap_err());
+                assert!(e.contains("can't access"), "{e}");
+            }
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

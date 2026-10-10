@@ -62,7 +62,8 @@ in the desktop app's Config tab ([app.md](app.md)).
 `webjetd.toml` holds how one machine runs the agent. It is a plain file that
 you edit by hand. Every key has a default, so an empty file, or no file at
 all, is a valid configuration: a data node that only dials out needs
-nothing.
+nothing. A file that exists but that the agent can't read (no permission on
+it or its directory) stops the agent with an error instead.
 
 ### Location and applying changes
 
@@ -123,7 +124,9 @@ emptied at every boot and the node with it.
 Addresses this node accepts hop sessions on, as `ip:port`. A transport
 whose key is left out isn't offered. A node listens only where this section
 says, so a data node behind NAT usually has no `[listen]` at all and only
-dials out. Relays and controllers need it.
+dials out. Relays and controllers need it: without it (and without a
+router port mapping) they raise the `not_listening` alarm, since edge nodes
+behind symmetric NATs can't reach them and keep fewer home relays.
 
 | Key | Example | Transport |
 | --- | --- | --- |

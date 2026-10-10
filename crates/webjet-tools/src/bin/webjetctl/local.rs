@@ -12,7 +12,7 @@ pub(crate) fn agent_config(
     data_dir: Option<PathBuf>,
 ) -> Result<webjetd::config::Config> {
     let path = config.map_or_else(webjetd::config::default_config_path, Path::to_path_buf);
-    if config.is_some() && !path.exists() {
+    if config.is_some() && matches!(path.try_exists(), Ok(false)) {
         bail!("configuration file {} not found", path.display());
     }
     let mut cfg = webjetd::config::Config::load(Some(&path))?;

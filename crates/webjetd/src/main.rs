@@ -96,7 +96,7 @@ fn main() -> Result<()> {
         } => return signer(&key, &socket, group_access),
         Cmd::Run => {}
     }
-    if cli.config.is_some() && !cfg_path.exists() {
+    if cli.config.is_some() && matches!(cfg_path.try_exists(), Ok(false)) {
         anyhow::bail!("configuration file {} not found", cfg_path.display());
     }
     let mut cfg = Config::load(Some(&cfg_path))?;

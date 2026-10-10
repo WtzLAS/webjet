@@ -141,7 +141,35 @@ pub async fn run(n: Arc<Node>) {
         if i.is_multiple_of(6) || i == 1 {
             check_camouflage(&n, now);
         }
+        check_listen(&n);
     }
+}
+
+/// A relay or controller nobody can dial (§10.6): without `[listen]` in
+/// webjetd.toml (or a router port mapping) edge nodes reach it only by
+/// hole punching, which fails from behind symmetric NATs, so they keep
+/// fewer home relays than they should and nothing else says why.
+pub fn check_listen(n: &Node) {
+    let core = n.is_controller()
+        || n.store
+            .read()
+            .view()
+            .nodes
+            .get(&n.me)
+            .is_some_and(|x| x.relay || x.control);
+    match listen_alarm(core, &n.cfg.listen, n.port_mapping.lock().is_some()) {
+        Some(msg) => n.alarm("not_listening", "warning", msg),
+        None => n.clear_alarm("not_listening"),
+    }
+}
+
+pub fn listen_alarm(core: bool, listen: &crate::config::Listen, mapped: bool) -> Option<String> {
+    let listening = listen.tls.is_some() || listen.kcp.is_some() || listen.anytls.is_some();
+    (core && !listening && !mapped).then(|| {
+        "this relay/controller accepts no connections: webjetd.toml has no [listen], \
+         so other nodes reach it only by hole punching"
+            .into()
+    })
 }
 
 const DAY_MS: u64 = 86_400_000;
@@ -193,6 +221,19 @@ pub fn camouflage_alarm(now: u64, not_after: u64) -> Option<(&'static str, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relays_and_controllers_must_listen() {
+        let none = crate::config::Listen::default();
+        let kcp = crate::config::Listen {
+            kcp: Some("0.0.0.0:6969".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(listen_alarm(true, &none, false).is_some());
+        assert!(listen_alarm(true, &none, true).is_none());
+        assert!(listen_alarm(true, &kcp, false).is_none());
+        assert!(listen_alarm(false, &none, false).is_none());
+    }
 
     #[test]
     fn camouflage_alarm_thresholds() {
