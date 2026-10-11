@@ -147,7 +147,7 @@ was a separate `webjet-app-<tag>-<target>` archive).
 FreeBSD, as root:
 
 ```sh
-curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.1/install.sh | sudo sh
+curl -fsSL https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.2/install.sh | sudo sh
 sudo webjetup enroll 'wj1:…'                 # the string from `webjetctl network node enroll`
 ```
 
@@ -156,7 +156,7 @@ otherwise (Forgejo has no "latest" download link, so the URL names a tag).
 It downloads `webjetup` for the machine, checks it against its `.sha256` and
 runs `webjetup install`. Arguments go to `webjetup install`, so
 `… | sudo sh -s -- --enroll 'wj1:…'` installs and enrolls in one step, and
-`… | sudo sh -s -- v0.12.1` picks a version.
+`… | sudo sh -s -- v0.12.2` picks a version.
 
 Behind a proxy, `webjetup` (and `webjetctl network node upgrade`) take it
 from the first variable that is set among `https_proxy`, `all_proxy` and
@@ -175,7 +175,7 @@ On Windows, `install.ps1` does the same, in an elevated PowerShell (Run as
 Administrator):
 
 ```powershell
-irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.1/install.ps1 | iex
+irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.2/install.ps1 | iex
 webjetup enroll "wj1:…"
 ```
 

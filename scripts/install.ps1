@@ -3,13 +3,13 @@
 # counterpart of install.sh. Run it in an elevated PowerShell (Run as
 # Administrator):
 #
-#   irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.1/install.ps1 | iex
+#   irm https://forgejo.wolf109909.top/webj8/webjet/releases/download/v0.12.2/install.ps1 | iex
 #
 # With arguments for `webjetup install` (install and enroll, a specific
 # version, …):
 #
 #   & ([scriptblock]::Create((irm …/install.ps1))) --enroll 'wj1:…'
-#   & ([scriptblock]::Create((irm …/install.ps1))) v0.12.1
+#   & ([scriptblock]::Create((irm …/install.ps1))) v0.12.2
 #
 # or save it and run `.\install.ps1 --enroll 'wj1:…'`. Environment:
 #   WEBJET_REPO     repository to install from (default below)
