@@ -434,6 +434,18 @@ pub fn limit(n: &Node, name: &str) -> u64 {
     limit_opt(n, name).unwrap_or(1).max(1)
 }
 
+/// [`limit`] as a count. Limits are u64 in the tree with no upper bound;
+/// one beyond the type saturates (no limit) instead of wrapping to a small
+/// number, or to 0 that would refuse everything.
+pub fn limit_usize(n: &Node, name: &str) -> usize {
+    usize::try_from(limit(n, name)).unwrap_or(usize::MAX)
+}
+
+/// [`limit`] as a per-second rate, saturating like [`limit_usize`].
+pub fn limit_u32(n: &Node, name: &str) -> u32 {
+    u32::try_from(limit(n, name)).unwrap_or(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +494,34 @@ mod tests {
         .unwrap();
         testnode::sync(&mut c, &n);
         assert_eq!(limit(&n, "circuits_global"), 300, "node scope wins");
+    }
+
+    #[test]
+    fn huge_limits_saturate_instead_of_wrapping() {
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &[]);
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        // 2^32 as `as u32` is 0: every new flow would be refused.
+        let big = 1u64 << 32;
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(crypto::k32(&me)),
+            limits: Some(vec![
+                lv("conntrack_new_per_sec", big),
+                lv("conntrack_global", u64::MAX),
+            ]),
+            ..Default::default()
+        })
+        .unwrap();
+        testnode::sync(&mut c, &n);
+        assert_eq!(limit_u32(&n, "conntrack_new_per_sec"), u32::MAX);
+        assert_eq!(
+            limit_usize(&n, "conntrack_global"),
+            usize::try_from(u64::MAX).unwrap_or(usize::MAX)
+        );
+        assert_eq!(
+            limit_u32(&n, "lookups_per_sec"),
+            limit(&n, "lookups_per_sec") as u32
+        );
     }
 
     #[test]

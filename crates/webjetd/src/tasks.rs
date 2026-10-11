@@ -90,6 +90,16 @@ impl Default for Supervisor {
     }
 }
 
+/// Run blocking work (fsyncs, files, the socket signer) from async code: on
+/// the agent's multi-threaded runtime the worker hands its other tasks off
+/// first; elsewhere (tests, the current-thread runtime) it just runs.
+pub(crate) fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+        _ => f(),
+    }
+}
+
 /// The text of a panic payload.
 fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {

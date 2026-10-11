@@ -488,10 +488,6 @@ pub fn may_talk(n: &Node, a: &Bytes32, b: &Bytes32) -> bool {
     )
 }
 
-fn limit(n: &Node, name: &str) -> u64 {
-    crate::metrics::limit(n, name)
-}
-
 // ---------------------------------------------------------------- opening (source)
 
 /// Open a circuit to `peer` through `hops` (empty = direct).
@@ -592,8 +588,8 @@ const NONCE_WINDOW: Duration = Duration::from_secs(300);
 /// without bound. (The setup rate is checked in [`on_open`], before the
 /// setup's nonce is recorded.)
 fn admit(n: &Arc<Node>, src: &Bytes32, to_me: bool) -> Option<&'static str> {
-    let per_src = limit(n, "circuits_per_source") as usize;
-    let global = limit(n, "circuits_global") as usize;
+    let per_src = crate::metrics::limit_usize(n, "circuits_per_source");
+    let global = crate::metrics::limit_usize(n, "circuits_global");
     let t = n.circuits.lock();
     if t.source_count(src, to_me) >= per_src {
         Some("per_source")
@@ -660,7 +656,7 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
     {
         // The rate first: a source over it records no nonces, so it can't
         // grow the replay set either.
-        let rate = limit(n, "circuit_setups_per_sec") as u32;
+        let rate = crate::metrics::limit_u32(n, "circuit_setups_per_sec");
         let mut t = n.circuits.lock();
         let now = Instant::now();
         let why = if !t.setup_allowed(&src, rate, now) {

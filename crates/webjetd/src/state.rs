@@ -280,7 +280,13 @@ pub struct CamouflageFile {
 }
 
 pub fn save_store(p: &Paths, s: &webjet_core::store::Store) -> Result<()> {
-    let f = StoreFile {
+    save_store_file(p, &store_file(s))
+}
+
+/// A copy of what [`save_store`] writes: taken under the store lock, so the
+/// slow part (encoding, the disk write) can run after the lock is released.
+pub fn store_file(s: &webjet_core::store::Store) -> StoreFile {
+    StoreFile {
         head: s.head().map(|h| h.raw.clone()).unwrap_or_default(),
         high_water: s.high_water,
         trusted_floor: s.trusted_floor,
@@ -294,8 +300,13 @@ pub fn save_store(p: &Paths, s: &webjet_core::store::Store) -> Result<()> {
             })
             .collect(),
         offline: s.offline_items(),
-    };
-    save_json(&p.store(), &f)
+    }
+}
+
+/// Write `store.json`. Compact JSON: it is rewritten after every tree
+/// change and only ever read back by the agent.
+pub fn save_store_file(p: &Paths, f: &StoreFile) -> Result<()> {
+    write_private(&p.store(), &serde_json::to_vec(f)?)
 }
 
 pub fn load_store(p: &Paths, genesis: Vec<u8>) -> Result<webjet_core::store::Store> {

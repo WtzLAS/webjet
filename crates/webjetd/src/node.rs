@@ -316,6 +316,11 @@ pub struct Node {
     /// This node retransmits unreliable-class frames on its KCP hops
     /// (§17.5): from the tree, `View::retransmit`.
     pub retransmit: AtomicBool,
+    /// `persist_store` bookkeeping: a number per copy taken of the store
+    /// (counted under the store lock), and the newest one on disk. A save
+    /// that finishes after a newer one is dropped.
+    store_copies: AtomicU64,
+    store_saved: Mutex<u64>,
     #[cfg(feature = "anytls")]
     pub anytls_acceptor: Mutex<
         Option<(
@@ -393,6 +398,8 @@ impl Node {
             rpc_tasks: Arc::new(tokio::sync::Semaphore::new(crate::rpc::MAX_INBOUND)),
             dns_tasks: Arc::new(tokio::sync::Semaphore::new(crate::dns::MAX_INFLIGHT)),
             retransmit: AtomicBool::new(false),
+            store_copies: AtomicU64::new(0),
+            store_saved: Mutex::new(0),
             #[cfg(feature = "anytls")]
             anytls_acceptor: Mutex::new(None),
             me_weak: OnceLock::new(),
@@ -874,29 +881,60 @@ impl Node {
 
     // ------------------------------------------------------------ persistence
 
-    /// Save the verified state. The read guard is held until the file is
-    /// replaced, so a store write can't land between two concurrent saves:
-    /// they write the same state, each through its own temp file.
+    /// Save the verified state. Only the copy is taken under the store lock;
+    /// encoding and the disk write (an fsync) run after it is released, so
+    /// store writers don't queue behind the disk. Saves are serialized and
+    /// numbered by the copy they write: one that would replace a newer copy
+    /// on disk is dropped.
     pub fn persist_store(&self) {
+        let (seq, f) = self.store_copy();
+        crate::tasks::blocking(|| self.save_store_copy(seq, &f));
+    }
+
+    /// A numbered copy of the store for [`Node::persist_store`]. Numbered
+    /// under the guard, which no writer can share: a later number never
+    /// holds an older state.
+    fn store_copy(&self) -> (u64, state::StoreFile) {
         let s = self.store.read();
-        if let Err(e) = state::save_store(&self.paths, &s) {
-            tracing::error!("saving state: {e}");
+        let seq = self.store_copies.fetch_add(1, Ordering::Relaxed) + 1;
+        (seq, state::store_file(&s))
+    }
+
+    /// Write copy `seq` unless a newer one is already on disk.
+    fn save_store_copy(&self, seq: u64, f: &state::StoreFile) {
+        let mut saved = self.store_saved.lock();
+        if *saved >= seq {
+            return;
+        }
+        match state::save_store_file(&self.paths, f) {
+            Ok(()) => *saved = seq,
+            Err(e) => tracing::error!("saving state: {e}"),
         }
     }
 
     /// Save long-term link history (live hops included).
     pub fn persist_links(&self) {
-        let mut book = self.link_history.lock().clone();
-        for h in self.hops.lock().values() {
-            book.insert((h.peer, h.transport), h.stats.lock().history.clone());
-        }
+        // Live hops' figures first: the hop locks are never held together
+        // with `link_history`.
+        let live: Vec<_> = self
+            .hops
+            .lock()
+            .values()
+            .map(|h| ((h.peer, h.transport), h.stats.lock().history.clone()))
+            .collect();
         let now = now_ms();
-        // Forget links not seen for 30 days.
-        book.retain(|_, h| now.saturating_sub(h.updated_ms) < 30 * 24 * 3_600_000);
-        *self.link_history.lock() = book.clone();
-        if let Err(e) = crate::state::save_links(&self.paths, &book) {
-            tracing::debug!("saving link history: {e}");
-        }
+        let book = {
+            let mut book = self.link_history.lock();
+            book.extend(live);
+            // Forget links not seen for 30 days.
+            book.retain(|_, h| now.saturating_sub(h.updated_ms) < 30 * 24 * 3_600_000);
+            book.clone()
+        };
+        crate::tasks::blocking(|| {
+            if let Err(e) = crate::state::save_links(&self.paths, &book) {
+                tracing::debug!("saving link history: {e}");
+            }
+        });
     }
 
     pub fn persist_psk(&self) {
@@ -1429,6 +1467,46 @@ mod hop_tests {
         // Our own redial never pushes out a hop the rule gives to the peer.
         assert_eq!(keep_new_hop(&high, &low, true, false, old), Dup::Refuse);
         assert_eq!(keep_new_hop(&low, &high, true, false, old), Dup::Replace);
+    }
+
+    /// `persist_store` copies under the store lock and writes after it: the
+    /// newest copy ends on disk, an older one finishing late never replaces
+    /// it, and the store can be written while a save is in progress.
+    #[test]
+    fn persist_store_keeps_the_newest_copy() {
+        use crate::testnode::{self, Cluster};
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &[]);
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        let genesis = c.net.genesis.clone();
+        let load = |n: &Node| state::load_store(&n.paths, genesis.clone()).unwrap();
+
+        n.persist_store();
+        assert_eq!(load(&n).all_leaves(), n.store.read().all_leaves());
+
+        // A save copies the store, then a newer node appears and a save of
+        // that lands first...
+        let (old_seq, old) = n.store_copy();
+        c.data_node("later", "10.7.0.3", &[]);
+        testnode::sync(&mut c, &n);
+        n.persist_store();
+        assert!(load(&n).view().by_name.contains_key("later"));
+        // ...the older copy's write, done afterwards, is dropped.
+        n.save_store_copy(old_seq, &old);
+        assert!(
+            load(&n).view().by_name.contains_key("later"),
+            "not replaced"
+        );
+
+        // The disk write runs without the store lock: with a save in
+        // progress (`store_saved` held), a store writer still gets in.
+        let saving = n.store_saved.lock();
+        let w = std::thread::spawn({
+            let n = n.clone();
+            move || drop(n.store.write())
+        });
+        w.join().unwrap();
+        drop(saving);
     }
 
     #[tokio::test]

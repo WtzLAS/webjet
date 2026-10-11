@@ -858,7 +858,7 @@ fn flood(n: &Arc<Node>, except: Option<u64>, origin: Bytes32, ty: u16, raw: &[u8
 
 fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
     let per_sec = crate::metrics::limit(n, "lookups_per_sec");
-    let max_subs = crate::metrics::limit(n, "subscriptions_per_peer") as usize;
+    let max_subs = crate::metrics::limit_usize(n, "subscriptions_per_peer");
     {
         let mut r = n.sync.lookup_rate.lock();
         let e = r.entry(hop.id).or_insert((Instant::now(), 0));

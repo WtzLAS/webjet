@@ -819,11 +819,10 @@ fn parse_proc_igmp6(text: &str, dev: &str) -> std::collections::HashSet<IpAddr> 
             if f.get(1) != Some(&dev) {
                 return None;
             }
-            let hex = f.get(2).filter(|h| h.len() == 32)?;
             let mut b = [0u8; 16];
-            for (i, x) in b.iter_mut().enumerate() {
-                *x = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
-            }
+            // Checks the length and every digit; never slices inside a
+            // multi-byte character.
+            hex::decode_to_slice(f.get(2)?, &mut b).ok()?;
             Some(IpAddr::from(b))
         })
         .collect()
@@ -1110,6 +1109,12 @@ mod tests {
         let g6 = parse_proc_igmp6(v6, "webjet0");
         assert!(g6.contains(&"ff02::fb".parse::<IpAddr>().unwrap()));
         assert_eq!(g6.len(), 2);
+        // Damaged lines are skipped, a multi-byte character among them.
+        let bad = "5 webjet0 ff02000000000000000000000000é01 1 0 0
+5 webjet0 ff02000000000000000000000000zz01 1 0 0
+5 webjet0 ff02 1 0 0
+";
+        assert!(parse_proc_igmp6(bad, "webjet0").is_empty());
     }
 
     #[test]

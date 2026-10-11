@@ -16,6 +16,7 @@ pub use reports::StoredReport;
 
 use crate::node::Node;
 use crate::rpc;
+use crate::tasks::blocking;
 use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use raft::{Raft, Role};
@@ -96,16 +97,6 @@ const HEAD_RESIGN: u64 = HOUR;
 struct Waiter {
     hash: Bytes32,
     tx: oneshot::Sender<std::result::Result<Outcome, String>>,
-}
-
-/// Run blocking controller work (log fsync, snapshot files, the socket
-/// signer) from async code: on the agent's multi-threaded runtime the worker
-/// hands its other tasks off first; elsewhere (tests) it just runs.
-fn blocking<T>(f: impl FnOnce() -> T) -> T {
-    match tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()) {
-        Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
-        _ => f(),
-    }
 }
 
 /// Lock order, where more than one is held: `apply_lock`, then `raft`, then

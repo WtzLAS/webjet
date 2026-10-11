@@ -683,7 +683,8 @@ impl Dataplane {
             return;
         }
         // Limits may have changed with the tree.
-        apply_limits(&n, &mut self.conntrack.lock());
+        let apply = ct_limits(&n);
+        apply(&mut self.conntrack.lock());
         let (my_ips, grants, pool, resolver, suffix, zones) = {
             let s = n.store.read();
             let v = s.view();
@@ -852,7 +853,7 @@ impl Dataplane {
     /// what would go to the tun interface arrives on the receiver.
     pub(crate) fn for_test(n: &Arc<Node>) -> (Arc<Dataplane>, mpsc::UnboundedReceiver<Vec<u8>>) {
         let mut ct = Conntrack::new(0, 0, 0);
-        apply_limits(n, &mut ct);
+        ct_limits(n)(&mut ct);
         let (tx, rx) = mpsc::unbounded_channel();
         let dp = Arc::new(Dataplane {
             node: Arc::downgrade(n),
@@ -889,17 +890,25 @@ impl Dataplane {
     }
 }
 
-/// Create the data plane: the tun device (if enabled) and its tasks.
-/// Connection tracking limits from the effective Limits (§16.2, §16.4).
-fn apply_limits(n: &Node, ct: &mut Conntrack) {
-    use crate::metrics::limit;
-    ct.per_peer_quota = limit(n, "conntrack_per_peer") as usize;
-    ct.new_per_sec = limit(n, "conntrack_new_per_sec") as u32;
-    ct.global_cap = limit(n, "conntrack_global") as usize;
-    ct.gateway_per_peer_quota = limit(n, "snat_ports_per_source") as usize;
-    ct.gateway_cap = limit(n, "snat_global") as usize;
+/// Connection tracking limits from the effective Limits (§16.2, §16.4),
+/// read before the table is locked (limits take the store lock).
+fn ct_limits(n: &Node) -> impl FnOnce(&mut Conntrack) {
+    use crate::metrics::{limit_u32, limit_usize};
+    let per_peer = limit_usize(n, "conntrack_per_peer");
+    let new_per_sec = limit_u32(n, "conntrack_new_per_sec");
+    let global = limit_usize(n, "conntrack_global");
+    let gw_per_source = limit_usize(n, "snat_ports_per_source");
+    let gw_cap = limit_usize(n, "snat_global");
+    move |ct| {
+        ct.per_peer_quota = per_peer;
+        ct.new_per_sec = new_per_sec;
+        ct.global_cap = global;
+        ct.gateway_per_peer_quota = gw_per_source;
+        ct.gateway_cap = gw_cap;
+    }
 }
 
+/// Create the data plane: the tun device (if enabled) and its tasks.
 pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     let (my_ips, pool) = {
         let s = n.store.read();
@@ -913,7 +922,7 @@ pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
         )
     };
     let mut ct = Conntrack::new(0, 0, 0);
-    apply_limits(n, &mut ct);
+    ct_limits(n)(&mut ct);
     let mut dev_name = n.cfg.tun.name.clone().unwrap_or_else(|| {
         if cfg!(target_os = "macos") {
             "utun".into()

@@ -930,14 +930,18 @@ impl Proxy {
     /// interfaces changed (from `Dataplane::refresh`).
     pub fn refresh(&self, n: &Arc<Node>, dp: &Dataplane) {
         {
-            use crate::metrics::limit;
+            use crate::metrics::{limit_u32, limit_usize};
+            // Read before locking the table: limits take the store lock.
+            let global = limit_usize(n, "conntrack_global");
+            let new_per_sec = limit_u32(n, "conntrack_new_per_sec");
+            let gw_per_source = limit_usize(n, "snat_ports_per_source");
+            let gw_cap = limit_usize(n, "snat_global");
             let mut t = self.table.lock();
-            let global = limit(n, "conntrack_global") as usize;
             t.ct.global_cap = global;
             t.ct.per_peer_quota = global;
-            t.ct.new_per_sec = limit(n, "conntrack_new_per_sec") as u32;
-            t.ct.gateway_per_peer_quota = limit(n, "snat_ports_per_source") as usize;
-            t.ct.gateway_cap = limit(n, "snat_global") as usize;
+            t.ct.new_per_sec = new_per_sec;
+            t.ct.gateway_per_peer_quota = gw_per_source;
+            t.ct.gateway_cap = gw_cap;
         }
         let addrs = dp.resolver.read().clone();
         *self.addrs.write() = addrs.clone();

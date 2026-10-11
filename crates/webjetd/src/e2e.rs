@@ -238,7 +238,7 @@ pub fn send(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8], ecn: u8) -> S
     let Some((c, key, peer_kid, ctr, needs_rekey)) = reserved else {
         // No keys or circuit yet: queue for after the handshake. The limit
         // is read without the session lock (it reads the tree).
-        let max = crate::metrics::limit(n, "handshake_queue") as usize;
+        let max = crate::metrics::limit_usize(n, "handshake_queue");
         let mut i = s.inner.lock();
         if i.queue.len() >= max {
             return SendResult::Dropped;
