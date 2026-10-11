@@ -171,16 +171,18 @@ impl Controller {
                 ack(true, None)
             }
             RpcBody::OfflineSubmit(o) => {
-                let mut errs = Vec::new();
-                for b in o.items.unwrap_or_default() {
-                    if let Err(e) = n
-                        .store
-                        .write()
-                        .add_offline_item(&b.data.unwrap_or_default())
-                    {
-                        errs.push(e.to_string());
-                    }
-                }
+                let raws: Vec<Vec<u8>> = o
+                    .items
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|b| b.data.unwrap_or_default())
+                    .collect();
+                // One write lock and one view rebuild for the whole batch.
+                let results = n.store.write().add_offline_items(&raws);
+                let errs: Vec<String> = results
+                    .into_iter()
+                    .filter_map(|r| r.err().map(|e| e.to_string()))
+                    .collect();
                 n.persist_store();
                 crate::gossip::push_head(&n);
                 ack(errs.is_empty(), (!errs.is_empty()).then(|| errs.join("; ")))

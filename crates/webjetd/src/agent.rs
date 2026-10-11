@@ -234,16 +234,15 @@ fn finish_enrollment(
         bail!("the controller's network has a different root key than the ticket");
     }
     let mut store = Store::new(genesis.clone())?;
-    for c in resp
+    let offline: Vec<Vec<u8>> = resp
         .certs
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .chain(resp.key_tombstones.clone().unwrap_or_default())
-        .chain(resp.offline.clone().unwrap_or_default())
-    {
-        let _ = store.add_offline_item(&c.data.unwrap_or_default());
-    }
+        .iter()
+        .flatten()
+        .chain(resp.key_tombstones.iter().flatten())
+        .chain(resp.offline.iter().flatten())
+        .map(|c| c.data.clone().unwrap_or_default())
+        .collect();
+    let _ = store.add_offline_items(&offline);
     let head = resp
         .head
         .clone()

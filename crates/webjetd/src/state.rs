@@ -305,8 +305,8 @@ pub fn save_store_file(p: &Paths, f: &StoreFile) -> Result<()> {
 pub fn load_store(p: &Paths, genesis: Vec<u8>) -> Result<webjet_core::store::Store> {
     let mut s = webjet_core::store::Store::new(genesis)?;
     if let Some(f) = load_json::<StoreFile>(&p.store())? {
-        for o in &f.offline {
-            if let Err(e) = s.add_offline_item(o) {
+        for r in s.add_offline_items(&f.offline) {
+            if let Err(e) = r {
                 tracing::warn!("persisted offline item rejected: {e}");
             }
         }

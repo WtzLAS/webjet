@@ -13,7 +13,7 @@ use anyhow::{Result, anyhow, bail};
 use ipnet::IpNet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use webjet_proto::{self as wp, Decodable, msg_type as mt};
 
 #[derive(Clone, Debug)]
@@ -446,6 +446,9 @@ pub struct Store {
     pub equivocation: Option<(Vec<u8>, Vec<u8>)>,
     pub trusted_floor: u64,
     view: Arc<View>,
+    /// `offline_hash()`, computed once per rebuild (every change to the
+    /// offline items rebuilds the view).
+    offline_hash: OnceLock<Bytes32>,
     /// Bumped whenever anything changes; consumers use it to recompute caches.
     pub generation: u64,
 }
@@ -497,6 +500,7 @@ impl Store {
             equivocation: None,
             trusted_floor: 0,
             view: Arc::default(),
+            offline_hash: OnceLock::new(),
             generation: 0,
         };
         s.rebuild();
@@ -543,6 +547,12 @@ impl Store {
     /// issuer's revocation while another stays good) until a root-signed one
     /// replaces them; which count is decided in the view (`View::valid_certs`).
     pub fn add_cert(&mut self, raw: &[u8]) -> Result<bool> {
+        let r = self.insert_cert(raw);
+        self.rebuild_if_added(r)
+    }
+
+    /// [`Store::add_cert`] without rebuilding the view.
+    fn insert_cert(&mut self, raw: &[u8]) -> Result<bool> {
         let v = open_envelope(raw)?;
         if v.ty != mt::SIGNING_KEY_CERT {
             bail!("expected a SigningKeyCert, got {}", mt::name(v.ty));
@@ -590,8 +600,15 @@ impl Store {
                 issuer,
             },
         );
-        self.rebuild();
         Ok(true)
+    }
+
+    /// Rebuild the view after an offline item went in.
+    fn rebuild_if_added(&mut self, r: Result<bool>) -> Result<bool> {
+        if matches!(r, Ok(true)) {
+            self.rebuild();
+        }
+        r
     }
 
     /// Who signed a certificate: `None` for the root, or the admin account.
@@ -625,6 +642,12 @@ impl Store {
     /// Accept a SigningKeyTombstone signed by the root or emergency key
     /// (§6.6, §22.1). Permanent.
     pub fn add_key_tombstone(&mut self, raw: &[u8]) -> Result<bool> {
+        let r = self.insert_key_tombstone(raw);
+        self.rebuild_if_added(r)
+    }
+
+    /// [`Store::add_key_tombstone`] without rebuilding the view.
+    fn insert_key_tombstone(&mut self, raw: &[u8]) -> Result<bool> {
         let v = open_expect(raw, mt::SIGNING_KEY_TOMBSTONE, &self.offline_signers())?;
         let t: wp::SigningKeyTombstone = v.decode()?;
         let id = crypto::opt_k32(&t.signing_key_id);
@@ -653,7 +676,6 @@ impl Store {
             self.tree = Tree::new();
             self.high_water = self.high_water.min(last_valid);
         }
-        self.rebuild();
         Ok(true)
     }
 
@@ -865,6 +887,12 @@ impl Store {
 
     /// Accept a root- or emergency-signed node or account tombstone (§6.3, §6.11).
     pub fn add_offline_tombstone(&mut self, raw: &[u8]) -> Result<bool> {
+        let r = self.insert_offline_tombstone(raw);
+        self.rebuild_if_added(r)
+    }
+
+    /// [`Store::add_offline_tombstone`] without rebuilding the view.
+    fn insert_offline_tombstone(&mut self, raw: &[u8]) -> Result<bool> {
         let v = open_envelope(raw)?;
         if !self.offline_signers().contains(&v.signer) {
             bail!("offline tombstone not signed by the root or emergency key");
@@ -890,17 +918,40 @@ impl Store {
             }
             _ => bail!("not a tombstone"),
         }
-        self.rebuild();
         Ok(true)
     }
 
     /// Generic entry point for any priority-gossiped offline item.
     pub fn add_offline_item(&mut self, raw: &[u8]) -> Result<bool> {
+        let r = self.insert_offline_item(raw);
+        self.rebuild_if_added(r)
+    }
+
+    /// Add several offline items, rebuilding the view once at the end
+    /// instead of once per item. One result per item, in order. None of the
+    /// checks reads the view, so the outcome is the same as adding them one
+    /// by one.
+    pub fn add_offline_items<I>(&mut self, items: I) -> Vec<Result<bool>>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<[u8]>,
+    {
+        let out: Vec<Result<bool>> = items
+            .into_iter()
+            .map(|raw| self.insert_offline_item(raw.as_ref()))
+            .collect();
+        if out.iter().any(|r| matches!(r, Ok(true))) {
+            self.rebuild();
+        }
+        out
+    }
+
+    fn insert_offline_item(&mut self, raw: &[u8]) -> Result<bool> {
         let v = open_envelope(raw)?;
         match v.ty {
-            mt::SIGNING_KEY_CERT => self.add_cert(raw),
-            mt::SIGNING_KEY_TOMBSTONE => self.add_key_tombstone(raw),
-            mt::TOMBSTONE | mt::ACCOUNT_TOMBSTONE => self.add_offline_tombstone(raw),
+            mt::SIGNING_KEY_CERT => self.insert_cert(raw),
+            mt::SIGNING_KEY_TOMBSTONE => self.insert_key_tombstone(raw),
+            mt::TOMBSTONE | mt::ACCOUNT_TOMBSTONE => self.insert_offline_tombstone(raw),
             _ => bail!("unexpected offline item {}", mt::name(v.ty)),
         }
     }
@@ -914,7 +965,14 @@ impl Store {
         v
     }
 
+    /// The hash of every offline item (§10.3.1), cached until they change.
     pub fn offline_hash(&self) -> Bytes32 {
+        *self
+            .offline_hash
+            .get_or_init(|| self.compute_offline_hash())
+    }
+
+    fn compute_offline_hash(&self) -> Bytes32 {
         let mut ids: Vec<Bytes32> = Vec::new();
         // Root-signed certs by key id, as before admins could sign them, so
         // nodes of either kind agree while only the root signs certs.
@@ -1013,6 +1071,7 @@ impl Store {
             &self.offline_node_tombs,
             &self.offline_acct_tombs,
         ));
+        self.offline_hash = OnceLock::new();
         self.generation += 1;
     }
 
@@ -1494,5 +1553,98 @@ mod tests {
         assert!(st.tree().get(kind::NODE_CONFIG, &id).is_none());
         // The same tree again is accepted.
         c.sync(&mut st);
+    }
+
+    /// Offline items for the batch tests: a second controller's cert, a
+    /// retired key, node and account tombstones, a duplicate and garbage.
+    fn offline_batch(c: &mut Cluster) -> Vec<Vec<u8>> {
+        let (id, _) = c.data_node("b", "10.7.0.6", &[]);
+        let other = crypto::KeyPair::generate();
+        let cert = wp::SigningKeyCert {
+            signing_key_id: Some(crypto::k32(&crypto::signing_key_id(&other.public()))),
+            signing_key: Some(crypto::k32(&other.public())),
+            controller: Some(crypto::k32(&[0xc1; 32])),
+            cert_serial: 2,
+            issuer: None,
+        };
+        let cert = c.net.root.sign_obj(mt::SIGNING_KEY_CERT, &cert);
+        let retired = wp::SigningKeyTombstone {
+            signing_key_id: Some(crypto::k32(&[0x77; 32])),
+            last_valid_version: 0,
+            reason: None,
+        };
+        let node = wp::Tombstone {
+            node_id: Some(crypto::k32(&id)),
+            version: 99,
+            reason: Some("lost".into()),
+        };
+        let account = wp::AccountTombstone {
+            account_id: Some(crypto::k32(&[0x55; 32])),
+            version: 1,
+            revoke_issued: false,
+            reason: None,
+        };
+        vec![
+            cert.clone(),
+            c.net
+                .emergency
+                .sign_obj(mt::SIGNING_KEY_TOMBSTONE, &retired),
+            c.net.emergency.sign_obj(mt::TOMBSTONE, &node),
+            c.net.root.sign_obj(mt::ACCOUNT_TOMBSTONE, &account),
+            cert,
+            b"not an envelope".to_vec(),
+        ]
+    }
+
+    #[test]
+    fn a_batch_of_offline_items_matches_adding_them_one_by_one() {
+        let mut c = Cluster::new();
+        let items = offline_batch(&mut c);
+        let mut one = c.store();
+        let mut batch = c.store();
+        let hash_before = batch.offline_hash();
+        let singles: Vec<Result<bool>> = items.iter().map(|i| one.add_offline_item(i)).collect();
+        let generation = batch.generation;
+        let batched = batch.add_offline_items(&items);
+        let shape = |r: &[Result<bool>]| {
+            r.iter()
+                .map(|r| r.as_ref().ok().copied())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&singles), shape(&batched));
+        assert_eq!(
+            shape(&batched),
+            [
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                None
+            ]
+        );
+        // One rebuild for the whole batch.
+        assert_eq!(batch.generation, generation + 1);
+        assert_eq!(one.offline_items(), batch.offline_items());
+        assert_eq!(one.offline_hash(), batch.offline_hash());
+        assert_ne!(
+            hash_before,
+            batch.offline_hash(),
+            "the cached hash follows changes"
+        );
+        assert_eq!(one.offline_hash(), one.compute_offline_hash());
+        assert_eq!(one.view().valid_certs, batch.view().valid_certs);
+        let valid = |s: &Store| {
+            let mut v: Vec<(Bytes32, bool)> =
+                s.view().nodes.iter().map(|(k, n)| (*k, n.valid)).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(valid(&one), valid(&batch));
+        // Nothing new: no rebuild.
+        let generation = batch.generation;
+        let again = batch.add_offline_items(&items[..1]);
+        assert!(matches!(again[..], [Ok(false)]));
+        assert_eq!(batch.generation, generation);
     }
 }

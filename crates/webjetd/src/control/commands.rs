@@ -320,14 +320,18 @@ fn node_config(n: &Node, id: Bytes32) -> Result<Value> {
 
 /// Install offline-signed items, gossip them and hand them to a controller.
 async fn submit_offline(n: &Arc<Node>, items: Vec<Vec<u8>>) -> Result<Value> {
-    let mut added = 0;
-    for it in &items {
-        if n.store.write().add_offline_item(it)? {
-            added += 1;
-        }
+    // One write lock and one view rebuild for the whole batch.
+    let results = n.store.write().add_offline_items(&items);
+    let added = results.iter().filter(|r| matches!(r, Ok(true))).count();
+    if added > 0 || results.iter().all(Result::is_ok) {
+        n.persist_store();
+        crate::gossip::push_head(n);
     }
-    n.persist_store();
-    crate::gossip::push_head(n);
+    // The first refused item fails the call, as before; the ones that went
+    // in are kept (and now saved).
+    if let Some(e) = results.into_iter().find_map(Result::err) {
+        return Err(e);
+    }
     super::forward_offline(n, items).await;
     Ok(json!({"added": added}))
 }

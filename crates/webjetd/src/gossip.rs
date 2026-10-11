@@ -245,12 +245,18 @@ pub fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
             Ok(())
         }
         HopMsg::OfflineItems(o) => {
+            let raws: Vec<Vec<u8>> = o
+                .items
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| b.data.unwrap_or_default())
+                .collect();
+            // One write lock and one view rebuild for the whole batch.
+            let results = n.store.write().add_offline_items(&raws);
             let mut changed = false;
-            for b in o.items.unwrap_or_default() {
-                let raw = b.data.unwrap_or_default();
-                match n.store.write().add_offline_item(&raw) {
-                    Ok(true) => changed = true,
-                    Ok(false) => {}
+            for r in results {
+                match r {
+                    Ok(added) => changed |= added,
                     Err(e) => tracing::debug!("offline item rejected: {e}"),
                 }
             }
@@ -372,11 +378,12 @@ fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
         }
         rl.insert(hop.id, Instant::now());
     }
+    let mine = n.store.read().offline_hash();
     if let Some(oh) = a.offline_hash
-        && oh.to_bytes() != n.store.read().offline_hash()
+        && oh.to_bytes() != mine
     {
         hop.send_control(HopMsg::GetOffline(Box::new(wp::GetOffline {
-            have_hash: Some(crypto::k32(&n.store.read().offline_hash())),
+            have_hash: Some(crypto::k32(&mine)),
         })));
     }
     let Some(raw) = a.head else { return Ok(()) };
