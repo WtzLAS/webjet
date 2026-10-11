@@ -422,7 +422,8 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
         push(a, Transport::KcpFecTls, wp::AddrKind::Public);
     }
     // The router's port mapping, reachable from anywhere (§11.7).
-    if let Some(m) = *n.port_mapping.lock() {
+    let mapping = *n.port_mapping.lock();
+    if let Some(m) = mapping {
         push(m.external, Transport::KcpFecTls, wp::AddrKind::Public);
     }
     // Reflexive UDP addresses from relays' observations (§11.7), then the

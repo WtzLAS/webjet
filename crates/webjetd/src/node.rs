@@ -1302,7 +1302,8 @@ fn sends_keepalives(hop: &Hop, age: Duration) -> bool {
     if hop.outbound {
         return true;
     }
-    match *hop.peer_keeps.lock() {
+    let keeps = *hop.peer_keeps.lock();
+    match keeps {
         Some(t) => t.elapsed() > PEER_KEEPS_FOR,
         None => age >= 2 * KEEPALIVE,
     }

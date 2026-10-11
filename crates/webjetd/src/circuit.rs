@@ -115,7 +115,8 @@ impl LocalCircuit {
         if self.unanswered() {
             return f64::INFINITY;
         }
-        if let Some(c) = *self.live.path_cost.lock() {
+        let measured = *self.live.path_cost.lock();
+        if let Some(c) = measured {
             return c;
         }
         let p = self.probes.lock();

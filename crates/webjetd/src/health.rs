@@ -227,7 +227,8 @@ pub fn check_listen(n: &Node) {
             .nodes
             .get(&n.me)
             .is_some_and(|x| x.relay || x.control);
-    match listen_alarm(core, &n.cfg.listen, n.port_mapping.lock().is_some()) {
+    let mapped = n.port_mapping.lock().is_some();
+    match listen_alarm(core, &n.cfg.listen, mapped) {
         Some(msg) => n.alarm("not_listening", "warning", msg),
         None => n.clear_alarm("not_listening"),
     }

@@ -321,7 +321,8 @@ impl Controller {
                     {
                         self.sync_psk(n);
                     }
-                    if let Some(w) = self.waiters.lock().remove(&next) {
+                    let waiter = self.waiters.lock().remove(&next);
+                    if let Some(w) = waiter {
                         let _ = w.tx.send(if w.hash == entry_hash(&bytes) {
                             Ok(outcome)
                         } else {
@@ -473,7 +474,8 @@ impl Controller {
                     }
                     u
                 };
-                if let Err(e) = n.store.write().install(head_raw, updates) {
+                let installed = n.store.write().install(head_raw, updates);
+                if let Err(e) = installed {
                     tracing::error!("installing our own tree head failed: {e}");
                     return;
                 }

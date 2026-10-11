@@ -104,7 +104,8 @@ fn has_direct_udp(n: &Node, peer: &Bytes32) -> bool {
 /// Our candidates, best first (§11.7 rules, plus the router's mapping).
 fn my_candidates(n: &Node) -> Vec<SocketAddr> {
     let mut out: Vec<SocketAddr> = Vec::new();
-    if let Some(m) = *n.port_mapping.lock() {
+    let mapping = *n.port_mapping.lock();
+    if let Some(m) = mapping {
         out.push(m.external);
     }
     let mut addrs = crate::transport::my_addrs(n);

@@ -623,14 +623,15 @@ impl Dataplane {
                     n.metrics.acl_denied.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-                if let Err(e) = self.conntrack.lock().insert(
+                let inserted = self.conntrack.lock().insert(
                     peer,
                     &parsed,
                     false,
                     verdict.rule,
                     gw.is_some(),
                     now,
-                ) {
+                );
+                if let Err(e) = inserted {
                     tracing::trace!("conntrack: {e:?}");
                     let counter = match e {
                         CtError::SnatPeerQuota | CtError::SnatGlobal => &n.metrics.snat_exhausted,
