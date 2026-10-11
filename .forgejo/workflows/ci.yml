@@ -8,8 +8,8 @@
 # BUILDER_USER and BUILDER_TOKEN (docs/development.md). webjet-app (GPUI)
 # is checked for every target, through the patched gpui in vendor/.
 #
-# Crates come from a crates.io mirror (scripts/cargo-mirror.sh: TUNA,
-# else USTC, else crates.io).
+# Crates come from a crates.io mirror (scripts/cargo-mirror.sh: rsproxy.cn,
+# else TUNA, else USTC, else crates.io).
 name: ci
 
 on:

@@ -4,11 +4,16 @@
 # with one `cargo fetch --locked` of the workspace, and keeps the first that
 # has every crate in Cargo.lock:
 #
-#   1. TUNA (a MirrorZ member, help.mirrors.cernet.edu.cn/crates.io-index/).
-#      Its sparse index is synced periodically, so right after a `cargo
-#      update` it can miss the newest versions.
-#   2. USTC: proxies crates.io live, but rate-limits (HTTP 429).
-#   3. crates.io itself.
+#   1. rsproxy.cn (ByteDance): index and crates both served from China,
+#      following crates.io closely. A cold fetch of the workspace takes
+#      ~35 s from the runner, also with four jobs at once.
+#   2. TUNA (a MirrorZ member, help.mirrors.cernet.edu.cn/crates.io-index/).
+#      Only its index is mirrored (synced periodically, so right after a
+#      `cargo update` it can miss the newest versions); the crates come from
+#      static.crates.io, so a cold fetch takes minutes.
+#   3. USTC: proxies crates.io live, but rate-limits (HTTP 429) or stops
+#      answering the runner.
+#   4. crates.io itself.
 #
 # The choice goes into $CARGO_HOME/config.toml (a source replacement, as on
 # the MirrorZ help page), so every cargo run afterwards uses it and finds
@@ -24,7 +29,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 if [ $# -eq 0 ]; then
-	set -- sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/ \
+	set -- sparse+https://rsproxy.cn/index/ \
+		sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/ \
 		sparse+https://mirrors.ustc.edu.cn/crates.io-index/ \
 		crates.io
 fi

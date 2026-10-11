@@ -464,12 +464,18 @@ label `ubuntu-latest`), with every job in the builder image
 Every job of `ci.yml` and `release.yml` first runs `scripts/cargo-mirror.sh`:
 the runners are in China, where crates.io is slow. It tries one
 `cargo fetch --locked` from each source in turn and keeps the first that
-has every crate in `Cargo.lock`: the sparse index of TUNA (a
+has every crate in `Cargo.lock`: [rsproxy.cn](https://rsproxy.cn/) (index
+and crates both served in China; a cold fetch takes ~35 s on the runner,
+also with four jobs at once), then the sparse index of TUNA (a
 [MirrorZ](https://help.mirrors.cernet.edu.cn/crates.io-index/) member; the
 MirrorZ endpoint `mirrors.cernet.edu.cn` itself doesn't answer from the
-runner), then USTC, then crates.io. TUNA syncs periodically, so for a few
-hours after a `cargo update` it may lack the newest versions; USTC proxies
-crates.io live but rate-limits (HTTP 429), which is why it isn't first. Cargo retries each request up to 10 times (`net.retry`), and when no source works the script goes through the list again, up to three times a minute apart: the jobs of a run start together from one address. A source that doesn't answer its `config.json` within 10 s is skipped (USTC sometimes stops answering the runner instead of sending a 429, and cargo would wait on it for minutes), and a fetch is stopped after 60 s (`FETCH_TIMEOUT`); what it downloaded stays, so the next attempt continues. The
+runner), then USTC, then crates.io. TUNA mirrors only the index and syncs
+it periodically, so for a few hours after a `cargo update` it may lack the
+newest versions, and its crates download from `static.crates.io` (a cold
+fetch took 138 s in October 2026, beyond the 60 s limit below, which
+failed every job of v0.12.2's first runs). USTC proxies crates.io live but
+rate-limits (HTTP 429) or stops answering the runner, which is why it
+isn't earlier. Cargo retries each request up to 10 times (`net.retry`), and when no source works the script goes through the list again, up to three times a minute apart: the jobs of a run start together from one address. A source that doesn't answer its `config.json` within 10 s is skipped (USTC sometimes stops answering the runner instead of sending a 429, and cargo would wait on it for minutes), and a fetch is stopped after 60 s (`FETCH_TIMEOUT`); what it downloaded stays, so the next attempt continues. The
 choice is a source replacement in `$CARGO_HOME/config.toml`, so the later
 steps use it and the crates are already downloaded. `Cargo.lock` still
 names crates.io and cargo checks every crate against its checksum there,
