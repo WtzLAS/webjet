@@ -51,6 +51,9 @@ pub struct Config {
     /// Remote upgrades started by an admin (§19.8).
     #[serde(default)]
     pub upgrade: UpgradeCfg,
+    /// Time servers asked when this node can't connect (§18.6).
+    #[serde(default)]
+    pub clock: ClockCfg,
     /// The control socket for `webjetctl` (§13.1).
     #[serde(default = "default_control")]
     pub control_socket: PathBuf,
@@ -259,6 +262,28 @@ pub struct ControllerCfg {
     /// Tree head lifetime in hours (§7.3, §24: 24–72 h).
     #[serde(default = "default_head_hours")]
     pub head_lifetime_hours: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClockCfg {
+    /// SNTP servers (`host` or `host:port`) asked whether this computer's
+    /// clock is wrong when enrollment fails or no hop comes up; the
+    /// built-in list when left out, never when empty. Only to tell the
+    /// operator: the agent never sets the clock.
+    pub servers: Option<Vec<String>>,
+}
+
+impl ClockCfg {
+    pub fn servers(&self) -> Vec<String> {
+        match &self.servers {
+            Some(s) => s.clone(),
+            None => webjet_core::sntp::SERVERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

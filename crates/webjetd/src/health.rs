@@ -87,6 +87,7 @@ pub fn check_clock(n: &Arc<Node>) {
 pub async fn run(n: Arc<Node>) {
     let mut tick = tokio::time::interval(Duration::from_secs(10));
     let mut i: u64 = 0;
+    let mut alone = Alone::new(std::time::Instant::now());
     loop {
         tick.tick().await;
         i += 1;
@@ -142,6 +143,75 @@ pub async fn run(n: Arc<Node>) {
             check_camouflage(&n, now);
         }
         check_listen(&n);
+        check_alone(&n, &mut alone).await;
+    }
+}
+
+/// How long without any hop before asking time servers (§18.6).
+const ALONE_AFTER: Duration = Duration::from_secs(120);
+/// How often to ask again while still without hops.
+const ALONE_RECHECK: Duration = Duration::from_secs(600);
+
+/// Bookkeeping for `check_alone`.
+pub struct Alone {
+    /// Since when the node has had no hop.
+    since: std::time::Instant,
+    /// When time servers were last asked during this stretch.
+    asked: Option<std::time::Instant>,
+}
+
+impl Alone {
+    pub fn new(now: std::time::Instant) -> Self {
+        Alone {
+            since: now,
+            asked: None,
+        }
+    }
+
+    /// Whether to ask time servers now. `connected`: any hop is up;
+    /// `others`: the network has relays or controllers to connect to.
+    pub fn due(&mut self, now: std::time::Instant, connected: bool, others: bool) -> bool {
+        if connected || !others {
+            *self = Alone::new(now);
+            return false;
+        }
+        let due = now.duration_since(self.since) >= ALONE_AFTER
+            && self
+                .asked
+                .is_none_or(|a| now.duration_since(a) >= ALONE_RECHECK);
+        if due {
+            self.asked = Some(now);
+        }
+        due
+    }
+}
+
+/// A node more than a minute off is dropped silently at every PSK gate, so
+/// keepalive offsets (`check_clock`) never come. After two minutes without
+/// any hop, ask time servers; a clock off by more than the gate allows
+/// raises `clock_skew` (critical), which `check_clock` clears once hops
+/// come back with sane offsets.
+async fn check_alone(n: &Arc<Node>, alone: &mut Alone) {
+    let connected = !n.hops.lock().is_empty();
+    let others = {
+        let s = n.store.read();
+        s.view()
+            .nodes
+            .iter()
+            .any(|(id, x)| *id != n.me && x.valid && (x.relay || x.control))
+    };
+    if !alone.due(std::time::Instant::now(), connected, others) {
+        return;
+    }
+    let Some(o) = crate::agent::clock_offset(&n.cfg).await else {
+        return;
+    };
+    match crate::agent::clock_message(&o) {
+        Some(msg) => {
+            tracing::error!("{msg}");
+            n.alarm("clock_skew", "critical", msg);
+        }
+        None => n.clear_alarm("clock_skew"),
     }
 }
 
@@ -221,6 +291,24 @@ pub fn camouflage_alarm(now: u64, not_after: u64) -> Option<(&'static str, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_servers_are_asked_after_two_minutes_alone() {
+        use std::time::Instant;
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut a = Alone::new(t0);
+        assert!(!a.due(at(60), false, true));
+        assert!(a.due(at(120), false, true));
+        assert!(!a.due(at(130), false, true), "not again at once");
+        assert!(a.due(at(720), false, true), "again after ten minutes");
+        // A hop resets it; a network without relays never asks.
+        assert!(!a.due(at(730), true, true));
+        assert!(!a.due(at(800), false, true));
+        assert!(a.due(at(850), false, true));
+        let mut b = Alone::new(t0);
+        assert!(!b.due(at(1000), false, false));
+    }
 
     #[test]
     fn relays_and_controllers_must_listen() {

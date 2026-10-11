@@ -17,6 +17,7 @@ pub mod protocol;
 pub mod proxy;
 pub mod queue;
 pub mod routing;
+pub mod sntp;
 pub mod statemachine;
 pub mod store;
 #[cfg(any(test, feature = "testutil"))]

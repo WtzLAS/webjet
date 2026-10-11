@@ -134,7 +134,48 @@ pub async fn enroll(cfg: &Config, ticket_str: &str) -> Result<()> {
             }
         }
     }
-    Err(last)
+    // Controllers turn away a clock more than a minute off without a word
+    // (the PSK gate, §9.1): every attempt fails the same opaque way.
+    if let Some(msg) = clock_problem(cfg).await {
+        bail!("{msg}");
+    }
+    Err(last.context(
+        "no controller accepted the enrollment: check the enrollment string is \
+         unused and not expired, and that this computer reaches the controllers",
+    ))
+}
+
+/// Whether time servers say this computer's clock is too far off to join
+/// (§18.6): the message to show, `None` when it is fine or nobody answered.
+pub async fn clock_problem(cfg: &Config) -> Option<String> {
+    clock_message(&clock_offset(cfg).await?)
+}
+
+/// This computer's clock against the time servers in `[clock]`; `None`
+/// when the check is off or no server answered.
+pub async fn clock_offset(cfg: &Config) -> Option<webjet_core::sntp::Offset> {
+    let servers = cfg.clock.servers();
+    if servers.is_empty() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || {
+        webjet_core::sntp::offset(&servers, webjet_core::sntp::TIMEOUT)
+    })
+    .await
+    .ok()?
+}
+
+/// The message for a clock offset beyond what the PSK gate tolerates.
+pub fn clock_message(o: &webjet_core::sntp::Offset) -> Option<String> {
+    (o.ahead_ms.unsigned_abs() > webjet_core::types::SKEW_PSK_GATE).then(|| {
+        format!(
+            "{}; Webjet needs it within {} s, so controllers and relays turn this node away. \
+             Set the clock right: {}",
+            o.describe(),
+            webjet_core::types::SKEW_PSK_GATE / 1000,
+            webjet_core::sntp::fix_hint()
+        )
+    })
 }
 
 async fn enroll_at(

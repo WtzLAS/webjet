@@ -18,6 +18,8 @@ serde_json.workspace = true
 hex.workspace = true
 # Release names, the release server client and the remote upgrade spool.
 webjet-release = { path = "../webjet-release", features = ["http"] }
+# The SNTP check before enrolling (clock.rs).
+webjet-core = { path = "../webjet-core" }
 sha2 = "0.11"
 flate2 = "1"
 tar = "0.4"

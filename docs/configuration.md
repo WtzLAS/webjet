@@ -294,6 +294,21 @@ version back if the new agent doesn't come up.
 helper; `--remote-upgrade` turns it back on. Docker containers have no
 helper.
 
+### `[clock]`
+
+A node whose clock is more than a minute off is turned away without an
+answer by every controller and relay (§18.6), so the network can't tell it
+what is wrong. When `webjetctl local enroll` fails at every controller, or a
+running agent has had no hop for two minutes, the node asks public time
+servers (SNTP, UDP port 123) how far off its clock is. Over 60 s,
+enrollment fails with the offset and how to fix the clock, and the agent
+raises the `clock_skew` alarm (critical). Webjet never sets the clock
+itself; `webjetup enroll` resynchronizes it on Windows.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `servers` | `time.cloudflare.com`, `ntp.aliyun.com`, `time.windows.com`, `pool.ntp.org` | Servers to ask, `host` or `host:port`. `[]` turns the check off. |
+
 ### Examples
 
 **A laptop or desktop.** A data node only dials out, so it needs no file.

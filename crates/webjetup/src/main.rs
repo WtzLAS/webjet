@@ -14,6 +14,7 @@
 //!   webjetup apply-upgrade         (the remote upgrade helper, run by the
 //!                                  service manager; see `remote`)
 
+mod clock;
 mod freebsd;
 mod layout;
 mod release;
@@ -670,6 +671,8 @@ fn do_enroll(sys: &Sys, l: &Layout, string: &str, start: bool) -> Result<()> {
     if !exe.exists() && !sys.dry {
         bail!("Webjet isn't installed: run `webjetup install` first");
     }
+    println!("==> Checking the clock");
+    clock::check(sys, l);
     println!("==> Enrolling this node");
     let config = l.config.to_string_lossy();
     let args: Vec<&str> = if legacy {
