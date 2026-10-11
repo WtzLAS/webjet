@@ -251,6 +251,12 @@ common bug. Rules:
   `Node::circuits`.
 - `Node::store.read()` is recursive (`read_recursive`), so nested reads are
   fine, but never take `write()` while holding a read.
+- Code that needs only the derived view, the overlay pool or the store's
+  generation reads `n.store.snapshot()` instead: no lock, so packets never
+  wait behind a writer rebuilding the view. The write guard republishes the
+  snapshot when it drops, if the store's generation moved, so every change to
+  the store must bump `Store::generation`. Don't hold a snapshot guard across
+  `.await` (`snapshot_arc()` gives an owned one).
 - Never hold a `parking_lot` guard across `.await`.
 - Helpers that iterate over all sessions or hops (e.g. counting handshakes in
   progress) must not run while the caller holds one of them; take the count
