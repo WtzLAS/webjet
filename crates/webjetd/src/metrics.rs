@@ -620,7 +620,7 @@ mod tests {
         n.metrics.rule_hit("web", true);
         n.metrics.acl_denied.fetch_add(3, Ordering::Relaxed);
         n.metrics.tun_in(1500);
-        n.alarm("clock", "warning", "test".into());
+        n.alarm("clock", "warning", "test");
         let (hop, _rx) = n.test_hop(peer, Transport::TcpTls);
         hop.tx_bytes.store(1000, Ordering::Relaxed);
 

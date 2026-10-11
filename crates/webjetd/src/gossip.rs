@@ -119,7 +119,7 @@ pub fn share_infra(n: &Arc<Node>) {
         .cloned()
         .collect();
     for h in hops {
-        send_records(&h, items.clone());
+        send_records(&h, &items);
     }
 }
 
@@ -153,7 +153,7 @@ pub fn on_hop_up(n: &Arc<Node>, hop: &Arc<Hop>) {
             }
         }
     }
-    send_records(hop, items);
+    send_records(hop, &items);
 }
 
 fn own_records(n: &Node) -> Vec<Vec<u8>> {
@@ -171,7 +171,7 @@ fn own_records(n: &Node) -> Vec<Vec<u8>> {
     v
 }
 
-fn send_records(hop: &Hop, items: Vec<Vec<u8>>) {
+fn send_records(hop: &Hop, items: &[Vec<u8>]) {
     for chunk in items.chunks(64) {
         hop.send_control(HopMsg::Records(Box::new(wp::Records {
             items: Some(
@@ -408,7 +408,7 @@ fn on_head(n: &Arc<Node>, hop: &Arc<Hop>, a: wp::HeadAnnounce) -> Result<()> {
         }
         Ok(HeadOutcome::NeedSync) => start_walk(n, hop, raw)?,
         Ok(HeadOutcome::Equivocation) => {
-            n.alarm("tree_head_equivocation", "critical", "two valid tree heads with the same version and different roots; tree updates frozen (§21.3)".into());
+            n.alarm("tree_head_equivocation", "critical", "two valid tree heads with the same version and different roots; tree updates frozen (§21.3)");
             let (a, b) = n.store.read().equivocation.clone().unwrap_or_default();
             for h in [a, b] {
                 n.broadcast_control(
@@ -508,7 +508,7 @@ fn on_buckets(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::Buckets) -> Result<()> {
         let raw = walk.head_raw.clone();
         *w = None;
         drop(w);
-        return finish(n, &raw, Vec::new());
+        return finish(n, &raw, &[]);
     }
     walk.buckets = diff.clone();
     hop.send_control(HopMsg::GetBucketIndex(Box::new(wp::GetBucketIndex {
@@ -558,7 +558,9 @@ fn on_bucket_index(n: &Arc<Node>, hop: &Arc<Hop>, b: wp::BucketIndex) -> Result<
         return finish(
             n,
             &raw,
-            rem.into_iter().map(|(k, key)| (k, key, None)).collect(),
+            &rem.into_iter()
+                .map(|(k, key)| (k, key, None))
+                .collect::<Vec<_>>(),
         );
     }
     walk.batches_left = want.len().div_ceil(512);
@@ -595,13 +597,13 @@ fn on_leaves(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Leaves) -> Result<()> {
     drop(w);
     // install() checks the resulting root against the signed head, so a
     // peer that sends wrong leaves only makes this walk fail.
-    finish(n, &raw, updates)
+    finish(n, &raw, &updates)
 }
 
 fn finish(
     n: &Arc<Node>,
     head_raw: &[u8],
-    updates: Vec<(u8, Bytes32, Option<Vec<u8>>)>,
+    updates: &[(u8, Bytes32, Option<Vec<u8>>)],
 ) -> Result<()> {
     n.store.write().install(head_raw, updates)?;
     after_install(n);
@@ -929,7 +931,7 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
             v.push((hop.id, keep));
         }
     }
-    send_records(hop, items);
+    send_records(hop, &items);
     Ok(())
 }
 

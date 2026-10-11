@@ -1170,7 +1170,7 @@ impl Session {
         for p in self.out.data.drain(..) {
             for s in self.enc.push(&p) {
                 self.pacer.spend(s.len());
-                let d = shard_datagram(&mut self.held_ack, self.opened, conv, s);
+                let d = shard_datagram(&mut self.held_ack, self.opened, conv, &s);
                 self.wire.send(d).await;
             }
             self.fec_flush_at
@@ -1179,7 +1179,7 @@ impl Session {
         if self.fec_flush_at.is_some_and(|t| now >= t) {
             for s in self.enc.flush() {
                 self.pacer.spend(s.len());
-                let d = shard_datagram(&mut self.held_ack, self.opened, conv, s);
+                let d = shard_datagram(&mut self.held_ack, self.opened, conv, &s);
                 self.wire.send(d).await;
             }
             self.fec_flush_at = None;
@@ -1253,17 +1253,15 @@ impl Session {
 /// A data shard's datagram: a held acknowledgement rides with the first
 /// shard it fits in front of without making the datagram larger than a full
 /// one.
-fn shard_datagram(held_ack: &mut Option<HeldAck>, opened: bool, conv: u32, s: Vec<u8>) -> Vec<u8> {
+fn shard_datagram(held_ack: &mut Option<HeldAck>, opened: bool, conv: u32, s: &[u8]) -> Vec<u8> {
     let fits = held_ack
         .as_ref()
         .is_some_and(|(p, _, _)| s.len() + p.len() + 6 <= KCP_MTU + 2 + fec::HDR);
     match held_ack.take() {
-        Some((p, at, _)) if fits => {
-            shard_ack_frame(conv, Instant::now().duration_since(at), &p, &s)
-        }
+        Some((p, at, _)) if fits => shard_ack_frame(conv, Instant::now().duration_since(at), &p, s),
         other => {
             *held_ack = other;
-            shard_frame(opened, conv, &s)
+            shard_frame(opened, conv, s)
         }
     }
 }

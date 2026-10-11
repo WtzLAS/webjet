@@ -73,7 +73,7 @@ pub fn check_clock(n: &Arc<Node>) {
         n.alarm(
             "clock_skew",
             "warning",
-            format!(
+            &format!(
                 "clock offset against peers up to {} ms",
                 offsets.iter().map(|o| o.abs()).max().unwrap_or(0)
             ),
@@ -113,13 +113,13 @@ pub async fn run(n: Arc<Node>) {
             n.alarm(
                 "soft_mode",
                 "warning",
-                "no fresh tree head: running in soft mode (§21.2)".into(),
+                "no fresh tree head: running in soft mode (§21.2)",
             );
         } else {
             n.clear_alarm("soft_mode");
         }
         if horizon {
-            n.alarm("validity_horizon", "critical", "the network's validity horizon has passed; no peer is trusted until a newer tree arrives (§6.16)".into());
+            n.alarm("validity_horizon", "critical", "the network's validity horizon has passed; no peer is trusted until a newer tree arrives (§6.16)");
         } else {
             n.clear_alarm("validity_horizon");
         }
@@ -127,13 +127,13 @@ pub async fn run(n: Arc<Node>) {
             n.alarm(
                 "node_tombstoned",
                 "critical",
-                "this node has been revoked; re-enroll it (§10.5)".into(),
+                "this node has been revoked; re-enroll it (§10.5)",
             );
         } else if !me_ok && n.store.read().head().is_some() {
             n.alarm(
                 "node_invalid",
                 "critical",
-                "this node's record is missing or its key was replaced".into(),
+                "this node's record is missing or its key was replaced",
             );
         } else {
             n.clear_alarm("node_tombstoned");
@@ -209,7 +209,7 @@ async fn check_alone(n: &Arc<Node>, alone: &mut Alone) {
     match crate::agent::clock_message(&o) {
         Some(msg) => {
             tracing::error!("{msg}");
-            n.alarm("clock_skew", "critical", msg);
+            n.alarm("clock_skew", "critical", &msg);
         }
         None => n.clear_alarm("clock_skew"),
     }
@@ -229,7 +229,7 @@ pub fn check_listen(n: &Node) {
             .is_some_and(|x| x.relay || x.control);
     let mapped = n.port_mapping.lock().is_some();
     match listen_alarm(core, &n.cfg.listen, mapped) {
-        Some(msg) => n.alarm("not_listening", "warning", msg),
+        Some(msg) => n.alarm("not_listening", "warning", &msg),
         None => n.clear_alarm("not_listening"),
     }
 }
@@ -263,7 +263,7 @@ fn check_camouflage(n: &Node, now: u64) {
             {
                 n.clear_alarm("camouflage_certificate");
             }
-            n.alarm("camouflage_certificate", severity, msg);
+            n.alarm("camouflage_certificate", severity, &msg);
         }
         None => n.clear_alarm("camouflage_certificate"),
     }

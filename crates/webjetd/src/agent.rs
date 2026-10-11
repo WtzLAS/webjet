@@ -251,7 +251,7 @@ fn finish_enrollment(
         HeadOutcome::NeedSync | HeadOutcome::Refreshed => {}
         o => bail!("unexpected head outcome {o:?}"),
     }
-    let leaves = resp
+    let leaves: Vec<_> = resp
         .leaves
         .clone()
         .unwrap_or_default()
@@ -259,7 +259,7 @@ fn finish_enrollment(
         .map(|l| (l.kind, opt_k32(&l.key), Some(l.bytes.unwrap_or_default())))
         .collect();
     store
-        .install(&head, leaves)
+        .install(&head, &leaves)
         .context("verifying the network state")?;
     let node_id = opt_k32(&resp.node_id);
     // The inclusion proof for our record (§8 step 5).

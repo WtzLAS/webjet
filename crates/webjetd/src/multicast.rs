@@ -96,12 +96,12 @@ pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &P
         }
         parsed.flow.src = mine;
     }
-    fan_out(dp, n, p, &parsed, kind, Origin::Tun);
+    fan_out(dp, n, &p, &parsed, kind, Origin::Tun);
 }
 
 /// A datagram the host sent out another interface, taken by capture
 /// (§9.5.2) and already given this node's overlay address as its source.
-pub(crate) fn captured(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parsed) {
+pub(crate) fn captured(dp: &Dataplane, n: &Arc<Node>, p: &[u8], parsed: &Parsed) {
     if parsed.flow.proto != PROTO_UDP || !on(n, dp) || !dp.is_mine(&parsed.flow.src) {
         return;
     }
@@ -115,7 +115,7 @@ pub(crate) fn captured(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parse
 
 /// One copy of a datagram from this host to each peer that takes it,
 /// within the budget.
-fn fan_out(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parsed, kind: Kind, origin: Origin) {
+fn fan_out(dp: &Dataplane, n: &Arc<Node>, p: &[u8], parsed: &Parsed, kind: Kind, origin: Origin) {
     let m = &n.metrics;
     let now = Instant::now();
     let payload = p.get(parsed.l4_offset + 8..).unwrap_or_default();
@@ -174,12 +174,12 @@ fn fan_out(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parsed, kind: Kin
         }
         out
     };
-    let ecn = crate::e2e::inner_ecn(&p);
+    let ecn = crate::e2e::inner_ecn(p);
     for (peer, addr, rule) in chosen {
         // Track the flow as if it went to the peer's address, so its
         // unicast reply (a pong, an mDNS answer) is let back in.
         track(dp, n, &peer, parsed, addr, true, rule, now);
-        if crate::e2e::send(n, &peer, ftype::MCAST, &p, ecn) != crate::e2e::SendResult::NoRoute {
+        if crate::e2e::send(n, &peer, ftype::MCAST, p, ecn) != crate::e2e::SendResult::NoRoute {
             m.multicast_tx.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -414,7 +414,7 @@ fn alarm(n: &Node) {
     n.alarm(
         "multicast_limit",
         "warning",
-        format!(
+        &format!(
             "broadcast/multicast over budget ({pps} copies/s, {bps} bytes/s, every copy counts): \
              a chatty or looping application; raise {PPS}/{BPS} or narrow the policy"
         ),
@@ -788,7 +788,7 @@ mod tests {
         let t = setup(&[]);
         let ping = udp4(ME, [255, 255, 255, 255], 50000, 19132, b"captured ping");
         let parsed = packet::parse(&ping).unwrap();
-        captured(&t.dp, &t.n, ping.clone(), &parsed);
+        captured(&t.dp, &t.n, &ping, &parsed);
         assert_eq!((mcast_to(&t, &t.a), mcast_to(&t, &t.b)), (1, 1));
         assert_eq!(mcast_to(&t, &t.c), 0, "policy");
         let m = &t.n.metrics;
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(m.multicast_duplicate.load(Ordering::Relaxed), 1);
         // Capture hands over only datagrams from this node's overlay address.
         let other = udp4([10, 7, 0, 9], [255, 255, 255, 255], 1, 19132, b"other");
-        captured(&t.dp, &t.n, other.clone(), &packet::parse(&other).unwrap());
+        captured(&t.dp, &t.n, &other, &packet::parse(&other).unwrap());
         assert_eq!(mcast_to(&t, &t.a), 1);
         // The pong to a captured ping comes back as a tracked reply.
         let pong = packet::parse(&udp4(A, ME, 19132, 50000, b"pong")).unwrap();

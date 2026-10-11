@@ -138,7 +138,7 @@ pub(crate) fn start(n: &Arc<Node>, dp: Arc<Dataplane>) {
                             n.alarm(
                                 "multicast_capture",
                                 "warning",
-                                format!("multicast.capture is set but capture could not start: {e}"),
+                                &format!("multicast.capture is set but capture could not start: {e}"),
                             );
                             failed = Some((want, Instant::now()));
                         }
@@ -154,7 +154,7 @@ pub(crate) fn start(n: &Arc<Node>, dp: Arc<Dataplane>) {
                         continue;
                     };
                     let Some(parsed) = webjet_core::packet::parse(&out) else { continue };
-                    crate::multicast::captured(&dp, &n, out, &parsed);
+                    crate::multicast::captured(&dp, &n, &out, &parsed);
                 }
             }
         }

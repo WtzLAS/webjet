@@ -1009,7 +1009,7 @@ impl Proxy {
             n.alarm(
                 "proxy_unsupported",
                 "warning",
-                "reverse proxy rules need Linux with the tun interface; not listening".into(),
+                "reverse proxy rules need Linux with the tun interface; not listening",
             );
         } else {
             n.clear_alarm("proxy_unsupported");
@@ -1018,7 +1018,7 @@ impl Proxy {
             Some(s) => n.alarm(
                 "proxy_rule",
                 "warning",
-                format!("reverse proxy rule {}: {}", s.rule.name, s.warnings[0]),
+                &format!("reverse proxy rule {}: {}", s.rule.name, s.warnings[0]),
             ),
             None => n.clear_alarm("proxy_rule"),
         }
@@ -1046,7 +1046,7 @@ impl Proxy {
                 n.alarm(
                     "proxy_real_ip",
                     "warning",
-                    "[proxy] accept_real_ip needs Linux with the tun interface".into(),
+                    "[proxy] accept_real_ip needs Linux with the tun interface",
                 );
             } else if !self.real_ip_ready.load(Ordering::Relaxed) {
                 let pool = n.store.snapshot().overlay_pool.clone();
@@ -1058,7 +1058,7 @@ impl Proxy {
                     n.alarm(
                         "proxy_real_ip",
                         "warning",
-                        "could not set up routing for real client addresses".into(),
+                        "could not set up routing for real client addresses",
                     );
                 }
             }

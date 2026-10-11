@@ -500,7 +500,7 @@ impl Dataplane {
             n.alarm(
                 "route_clash",
                 "warning",
-                format!("published prefix {prefix} overlaps a local network; not routed"),
+                &format!("published prefix {prefix} overlaps a local network; not routed"),
             );
             return None;
         }

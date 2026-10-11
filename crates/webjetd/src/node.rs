@@ -517,7 +517,7 @@ impl Node {
         let _ = self.events.send(e);
     }
 
-    pub fn alarm(&self, name: &str, severity: &str, msg: String) {
+    pub fn alarm(&self, name: &str, severity: &str, msg: &str) {
         let mut a = self.alarms.lock();
         if !a.contains_key(name) {
             tracing::warn!(alarm = name, "{msg}");

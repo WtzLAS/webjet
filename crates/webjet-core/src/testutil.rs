@@ -280,7 +280,7 @@ impl Cluster {
                 leaves.push((e.kind, e.key, None));
             }
         }
-        st.install(&head, leaves).expect("install");
+        st.install(&head, &leaves).expect("install");
     }
 }
 

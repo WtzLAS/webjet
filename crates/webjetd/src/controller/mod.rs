@@ -356,7 +356,7 @@ impl Controller {
 
     fn halt(&self, n: &Arc<Node>, why: String) {
         tracing::error!("controller halted: {why}");
-        n.alarm("controller_halted", "critical", why.clone());
+        n.alarm("controller_halted", "critical", &why);
         *self.halted.lock() = Some(why);
     }
 
@@ -424,7 +424,7 @@ impl Controller {
             n.alarm(
                 "no_signing_cert",
                 "warning",
-                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl network controller certify`, ops guide 2.4)".into(),
+                "this controller's signing key has no valid SigningKeyCert yet (`webjetctl network controller certify`, ops guide 2.4)",
             );
             return;
         }
@@ -443,7 +443,7 @@ impl Controller {
                 n.alarm(
                     "signer_unavailable",
                     "critical",
-                    format!("signing the tree head failed: {e}"),
+                    &format!("signing the tree head failed: {e}"),
                 );
                 return;
             }
@@ -474,7 +474,7 @@ impl Controller {
                     }
                     u
                 };
-                let installed = n.store.write().install(head_raw, updates);
+                let installed = n.store.write().install(head_raw, &updates);
                 if let Err(e) = installed {
                     tracing::error!("installing our own tree head failed: {e}");
                     return;

@@ -2635,7 +2635,7 @@ mod tests {
                 .iter()
                 .map(|(_, e)| (e.kind, e.key, Some(e.bytes.clone())))
                 .collect();
-        st.install(&head_raw, leaves).unwrap();
+        st.install(&head_raw, &leaves).unwrap();
         let id = st.view().by_name["n1"];
         assert!(st.node_trusted(&id));
         // Rollback is rejected.
@@ -2717,7 +2717,7 @@ mod tests {
                 .iter()
                 .map(|(_, e)| (e.kind, e.key, Some(e.bytes.clone())))
                 .collect();
-        st.install(head, leaves).unwrap();
+        st.install(head, &leaves).unwrap();
     }
 
     #[test]

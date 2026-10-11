@@ -781,7 +781,7 @@ impl Store {
     pub fn install(
         &mut self,
         head_raw: &[u8],
-        updates: Vec<(u8, Bytes32, Option<Vec<u8>>)>,
+        updates: &[(u8, Bytes32, Option<Vec<u8>>)],
     ) -> Result<()> {
         let h = self.verify_head(head_raw)?;
         if h.version < self.high_water {
@@ -796,7 +796,7 @@ impl Store {
         // back would get past both the tombstone and the version rules.
         let mut seen = HashSet::new();
         let mut t = self.tree.clone();
-        for (k, key, bytes) in &updates {
+        for (k, key, bytes) in updates {
             if !seen.insert(merkle::path_of(*k, key)) {
                 bail!("leaf listed twice in one sync");
             }
@@ -1479,7 +1479,7 @@ mod tests {
         let mut t = st.tree().clone();
         t.remove(kind::NODE, &id);
         let head = forged_head(&c, &mut t);
-        let e = st.install(&head, vec![(kind::NODE, id, None)]).unwrap_err();
+        let e = st.install(&head, &[(kind::NODE, id, None)]).unwrap_err();
         assert!(e.to_string().contains("can't be removed"), "{e}");
         assert!(st.tree().get(kind::NODE, &id).is_some());
     }
@@ -1492,14 +1492,14 @@ mod tests {
         let head = forged_head(&c, &mut t);
         // Directly...
         let e = st
-            .install(&head, vec![(kind::NODE, id, Some(record.clone()))])
+            .install(&head, &[(kind::NODE, id, Some(record.clone()))])
             .unwrap_err();
         assert!(e.to_string().contains("can't be replaced"), "{e}");
         // ...or removed first in the same sync.
         let e = st
             .install(
                 &head,
-                vec![(kind::NODE, id, None), (kind::NODE, id, Some(record))],
+                &[(kind::NODE, id, None), (kind::NODE, id, Some(record))],
             )
             .unwrap_err();
         assert!(e.to_string().contains("can't be removed"), "{e}");
@@ -1516,7 +1516,7 @@ mod tests {
         let e = st
             .install(
                 &head,
-                vec![
+                &[
                     (kind::NODE, id, Some(record.clone())),
                     (kind::NODE, id, Some(record)),
                 ],
