@@ -1347,7 +1347,7 @@ DATA nodes behind NAT try to establish direct routes to each other. Relays make 
 - Every hop keepalive from a relay to a node carries an `observed_addr` field: the source address and port the relay saw the node's packets come from. It travels inside the authenticated hop session, so it can't be spoofed off-path.
 - A node compares the observed address across two or more relays:
   - the same address and port from different relays: the NAT maps consistently, so hole punching is likely to work
-  - different ports from different relays: symmetric NAT; hole punching works only if the other side's NAT maps consistently
+  - different ports from different relays: symmetric NAT; hole punching across the internet works mainly when the other side's NAT maps consistently, but it is tried toward every peer (see the checks below)
 - The node publishes its `HOST` and `REFLEXIVE` addresses and its NAT type in its EndpointRecord (§6.2).
 
 **Candidates.** In this order: a port mapping the node got from its router (PCP / NAT-PMP, then UPnP IGD; only when the mapping has a public address), `PUBLIC` addresses, `REFLEXIVE` addresses, then `HOST` addresses (public ones before LAN ones), at most 12. **Another VPN is not a direct path:** addresses of tunnel interfaces (point-to-point interfaces and well-known VPN interface names such as `wg*`, `utun*`, `tailscale*`) are not offered, a relay observation made through a tunnel doesn't count, and a peer candidate the system would reach through a tunnel interface is not dialed, unless the default route goes through that interface too (a full-tunnel VPN). Operators can add or allow interfaces and exclude prefixes (`[nat]` in webjetd.toml). The overlay's own pool is never a candidate.
@@ -1362,8 +1362,10 @@ These messages are encrypted and authenticated end to end, so relays can't read 
 
 **3. Connectivity checks** (as in ICE). Each side sends a check (a PUNCH datagram with type PING and the nonce, under the PSK gate) to every candidate of the other, every 50 ms for the first second and every 200 ms up to 6 s. A PING that arrives is answered with a PONG to the address it came from (rate-limited, so a replayed PING can't make a node a reflector).
 - A PING from an address the peer never offered is a **peer-reflexive** candidate: the peer's NAT gave this flow a new port. It is checked too.
-- **Port prediction:** when the peer's NAT is symmetric and ours is not, we also check the ports just after (96) and before (8) the peer's public reflexive ports, for 3 s; many symmetric NATs hand out ports in sequence. Two symmetric NATs: no attempt; the pair stays relayed.
+- **Port prediction:** when the peer's NAT is symmetric, we also check the ports just after (96) and before (8) the peer's public reflexive ports, for 3 s; many symmetric NATs hand out ports in sequence.
+- **Symmetric NAT on both sides** is no reason to skip an attempt: two nodes behind the same NAT (on one LAN) look symmetric to the relays, since outsiders can't reach them, yet reach each other's `HOST` candidates directly; across the internet, port prediction on both sides may still meet. Failed attempts follow the normal retry schedule.
 - **Nomination:** the first address that answers with a PONG is reachable both ways. The lower node ID dials it at once; the higher one 1.5 s later if no hop came up. When no check is ever answered (a peer from before checks were answered), the lower ID dials all candidates at once at the end of the window.
+- **Wrong answers:** two LANs often use the same private subnet, so a PONG for a peer's `HOST` candidate can come from another node of the network that happens to have that address on our LAN (it answers every PING). The dial then fails the hop handshake's key check; the address is dropped for this attempt and the checks go on, so the next address that answers is nominated. A peer candidate that is one of our own addresses is not checked at all.
 
 **4. Establishing the direct hop.**
 - The dial is a normal **UDP + KCP + FEC + TLS** hop through the mappings the checks opened: its first packets carry the PSK-gate MAC (§9.1), and the normal hop handshake (§9.2) authenticates both sides.
@@ -3064,7 +3066,6 @@ No state has to be rebuilt: the remaining controllers already hold the full comm
 - **Hash-ratchet rekeying:** no forward secrecy against a later key compromise; a full handshake every 120 s is cheap enough.
 - **Skipping the end-to-end session on direct paths:** saves one AEAD operation per packet, but needs a second endpoint-check code path and breaks seamless switching between direct and relayed routes.
 - **TCP hole punching:** TCP simultaneous open through NAT is unreliable; hole punching uses UDP only.
-- **Port prediction for symmetric NAT:** complex and unreliable; such pairs stay relayed.
 
 **Accounting**
 

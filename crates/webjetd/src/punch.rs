@@ -11,13 +11,16 @@
 //!    nonce) to every candidate of the other for several seconds; a PING
 //!    that arrives is answered with a PONG to its source. A PING from an
 //!    address the peer never offered is a peer-reflexive candidate (its
-//!    NAT picked a new port): it is checked too. When one side is behind a
-//!    symmetric NAT and the other isn't, the other side also probes the
-//!    ports next to the symmetric side's reflexive ports (port prediction).
+//!    NAT picked a new port): it is checked too. Toward a peer behind a
+//!    symmetric NAT we also probe the ports next to its reflexive ports
+//!    (port prediction). NAT types never stop an attempt: two nodes behind
+//!    one NAT look symmetric to relays but reach each other on the LAN.
 //! 4. **Nomination.** The first address that answers a PONG is reachable
 //!    both ways. The lower node id dials it at once (the higher one a
 //!    second later if no hop came up); the KCP OPEN uses the mappings the
-//!    checks opened. Without any answer (a peer from before checks were
+//!    checks opened. If that dial fails (another node at the same private
+//!    address answered), the address is dropped and checks go on until the
+//!    window ends. Without any answer (a peer from before checks were
 //!    answered) the lower id dials every candidate at once at the end.
 //! 5. **Retry** while the session is in use: 15 s, doubling to 5 min, and
 //!    at once when either side's endpoint record changes or the direct hop
@@ -63,8 +66,12 @@ struct Attempt {
     /// The peer's offered candidates, then peer-reflexive ones.
     theirs: Vec<SocketAddr>,
     prflx: usize,
-    /// The first address that answered a check.
+    /// The address being dialed: the first one that answered a check.
     validated: Option<SocketAddr>,
+    /// Addresses that answered a check but whose dial failed: another
+    /// node of the network at the same private address on our LAN (two
+    /// LANs often share a subnet), or ourselves. Checks go on without them.
+    rejected: Vec<SocketAddr>,
     started: Instant,
     probing: bool,
     dialing: bool,
@@ -124,24 +131,20 @@ fn nat_of(n: &Node, peer: &Bytes32) -> wp::NatType {
         .map_or(wp::NatType::Unknown, |(r, _)| r.nat)
 }
 
+/// Punch unless a direct UDP hop exists or either side turned UDP off. The
+/// NAT types don't matter: two nodes behind one NAT (on one LAN) look
+/// symmetric to relays yet reach each other's HOST candidates, and port
+/// prediction may still meet across two symmetric NATs.
 fn should_try(n: &Node, peer: &Bytes32) -> bool {
-    if has_direct_udp(n, peer) {
-        return false;
-    }
-    if crate::transport::priority(n, &n.me, Transport::KcpFecTls) == 0
-        || crate::transport::priority(n, peer, Transport::KcpFecTls) == 0
-    {
-        return false;
-    }
-    // Symmetric NAT on both sides: no attempt; the pair stays relayed.
-    !(matches!(nat_of(n, peer), wp::NatType::Symmetric)
-        && matches!(crate::transport::nat_type(n), wp::NatType::Symmetric))
+    !has_direct_udp(n, peer)
+        && crate::transport::priority(n, &n.me, Transport::KcpFecTls) != 0
+        && crate::transport::priority(n, peer, Transport::KcpFecTls) != 0
 }
 
-/// Port prediction applies when the peer's NAT is symmetric and ours isn't.
+/// Port prediction applies when the peer's NAT is symmetric (whatever ours
+/// is: two symmetric NATs that hand out ports in sequence can still meet).
 fn should_predict(n: &Node, peer: &Bytes32) -> bool {
     matches!(nat_of(n, peer), wp::NatType::Symmetric)
-        && !matches!(crate::transport::nat_type(n), wp::NatType::Symmetric)
 }
 
 /// Start punching toward `peer` once a session exists, unless we already
@@ -182,6 +185,7 @@ pub fn maybe_start(n: &Arc<Node>, peer: &Bytes32) {
         theirs: Vec::new(),
         prflx: 0,
         validated: None,
+        rejected: Vec::new(),
         started: now,
         probing: false,
         dialing: false,
@@ -228,12 +232,15 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
                 return;
             };
             let nonce = o.nonce.map(|x| x.to_bytes()).unwrap_or_default();
+            // Our own addresses: a peer on another LAN with the same subnet
+            // may offer an address that is ours here.
+            let mine = my_candidates(n);
             let cands: Vec<SocketAddr> = o
                 .candidates
                 .unwrap_or_default()
                 .iter()
                 .filter_map(|c| c.to_sock())
-                .filter(|a| crate::nat::dialable(n, a))
+                .filter(|a| crate::nat::dialable(n, a) && !mine.contains(a))
                 .take(MAX_CANDIDATES)
                 .collect();
             let predict = should_predict(n, peer);
@@ -272,6 +279,7 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
                         theirs: cands,
                         prflx: 0,
                         validated: None,
+                        rejected: Vec::new(),
                         started: Instant::now(),
                         probing: false,
                         dialing: false,
@@ -447,6 +455,37 @@ fn finish(n: &Node, peer: &Bytes32, failure: Option<String>) {
     }
 }
 
+/// The dial to a validated address failed: the PONG came from someone else
+/// (another node at the same private address on our LAN, or ourselves).
+/// Drop the address and let the checks go on while the window lasts, so
+/// the next address that answers is nominated; afterwards the attempt
+/// fails.
+fn reject(n: &Node, peer: &Bytes32, addr: SocketAddr) {
+    {
+        let mut t = table(n).lock();
+        let Some(a) = t.get_mut(peer).and_then(|s| s.attempt.as_mut()) else {
+            return;
+        };
+        // A dial from an attempt that is gone (a new one took its place).
+        if a.validated != Some(addr) {
+            return;
+        }
+        if !a.rejected.contains(&addr) {
+            a.rejected.push(addr);
+        }
+        a.theirs.retain(|c| *c != addr);
+        // `started` is at or before the probe loop's start, so the loop
+        // still runs and will judge the outcome at the end of its window.
+        if a.started.elapsed() < WINDOW {
+            tracing::debug!(peer = %n.name_of(peer), %addr, "punch: dial failed, checks go on");
+            a.validated = None;
+            a.dialing = false;
+            return;
+        }
+    }
+    finish(n, peer, Some(format!("dial to {addr} failed")));
+}
+
 /// Dial `addr` over the opened mappings; returns whether a hop came up.
 async fn dial(n: Arc<Node>, peer: Bytes32, addr: SocketAddr, how: &'static str) -> bool {
     let key = n.store.read().view().nodes.get(&peer).map(|x| x.key);
@@ -488,13 +527,13 @@ fn on_check(n: &Arc<Node>, ev: PunchEvent) {
     if !ev.pong {
         // A PING from an address the peer didn't offer: its NAT mapped a
         // new port for us. Check it too (it gets our PONG already).
-        if !a.theirs.contains(&ev.from) && a.prflx < MAX_PRFLX {
+        if !a.theirs.contains(&ev.from) && !a.rejected.contains(&ev.from) && a.prflx < MAX_PRFLX {
             a.prflx += 1;
             a.theirs.insert(0, ev.from);
         }
         return;
     }
-    if a.validated.is_some() {
+    if a.validated.is_some() || a.rejected.contains(&ev.from) {
         return;
     }
     a.validated = Some(ev.from);
@@ -517,7 +556,7 @@ fn on_check(n: &Arc<Node>, ev: PunchEvent) {
             }
         }
         if mark_dialing(&n, &peer) && !dial(n.clone(), peer, ev.from, how).await {
-            finish(&n, &peer, Some(format!("dial to {} failed", ev.from)));
+            reject(&n, &peer, ev.from);
         }
     });
 }
@@ -536,6 +575,7 @@ pub fn status(n: &Node) -> serde_json::Value {
                     "age_ms": a.started.elapsed().as_millis() as u64,
                     "candidates": a.theirs.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
                     "validated": a.validated.map(|v| v.to_string()),
+                    "rejected": a.rejected.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
                     "port_prediction": a.predict,
                 })),
                 "last": s.last.as_ref().map(|(at, why)| serde_json::json!({"result": why, "age_s": at.elapsed().as_secs()})),
@@ -687,6 +727,7 @@ mod tests {
                 theirs: Vec::new(),
                 prflx: 0,
                 validated: None,
+                rejected: Vec::new(),
                 started: Instant::now(),
                 probing: false,
                 dialing: false,
@@ -783,6 +824,103 @@ mod tests {
         );
         assert!(attempt(&lo, &hi.me).is_some());
         assert!(table(&hi).lock().is_empty());
+    }
+
+    /// A symmetric NAT on the peer's side (and possibly ours) doesn't stop
+    /// punching: two nodes behind one NAT reach each other's LAN addresses.
+    /// Port prediction runs toward a symmetric peer.
+    #[tokio::test]
+    async fn symmetric_peers_are_punched_with_port_prediction() {
+        let (lo, hi, _d) = pair();
+        assert!(!should_predict(&lo, &hi.me));
+        let rec = wp::EndpointRecord {
+            node_id: Some(webjet_core::crypto::k32(&hi.me)),
+            nat: wp::NatType::Symmetric,
+            ..Default::default()
+        };
+        lo.records.lock().endpoints.insert(hi.me, (rec, Vec::new()));
+        assert!(should_try(&lo, &hi.me));
+        assert!(should_predict(&lo, &hi.me));
+        on_message(
+            &lo,
+            &hi.me,
+            ftype::PUNCH_OFFER,
+            &offer([5; 16], &["203.0.113.20:4000"]),
+        );
+        let t = table(&lo).lock();
+        assert!(t[&hi.me].attempt.as_ref().is_some_and(|a| a.predict));
+    }
+
+    /// A validated address whose dial failed (someone else answered) is
+    /// dropped and the checks go on; the next answer is nominated. After
+    /// the window a failed dial ends the attempt.
+    #[tokio::test]
+    async fn a_failed_dial_rejects_the_address_and_checks_go_on() {
+        let (lo, hi, _d) = pair();
+        let nonce = [5; 16];
+        let (a, b): (SocketAddr, SocketAddr) = (
+            "203.0.113.20:4000".parse().unwrap(),
+            "198.51.100.7:4000".parse().unwrap(),
+        );
+        on_message(
+            &hi,
+            &lo.me,
+            ftype::PUNCH_OFFER,
+            &offer(nonce, &["203.0.113.20:4000", "198.51.100.7:4000"]),
+        );
+        let pong = |from| PunchEvent {
+            from,
+            token: nonce,
+            pong: true,
+        };
+        let validated = |n: &Node, peer: &Bytes32| {
+            table(n).lock()[peer]
+                .attempt
+                .as_ref()
+                .and_then(|x| x.validated)
+        };
+        on_check(&hi, pong(a));
+        assert_eq!(validated(&hi, &lo.me), Some(a));
+        mark_dialing(&hi, &lo.me);
+        // A failure for another address (an older dial) changes nothing.
+        reject(&hi, &lo.me, b);
+        assert_eq!(validated(&hi, &lo.me), Some(a));
+        reject(&hi, &lo.me, a);
+        {
+            let t = table(&hi).lock();
+            let at = t[&lo.me].attempt.as_ref().expect("still running");
+            assert_eq!((at.validated, at.dialing), (None, false));
+            assert_eq!(at.rejected, [a]);
+            assert_eq!(at.theirs, [b]);
+        }
+        // The rejected address answering again (or pinging) is ignored.
+        on_check(&hi, pong(a));
+        on_check(
+            &hi,
+            PunchEvent {
+                from: a,
+                token: nonce,
+                pong: false,
+            },
+        );
+        assert_eq!(validated(&hi, &lo.me), None);
+        assert_eq!(
+            table(&hi).lock()[&lo.me].attempt.as_ref().unwrap().theirs,
+            [b]
+        );
+        on_check(&hi, pong(b));
+        assert_eq!(validated(&hi, &lo.me), Some(b));
+        // Past the window: the attempt ends.
+        table(&hi)
+            .lock()
+            .get_mut(&lo.me)
+            .and_then(|s| s.attempt.as_mut())
+            .unwrap()
+            .started -= WINDOW;
+        reject(&hi, &lo.me, b);
+        let t = table(&hi).lock();
+        assert!(t[&lo.me].attempt.is_none());
+        assert!(t[&lo.me].last.as_ref().unwrap().1.starts_with("dial to"));
     }
 
     #[test]

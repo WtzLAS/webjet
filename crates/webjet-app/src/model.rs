@@ -513,7 +513,7 @@ impl TopoNode {
         Some(match t {
             "none" => "no NAT (public address)".into(),
             "consistent" => "consistent NAT (hole punching works)".into(),
-            "symmetric" => "symmetric NAT (punching only toward non-symmetric peers)".into(),
+            "symmetric" => "symmetric NAT (port prediction; direct on a shared LAN)".into(),
             _ => "unknown (fewer than two relays measured it)".into(),
         })
     }
