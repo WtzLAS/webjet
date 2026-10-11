@@ -1612,7 +1612,7 @@ dependencies = [
  "crossterm_winapi",
  "document-features",
  "mio",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rustix 1.1.5",
  "signal-hook",
  "signal-hook-mio",
@@ -2728,7 +2728,7 @@ dependencies = [
  "oo7",
  "open",
  "parking",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pathfinder_geometry",
  "pin-project",
  "postage",
@@ -2814,7 +2814,7 @@ dependencies = [
  "http",
  "http-body",
  "log",
- "parking_lot 0.12.5",
+ "parking_lot",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4659,37 +4659,12 @@ checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
 name = "parking_lot"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
-dependencies = [
- "instant",
- "lock_api",
- "parking_lot_core 0.8.6",
-]
-
-[[package]]
-name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.12",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
-dependencies = [
- "cfg-if",
- "instant",
- "libc",
- "redox_syscall 0.2.16",
- "smallvec",
- "winapi",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -4923,7 +4898,7 @@ dependencies = [
  "crossbeam-queue",
  "futures",
  "log",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project",
  "pollster",
  "static_assertions",
@@ -5459,7 +5434,6 @@ checksum = "7263373d500d4d4f505d43a2a662d475a894aa94503a1ee28e9188b5f3960d4f"
 dependencies = [
  "libm",
  "lru",
- "parking_lot 0.11.2",
  "smallvec",
  "spin",
 ]
@@ -6802,7 +6776,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -7707,7 +7681,7 @@ dependencies = [
  "hex",
  "ipnet",
  "lz4_flex",
- "parking_lot 0.12.5",
+ "parking_lot",
  "proptest",
  "rand 0.10.3",
  "serde",
@@ -7733,7 +7707,7 @@ dependencies = [
  "futures",
  "kcp",
  "libc",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rand 0.10.3",
  "reed-solomon-erasure",
  "rustls",
@@ -7829,7 +7803,7 @@ dependencies = [
  "ipnet",
  "libc",
  "netdev",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rand 0.10.3",
  "rustls",
  "security-framework",
@@ -7971,7 +7945,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a4df73e95feddb9ec1a7e9c2ca6323b8c97d5eeeff78d28f1eccdf19c882b24"
 dependencies = [
- "parking_lot 0.12.5",
+ "parking_lot",
  "rayon",
  "thiserror 2.0.21",
  "windows 0.61.3",
