@@ -8,6 +8,7 @@ use crate::model::{Load, Snapshot, TopoEdge};
 pub use layout::{DEFAULT_AREA, vertex_box};
 use layout::{Item, P, layout, place};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Vertex {
@@ -41,9 +42,13 @@ impl Vertex {
             t.push_str(" (this)");
         }
         match (&self.software, self.outdated) {
-            (Some(v), true) => t.push_str(&format!(" · {v} outdated")),
+            (Some(v), true) => {
+                let _ = write!(t, " · {v} outdated");
+            }
             (None, true) => t.push_str(" · outdated"),
-            (Some(v), false) => t.push_str(&format!(" · {v}")),
+            (Some(v), false) => {
+                let _ = write!(t, " · {v}");
+            }
             (None, false) => {}
         }
         t

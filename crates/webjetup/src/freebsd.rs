@@ -22,6 +22,7 @@
 use crate::layout::{Layout, SIGNER_SERVICE, UPGRADE_SERVICE};
 use crate::system::{Sys, query};
 use anyhow::Result;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// The agent's rc.d name (also its syslog tag and `service` name).
@@ -84,10 +85,8 @@ impl RcService<'_> {
         let mut defaults = String::new();
         let mut required = Vec::new();
         for (suffix, default, comment) in *settings {
-            doc.push_str(&format!(
-                "# {name}_{suffix}: {comment} (default {default}).\n"
-            ));
-            defaults.push_str(&format!(": ${{{name}_{suffix}:=\"{default}\"}}\n"));
+            let _ = writeln!(doc, "# {name}_{suffix}: {comment} (default {default}).");
+            let _ = writeln!(defaults, ": ${{{name}_{suffix}:=\"{default}\"}}");
             if *suffix == "config" {
                 required.push(format!("${{{name}_{suffix}}}"));
             }

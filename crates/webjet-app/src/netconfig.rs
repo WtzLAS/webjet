@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
+use std::fmt::Write as _;
 use std::path::Path;
 use webjet_core::crypto::{self, Bytes32};
 use webjet_proto::{self as wp, AccountOp};
@@ -78,9 +79,7 @@ impl Plan {
                     n.sections.join(", ")
                 );
                 if let Some(d) = n.new_certificate_domain() {
-                    s.push_str(&format!(
-                        "; made a self-signed camouflage certificate for {d}"
-                    ));
+                    let _ = write!(s, "; made a self-signed camouflage certificate for {d}");
                 }
                 s
             }
@@ -173,13 +172,14 @@ impl Doc {
         if let Source::Network(_) = self.source
             && let Some(n) = config::camouflage_note(&f)
         {
-            out.push_str(&format!("; note: {n}"));
+            let _ = write!(out, "; note: {n}");
         }
         if from != self.version {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "; made from version {from}, but version {} is in force: applying will refuse it",
                 self.version
-            ));
+            );
         }
         Ok(out)
     }

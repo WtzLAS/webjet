@@ -4,6 +4,7 @@ use crate::{agent::*, cli::*, output::*};
 use anyhow::{Result, anyhow, bail};
 use futures::{StreamExt, stream};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use webjet_core::crypto::{self, Bytes32};
 use webjet_core::types::now_ms;
 use webjet_proto as wp;
@@ -298,7 +299,8 @@ pub(crate) async fn upgrade_nodes(
     let mut text = format!("{} node(s) run {tag}.", done.len());
     if !skipped.is_empty() {
         let names: Vec<&str> = skipped.iter().filter_map(|v| v["name"].as_str()).collect();
-        text += &format!(
+        let _ = write!(
+            text,
             "\n{} node(s) skipped, left as they are: {}. Fix the cause and run the same command again.",
             skipped.len(),
             names.join(", ")

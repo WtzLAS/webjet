@@ -13,6 +13,7 @@
 //! on uninstall).
 
 use ipnet::IpNet;
+use std::fmt::Write as _;
 use std::net::IpAddr;
 use std::process::Command;
 use webjet_core::packet::Flow;
@@ -251,11 +252,12 @@ pub fn nrpt_script(resolver: &[IpAddr], domains: &[String]) -> String {
         ps_quote(OWNER_TAG)
     );
     for d in domains {
-        s.push_str(&format!(
+        let _ = write!(
+            s,
             "Add-DnsClientNrptRule -Namespace {} -NameServers @({ns}) -Comment {} | Out-Null; ",
             ps_quote(&format!(".{}", d.trim_matches('.'))),
             ps_quote(OWNER_TAG)
-        ));
+        );
     }
     s.push_str("Clear-DnsClientCache");
     s

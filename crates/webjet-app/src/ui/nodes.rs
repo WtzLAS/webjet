@@ -10,6 +10,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, PathBuilder, PinchEvent, Pixels, Point, ScrollDelta,
     ScrollWheelEvent, canvas, point,
 };
+use std::fmt::Write as _;
 
 /// What a drag on the graph moves.
 #[derive(Clone, Debug, PartialEq)]
@@ -539,7 +540,7 @@ impl WebjetApp {
             if show_labels || focus || in_use {
                 let (x, y) = self
                     .viewport
-                    .to_view(((va.x + vb.x) / 2.0, (va.y + vb.y) / 2.0));
+                    .to_view((f32::midpoint(va.x, vb.x), f32::midpoint(va.y, vb.y)));
                 labels[layer].push(EdgeLabel {
                     x,
                     y,
@@ -1235,13 +1236,13 @@ impl WebjetApp {
                     loss_text(r.loss)
                 );
                 if let Some(u) = r.util_pct {
-                    t.push_str(&format!(" · {u}% used"));
+                    let _ = write!(t, " · {u}% used");
                 }
                 if let Some(remote) = &r.remote {
-                    t.push_str(&format!(" · {remote}"));
+                    let _ = write!(t, " · {remote}");
                 }
                 if let (Some(tx), Some(rx)) = (r.tx_bytes, r.rx_bytes) {
-                    t.push_str(&format!(" · ▲ {} ▼ {}", model::bytes(tx), model::bytes(rx)));
+                    let _ = write!(t, " · ▲ {} ▼ {}", model::bytes(tx), model::bytes(rx));
                 }
                 row = row.child(muted(t).text_xs());
             }

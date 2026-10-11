@@ -101,7 +101,7 @@ pub fn layout(items: &[Item], edges: &[(usize, usize)], area: (f32, f32)) -> Vec
         }
         let [x0, y0, x1, y1] = bbox(&all, &pos, items);
         let fit = ((aw - 24.0) / (x1 - x0).max(1.0)).min((ah - 24.0) / (y1 - y0).max(1.0));
-        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let (cx, cy) = (f64::midpoint(x0, x1), f64::midpoint(y0, y1));
         if fit >= 0.97 || round == 3 {
             // Spread a small picture out a little (labels keep their size,
             // so that only adds room); shrink one that still doesn't fit.
@@ -1142,6 +1142,7 @@ fn pack(boxes: &[[f64; 4]], aspect: f64, gap: f64) -> Vec<P> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     /// Layout quality in pixels: (overlapping label boxes, edge crossings,
     /// edges through another vertex's box, shortest gap between vertices).
@@ -1293,7 +1294,8 @@ pub(super) mod tests {
         let at = |i: usize| (pos[i].0 * area.0, pos[i].1 * area.1);
         for &(a, b) in edges {
             let (p, q) = (at(a), at(b));
-            out += &format!(
+            let _ = write!(
+                out,
                 "<line x1='{}' y1='{}' x2='{}' y2='{}' stroke='#4caf50' stroke-width='1.5'/>",
                 p.0, p.1, q.0, q.1
             );
@@ -1301,18 +1303,21 @@ pub(super) mod tests {
         for (i, it) in items.iter().enumerate() {
             let (x, y) = at(i);
             let (l, t, r, b) = it.extent();
-            out += &format!(
+            let _ = write!(
+                out,
                 "<rect x='{}' y='{}' width='{}' height='{}' fill='none' stroke='#555'/>",
                 x as f64 + l,
                 y as f64 + t,
                 r - l,
                 b - t
             );
-            out += &format!(
+            let _ = write!(
+                out,
                 "<circle cx='{x}' cy='{y}' r='{}' fill='#3b82f6'/>",
                 it.circle / 2.0
             );
-            out += &format!(
+            let _ = write!(
+                out,
                 "<text x='{x}' y='{}' fill='#ccc' font-size='11' text-anchor='middle'>{}</text>",
                 y + it.circle / 2.0 + 12.0,
                 labels[i]

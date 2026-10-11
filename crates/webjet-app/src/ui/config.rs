@@ -12,6 +12,7 @@ use super::editor::Editor;
 use super::split::{Axis, Split};
 use super::*;
 use crate::netconfig::{Doc, Plan, Scope};
+use std::fmt::Write as _;
 
 /// The list of configurations beside the editor.
 const CONFIG: Split = Split {
@@ -238,7 +239,7 @@ impl WebjetApp {
                             m.push_str("; this agent doesn't show it yet, reload in a moment");
                         }
                         if let Some(n) = note {
-                            m.push_str(&format!("; note: {n}"));
+                            let _ = write!(m, "; note: {n}");
                         }
                         app.notice = Some((true, m));
                         let seq = app.config.seq;

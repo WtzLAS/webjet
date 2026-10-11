@@ -207,8 +207,8 @@ impl WebjetApp {
             .as_ref()
             .and_then(|k| ct.flows.iter().find(|f| &flow_key(f) == k))
         {
-            Some(f) => self.render_flow_detail(s, f, sessions, cx),
-            None => self.render_sessions_side(s, sessions, cx),
+            Some(f) => Self::render_flow_detail(s, f, sessions, cx),
+            None => Self::render_sessions_side(s, sessions, cx),
         };
 
         div()
@@ -226,7 +226,6 @@ impl WebjetApp {
     }
 
     fn render_flow_detail(
-        &self,
         s: &Snapshot,
         f: &Flow,
         sessions: Option<&Sessions>,
@@ -366,7 +365,6 @@ impl WebjetApp {
     }
 
     fn render_sessions_side(
-        &self,
         s: &Snapshot,
         sessions: Option<&Sessions>,
         cx: &mut Context<Self>,
@@ -587,8 +585,8 @@ impl WebjetApp {
             .as_ref()
             .and_then(|k| px_.flows.iter().find(|f| &f.key() == k))
         {
-            Some(f) => self.render_proxy_flow(f, cx),
-            None => self.render_proxy_rules(px_),
+            Some(f) => Self::render_proxy_flow(f, cx),
+            None => Self::render_proxy_rules(px_),
         };
         div()
             .flex()
@@ -602,7 +600,7 @@ impl WebjetApp {
 
     /// This node's rules with their status and warnings, and the traffic
     /// counters per rule.
-    fn render_proxy_rules(&self, p: &Proxy) -> AnyElement {
+    fn render_proxy_rules(p: &Proxy) -> AnyElement {
         let mut side = scroll("proxy-rules")
             .gap_1()
             .p_3()
@@ -709,7 +707,7 @@ impl WebjetApp {
         side.into_any_element()
     }
 
-    fn render_proxy_flow(&self, f: &ProxyFlow, cx: &mut Context<Self>) -> AnyElement {
+    fn render_proxy_flow(f: &ProxyFlow, cx: &mut Context<Self>) -> AnyElement {
         let mut p =
             scroll("proxy-flow")
                 .gap_1()
