@@ -252,7 +252,7 @@ impl Render for Field {
                                 let _ = moved.update(cx, |f, cx| f.drag_to(e, cx));
                             }
                         });
-                        let up = this.clone();
+                        let up = this;
                         window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble && e.button == MouseButton::Left {
                                 let _ = up.update(cx, |f, cx| {

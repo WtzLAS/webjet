@@ -909,7 +909,7 @@ fn ct_limits(n: &Node) -> impl FnOnce(&mut Conntrack) {
 }
 
 /// Create the data plane: the tun device (if enabled) and its tasks.
-pub async fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
+pub fn start(n: &Arc<Node>) -> anyhow::Result<Arc<Dataplane>> {
     let (my_ips, pool) = {
         let s = n.store.read();
         (

@@ -7756,7 +7756,6 @@ name = "webjet-release"
 version = "0.12.2"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
  "hex",
  "libc",
  "rustls",

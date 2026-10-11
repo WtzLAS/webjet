@@ -434,7 +434,7 @@ impl Node {
             tracing::warn!(alarm = name, "{msg}");
         }
         a.entry(name.to_string())
-            .or_insert((severity.to_string(), now_ms()));
+            .or_insert_with(|| (severity.to_string(), now_ms()));
     }
 
     pub fn clear_alarm(&self, name: &str) {
@@ -1315,7 +1315,8 @@ pub(crate) async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> 
         }
         HopMsg::KeepaliveAck(a) => {
             let now_us = n.started.elapsed().as_micros() as u64;
-            if let Some(rtt) = hop.stats.lock().on_ack(a.seq, now_us) {
+            let rtt = hop.stats.lock().on_ack(a.seq, now_us);
+            if let Some(rtt) = rtt {
                 // Clock offset (§18.6): their wall clock vs ours at the midpoint.
                 let mid = now_ms() as i64 - (rtt / 2.0) as i64;
                 *hop.clock_offset.lock() = Some(a.wall_ms as i64 - mid);
@@ -1336,7 +1337,7 @@ pub(crate) async fn handle_control(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> 
         HopMsg::CircuitAccept(a) if !hop.restricted => crate::circuit::on_accept(n, hop, *a),
         HopMsg::CircuitRefuse(r) if !hop.restricted => crate::circuit::on_refuse(n, hop, *r),
         HopMsg::CircuitClose(c) if !hop.restricted => crate::circuit::on_close(n, hop, c.label),
-        other => crate::gossip::handle(n, hop, other).await?,
+        other => crate::gossip::handle(n, hop, other)?,
     }
     Ok(())
 }

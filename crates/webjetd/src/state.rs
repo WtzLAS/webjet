@@ -4,19 +4,12 @@
 //! (temp file + rename) and readable only by the agent's user.
 
 use anyhow::{Context, Result};
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use webjet_core::crypto::{Bytes32, KeyPair};
 
-pub fn b64(b: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(b)
-}
-
-pub fn unb64(s: &str) -> Result<Vec<u8>> {
-    Ok(base64::engine::general_purpose::STANDARD.decode(s)?)
-}
+pub use webjet_core::crypto::{b64, unb64};
 
 mod b64v {
     use serde::{Deserialize, Deserializer, Serializer};

@@ -214,7 +214,7 @@ impl Controller {
             // the runtime, so other tasks move off this worker meanwhile.
             blocking(|| {
                 let out = self.raft.lock().tick(Instant::now());
-                self.send_raft(&n, out);
+                Self::send_raft(&n, out);
                 self.apply_committed(&n);
                 self.send_snapshots(&n);
                 if i.is_multiple_of(10) {
@@ -228,7 +228,7 @@ impl Controller {
         }
     }
 
-    fn send_raft(&self, n: &Arc<Node>, out: raft::Out) {
+    fn send_raft(n: &Arc<Node>, out: raft::Out) {
         for (to, body) in out {
             let msg = raft::wrap(&n.me, &to, body);
             rpc::send_oneway(
@@ -254,7 +254,7 @@ impl Controller {
                 r.snapshot_msg(data.clone())
             };
             tracing::info!(peer = %n.name_of(&p), "sending Raft snapshot");
-            self.send_raft(n, vec![(p, body)]);
+            Self::send_raft(n, vec![(p, body)]);
         }
     }
 
@@ -552,7 +552,7 @@ impl Controller {
                 },
             );
             drop(r);
-            self.send_raft(&n, out);
+            Self::send_raft(&n, out);
             // Single-voter clusters commit immediately; apply right away.
             self.apply_committed(&n);
             Ok((rx, i))

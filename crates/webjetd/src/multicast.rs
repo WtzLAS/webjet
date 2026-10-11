@@ -794,7 +794,7 @@ mod tests {
         let m = &t.n.metrics;
         assert_eq!(m.multicast_captured.load(Ordering::Relaxed), 1);
         // The app also sent it into the tun interface: once is enough.
-        t.dp.outbound(ping.clone());
+        t.dp.outbound(ping);
         assert_eq!(mcast_to(&t, &t.a), 1);
         assert_eq!(m.multicast_duplicate.load(Ordering::Relaxed), 1);
         // Capture hands over only datagrams from this node's overlay address.

@@ -16,7 +16,6 @@ http = ["dep:ureq", "dep:rustls", "dep:sha2"]
 # The signed UpgradeRequest and AccountRecord the helper verifies itself.
 webjet-core = { path = "../webjet-core" }
 webjet-proto = { path = "../webjet-proto" }
-base64.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

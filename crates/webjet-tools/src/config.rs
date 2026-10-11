@@ -1954,7 +1954,7 @@ value = { circuits_global = 9000 }
         let merged = f.over(&current);
         assert_eq!(
             (merged.seeds, merged.policy),
-            (current.seeds.clone(), current.policy.clone())
+            (current.seeds.clone(), current.policy)
         );
         assert!(merged.dns.unwrap().records.is_empty());
         // A section the file never had stays left out.

@@ -6,7 +6,7 @@
 
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 /// Asked when nothing else is configured: anycast or large pools, with one
 /// that answers well from mainland China.
@@ -79,12 +79,7 @@ pub fn fix_hint() -> &'static str {
     }
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::types::now_ms;
 
 fn to_ntp(ms: u64) -> [u8; 8] {
     let secs = ms / 1000 + NTP_UNIX;

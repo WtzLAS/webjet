@@ -242,13 +242,13 @@ impl Controller {
                     }
                 };
                 drop(_g);
-                self.send_raft(n, out);
+                Self::send_raft(n, out);
                 self.apply_committed(n);
                 self.maybe_sign_head(n);
             }
             other => {
                 let out = self.raft.lock().handle(Instant::now(), from, other);
-                self.send_raft(n, out);
+                Self::send_raft(n, out);
                 self.apply_committed(n);
             }
         }

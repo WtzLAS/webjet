@@ -278,6 +278,16 @@ pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 // ---------------------------------------------------------------- text forms
 
+/// Standard base64 with padding, as used throughout the JSON state files and
+/// the control channel.
+pub fn b64(b: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(b)
+}
+
+pub fn unb64(s: &str) -> Result<Vec<u8>> {
+    Ok(base64::engine::general_purpose::STANDARD.decode(s)?)
+}
+
 /// Standard base64 with padding: 44 characters ending in `=` (§14.2).
 pub fn key_b64(k: &Bytes32) -> String {
     base64::engine::general_purpose::STANDARD.encode(k)

@@ -211,7 +211,7 @@ const SYNC_REQUESTS_PER_SEC: u32 = 1000;
 /// Count a sync request from `hop`; false when it is over the rate.
 fn sync_allowed(n: &Node, hop: &Hop) -> bool {
     let mut r = n.sync.sync_rate.lock();
-    let e = r.entry(hop.id).or_insert((Instant::now(), 0));
+    let e = r.entry(hop.id).or_insert_with(|| (Instant::now(), 0));
     if e.0.elapsed() > Duration::from_secs(1) {
         *e = (Instant::now(), 0);
     }
@@ -219,7 +219,7 @@ fn sync_allowed(n: &Node, hop: &Hop) -> bool {
     e.1 <= SYNC_REQUESTS_PER_SEC
 }
 
-pub async fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
+pub fn handle(n: &Arc<Node>, hop: &Arc<Hop>, m: HopMsg) -> Result<()> {
     if matches!(
         m,
         HopMsg::GetOffline(_)
@@ -861,7 +861,7 @@ fn on_lookup(n: &Arc<Node>, hop: &Arc<Hop>, l: wp::Lookup) -> Result<()> {
     let max_subs = crate::metrics::limit_usize(n, "subscriptions_per_peer");
     {
         let mut r = n.sync.lookup_rate.lock();
-        let e = r.entry(hop.id).or_insert((Instant::now(), 0));
+        let e = r.entry(hop.id).or_insert_with(|| (Instant::now(), 0));
         if e.0.elapsed() > Duration::from_secs(1) {
             *e = (Instant::now(), 0);
         }
@@ -1610,11 +1610,11 @@ mod walk_tests {
                 return errors;
             }
             for m in up {
-                handle(&p.ahead, &p.to_behind.0, m).await.unwrap();
+                handle(&p.ahead, &p.to_behind.0, m).unwrap();
             }
             for mut m in down.drain(..) {
                 tamper(&mut m);
-                if let Err(e) = handle(&p.behind, &p.to_ahead.0, m).await {
+                if let Err(e) = handle(&p.behind, &p.to_ahead.0, m) {
                     errors.push(e.to_string());
                 }
             }
@@ -1640,7 +1640,7 @@ mod walk_tests {
         );
         assert!(old.len() + 30 < new.len(), "leaves to fetch");
         let m = announce(&p.ahead);
-        handle(&p.behind, &p.to_ahead.0, m).await.unwrap();
+        handle(&p.behind, &p.to_ahead.0, m).unwrap();
         assert_eq!(pump(&mut p, |_| {}).await, Vec::<String>::new());
         let (b, a) = (p.behind.store.read(), p.ahead.store.read());
         assert_eq!(b.tree().clone().root(), a.tree().clone().root());
@@ -1659,7 +1659,7 @@ mod walk_tests {
         let root = |n: &Node| n.store.read().tree().clone().root();
         let before = root(&p.behind);
         let m = announce(&p.ahead);
-        handle(&p.behind, &p.to_ahead.0, m).await.unwrap();
+        handle(&p.behind, &p.to_ahead.0, m).unwrap();
         let errors = pump(&mut p, |m| {
             if let HopMsg::Leaves(l) = m
                 && let Some(x) = l.leaves.as_mut().and_then(|v| v.first_mut())
@@ -1681,7 +1681,7 @@ mod walk_tests {
     async fn buckets_must_match_the_signed_root() {
         let mut p = pair();
         let m = announce(&p.ahead);
-        handle(&p.behind, &p.to_ahead.0, m).await.unwrap();
+        handle(&p.behind, &p.to_ahead.0, m).unwrap();
         let errors = pump(&mut p, |m| {
             if let HopMsg::Buckets(b) = m
                 && let Some(h) = b.hashes.as_mut().and_then(|v| v.first_mut())
@@ -1699,7 +1699,7 @@ mod walk_tests {
     async fn a_peer_behind_gets_our_head() {
         let mut p = pair();
         let m = announce(&p.behind);
-        handle(&p.ahead, &p.to_behind.0, m).await.unwrap();
+        handle(&p.ahead, &p.to_behind.0, m).unwrap();
         let sent = p.to_behind.1.control();
         let ours = p.ahead.store.read().head().map(|h| h.raw.clone());
         assert!(

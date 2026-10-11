@@ -366,9 +366,8 @@ async fn watch_control_role(n: Arc<Node>) {
     let mut warned = false;
     loop {
         match ev.recv().await {
-            Ok(Event::HeadChanged) => {}
+            Ok(Event::HeadChanged) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
             Ok(_) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
             Err(_) => return,
         }
         let granted = control_granted(&n);
@@ -515,7 +514,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
             }
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
                 if let Some(e) = crate::health::CLOCK_FATAL.get() {
-                    break Some(e.to_string());
+                    break Some(e.clone());
                 }
             }
         }
@@ -545,7 +544,7 @@ async fn start_dataplane_when_ready(n: Arc<Node>) {
             .get(&n.me)
             .is_some_and(|x| x.valid);
         if ready {
-            match crate::dataplane::start(&n).await {
+            match crate::dataplane::start(&n) {
                 Ok(dp) => {
                     let _ = n.dataplane.set(dp);
                     crate::gossip::publish_endpoint(&n, true);
@@ -676,7 +675,7 @@ async fn dial_tracked(n: &Arc<Node>, peer: Bytes32, backoff: &Backoff) {
         _ => {
             let e = b
                 .entry(peer)
-                .or_insert((Instant::now(), Duration::from_secs(2)));
+                .or_insert_with(|| (Instant::now(), Duration::from_secs(2)));
             e.1 = (e.1 * 2).min(Duration::from_secs(300));
             e.0 = Instant::now() + e.1;
         }

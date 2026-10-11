@@ -122,7 +122,7 @@ impl Graph {
         out
     }
 
-    fn relays_of(&self, nodes: &[Bytes32], src: &Bytes32, dst: &Bytes32) -> Vec<Bytes32> {
+    fn relays_of(nodes: &[Bytes32], src: &Bytes32, dst: &Bytes32) -> Vec<Bytes32> {
         nodes
             .iter()
             .filter(|n| *n != src && *n != dst)
@@ -136,7 +136,7 @@ impl Graph {
             let e = self.edges(&w[0], src, dst);
             c += e.iter().find(|(n, _)| *n == w[1])?.1;
         }
-        let relays = self.relays_of(nodes, src, dst);
+        let relays = Self::relays_of(nodes, src, dst);
         let mut pen: f64 = 1.0;
         let mut max_load = 0u8;
         for r in &relays {
@@ -201,7 +201,7 @@ impl Graph {
             .filter_map(|p| {
                 let (cost, spare) = self.path_cost(&p, src, dst)?;
                 Some(Path {
-                    hops: self.relays_of(&p, src, dst),
+                    hops: Self::relays_of(&p, src, dst),
                     cost,
                     spare,
                 })

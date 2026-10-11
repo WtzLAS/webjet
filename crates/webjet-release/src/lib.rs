@@ -325,15 +325,7 @@ impl QueuedRequest {
     }
 }
 
-fn b64(b: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(b)
-}
-
-fn unb64(s: &str) -> Result<Vec<u8>> {
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.decode(s)?)
-}
+use webjet_core::crypto::{b64, unb64};
 
 /// One release file and the SHA-256 the admin pinned for it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -481,11 +473,7 @@ pub struct HelperStatus {
     pub at: u64,
 }
 
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
+pub use webjet_core::types::now_ms;
 
 /// Read a spool file someone else controls: no symbolic links, a regular
 /// file with one name, at most [`MAX_SPOOL_FILE`] bytes. `None` if absent.

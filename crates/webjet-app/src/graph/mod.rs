@@ -531,7 +531,7 @@ mod tests {
         };
         // A link comes, another goes, a label changes, the area is resized:
         // nobody moves.
-        let mut s2 = s.clone();
+        let mut s2 = s;
         if let Ok(t) = &mut s2.topology {
             t.edges.push(TopoEdge {
                 a: "c".into(),
@@ -582,7 +582,7 @@ mod tests {
         let area = (800.0, 420.0);
         let s = snap();
         let a = Graph::build(&s, area, None);
-        let mut s2 = s.clone();
+        let mut s2 = s;
         if let Ok(t) = &mut s2.topology {
             let link = |x: &str, y: &str| TopoEdge {
                 a: x.into(),

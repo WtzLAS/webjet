@@ -370,7 +370,7 @@ impl Proxy {
         if !plausible {
             return refuse("not a client address");
         }
-        let choice = match self.choose(n, dp, &rule, &client.src) {
+        let choice = match Self::choose(n, dp, &rule, &client.src) {
             Ok(c) => c,
             Err(e) => return refuse(&e),
         };
@@ -467,7 +467,6 @@ impl Proxy {
     }
 
     fn choose(
-        &self,
         n: &Arc<Node>,
         dp: &Dataplane,
         rule: &Rule,
@@ -978,7 +977,7 @@ impl Proxy {
         }
         let states: Vec<RuleState> = rules
             .iter()
-            .map(|r| self.check_rule(n, dp, r, supported, &addrs))
+            .map(|r| Self::check_rule(n, dp, r, supported, &addrs))
             .collect();
         if !rules.is_empty() && !supported {
             n.alarm(
@@ -1043,7 +1042,6 @@ impl Proxy {
     }
 
     fn check_rule(
-        &self,
         n: &Arc<Node>,
         dp: &Dataplane,
         r: &Rule,

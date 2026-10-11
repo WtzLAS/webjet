@@ -802,9 +802,7 @@ fn rate_text(bps: f64) -> String {
     format!("{}/s", model::bytes(bps.max(0.0) as u64))
 }
 
-fn now_ms() -> u64 {
-    webjet_core::types::now_ms()
-}
+use webjet_core::types::now_ms;
 
 // ---------------------------------------------------------------- screens
 
@@ -2121,7 +2119,7 @@ mod tests {
         let mut changed = snap.clone();
         if let Ok(t) = &mut changed.topology {
             let first = t.edges.remove(0);
-            let a = first.a.clone();
+            let a = first.a;
             t.nodes.push(model::TopoNode {
                 id: "ffff0000".into(),
                 name: "node-new".into(),

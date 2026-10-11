@@ -19,9 +19,7 @@ pub mod upgrade;
 pub use prompt::{new_passphrase, passphrase};
 pub use webjetd::state::write_private;
 
-pub fn b64(b: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(b)
-}
+pub use webjet_core::crypto::b64;
 
 pub fn read(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).with_context(|| format!("read {}", path.display()))

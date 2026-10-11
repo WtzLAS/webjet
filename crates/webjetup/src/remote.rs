@@ -324,7 +324,7 @@ fn write_trust(sys: &Sys, l: &Layout, repo: Option<&Repo>, force: bool) -> Resul
     };
     let t = match kept {
         Some(t) => rel::Trust {
-            repo: repo.map_or(t.repo.clone(), |r| r.web.clone()),
+            repo: repo.map_or_else(|| t.repo.clone(), |r| r.web.clone()),
             ..t
         },
         None => {
