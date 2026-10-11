@@ -398,7 +398,7 @@ pub async fn run(n: Arc<Node>) {
                 .values()
                 .filter_map(|e| match &e.kind {
                     circuit::Kind::Local(c) => Some(c.clone()),
-                    _ => None,
+                    circuit::Kind::Transit(_) => None,
                 })
                 .collect()
         };

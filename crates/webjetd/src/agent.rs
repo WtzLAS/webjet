@@ -736,7 +736,7 @@ fn prune_home_relays(
             .values()
             .filter_map(|e| match &e.kind {
                 crate::circuit::Kind::Local(c) => Some(c.next),
-                _ => None,
+                crate::circuit::Kind::Transit(_) => None,
             })
             .collect()
     };

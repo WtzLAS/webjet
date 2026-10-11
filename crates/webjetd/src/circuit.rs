@@ -460,7 +460,7 @@ impl Table {
         let rid = match &e.kind {
             Kind::Local(c) => Some(c.route_id),
             Kind::Transit(t) if t.forward => Some(t.route_id),
-            _ => None,
+            Kind::Transit(_) => None,
         };
         if let Some(rid) = rid
             && let Some(r) = self.routes.get(&rid)

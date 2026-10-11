@@ -423,7 +423,7 @@ fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
                 .and_then(|g| map_prefix(ip, &g.lan, &g.published))
                 .and_then(|x| match x {
                     IpAddr::V4(v) => Some(RData::A(A(v))),
-                    _ => None,
+                    IpAddr::V6(_) => None,
                 })
         }
         RData::AAAA(a) => {
@@ -433,7 +433,7 @@ fn rewrite_record(mut rec: Record, gs: &[Grant]) -> Record {
                 .and_then(|g| map_prefix(ip, &g.lan, &g.published))
                 .and_then(|x| match x {
                     IpAddr::V6(v) => Some(RData::AAAA(AAAA(v))),
-                    _ => None,
+                    IpAddr::V4(_) => None,
                 })
         }
         _ => None,

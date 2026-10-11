@@ -534,7 +534,7 @@ pub fn nat_name(t: wp::NatType) -> &'static str {
         wp::NatType::NoNat => "none",
         wp::NatType::Consistent => "consistent",
         wp::NatType::Symmetric => "symmetric",
-        _ => "unknown",
+        wp::NatType::Unknown => "unknown",
     }
 }
 

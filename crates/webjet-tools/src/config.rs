@@ -909,7 +909,7 @@ fn leaf<T: serde::de::DeserializeOwned>(tree: &Value, key: &str) -> Result<Optio
 fn action(a: wp::Action) -> &'static str {
     match a {
         wp::Action::Allow => "allow",
-        _ => "deny",
+        wp::Action::Deny => "deny",
     }
 }
 
