@@ -303,8 +303,16 @@ pub fn kcp_session(data: &[u8]) {
 /// reads first, including CONTROL_ZSTD payloads.
 pub fn hop_record(data: &[u8]) {
     futures::executor::block_on(async {
-        let mut r = data;
+        let (mut r, mut whole) = (data, data);
         while let Ok((ty, body)) = hop::read_record(&mut r).await {
+            let Ok((t, rec)) = hop::read_record_buf(&mut whole).await else {
+                panic!("read_record_buf refused what read_record took");
+            };
+            assert_eq!(
+                (t, &rec[hop::RECORD_HEADER..]),
+                (ty, &body[..]),
+                "both readers agree"
+            );
             assert!(body.len() <= hop::MAX_RECORD);
             if ty == hop::rec::CONTROL_ZSTD {
                 let _ = compress::zstd_decompress(&body, hop::MAX_RECORD);
@@ -324,6 +332,18 @@ pub fn hop_record(data: &[u8]) {
         match hop::read_record(&mut r).await {
             Ok((t, b)) => assert_eq!((t, b.as_slice()), (ty, payload), "record round trip"),
             Err(e) => panic!("encoded record doesn't read back: {e}"),
+        }
+        // Built in place and read whole (the relay path): the same bytes.
+        let mut built = [&[0; hop::RECORD_HEADER][..], payload].concat();
+        assert!(
+            hop::seal_record(ty, &mut built),
+            "a record within the limit seals"
+        );
+        assert_eq!(built, enc, "sealed in place = encoded");
+        let mut r = enc.as_slice();
+        match hop::read_record_buf(&mut r).await {
+            Ok((t, b)) => assert_eq!((t, b.as_slice()), (ty, enc.as_slice()), "whole record"),
+            Err(e) => panic!("encoded record doesn't read back whole: {e}"),
         }
     });
 }
