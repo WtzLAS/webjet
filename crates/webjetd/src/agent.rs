@@ -764,6 +764,7 @@ async fn connections(n: Arc<Node>) {
     let mut home: HashSet<Bytes32> = HashSet::new();
     let mut seed_backoff = Duration::from_secs(1);
     let mut next_seed = Instant::now();
+    let mut relay_cache: Option<Vec<u8>> = None;
     let mut ev = n.events.subscribe();
     loop {
         tokio::select! {
@@ -845,7 +846,7 @@ async fn connections(n: Arc<Node>) {
             };
             next_seed = Instant::now() + seed_backoff;
         }
-        save_relay_cache(&n);
+        save_relay_cache(&n, &mut relay_cache);
     }
 }
 
@@ -901,22 +902,36 @@ async fn dial_seeds(n: &Arc<Node>) -> bool {
     false
 }
 
-/// Cache relay and controller endpoints for the next start.
-fn save_relay_cache(n: &Node) {
+/// Cache relay and controller endpoints for the next start. Written only
+/// when the content changed since the last write (`last`): this runs every
+/// few seconds, and relays often run on flash storage.
+fn save_relay_cache(n: &Node, last: &mut Option<Vec<u8>>) {
     let cache = {
         let s = n.store.snapshot();
         let v = s.view();
         let recs = n.records.lock();
+        let mut relays: Vec<(&Bytes32, &Vec<u8>)> = recs
+            .endpoints
+            .iter()
+            .filter(|(id, _)| v.nodes.get(*id).is_some_and(|x| x.relay || x.control))
+            .map(|(id, (_, raw))| (id, raw))
+            .collect();
+        // In a fixed order, so unchanged records give unchanged bytes.
+        relays.sort_unstable_by_key(|(id, _)| **id);
         state::RelayCache {
-            endpoints: recs
-                .endpoints
-                .iter()
-                .filter(|(id, _)| v.nodes.get(*id).is_some_and(|x| x.relay || x.control))
-                .map(|(_, (_, raw))| raw.clone())
-                .collect(),
+            endpoints: relays.into_iter().map(|(_, raw)| raw.clone()).collect(),
         }
     };
-    let _ = state::save_json(&n.paths.relays(), &cache);
+    let Ok(bytes) = serde_json::to_vec_pretty(&cache) else {
+        return;
+    };
+    if last.as_ref() == Some(&bytes) {
+        return;
+    }
+    match crate::tasks::blocking(|| state::write_private(&n.paths.relays(), &bytes)) {
+        Ok(()) => *last = Some(bytes),
+        Err(e) => tracing::debug!("saving the relay cache: {e}"),
+    }
 }
 
 /// Fetch PSK epochs (and, on relays, the camouflage secret) from a

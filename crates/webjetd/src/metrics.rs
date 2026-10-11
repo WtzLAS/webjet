@@ -1,7 +1,7 @@
 //! Counters, relay load (§11.8.1) and metric reports (§12.3-§12.5).
 
 use crate::node::Node;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -382,26 +382,31 @@ fn tun_metrics(m: &Counters) -> wp::TunMetrics {
     }
 }
 
+/// Reports kept for a later upload: 120 × 30 s = one hour.
+const RING_MAX: usize = 120;
+
 /// Upload reports every 30 s to a controller; unsent ones go to a small
-/// on-disk ring and are retried (§12.5).
+/// on-disk ring and are retried (§12.5). The ring lives in memory and is
+/// read from disk once, at start; it is written back only when it changed,
+/// so a node whose uploads succeed doesn't rewrite the file every 30 s.
 pub async fn run(n: Arc<Node>) {
     let mut tick = tokio::time::interval(Duration::from_secs(30));
     tick.tick().await;
+    let mut ring: VecDeque<Vec<u8>> =
+        crate::state::load_json::<Vec<String>>(&n.paths.metrics_ring())
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| crate::state::unb64(s).ok())
+            .collect();
+    // What the file holds now: an unchanged ring isn't written again.
+    let mut saved: Option<Vec<u8>> = std::fs::read(n.paths.metrics_ring()).ok();
     loop {
         tick.tick().await;
-        let rep = build_report(&n);
-        let mut ring: Vec<Vec<u8>> =
-            crate::state::load_json::<Vec<String>>(&n.paths.metrics_ring())
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|s| crate::state::unb64(s).ok())
-                .collect();
-        ring.push(rep);
-        if ring.len() > 120 {
-            let drop = ring.len() - 120;
-            ring.drain(..drop);
+        ring.push_back(build_report(&n));
+        while ring.len() > RING_MAX {
+            ring.pop_front();
         }
         if n.is_controller() {
             if let Some(c) = n.controller.get() {
@@ -410,18 +415,36 @@ pub async fn run(n: Arc<Node>) {
                 }
             }
         } else {
-            while let Some(r) = ring.first().cloned() {
-                let body = RpcBody::MetricUpload(Box::new(wp::MetricUpload { report: Some(r) }));
+            while let Some(r) = ring.pop_front() {
+                let body = RpcBody::MetricUpload(Box::new(wp::MetricUpload {
+                    report: Some(r.clone()),
+                }));
                 match crate::rpc::call_any(&n, body, Duration::from_secs(10)).await {
-                    Ok((_, RpcBody::RpcAck(a))) if a.ok => {
-                        ring.remove(0);
+                    Ok((_, RpcBody::RpcAck(a))) if a.ok => {}
+                    _ => {
+                        ring.push_front(r);
+                        break;
                     }
-                    _ => break,
                 }
             }
         }
-        let enc: Vec<String> = ring.iter().map(|r| crate::state::b64(r)).collect();
-        let _ = crate::state::save_json(&n.paths.metrics_ring(), &enc);
+        save_ring(&n, &ring, &mut saved);
+    }
+}
+
+/// Write the ring when it differs from what was last written.
+fn save_ring(n: &Node, ring: &VecDeque<Vec<u8>>, saved: &mut Option<Vec<u8>>) {
+    let enc: Vec<String> = ring.iter().map(|r| crate::state::b64(r)).collect();
+    let Ok(bytes) = serde_json::to_vec_pretty(&enc) else {
+        return;
+    };
+    if saved.as_ref() == Some(&bytes) {
+        return;
+    }
+    let path = n.paths.metrics_ring();
+    match crate::tasks::blocking(|| crate::state::write_private(&path, &bytes)) {
+        Ok(()) => *saved = Some(bytes),
+        Err(e) => tracing::debug!("saving unsent metrics: {e}"),
     }
 }
 
@@ -697,5 +720,27 @@ mod tests {
         );
         assert_eq!(route_e2e(&t, &HashMap::new())[&rid].selected, 0);
         drop(n);
+    }
+
+    #[test]
+    fn the_ring_is_written_only_when_it_changes() {
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("a", "10.7.0.5", &[]);
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        let path = n.paths.metrics_ring();
+        let mut ring: VecDeque<Vec<u8>> = VecDeque::from([vec![1, 2, 3]]);
+        let mut saved = None;
+        save_ring(&n, &ring, &mut saved);
+        let first = std::fs::read(&path).unwrap();
+        assert_eq!(saved.as_deref(), Some(&first[..]));
+        // Unchanged: not written (a removed file stays removed).
+        std::fs::remove_file(&path).unwrap();
+        save_ring(&n, &ring, &mut saved);
+        assert!(!path.exists());
+        // Changed: written, and it reads back as the ring.
+        ring.clear();
+        save_ring(&n, &ring, &mut saved);
+        let back: Vec<String> = crate::state::load_json(&path).unwrap().unwrap();
+        assert!(back.is_empty());
     }
 }
