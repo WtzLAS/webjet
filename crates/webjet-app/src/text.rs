@@ -784,7 +784,9 @@ impl Line {
 }
 
 fn split(text: &str) -> Vec<String> {
-    let text = text.replace("\r\n", "\n");
+    // Line breaks of every kind, like `Buffer::insert`: a lone CR left in a
+    // line would be drawn and saved as part of it.
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<String> = text.split('\n').map(String::from).collect();
     if lines.is_empty() {
         vec![String::new()]
@@ -1044,5 +1046,178 @@ mod tests {
         l.set_cursor(9, false);
         l.delete_word_left();
         assert_eq!(l.text(), "");
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Text built from pieces that stress byte offsets: multi-byte
+        /// characters (2, 3 and 4 bytes, a combining mark), indentation,
+        /// comments, line breaks of both kinds.
+        fn text() -> impl Strategy<Value = String> {
+            let pieces = vec![
+                "a", "Z", "_", "-", "=", " ", "  ", "\t", "#", "# ", "[", "\"", "é", "中", "🙂",
+                "e\u{301}", "\n", "\r\n", "\r", "key = ", "ctl-01",
+            ];
+            proptest::collection::vec(proptest::sample::select(pieces), 0..12)
+                .prop_map(|v| v.concat())
+        }
+
+        fn movement() -> impl Strategy<Value = Move> {
+            prop_oneof![
+                Just(Move::Left),
+                Just(Move::Right),
+                Just(Move::Up),
+                Just(Move::Down),
+                Just(Move::Home),
+                Just(Move::End),
+                (0usize..4).prop_map(Move::PageUp),
+                (0usize..4).prop_map(Move::PageDown),
+                Just(Move::Top),
+                Just(Move::Bottom),
+                Just(Move::WordLeft),
+                Just(Move::WordRight),
+            ]
+        }
+
+        #[derive(Clone, Debug)]
+        enum Edit {
+            Insert(String),
+            Newline,
+            Backspace,
+            Delete,
+            DeleteToLineStart,
+            Indent,
+            Outdent,
+            ToggleComment,
+            Undo,
+            Redo,
+            Move(Move, bool),
+            /// Any line and byte offset, on a character boundary or not.
+            SetCursor(usize, usize, bool),
+            SelectWord(usize, usize),
+            SelectAll,
+        }
+
+        fn edit() -> impl Strategy<Value = Edit> {
+            prop_oneof![
+                3 => text().prop_map(Edit::Insert),
+                1 => Just(Edit::Newline),
+                2 => Just(Edit::Backspace),
+                1 => Just(Edit::Delete),
+                1 => Just(Edit::DeleteToLineStart),
+                1 => Just(Edit::Indent),
+                1 => Just(Edit::Outdent),
+                1 => Just(Edit::ToggleComment),
+                1 => Just(Edit::Undo),
+                1 => Just(Edit::Redo),
+                3 => (movement(), any::<bool>()).prop_map(|(m, x)| Edit::Move(m, x)),
+                2 => (0usize..6, 0usize..40, any::<bool>())
+                    .prop_map(|(l, c, x)| Edit::SetCursor(l, c, x)),
+                1 => (0usize..6, 0usize..40).prop_map(|(l, c)| Edit::SelectWord(l, c)),
+                1 => Just(Edit::SelectAll),
+            ]
+        }
+
+        fn apply(b: &mut Buffer, e: &Edit) {
+            match e {
+                Edit::Insert(t) => b.insert(t),
+                Edit::Newline => b.newline(),
+                Edit::Backspace => b.backspace(),
+                Edit::Delete => b.delete(),
+                Edit::DeleteToLineStart => b.delete_to_line_start(),
+                Edit::Indent => b.indent(),
+                Edit::Outdent => b.outdent(),
+                Edit::ToggleComment => b.toggle_comment(),
+                Edit::Undo => {
+                    b.undo();
+                }
+                Edit::Redo => {
+                    b.redo();
+                }
+                Edit::Move(m, x) => b.move_cursor(*m, *x),
+                Edit::SetCursor(l, c, x) => b.set_cursor(Pos::new(*l, *c), *x),
+                Edit::SelectWord(l, c) => b.select_word(Pos::new(*l, *c)),
+                Edit::SelectAll => b.select_all(),
+            }
+        }
+
+        fn on_boundary(b: &Buffer, p: Pos) -> bool {
+            p.line < b.lines().len() && b.line(p.line).is_char_boundary(p.col)
+        }
+
+        /// Everything the editor widget reads from a buffer: a byte offset
+        /// that isn't on a character boundary would panic there.
+        fn check(b: &Buffer) -> Result<(), TestCaseError> {
+            prop_assert!(!b.lines().is_empty());
+            prop_assert!(on_boundary(b, b.cursor()), "cursor {:?}", b.cursor());
+            if let Some((s, e)) = b.selection() {
+                prop_assert!(on_boundary(b, s) && on_boundary(b, e), "{s:?}..{e:?}");
+                prop_assert!(b.selected_text().is_some());
+            }
+            for (i, l) in b.lines().iter().enumerate() {
+                prop_assert!(!l.contains(['\n', '\r']), "line break inside line {i}");
+                if let Some((from, to, _)) = b.selected_in_line(i) {
+                    prop_assert!(from <= to && l.is_char_boundary(from) && l.is_char_boundary(to));
+                }
+                if let LineKind::KeyValue(k) = line_kind(l) {
+                    prop_assert!(l.is_char_boundary(k));
+                }
+            }
+            Ok(())
+        }
+
+        proptest! {
+            #[test]
+            fn buffer_edits_keep_offsets_on_characters(
+                start in text(),
+                edits in proptest::collection::vec(edit(), 0..40),
+            ) {
+                let mut b = Buffer::new(&start);
+                check(&b)?;
+                for e in &edits {
+                    apply(&mut b, e);
+                    check(&b)?;
+                }
+                // Every change was undoable: undoing them all gives back the
+                // start (CRs folded into line breaks, as `new` does).
+                while b.undo() {
+                    check(&b)?;
+                }
+                prop_assert_eq!(b.text(), Buffer::new(&start).text());
+            }
+
+            #[test]
+            fn line_edits_keep_offsets_on_characters(
+                opaque in any::<bool>(),
+                start in text(),
+                edits in proptest::collection::vec(edit(), 0..40),
+            ) {
+                let mut l = Line::new(opaque);
+                l.set_text(&start);
+                for e in &edits {
+                    match e {
+                        Edit::Insert(t) => l.insert(t),
+                        Edit::Backspace => l.backspace(),
+                        Edit::Delete => l.delete(),
+                        Edit::DeleteToLineStart => l.delete_to_start(),
+                        Edit::Indent => l.delete_word_left(),
+                        Edit::Outdent => l.delete_word_right(),
+                        Edit::Move(m, x) => l.move_cursor(*m, *x),
+                        Edit::SetCursor(_, c, x) => l.set_cursor(*c, *x),
+                        Edit::SelectWord(_, c) => l.select_word(*c),
+                        Edit::SelectAll => l.select_all(),
+                        _ => {}
+                    }
+                    let t = l.text();
+                    prop_assert!(t.is_char_boundary(l.cursor()), "cursor {}", l.cursor());
+                    if let Some((s, e)) = l.selection() {
+                        prop_assert!(t.is_char_boundary(s) && t.is_char_boundary(e));
+                        prop_assert!(l.selected_text().is_some());
+                    }
+                }
+            }
+        }
     }
 }
