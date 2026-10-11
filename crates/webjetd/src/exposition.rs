@@ -258,7 +258,7 @@ impl Exposition {
     /// Per-route series (sources, relays, destinations).
     fn routes(&mut self, rep: &wp::MetricReport, names: &dyn Names, s: &Subject) {
         let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
-        for r in rep.routes.clone().unwrap_or_default() {
+        for r in rep.routes.iter().flatten() {
             let rid = hex::encode(&opt_k32(&r.route_id)[..8]);
             let role = match r.role {
                 wp::RouteRole::Source => "source",
@@ -304,10 +304,10 @@ impl Exposition {
                 .filter(|(k, _)| *k != "direction")
                 .map(|(k, v)| (*k, v.as_str()))
                 .collect();
-            for c in r.dropped.clone().unwrap_or_default() {
-                let reason = c.name.clone().unwrap_or_default();
+            for c in r.dropped.iter().flatten() {
+                let reason = c.name.as_deref().unwrap_or_default();
                 let mut ld = lr.clone();
-                ld.push(("reason", &reason));
+                ld.push(("reason", reason));
                 self.counter(
                     "webjet_route_dropped",
                     "Frames dropped on a route, by reason.",
@@ -366,7 +366,7 @@ impl Exposition {
     /// Per-link quality series.
     fn links(&mut self, rep: &wp::MetricReport, names: &dyn Names, s: &Subject) {
         let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
-        for l in rep.links.clone().unwrap_or_default() {
+        for l in rep.links.iter().flatten() {
             let peer = names.node(&opt_k32(&l.peer));
             let t = l.transport.name();
             let ll = [
@@ -489,8 +489,8 @@ impl Exposition {
     /// Policy rule hits, refused circuits and limit hits.
     fn refusals(&mut self, rep: &wp::MetricReport, s: &Subject) {
         let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
-        for h in rep.rule_hits.clone().unwrap_or_default() {
-            let rule = h.rule_id.clone().unwrap_or_default();
+        for h in rep.rule_hits.iter().flatten() {
+            let rule = h.rule_id.as_deref().unwrap_or_default();
             let dec = if h.decision == wp::Action::Allow {
                 "allow"
             } else {
@@ -502,29 +502,29 @@ impl Exposition {
                 &[
                     ("node", &node),
                     ("owner", &owner),
-                    ("rule_id", &rule),
+                    ("rule_id", rule),
                     ("decision", dec),
                 ],
                 h.flows,
                 ts,
             );
         }
-        for c in rep.circuits_refused.clone().unwrap_or_default() {
-            let reason = c.name.clone().unwrap_or_default();
+        for c in rep.circuits_refused.iter().flatten() {
+            let reason = c.name.as_deref().unwrap_or_default();
             self.counter(
                 "webjet_circuits_refused",
                 "Circuit setups this node refused, by reason.",
-                &[("node", &node), ("owner", &owner), ("reason", &reason)],
+                &[("node", &node), ("owner", &owner), ("reason", reason)],
                 c.value,
                 ts,
             );
         }
-        for c in rep.limit_hits.clone().unwrap_or_default() {
-            let what = c.name.clone().unwrap_or_default();
+        for c in rep.limit_hits.iter().flatten() {
+            let what = c.name.as_deref().unwrap_or_default();
             self.counter(
                 "webjet_limit_hits",
                 "Packets or flows refused by a limit or check, by kind.",
-                &[("node", &node), ("owner", &owner), ("limit", &what)],
+                &[("node", &node), ("owner", &owner), ("limit", what)],
                 c.value,
                 ts,
             );
@@ -534,12 +534,12 @@ impl Exposition {
     /// Compression (§9.8), per plane.
     fn compression(&mut self, rep: &wp::MetricReport, s: &Subject) {
         let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
-        for c in rep.compression.clone().unwrap_or_default() {
-            let plane = c.plane.clone().unwrap_or_default();
+        for c in rep.compression.iter().flatten() {
+            let plane = c.plane.as_deref().unwrap_or_default();
             let l = [
                 ("node", node.as_str()),
                 ("owner", owner.as_str()),
-                ("plane", plane.as_str()),
+                ("plane", plane),
             ];
             for (dir, msgs, raw, wire) in [
                 ("tx", c.tx_messages, c.tx_raw_bytes, c.tx_wire_bytes),
@@ -637,14 +637,14 @@ impl Exposition {
     /// Reverse proxy traffic (§11.11), apart from the overlay's series.
     fn proxy(&mut self, rep: &wp::MetricReport, names: &dyn Names, s: &Subject) {
         let (node, owner, ts) = (s.node.clone(), s.owner.clone(), s.ts);
-        for m in rep.proxy.clone().unwrap_or_default() {
-            let rule = m.rule.clone().unwrap_or_default();
+        for m in rep.proxy.iter().flatten() {
+            let rule = m.rule.as_deref().unwrap_or_default();
             let side = if m.ingress { "ingress" } else { "target" };
             let ingress = names.node(&opt_k32(&m.node));
             let l = [
                 ("node", node.as_str()),
                 ("owner", owner.as_str()),
-                ("rule", rule.as_str()),
+                ("rule", rule),
                 ("side", side),
                 ("ingress", ingress.as_str()),
             ];
@@ -696,13 +696,13 @@ impl Exposition {
     /// Active alarms.
     fn alarms(&mut self, rep: &wp::MetricReport, s: &Subject) {
         let (node, ts) = (s.node.clone(), s.ts);
-        for a in rep.alarms.clone().unwrap_or_default() {
-            let name = a.name.clone().unwrap_or_default();
-            let sev = a.severity.clone().unwrap_or_default();
+        for a in rep.alarms.iter().flatten() {
+            let name = a.name.as_deref().unwrap_or_default();
+            let sev = a.severity.as_deref().unwrap_or_default();
             self.gauge(
                 "webjet_alarm",
                 "Active alarms (§19.7); 1 while active.",
-                &[("node", &node), ("alarm", &name), ("severity", &sev)],
+                &[("node", &node), ("alarm", name), ("severity", sev)],
                 1.0,
                 ts,
             );

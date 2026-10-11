@@ -680,8 +680,8 @@ impl WebjetApp {
             leaves = leaves.child(muted("None: this entry changed no tree leaf."));
         }
         for (i, x) in r.leaves.iter().enumerate() {
-            let key = x.key.clone().unwrap_or_default();
-            let in_tree = m.find(x.kind, &key).map(|l| (l.path, l.hash));
+            let key = x.key.as_deref().unwrap_or_default();
+            let in_tree = m.find(x.kind, key).map(|l| (l.path, l.hash));
             let current = match (&x.hash, in_tree) {
                 (_, None) if x.deleted => "deleted",
                 (Some(h), Some((_, now))) if *h == hex::encode(now) => "still current",
@@ -697,7 +697,7 @@ impl WebjetApp {
                 .rounded_sm()
                 .child(dot(kind_color(x.kind)))
                 .child(cell(70., kind_name(x.kind)).text_color(rgb(theme::MUTED)))
-                .child(cell(110., self.names.leaf_key(x.kind, &key)))
+                .child(cell(110., self.names.leaf_key(x.kind, key)))
                 .child(
                     cell(
                         120.,

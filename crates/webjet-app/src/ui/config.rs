@@ -125,9 +125,9 @@ impl WebjetApp {
         match r {
             Ok(d) => {
                 let text = d.text.clone();
-                let eff = d.effective.clone().unwrap_or_default();
+                let eff = d.effective.as_deref().unwrap_or_default();
                 c.editor.update(cx, |e, cx| e.set_text(&text, cx));
-                c.effective.update(cx, |e, cx| e.set_text(&eff, cx));
+                c.effective.update(cx, |e, cx| e.set_text(eff, cx));
                 c.doc = Some(Ok(d));
             }
             Err(e) => c.doc = Some(Err(format!("{e:#}"))),

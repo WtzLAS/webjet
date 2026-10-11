@@ -270,7 +270,7 @@ impl View {
             return p;
         }
         if let Some(tc) = &self.transport {
-            for o in tc.overrides.clone().unwrap_or_default() {
+            for o in tc.overrides.iter().flatten() {
                 if self.selected(&o.select, node)
                     && let Some(p) = find(&o.values)
                 {
@@ -1255,7 +1255,7 @@ fn node_info(
     offline_node_tombs: &BTreeMap<Bytes32, (wp::Tombstone, Vec<u8>)>,
 ) -> (NodeInfo, bool) {
     let id = crypto::opt_k32(&r.node_id);
-    let roles = r.roles.clone().unwrap_or_default();
+    let roles = r.roles.as_deref().unwrap_or_default();
     let owner = crypto::opt_k32(&r.owner);
     let offline_tomb = offline_node_tombs
         .get(&id)

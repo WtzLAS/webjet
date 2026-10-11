@@ -322,7 +322,7 @@ impl Policy {
     pub fn from_wire(p: &wp::Policy) -> Result<Policy> {
         let mut rules = Vec::new();
         let mut ids = std::collections::HashSet::new();
-        for r in p.rules.clone().unwrap_or_default() {
+        for r in p.rules.iter().flatten() {
             let id = r.id.clone().unwrap_or_default();
             if id.is_empty() || !ids.insert(id.clone()) {
                 bail!("rule ids must be present and unique ({id:?})");
@@ -347,7 +347,7 @@ impl Policy {
             if src.is_empty() || dst.is_empty() {
                 bail!("rule {id}: src and dst must not be empty");
             }
-            let ports = PortSet::parse_list(&r.ports.clone().unwrap_or_default())?;
+            let ports = PortSet::parse_list(r.ports.as_deref().unwrap_or_default())?;
             rules.push(Rule {
                 id,
                 action: action(r.action),

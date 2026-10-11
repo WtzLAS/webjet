@@ -109,8 +109,8 @@ impl Controller {
                 Some(submit_result(res))
             }
             RpcBody::RedeemRequest(r) => {
-                let req =
-                    wp::EnrollRequest::decode_bytes(&r.request.clone().unwrap_or_default()).ok()?;
+                let req = wp::EnrollRequest::decode_bytes(r.request.as_deref().unwrap_or_default())
+                    .ok()?;
                 let res = self
                     .redeem(&req, Some(RpcBody::RedeemRequest(r)))
                     .await
@@ -186,8 +186,8 @@ impl Controller {
                 ack(errs.is_empty(), (!errs.is_empty()).then(|| errs.join("; ")))
             }
             RpcBody::SubmitRoot(r) => {
-                let raw = r.signed.clone().unwrap_or_default();
-                let res = match root_payload(&raw) {
+                let raw = r.signed.as_deref().unwrap_or_default();
+                let res = match root_payload(raw) {
                     Ok(p) => self.submit(p, Some(RpcBody::SubmitRoot(r))).await,
                     Err(e) => Err(e),
                 };
@@ -217,12 +217,12 @@ impl Controller {
                 let out = match offer {
                     raft::SnapshotOffer::Reply(out) => out,
                     raft::SnapshotOffer::Install => {
-                        let data = s.data.clone().unwrap_or_default();
-                        match Machine::restore_bytes(&data) {
+                        let data = s.data.as_deref().unwrap_or_default();
+                        match Machine::restore_bytes(data) {
                             Ok(m) if m.last_index == s.last_index && m.last_term == s.last_term => {
                                 let members = m.members.clone();
                                 let mut r = self.raft.lock();
-                                if let Err(e) = r.storage().save_snapshot(&data) {
+                                if let Err(e) = r.storage().save_snapshot(data) {
                                     tracing::error!("saving Raft snapshot: {e}");
                                     return;
                                 }

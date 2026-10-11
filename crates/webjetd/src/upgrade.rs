@@ -194,10 +194,10 @@ fn queued_json(n: &Node, h: &rel::Plan) -> Value {
 pub async fn on_rpc(n: &Arc<Node>, from: Bytes32, body: RpcBody) -> Option<RpcBody> {
     let (target, raw) = match &body {
         RpcBody::UpgradeNode(u) => {
-            let raw = u.request.clone().unwrap_or_default();
+            let raw = u.request.as_deref().unwrap_or_default();
             let checked = {
                 let s = n.store.read();
-                check_signed(s.view(), &raw, now_ms())
+                check_signed(s.view(), raw, now_ms())
             };
             match checked {
                 Ok(r) => (crypto::opt_k32(&r.node_id), Some(raw)),
@@ -218,7 +218,7 @@ pub async fn on_rpc(n: &Arc<Node>, from: Bytes32, body: RpcBody) -> Option<RpcBo
     }
     if target == n.me {
         return Some(reply(match raw {
-            Some(raw) => take(n, &raw).map(|h| queued_json(n, &h)),
+            Some(raw) => take(n, raw).map(|h| queued_json(n, &h)),
             None => Ok(status(n)),
         }));
     }

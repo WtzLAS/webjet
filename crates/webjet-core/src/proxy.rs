@@ -108,7 +108,7 @@ impl Rule {
         if r.listen_port == 0 || r.target_port == 0 {
             bail!("proxy rule {name}: ports must not be 0");
         }
-        let target = Target::parse(&r.target.clone().unwrap_or_default())
+        let target = Target::parse(r.target.as_deref().unwrap_or_default())
             .map_err(|e| anyhow::anyhow!("proxy rule {name}: {e}"))?;
         if let Target::Addr(a) = target
             && (a.is_unspecified() || a.is_loopback() || a.is_multicast())

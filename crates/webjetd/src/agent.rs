@@ -122,9 +122,9 @@ pub async fn enroll(cfg: &Config, ticket_str: &str) -> Result<()> {
         ))),
     };
     let mut last = anyhow!("no controller address in the ticket");
-    for c in ticket.controllers.clone().unwrap_or_default() {
-        let host = c.host.clone().unwrap_or_default();
-        for addr in resolve(&host, c.port).await {
+    for c in ticket.controllers.iter().flatten() {
+        let host = c.host.as_deref().unwrap_or_default();
+        for addr in resolve(host, c.port).await {
             match enroll_at(addr, c.transport, &ticket, &th, &req).await {
                 Ok(resp) => return finish_enrollment(cfg, &paths, &kp, root_key, &ticket, resp),
                 Err(e) => {
@@ -264,7 +264,7 @@ fn finish_enrollment(
         .context("verifying the network state")?;
     let node_id = opt_k32(&resp.node_id);
     // The inclusion proof for our record (§8 step 5).
-    let rec = resp.record.clone().unwrap_or_default();
+    let rec = resp.record.as_deref().unwrap_or_default();
     let proof =
         webjet_core::merkle::Proof::from_wire(&resp.proof.clone().map(|b| *b).unwrap_or_default());
     let root = store.head().map(|h| h.root()).unwrap_or_default();
@@ -272,7 +272,7 @@ fn finish_enrollment(
         &root,
         webjet_core::merkle::kind::NODE,
         &node_id,
-        &rec,
+        rec,
         &proof,
     ) {
         bail!("our node record is not proven by the signed tree head");
@@ -293,7 +293,7 @@ fn finish_enrollment(
     println!("identity key stored with {} storage", backend.name());
     state::save_store(paths, &store)?;
     let mut e = webjet_net::gate::Epochs::default();
-    for p in resp.psk_epochs.clone().unwrap_or_default() {
+    for p in resp.psk_epochs.iter().flatten() {
         e.keys.insert(p.epoch_id, opt_k32(&p.psk));
     }
     e.current = resp.psk_current;
@@ -603,8 +603,8 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
         let s = n.store.read();
         // This node's own seeds first, then the network's (§6.19).
         for e in s.view().seeds_for(&n.me) {
-            for a in e.addrs.clone().unwrap_or_default() {
-                hints.push(seed_hint(&a, e.node.clone()));
+            for a in e.addrs.iter().flatten() {
+                hints.push(seed_hint(a, e.node.clone()));
             }
         }
     }

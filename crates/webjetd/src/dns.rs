@@ -75,8 +75,8 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
     };
     // Forwarded zones first: they never cover the suffix (§11.10.6).
     for f in &forwards {
-        let zone = f.zone.clone().unwrap_or_default();
-        if in_zone(&name, &zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, f)) {
+        let zone = f.zone.as_deref().unwrap_or_default();
+        if in_zone(&name, zone) || (qtype == RecordType::PTR && reverse_in_rewrite(&name, f)) {
             return forward(n, q, f).await.unwrap_or_else(|| {
                 let mut e = r.clone();
                 e.metadata.response_code = ResponseCode::ServFail;

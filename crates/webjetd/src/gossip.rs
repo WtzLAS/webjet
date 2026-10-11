@@ -1451,7 +1451,7 @@ pub fn topology(n: &Node) -> serde_json::Value {
                 json!({"util_pct": x.util_pct, "cpu_pct": x.cpu_pct, "circuits_pct": x.circuits_pct, "queue_pct": x.queue_pct, "capacity_mbps": x.capacity_mbps}),
             );
         }
-        for e in l.links.clone().unwrap_or_default() {
+        for e in l.links.iter().flatten() {
             edges.push(json!({
                 "a": hex::encode(id), "b": hex::encode(opt_k32(&e.peer)), "kind": "relay",
                 "transport": e.transport.name(), "rtt_ms": e.rtt_ms, "loss": e.loss_pct as f64 / 100.0,
@@ -1463,7 +1463,7 @@ pub fn topology(n: &Node) -> serde_json::Value {
         if a.expires_at.saturating_add(SKEW_SHORT_RECORD) < now {
             continue;
         }
-        for e in a.relays.clone().unwrap_or_default() {
+        for e in a.relays.iter().flatten() {
             edges.push(json!({
                 "a": hex::encode(id), "b": hex::encode(opt_k32(&e.relay)), "kind": "attachment",
                 "transport": e.transport.name(), "rtt_ms": e.rtt_ms, "loss": e.loss_pct as f64 / 100.0,

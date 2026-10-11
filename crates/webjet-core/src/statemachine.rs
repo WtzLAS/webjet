@@ -317,7 +317,7 @@ impl Machine {
             Err(e) => return Err(e),
         };
         // Compare our expected leaves with the leader's bytes.
-        let theirs = entry.leaves.clone().unwrap_or_default();
+        let theirs = entry.leaves.as_deref().unwrap_or_default();
         if theirs.len() != fx.leaves.len() {
             return Err(ApplyError::Divergence(format!(
                 "entry {}: {} leaves expected, leader sent {}",
@@ -513,16 +513,16 @@ impl Machine {
             EntryPayload::RedeemEnrollmentEntry(r) => self.redeem(r, ts, &mut fx)?,
             EntryPayload::RotateNodeKeyEntry(r) => self.rotate_key(r, ts, &mut fx)?,
             EntryPayload::RootAccountEntry(r) => {
-                let raw = r.record.clone().unwrap_or_default();
-                let v = open_envelope(&raw).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+                let raw = r.record.as_deref().unwrap_or_default();
+                let v = open_envelope(raw).map_err(|e| ApplyError::Rejected(e.to_string()))?;
                 match v.ty {
                     mt::ACCOUNT_RECORD if v.signer == self.root_key => {
-                        self.put_account(&raw, None, &mut fx)?
+                        self.put_account(raw, None, &mut fx)?
                     }
                     mt::ACCOUNT_TOMBSTONE
                         if v.signer == self.root_key || Some(v.signer) == self.emergency_key =>
                     {
-                        self.tombstone_account(&raw, None, &mut fx)?
+                        self.tombstone_account(raw, None, &mut fx)?
                     }
                     _ => return rej("root account entry not signed by the root"),
                 }
@@ -541,8 +541,8 @@ impl Machine {
                 fx.outcome.description = format!("state version {} activated", sv.version);
             }
             EntryPayload::OpEntry(o) => {
-                let raw = o.signed_op.clone().unwrap_or_default();
-                self.signed_op(&raw, ts, &random, &mut fx)?;
+                let raw = o.signed_op.as_deref().unwrap_or_default();
+                self.signed_op(raw, ts, &random, &mut fx)?;
             }
             EntryPayload::MembershipEntry(_) => {
                 return rej("raw membership entries are not accepted");
@@ -753,7 +753,7 @@ impl Machine {
         }
         if u.set_overlay_ips {
             rec.overlay_ips =
-                Some(self.check_ips(&u.overlay_ips.clone().unwrap_or_default(), Some(&id))?);
+                Some(self.check_ips(u.overlay_ips.as_deref().unwrap_or_default(), Some(&id))?);
         }
         if u.set_roles {
             rec.roles = Some(sort_dedup(u.roles.clone().unwrap_or_default()));
@@ -767,7 +767,7 @@ impl Machine {
             rec.control = Some(ctl);
         }
         if u.set_tags {
-            rec.tags = Some(check_tags(&u.tags.clone().unwrap_or_default())?);
+            rec.tags = Some(check_tags(u.tags.as_deref().unwrap_or_default())?);
         }
         if u.set_routes {
             rec.routes = Some(self.check_routes(&u.routes.unwrap_or_default(), &id)?);
@@ -893,7 +893,7 @@ impl Machine {
                     .seeds
                     .ok_or_else(|| ApplyError::Rejected("missing seeds".into()))?;
                 self.check_version(kind::SEEDS, seeds.version)?;
-                self.check_seeds(&seeds.entries.clone().unwrap_or_default())?;
+                self.check_seeds(seeds.entries.as_deref().unwrap_or_default())?;
                 fx.leaves
                     .push((kind::SEEDS, SINGLETON, Some(leaf::encode_seeds(&seeds))));
                 fx.outcome.description = format!("set seeds version {}", seeds.version);
@@ -963,17 +963,17 @@ impl Machine {
     /// Seeds must name valid relays or controllers and parse (§6.8).
     fn check_seeds(&self, entries: &[wp::SeedEntry]) -> std::result::Result<(), ApplyError> {
         for e in entries {
-            let n = e.node.clone().unwrap_or_default();
+            let n = e.node.as_deref().unwrap_or_default();
             let id = self
-                .resolve_node_ref(&n)
+                .resolve_node_ref(n)
                 .ok_or_else(|| ApplyError::Rejected(format!("seed {n} names no node")))?;
             let info = &self.view.nodes[&id];
             if !info.valid || !(info.relay || self.members.contains(&id)) {
                 return rej(format!("seed {n} is not a valid RELAY or CONTROL node"));
             }
-            for a in e.addrs.clone().unwrap_or_default() {
-                let h = a.host.clone().unwrap_or_default();
-                if h.parse::<std::net::IpAddr>().is_err() && !crate::validate::valid_dns_name(&h) {
+            for a in e.addrs.iter().flatten() {
+                let h = a.host.as_deref().unwrap_or_default();
+                if h.parse::<std::net::IpAddr>().is_err() && !crate::validate::valid_dns_name(h) {
                     return rej(format!("seed address {h} doesn't parse"));
                 }
                 if a.port == 0 {
@@ -1007,7 +1007,7 @@ impl Machine {
         self.validate_dns(&dns)?;
         let mut seeds = cfg.seeds.map(|b| *b).unwrap_or_default();
         seeds.version = version;
-        self.check_seeds(&seeds.entries.clone().unwrap_or_default())?;
+        self.check_seeds(seeds.entries.as_deref().unwrap_or_default())?;
         let mut lim = cfg.limits.map(|b| *b).unwrap_or_default();
         lim.version = version;
         crate::validate::limits(&lim).map_err(|e| ApplyError::Rejected(e.to_string()))?;
@@ -1070,7 +1070,7 @@ impl Machine {
         }
         let mut m = Membership::default();
         m.voters.insert(voter);
-        for k in f.learners.clone().unwrap_or_default() {
+        for k in f.learners.iter().flatten() {
             let id = k.to_bytes();
             if id == voter {
                 continue;
@@ -1170,7 +1170,7 @@ impl Machine {
             overrides: None,
         })
         .map_err(|e| ApplyError::Rejected(e.to_string()))?;
-        self.check_seeds(&cfg.seeds.clone().unwrap_or_default())?;
+        self.check_seeds(cfg.seeds.as_deref().unwrap_or_default())?;
         // Node records and zones are checked like the network's, against
         // the network's suffix and with the network's zones also allowed.
         let net = self.view.dns.clone().unwrap_or_default();
@@ -1183,8 +1183,8 @@ impl Machine {
             records: cfg.dns_records.clone(),
             forward: Some(forward),
         })?;
-        let proxy = cfg.proxy.clone().unwrap_or_default();
-        crate::proxy::rules(&proxy).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        let proxy = cfg.proxy.as_deref().unwrap_or_default();
+        crate::proxy::rules(proxy).map_err(|e| ApplyError::Rejected(e.to_string()))?;
         if let Some(c) = &cfg.compression {
             crate::validate::compression(c).map_err(|e| ApplyError::Rejected(e.to_string()))?;
         }
@@ -1513,15 +1513,15 @@ impl Machine {
         if !self.view.accounts.get(&owner).is_some_and(|a| a.valid) {
             return rej("owner must be a valid account");
         }
-        let name = c.name.clone().unwrap_or_default();
-        if !valid_name(&name) {
+        let name = c.name.as_deref().unwrap_or_default();
+        if !valid_name(name) {
             return rej("invalid node name");
         }
-        self.check_name_free(&name, None)?;
+        self.check_name_free(name, None)?;
         let mut c = c.clone();
-        c.overlay_ips = Some(self.check_ips(&c.overlay_ips.clone().unwrap_or_default(), None)?);
+        c.overlay_ips = Some(self.check_ips(c.overlay_ips.as_deref().unwrap_or_default(), None)?);
         c.roles = Some(sort_dedup(c.roles.clone().unwrap_or_default()));
-        c.tags = Some(check_tags(&c.tags.clone().unwrap_or_default())?);
+        c.tags = Some(check_tags(c.tags.as_deref().unwrap_or_default())?);
         let fixed_id = c.node_id.map(|k| k.to_bytes()).filter(|k| *k != [0; 32]);
         if let Some(f) = fixed_id {
             // Only a controller that is a Raft member but has no record yet
@@ -1537,7 +1537,7 @@ impl Machine {
         if self.tree.get(kind::NODE, &node_id).is_some() {
             return rej("node id already enrolled");
         }
-        c.routes = Some(self.check_routes(&c.routes.clone().unwrap_or_default(), &node_id)?);
+        c.routes = Some(self.check_routes(c.routes.as_deref().unwrap_or_default(), &node_id)?);
         let key = c
             .identity_key
             .map(|k| k.to_bytes())
@@ -1646,8 +1646,8 @@ impl Machine {
         ts: u64,
         fx: &mut Effects,
     ) -> std::result::Result<(), ApplyError> {
-        let raw = r.rotation.clone().unwrap_or_default();
-        let outer = open_envelope(&raw).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+        let raw = r.rotation.as_deref().unwrap_or_default();
+        let outer = open_envelope(raw).map_err(|e| ApplyError::Rejected(e.to_string()))?;
         if outer.ty != mt::ROTATE_NODE_KEY {
             return rej("not a RotateNodeKey");
         }
@@ -1823,7 +1823,7 @@ impl Machine {
             let z = zone.trim_end_matches('.').to_ascii_lowercase();
             n == z || n.ends_with(&format!(".{z}"))
         };
-        for ip in d.resolver_ip.clone().unwrap_or_default() {
+        for ip in d.resolver_ip.iter().flatten() {
             let ip = ip
                 .to_ip()
                 .ok_or_else(|| ApplyError::Rejected("bad resolver ip".into()))?;
@@ -1842,12 +1842,12 @@ impl Machine {
             .map(|f| f.zone.clone().unwrap_or_default())
             .collect();
         let published: Vec<IpNet> = self.all_grants(None).iter().map(|g| g.published).collect();
-        for r in d.records.clone().unwrap_or_default() {
-            let name = r.name.clone().unwrap_or_default();
-            if !valid_dns_name(&name) {
+        for r in d.records.iter().flatten() {
+            let name = r.name.as_deref().unwrap_or_default();
+            if !valid_dns_name(name) {
                 return rej(format!("invalid record name {name}"));
             }
-            if !in_zone(&name, &suffix) && !zones.iter().any(|z| in_zone(&name, z)) {
+            if !in_zone(name, &suffix) && !zones.iter().any(|z| in_zone(name, z)) {
                 return rej(format!(
                     "record {name} is outside the suffix and every listed zone"
                 ));
@@ -1861,7 +1861,7 @@ impl Machine {
             {
                 return rej(format!("record {name} shadows a magic DNS name"));
             }
-            let value = r.value.clone().unwrap_or_default();
+            let value = r.value.as_deref().unwrap_or_default();
             match r.rtype {
                 wp::DnsType::A | wp::DnsType::Aaaa => {
                     if value.starts_with("node:") {
@@ -1881,17 +1881,17 @@ impl Machine {
                 _ => {}
             }
         }
-        for f in d.forward.clone().unwrap_or_default() {
-            let z = f.zone.clone().unwrap_or_default();
-            if !valid_dns_name(&z) {
+        for f in d.forward.iter().flatten() {
+            let z = f.zone.as_deref().unwrap_or_default();
+            if !valid_dns_name(z) {
                 return rej(format!("invalid forward zone {z}"));
             }
-            if in_zone(&suffix, &z) || in_zone(&z, &suffix) {
+            if in_zone(&suffix, z) || in_zone(z, &suffix) {
                 return rej("a forward zone may not cover the magic DNS suffix");
             }
             let grants = self.all_grants(None);
-            for g in f.rewrite.clone().unwrap_or_default() {
-                let g = Grant::from_wire(&g).map_err(|e| ApplyError::Rejected(e.to_string()))?;
+            for g in f.rewrite.iter().flatten() {
+                let g = Grant::from_wire(g).map_err(|e| ApplyError::Rejected(e.to_string()))?;
                 if !grants.contains(&g) {
                     return rej("rewrite grant doesn't match an existing route grant");
                 }
@@ -1991,10 +1991,10 @@ impl Machine {
                 },
             );
         }
-        for o in s.op_seqs.clone().unwrap_or_default() {
+        for o in s.op_seqs.iter().flatten() {
             m.op_seqs.insert(opt_k32(&o.account_id), o.seq);
         }
-        for e in s.psk_epochs.clone().unwrap_or_default() {
+        for e in s.psk_epochs.iter().flatten() {
             m.psk_epochs.insert(e.epoch_id, opt_k32(&e.psk));
         }
         m.psk_current = s.psk_current;

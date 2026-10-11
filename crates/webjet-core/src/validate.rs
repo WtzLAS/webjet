@@ -12,26 +12,26 @@ pub fn node_record(r: &wp::NodeRecord) -> Result<()> {
     if !valid_name(name) {
         bail!("invalid node name {name:?}");
     }
-    let ips = r.overlay_ips.clone().unwrap_or_default();
-    for c in &ips {
+    let ips = r.overlay_ips.as_deref().unwrap_or_default();
+    for c in ips {
         canonical(c)?;
     }
-    if !sorted_unique(&ips) {
+    if !sorted_unique(ips) {
         bail!("overlay_ips not sorted/unique");
     }
-    let roles = r.roles.clone().unwrap_or_default();
-    if !sorted_unique(&roles) {
+    let roles = r.roles.as_deref().unwrap_or_default();
+    if !sorted_unique(roles) {
         bail!("roles not sorted/unique");
     }
-    let tags = r.tags.clone().unwrap_or_default();
-    if !tags.iter().all(|t| valid_tag(t)) || !sorted_unique(&tags) {
+    let tags = r.tags.as_deref().unwrap_or_default();
+    if !tags.iter().all(|t| valid_tag(t)) || !sorted_unique(tags) {
         bail!("tags invalid or not sorted/unique");
     }
-    let routes = r.routes.clone().unwrap_or_default();
-    for g in &routes {
+    let routes = r.routes.as_deref().unwrap_or_default();
+    for g in routes {
         Grant::from_wire(g)?;
     }
-    if !sorted_unique(&routes) {
+    if !sorted_unique(routes) {
         bail!("routes not sorted/unique");
     }
     Ok(())
@@ -192,20 +192,20 @@ pub fn limits(l: &wp::Limits) -> Result<()> {
         }
         Ok(())
     };
-    check(&l.defaults.clone().unwrap_or_default())?;
-    for o in l.overrides.clone().unwrap_or_default() {
-        for s in o.select.clone().unwrap_or_default() {
-            crate::policy::Selector::parse(&s)?;
+    check(l.defaults.as_deref().unwrap_or_default())?;
+    for o in l.overrides.iter().flatten() {
+        for s in o.select.iter().flatten() {
+            crate::policy::Selector::parse(s)?;
         }
-        check(&o.values.clone().unwrap_or_default())?;
+        check(o.values.as_deref().unwrap_or_default())?;
     }
     Ok(())
 }
 
 pub fn transport(t: &wp::TransportConfig) -> Result<()> {
-    for o in t.overrides.clone().unwrap_or_default() {
-        for s in o.select.clone().unwrap_or_default() {
-            crate::policy::Selector::parse(&s)?;
+    for o in t.overrides.iter().flatten() {
+        for s in o.select.iter().flatten() {
+            crate::policy::Selector::parse(s)?;
         }
     }
     if let Some(c) = &t.camouflage
@@ -216,8 +216,8 @@ pub fn transport(t: &wp::TransportConfig) -> Result<()> {
         bail!("invalid camouflage domain {d:?}");
     }
     if let Some(p) = &t.padding {
-        for l in p.lines.clone().unwrap_or_default() {
-            crate::padding::parse_line(&l)?;
+        for l in p.lines.iter().flatten() {
+            crate::padding::parse_line(l)?;
         }
     }
     if let Some(c) = &t.compression {
@@ -256,11 +256,11 @@ pub fn compression(c: &wp::CompressionConfig) -> Result<()> {
 
 /// `[multicast]` (§9.5.2): capture takes UDP port specs only.
 pub fn multicast(m: &wp::MulticastConfig) -> Result<()> {
-    let capture = m.capture.clone().unwrap_or_default();
+    let capture = m.capture.as_deref().unwrap_or_default();
     if capture.len() > 64 {
         bail!("multicast.capture: at most 64 port specs");
     }
-    crate::multicast::CapturePorts::parse(&capture)?;
+    crate::multicast::CapturePorts::parse(capture)?;
     Ok(())
 }
 

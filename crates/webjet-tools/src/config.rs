@@ -496,7 +496,7 @@ impl ConfigFile {
             })),
             seeds: Some(Box::new(wp::Seeds {
                 version,
-                entries: Some(seeds(&self.seeds.clone().unwrap_or_default())?),
+                entries: Some(seeds(self.seeds.as_deref().unwrap_or_default())?),
             })),
             limits: Some(Box::new(limits)),
             transport: Some(Box::new(transport)),
@@ -535,10 +535,10 @@ impl ConfigFile {
                     .unwrap_or_default(),
             )?),
             limits: Some(limits),
-            seeds: Some(seeds(&self.seeds.clone().unwrap_or_default())?),
+            seeds: Some(seeds(self.seeds.as_deref().unwrap_or_default())?),
             dns_records: Some(records(&dns.records)?),
             dns_forward: Some(forwards(&dns.forward)?),
-            proxy: Some(proxy_rules(&self.proxy.clone().unwrap_or_default())?),
+            proxy: Some(proxy_rules(self.proxy.as_deref().unwrap_or_default())?),
             compression: self
                 .transport
                 .as_ref()
@@ -969,7 +969,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
             suffix
         },
         resolver_ip: set_resolver,
-        records: records_out(&dns.records.clone().unwrap_or_default()),
+        records: records_out(dns.records.as_deref().unwrap_or_default()),
         forward: forwards_out(&dns.forward.unwrap_or_default()),
     };
     let tr = tr.unwrap_or_default();
@@ -981,7 +981,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
     } else {
         BTreeMap::new()
     };
-    priority.extend(prio_map(&tr.defaults.clone().unwrap_or_default()));
+    priority.extend(prio_map(tr.defaults.as_deref().unwrap_or_default()));
     let camouflage = tr.camouflage.as_deref().map(|c| {
         let website = c.mode == wp::CamouflageMode::Website;
         let chain: String = c
@@ -1046,7 +1046,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
             .iter()
             .map(|o| PriorityOverrideFile {
                 select: o.select.clone().unwrap_or_default(),
-                priority: prio_map(&o.values.clone().unwrap_or_default()),
+                priority: prio_map(o.values.as_deref().unwrap_or_default()),
                 retransmit: o.retransmit,
             })
             .collect(),
@@ -1056,7 +1056,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         retransmit: tr.retransmit.or(fill.then_some(false)),
     };
     let lim = lim.unwrap_or_default();
-    let set = limit_map(&lim.defaults.clone().unwrap_or_default());
+    let set = limit_map(lim.defaults.as_deref().unwrap_or_default());
     let mut value = BTreeMap::new();
     for l in webjet_core::validate::LIMITS {
         let builtin = if fill { l.default } else { None };
@@ -1072,7 +1072,7 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
             .iter()
             .map(|o| LimitOverrideFile {
                 select: o.select.clone().unwrap_or_default(),
-                value: limit_map(&o.values.clone().unwrap_or_default()),
+                value: limit_map(o.values.as_deref().unwrap_or_default()),
             })
             .collect(),
     };
@@ -1136,11 +1136,11 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
             ..Default::default()
         };
     };
-    let priority = prio_map(&c.priorities.clone().unwrap_or_default());
-    let value = limit_map(&c.limits.clone().unwrap_or_default());
-    let records = records_out(&c.dns_records.clone().unwrap_or_default());
-    let forward = forwards_out(&c.dns_forward.clone().unwrap_or_default());
-    let proxy = proxy_out(&c.proxy.clone().unwrap_or_default());
+    let priority = prio_map(c.priorities.as_deref().unwrap_or_default());
+    let value = limit_map(c.limits.as_deref().unwrap_or_default());
+    let records = records_out(c.dns_records.as_deref().unwrap_or_default());
+    let forward = forwards_out(c.dns_forward.as_deref().unwrap_or_default());
+    let proxy = proxy_out(c.proxy.as_deref().unwrap_or_default());
     let compression = CompressionFile::from_wire(c.compression.as_deref());
     let multicast = MulticastSection::from_wire(c.multicast.as_deref());
     ConfigFile {
@@ -1152,7 +1152,7 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
             forward,
             ..Default::default()
         }),
-        seeds: Some(seeds_out(&c.seeds.clone().unwrap_or_default())).filter(|v| !v.is_empty()),
+        seeds: Some(seeds_out(c.seeds.as_deref().unwrap_or_default())).filter(|v| !v.is_empty()),
         transport: (!priority.is_empty() || compression.is_some() || c.retransmit.is_some()).then(
             || TransportSection {
                 priority,
