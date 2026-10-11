@@ -928,6 +928,346 @@ impl Pacer {
     }
 }
 
+/// Where a session's datagrams go: sealed for the peer, and counted.
+struct Wire {
+    ep: Arc<UdpEndpoint>,
+    peer: SocketAddr,
+    stats: Arc<KcpStats>,
+}
+
+impl Wire {
+    async fn send(&self, inner: Vec<u8>) {
+        if let Some(d) = self.ep.seal(&inner) {
+            self.stats
+                .wire_tx
+                .fetch_add(d.len() as u64, Ordering::Relaxed);
+            let _ = self.ep.sock.send_to(&d, self.peer).await;
+        }
+    }
+}
+
+/// A small acknowledgement waiting (at most ACK_HOLD) for a shard to ride
+/// with: (the KCP packet, when what it acknowledges arrived, when it was
+/// made).
+type HeldAck = (Vec<u8>, Instant, Instant);
+
+/// One KCP session's protocol state: KCP, FEC, the rate controller and
+/// pacer, and what is owed to the peer (acknowledgements, loss reports).
+/// `run_session` owns the I/O around it.
+struct Session {
+    wire: Wire,
+    conv: u32,
+    kcp: proto::Kcp,
+    start: Instant,
+    enc: fec::Encoder,
+    dec: fec::Decoder,
+    bbr: Bbr,
+    rate: f64,
+    /// False while the dialer sends OPENs (until it hears back).
+    opened: bool,
+    pacer: Pacer,
+    fec_flush_at: Option<Instant>,
+    delivery: Delivery,
+    out: proto::Output,
+    rtts: Vec<Duration>,
+    /// The peer takes acknowledgements outside FEC and the pacer (it said
+    /// so in its STATS).
+    peer_raw_ack: bool,
+    /// It takes acknowledgements riding in front of a shard (SHARD_ACK).
+    peer_shard_ack: bool,
+    /// When the newest datagram whose segments this flush acknowledges
+    /// reached the socket: the peer subtracts how long we held them.
+    acked_arrival: Option<Instant>,
+    held_ack: Option<HeldAck>,
+    /// Loss counts not yet reported, when the last check and the last STATS
+    /// went, when there was last loss, and whether a STATS went at all (the
+    /// first goes at once: it tells the peer which datagrams we take).
+    unreported: (u64, u64),
+    stats_sent_at: Instant,
+    stats_reported_at: Instant,
+    last_loss_at: Option<Instant>,
+    stats_reported: bool,
+}
+
+impl Session {
+    fn new(wire: Wire, conv: u32, dialer: bool) -> Session {
+        let mut kcp = proto::Kcp::new(conv, KCP_MTU);
+        kcp.set_wndsize(256, 1024);
+        let start = Instant::now();
+        let mut bbr = Bbr::new();
+        let rate = bbr.pacing_rate(start);
+        Session {
+            wire,
+            conv,
+            kcp,
+            start,
+            enc: fec::Encoder::new(),
+            dec: fec::Decoder::new(),
+            bbr,
+            rate,
+            opened: !dialer,
+            pacer: Pacer::new(Instant::now()),
+            fec_flush_at: None,
+            delivery: Delivery::new(Instant::now()),
+            out: proto::Output::default(),
+            rtts: Vec::new(),
+            peer_raw_ack: false,
+            peer_shard_ack: false,
+            acked_arrival: None,
+            held_ack: None,
+            unreported: (0, 0),
+            stats_sent_at: Instant::now(),
+            stats_reported_at: Instant::now(),
+            last_loss_at: None,
+            stats_reported: false,
+        }
+    }
+
+    /// KCP's clock: microseconds since the session started.
+    fn us(&self, t: Instant) -> u64 {
+        t.duration_since(self.start).as_micros() as u64
+    }
+
+    /// Room for more user data: only while KCP holds a few milliseconds of
+    /// it (§17.2); the rest waits in the hop queue, where CoDel sees it.
+    fn room(&self) -> bool {
+        self.kcp.queued_bytes() < queue_limit(self.rate)
+    }
+
+    /// Datagrams from the peer: shards into FEC and KCP, acknowledgements
+    /// into KCP, loss reports into the FEC encoder.
+    fn on_datagrams(&mut self, batch: Vec<Arrived>) {
+        self.opened = true;
+        let stats = self.wire.stats.clone();
+        for (at, d) in batch {
+            stats.wire_rx.fetch_add(d.len() as u64, Ordering::Relaxed);
+            let at_us = self.us(at);
+            match inbound(&d) {
+                Inbound::Shard(shard) => self.input_shard(shard, at, at_us),
+                Inbound::RawAck { held, acks } => {
+                    let _ = self.kcp.input_control(acks, at_us, held);
+                }
+                Inbound::ShardAck { held, acks, shard } => {
+                    let _ = self.kcp.input_control(acks, at_us, held);
+                    self.input_shard(shard, at, at_us);
+                }
+                Inbound::Loss {
+                    received,
+                    expected,
+                    raw_ack,
+                    shard_ack,
+                } => {
+                    self.peer_raw_ack = raw_ack;
+                    self.peer_shard_ack = shard_ack;
+                    stats.meas.lock().tx.add(received, expected);
+                    self.enc.adapt(Inbound::loss(received, expected));
+                    stats
+                        .fec_ratio_pct
+                        .store((self.enc.ratio * 100.0) as u64, Ordering::Relaxed);
+                }
+                Inbound::Ignore => {}
+            }
+        }
+        stats
+            .fec_recovered
+            .store(self.dec.recovered, Ordering::Relaxed);
+    }
+
+    fn input_shard(&mut self, shard: &[u8], at: Instant, at_us: u64) {
+        for pkt in self.dec.push(shard) {
+            let _ = self.kcp.input(&pkt, at_us, Duration::ZERO);
+            self.acked_arrival = Some(self.acked_arrival.map_or(at, |t| t.max(at)));
+        }
+    }
+
+    fn lane_stats(&self) {
+        if self.kcp.lane_ready() {
+            let l = self.kcp.lane_stats();
+            let stats = &self.wire.stats;
+            stats.lane_tx.store(l.tx_records, Ordering::Relaxed);
+            stats.lane_rx.store(l.rx_records, Ordering::Relaxed);
+            stats.lane_incomplete.store(l.incomplete, Ordering::Relaxed);
+        }
+    }
+
+    /// What KCP measured: raw round trips (§11.2), retransmissions and
+    /// delivered bytes for the rate controller (§17.5).
+    fn measure(&mut self, now: Instant) {
+        let stats = &self.wire.stats;
+        self.kcp.take_rtt_samples(&mut self.rtts);
+        if !self.rtts.is_empty() {
+            let mut m = stats.meas.lock();
+            for r in self.rtts.drain(..) {
+                m.rtt.add(r.as_secs_f64() * 1000.0);
+                self.bbr.on_rtt(r, now);
+            }
+        }
+        let re = self.kcp.take_retransmits();
+        if re > 0 {
+            stats.retrans.fetch_add(re, Ordering::Relaxed);
+        }
+        let min_interval = self.bbr.min_rtt.max(MIN_SAMPLE_INTERVAL);
+        let idle = self.kcp.wait_snd() == 0;
+        // Nothing waited for the pacer or the window: the sender had no
+        // more to send, so the sample is application-limited.
+        let app_limited = self.kcp.queued_bytes() == 0;
+        if let Some(s) = self.delivery.on_tick(
+            self.kcp.take_delivered(),
+            idle,
+            now,
+            min_interval,
+            app_limited,
+        ) {
+            self.bbr
+                .on_delivery(s.bytes, s.interval, now, s.app_limited);
+        }
+        self.bbr.ceiling = self.wire.ep.rate_ceiling_bps.load(Ordering::Relaxed) as f64 / 8.0;
+        self.kcp.set_wndsize(self.bbr.window(), 1024);
+        stats
+            .bw_estimate_kbps
+            .store((self.bbr.btl_bw * 8.0 / 1000.0) as u64, Ordering::Relaxed);
+    }
+
+    /// Acknowledgements, retransmissions and new data, paced: data goes
+    /// only while the pacer has tokens, and FEC parity counts too.
+    async fn flush(&mut self, now: Instant) {
+        self.rate = self.bbr.pacing_rate(now);
+        self.pacer.refill(now, self.rate);
+        self.out.clear();
+        let now_us = self.us(now);
+        self.kcp.flush(now_us, self.pacer.budget(), &mut self.out);
+        let arrival = self.acked_arrival.take().unwrap_or(now);
+        // Acknowledgements go at once and on their own (RAW_ACK), so the
+        // peer's RTT never includes our send backlog (§11.2); a lone small
+        // one may wait ACK_HOLD for a shard to ride with (SHARD_ACK).
+        let raw = self.peer_raw_ack && self.opened;
+        let hold = raw && self.peer_shard_ack;
+        let conv = self.conv;
+        if raw && !self.out.control.is_empty() {
+            if let Some((p, at, _)) = self.held_ack.take() {
+                self.wire
+                    .send(raw_ack_frame(conv, now.duration_since(at), &p))
+                    .await;
+            }
+            if hold && self.out.control.len() == 1 && self.out.control[0].len() <= ACK_HOLD_MAX {
+                self.held_ack = self.out.control.pop().map(|p| (p, arrival, now));
+            }
+        }
+        for p in self.out.control.drain(..) {
+            if raw {
+                self.wire
+                    .send(raw_ack_frame(conv, now.duration_since(arrival), &p))
+                    .await;
+                continue;
+            }
+            for s in self.enc.push(&p) {
+                self.pacer.spend(s.len());
+                self.wire.send(shard_frame(self.opened, conv, &s)).await;
+            }
+            self.fec_flush_at
+                .get_or_insert(now + Duration::from_millis(15));
+        }
+        for p in self.out.data.drain(..) {
+            for s in self.enc.push(&p) {
+                self.pacer.spend(s.len());
+                let d = shard_datagram(&mut self.held_ack, self.opened, conv, s);
+                self.wire.send(d).await;
+            }
+            self.fec_flush_at
+                .get_or_insert(now + Duration::from_millis(15));
+        }
+        if self.fec_flush_at.is_some_and(|t| now >= t) {
+            for s in self.enc.flush() {
+                self.pacer.spend(s.len());
+                let d = shard_datagram(&mut self.held_ack, self.opened, conv, s);
+                self.wire.send(d).await;
+            }
+            self.fec_flush_at = None;
+        }
+        if self
+            .held_ack
+            .as_ref()
+            .is_some_and(|(_, _, made)| now.duration_since(*made) >= ACK_HOLD)
+            && let Some((p, at, _)) = self.held_ack.take()
+        {
+            self.wire
+                .send(raw_ack_frame(conv, now.duration_since(at), &p))
+                .await;
+        }
+        let stats = &self.wire.stats;
+        stats
+            .fec_parity_tx
+            .store(self.enc.parity_bytes, Ordering::Relaxed);
+        // How long data has waited in KCP: the hop queue's CoDel adds it to
+        // each frame's own wait (§17.2, §17.7).
+        stats.backlog_us.store(
+            self.kcp.backlog_age(now_us).as_micros() as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Loss feedback for the peer's FEC (§17.6): every second while there
+    /// is loss (and for STATS_QUIET after it), else every STATS_QUIET.
+    async fn report_loss(&mut self, now: Instant) {
+        if now.duration_since(self.stats_sent_at) <= Duration::from_secs(1) {
+            return;
+        }
+        // Line loss before FEC recovery, counted from shard group gaps.
+        let (received, expected) = self.dec.take_loss();
+        self.wire.stats.meas.lock().rx.add(received, expected);
+        if received < expected {
+            self.last_loss_at = Some(now);
+        }
+        self.unreported.0 += received;
+        self.unreported.1 += expected;
+        let lossy = self
+            .last_loss_at
+            .is_some_and(|t| now.duration_since(t) < STATS_QUIET);
+        let due = !self.stats_reported
+            || lossy
+            || now.duration_since(self.stats_reported_at) >= STATS_QUIET;
+        if self.unreported.1 > 0 && due {
+            let (r, e) = self.unreported;
+            self.wire.send(stats_frame(self.conv, r, e)).await;
+            self.unreported = (0, 0);
+            self.stats_reported_at = now;
+            self.stats_reported = true;
+        }
+        self.stats_sent_at = now;
+    }
+
+    /// The next wake-up without traffic: every BUSY_TICK while anything is
+    /// queued, in flight or due, otherwise IDLE_TICK (a host may hold
+    /// thousands of idle hops; their keepalives wake them anyway); a held
+    /// acknowledgement's deadline in any case.
+    fn next_wake(&self, user_pending: bool) -> Instant {
+        let busy = self.kcp.wait_snd() > 0 || self.fec_flush_at.is_some() || user_pending;
+        let mut wake = Instant::now() + if busy { BUSY_TICK } else { IDLE_TICK };
+        if let Some((_, _, made)) = &self.held_ack {
+            wake = wake.min(*made + ACK_HOLD);
+        }
+        wake
+    }
+}
+
+/// A data shard's datagram: a held acknowledgement rides with the first
+/// shard it fits in front of without making the datagram larger than a full
+/// one.
+fn shard_datagram(held_ack: &mut Option<HeldAck>, opened: bool, conv: u32, s: Vec<u8>) -> Vec<u8> {
+    let fits = held_ack
+        .as_ref()
+        .is_some_and(|(p, _, _)| s.len() + p.len() + 6 <= KCP_MTU + 2 + fec::HDR);
+    match held_ack.take() {
+        Some((p, at, _)) if fits => {
+            shard_ack_frame(conv, Instant::now().duration_since(at), &p, &s)
+        }
+        other => {
+            *held_ack = other;
+            shard_frame(opened, conv, &s)
+        }
+    }
+}
+
 async fn run_session(
     ep: Arc<UdpEndpoint>,
     peer: SocketAddr,
@@ -946,41 +1286,8 @@ async fn run_session(
     // sender is dropped).
     let mut lane_keys_open = true;
     let mut lane_open = true;
-    let mut kcp = proto::Kcp::new(conv, KCP_MTU);
-    kcp.set_wndsize(256, 1024);
-    let start = Instant::now();
-    let us = |t: Instant| t.duration_since(start).as_micros() as u64;
-    let mut enc = fec::Encoder::new();
-    let mut dec = fec::Decoder::new();
-    let mut bbr = Bbr::new();
-    let mut rate = bbr.pacing_rate(start);
-    let mut opened = !dialer; // the dialer sends OPENs until it hears back
+    let mut s = Session::new(Wire { ep, peer, stats }, conv, dialer);
     let mut last_rx = Instant::now();
-    let mut pacer = Pacer::new(Instant::now());
-    let mut fec_flush_at: Option<Instant> = None;
-    let mut delivery = Delivery::new(Instant::now());
-    let mut stats_sent_at = Instant::now();
-    let mut out = proto::Output::default();
-    let mut rtts: Vec<Duration> = Vec::new();
-    // The peer takes acknowledgements outside FEC and the pacer (it said so
-    // in its STATS).
-    let mut peer_raw_ack = false;
-    // It takes acknowledgements riding in front of a shard (SHARD_ACK).
-    let mut peer_shard_ack = false;
-    // When the newest datagram whose segments this flush acknowledges
-    // reached the socket: the peer subtracts how long we held them.
-    let mut acked_arrival: Option<Instant> = None;
-    // A small acknowledgement waiting (at most ACK_HOLD) for a shard to
-    // ride with: (the KCP packet, when what it acknowledges arrived, when
-    // it was made).
-    let mut held_ack: Option<(Vec<u8>, Instant, Instant)> = None;
-    // Loss counts not yet reported, when STATS last went, when there was
-    // last loss, and whether one went at all (the first goes at once: it
-    // tells the peer which datagrams we take).
-    let mut unreported = (0u64, 0u64);
-    let mut stats_reported_at = Instant::now();
-    let mut last_loss_at: Option<Instant> = None;
-    let mut stats_reported = false;
     let mut user_buf = vec![0u8; 16 * 1024];
     let mut user_open = true;
     // Received bytes on their way to the user. While a slow reader hasn't
@@ -991,51 +1298,36 @@ async fn run_session(
     let mut pending: Vec<u8> = Vec::new();
     let mut pend_off = 0usize;
     let mut user_gone = false;
-    // The next wake-up without traffic: every BUSY_TICK while anything is
-    // queued, in flight or due, otherwise IDLE_TICK (a host may hold
-    // thousands of idle hops; their keepalives wake them anyway).
     let mut wake = Instant::now() + BUSY_TICK;
 
-    let seal_and_send = |inner: Vec<u8>| {
-        let ep = ep.clone();
-        let st = stats.clone();
-        async move {
-            if let Some(d) = ep.seal(&inner) {
-                st.wire_tx.fetch_add(d.len() as u64, Ordering::Relaxed);
-                let _ = ep.sock.send_to(&d, peer).await;
-            }
-        }
-    };
-
     loop {
-        // Take more user data only while KCP holds a few milliseconds of it
-        // (§17.2): the rest waits in the hop queue, where CoDel sees it.
-        let room = kcp.queued_bytes() < queue_limit(rate);
+        let room = s.room();
         let can_take = user_open && room;
-        let lane_takes = lane_open && room && kcp.lane_ready();
+        let lane_takes = lane_open && room && s.kcp.lane_ready();
         tokio::select! {
             r = rd.read(&mut user_buf), if can_take => {
                 match r {
                     Ok(0) | Err(_) => { user_open = false; }
-                    Ok(n) => kcp.send(&user_buf[..n], us(Instant::now())),
+                    Ok(n) => {
+                        let now_us = s.us(Instant::now());
+                        s.kcp.send(&user_buf[..n], now_us);
+                    }
                 }
             }
             k = &mut lane_keys, if lane_keys_open => {
                 lane_keys_open = false;
                 if let Ok((tx, rx)) = k {
-                    kcp.set_lane_keys(tx, rx);
+                    s.kcp.set_lane_keys(tx, rx);
                 }
             }
             r = lane_out.recv(), if lane_takes => {
                 match r {
                     Some(rec) => {
-                        let now_us = us(Instant::now());
-                        kcp.send_unreliable(&rec, now_us);
+                        let now_us = s.us(Instant::now());
+                        s.kcp.send_unreliable(&rec, now_us);
                         // Take what else is waiting, while there's room.
-                        while kcp.queued_bytes() < queue_limit(rate)
-                            && let Ok(rec) = lane_out.try_recv()
-                        {
-                            kcp.send_unreliable(&rec, now_us);
+                        while s.room() && let Ok(rec) = lane_out.try_recv() {
+                            s.kcp.send_unreliable(&rec, now_us);
                         }
                     }
                     None => lane_open = false,
@@ -1044,7 +1336,6 @@ async fn run_session(
             d = rx.recv() => {
                 let Some(d) = d else { break };
                 last_rx = Instant::now();
-                opened = true;
                 // Take what else has arrived, so one flush answers it all.
                 let mut batch = vec![d];
                 while batch.len() < 64 {
@@ -1053,36 +1344,7 @@ async fn run_session(
                         Err(_) => break,
                     }
                 }
-                for (at, d) in batch {
-                    stats.wire_rx.fetch_add(d.len() as u64, Ordering::Relaxed);
-                    match inbound(&d) {
-                        Inbound::Shard(shard) => {
-                            for pkt in dec.push(shard) {
-                                let _ = kcp.input(&pkt, us(at), Duration::ZERO);
-                                acked_arrival = Some(acked_arrival.map_or(at, |t| t.max(at)));
-                            }
-                        }
-                        Inbound::RawAck { held, acks } => {
-                            let _ = kcp.input_control(acks, us(at), held);
-                        }
-                        Inbound::ShardAck { held, acks, shard } => {
-                            let _ = kcp.input_control(acks, us(at), held);
-                            for pkt in dec.push(shard) {
-                                let _ = kcp.input(&pkt, us(at), Duration::ZERO);
-                                acked_arrival = Some(acked_arrival.map_or(at, |t| t.max(at)));
-                            }
-                        }
-                        Inbound::Loss { received, expected, raw_ack, shard_ack } => {
-                            peer_raw_ack = raw_ack;
-                            peer_shard_ack = shard_ack;
-                            stats.meas.lock().tx.add(received, expected);
-                            enc.adapt(Inbound::loss(received, expected));
-                            stats.fec_ratio_pct.store((enc.ratio * 100.0) as u64, Ordering::Relaxed);
-                        }
-                        Inbound::Ignore => {}
-                    }
-                }
-                stats.fec_recovered.store(dec.recovered, Ordering::Relaxed);
+                s.on_datagrams(batch);
             }
             r = wr.write(&pending[pend_off..]), if pend_off < pending.len() => {
                 match r {
@@ -1107,7 +1369,7 @@ async fn run_session(
         // Hand received bytes to the user, a bounded amount at a time.
         if pending.is_empty() {
             while pending.len() < PENDING_MAX
-                && let Some(b) = kcp.recv()
+                && let Some(b) = s.kcp.recv()
             {
                 if !user_gone {
                     pending.extend_from_slice(&b);
@@ -1116,159 +1378,21 @@ async fn run_session(
         }
         // Lane records go to the reader as they come; a reader that can't
         // keep up loses them, as the line would.
-        while let Some(r) = kcp.recv_unreliable() {
+        while let Some(r) = s.kcp.recv_unreliable() {
             let _ = lane_delivered.try_send(r);
         }
-        if kcp.lane_ready() {
-            let l = kcp.lane_stats();
-            stats.lane_tx.store(l.tx_records, Ordering::Relaxed);
-            stats.lane_rx.store(l.rx_records, Ordering::Relaxed);
-            stats.lane_incomplete.store(l.incomplete, Ordering::Relaxed);
-        }
+        s.lane_stats();
         let now = Instant::now();
-        // What KCP measured: raw round trips (§11.2), retransmissions and
-        // delivered bytes for the rate controller (§17.5).
-        kcp.take_rtt_samples(&mut rtts);
-        if !rtts.is_empty() {
-            let mut m = stats.meas.lock();
-            for r in rtts.drain(..) {
-                m.rtt.add(r.as_secs_f64() * 1000.0);
-                bbr.on_rtt(r, now);
-            }
-        }
-        let re = kcp.take_retransmits();
-        if re > 0 {
-            stats.retrans.fetch_add(re, Ordering::Relaxed);
-        }
-        let min_interval = bbr.min_rtt.max(MIN_SAMPLE_INTERVAL);
-        let idle = kcp.wait_snd() == 0;
-        // Nothing waited for the pacer or the window: the sender had no
-        // more to send, so the sample is application-limited.
-        let app_limited = kcp.queued_bytes() == 0;
-        if let Some(s) =
-            delivery.on_tick(kcp.take_delivered(), idle, now, min_interval, app_limited)
-        {
-            bbr.on_delivery(s.bytes, s.interval, now, s.app_limited);
-        }
-        bbr.ceiling = ep.rate_ceiling_bps.load(Ordering::Relaxed) as f64 / 8.0;
-        kcp.set_wndsize(bbr.window(), 1024);
-        stats
-            .bw_estimate_kbps
-            .store((bbr.btl_bw * 8.0 / 1000.0) as u64, Ordering::Relaxed);
-        // Acknowledgements, retransmissions and new data, paced: data goes
-        // only while the pacer has tokens, and FEC parity counts too.
-        rate = bbr.pacing_rate(now);
-        pacer.refill(now, rate);
-        out.clear();
-        kcp.flush(us(now), pacer.budget(), &mut out);
-        let arrival = acked_arrival.take().unwrap_or(now);
-        // Acknowledgements go at once and on their own (RAW_ACK), so the
-        // peer's RTT never includes our send backlog (§11.2); a lone small
-        // one may wait ACK_HOLD for a shard to ride with (SHARD_ACK).
-        let raw = peer_raw_ack && opened;
-        let hold = raw && peer_shard_ack;
-        if raw && !out.control.is_empty() {
-            if let Some((p, at, _)) = held_ack.take() {
-                seal_and_send(raw_ack_frame(conv, now.duration_since(at), &p)).await;
-            }
-            if hold && out.control.len() == 1 && out.control[0].len() <= ACK_HOLD_MAX {
-                held_ack = out.control.pop().map(|p| (p, arrival, now));
-            }
-        }
-        for p in out.control.drain(..) {
-            if raw {
-                seal_and_send(raw_ack_frame(conv, now.duration_since(arrival), &p)).await;
-                continue;
-            }
-            for s in enc.push(&p) {
-                pacer.spend(s.len());
-                seal_and_send(shard_frame(opened, conv, &s)).await;
-            }
-            fec_flush_at.get_or_insert(now + Duration::from_millis(15));
-        }
-        // A held acknowledgement rides with the first shard it fits in
-        // front of without making the datagram larger than a full one.
-        let send_shard = |s: Vec<u8>, held_ack: &mut Option<(Vec<u8>, Instant, Instant)>| {
-            let fits = held_ack
-                .as_ref()
-                .is_some_and(|(p, _, _)| s.len() + p.len() + 6 <= KCP_MTU + 2 + fec::HDR);
-            match held_ack.take() {
-                Some((p, at, _)) if fits => {
-                    shard_ack_frame(conv, Instant::now().duration_since(at), &p, &s)
-                }
-                other => {
-                    *held_ack = other;
-                    shard_frame(opened, conv, &s)
-                }
-            }
-        };
-        for p in out.data.drain(..) {
-            for s in enc.push(&p) {
-                pacer.spend(s.len());
-                let d = send_shard(s, &mut held_ack);
-                seal_and_send(d).await;
-            }
-            fec_flush_at.get_or_insert(now + Duration::from_millis(15));
-        }
-        if fec_flush_at.is_some_and(|t| now >= t) {
-            for s in enc.flush() {
-                pacer.spend(s.len());
-                let d = send_shard(s, &mut held_ack);
-                seal_and_send(d).await;
-            }
-            fec_flush_at = None;
-        }
-        if held_ack
-            .as_ref()
-            .is_some_and(|(_, _, made)| now.duration_since(*made) >= ACK_HOLD)
-            && let Some((p, at, _)) = held_ack.take()
-        {
-            seal_and_send(raw_ack_frame(conv, now.duration_since(at), &p)).await;
-        }
-        stats
-            .fec_parity_tx
-            .store(enc.parity_bytes, Ordering::Relaxed);
-        // How long data has waited in KCP: the hop queue's CoDel adds it to
-        // each frame's own wait (§17.2, §17.7).
-        stats.backlog_us.store(
-            kcp.backlog_age(us(now)).as_micros() as u64,
-            Ordering::Relaxed,
-        );
-        // Loss feedback for the peer's FEC (§17.6): every second while
-        // there is loss (and for STATS_QUIET after it), else every
-        // STATS_QUIET.
-        if now.duration_since(stats_sent_at) > Duration::from_secs(1) {
-            // Line loss before FEC recovery, counted from shard group gaps.
-            let (received, expected) = dec.take_loss();
-            stats.meas.lock().rx.add(received, expected);
-            if received < expected {
-                last_loss_at = Some(now);
-            }
-            unreported.0 += received;
-            unreported.1 += expected;
-            let lossy = last_loss_at.is_some_and(|t| now.duration_since(t) < STATS_QUIET);
-            let due =
-                !stats_reported || lossy || now.duration_since(stats_reported_at) >= STATS_QUIET;
-            if unreported.1 > 0 && due {
-                seal_and_send(stats_frame(conv, unreported.0, unreported.1)).await;
-                unreported = (0, 0);
-                stats_reported_at = now;
-                stats_reported = true;
-            }
-            stats_sent_at = now;
-        }
-        if now.duration_since(last_rx) > IDLE_TIMEOUT || kcp.is_dead() {
+        s.measure(now);
+        s.flush(now).await;
+        s.report_loss(now).await;
+        if now.duration_since(last_rx) > IDLE_TIMEOUT || s.kcp.is_dead() {
             break;
         }
-        if !user_open && kcp.wait_snd() == 0 && pending.is_empty() {
+        if !user_open && s.kcp.wait_snd() == 0 && pending.is_empty() {
             break;
         }
-        let busy = kcp.wait_snd() > 0 || fec_flush_at.is_some() || !pending.is_empty();
-        let now = Instant::now();
-        wake = now + if busy { BUSY_TICK } else { IDLE_TICK };
-        if let Some((_, _, made)) = &held_ack {
-            wake = wake.min(*made + ACK_HOLD);
-        }
+        wake = s.next_wake(!pending.is_empty());
     }
 }
 

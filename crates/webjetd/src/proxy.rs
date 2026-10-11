@@ -112,6 +112,20 @@ fn features(n: &Node, id: &Bytes32) -> Option<Vec<String>> {
 
 /// The overlay pool and every published prefix: addresses a client can't
 /// have.
+/// Whether the policy lets this node reach the chosen target (None: this
+/// node isn't in the tree).
+fn policy_allows(n: &Node, choice: &Choice, proto: u8, port: u16) -> Option<bool> {
+    let s = n.store.snapshot();
+    let v = s.view();
+    let me = v.nodes.get(&n.me).map(|x| v.subject(x))?;
+    let target = v.nodes.get(&choice.peer).map(|x| v.subject(x));
+    let dest = match (&target, choice.is_node) {
+        (Some(t), true) => Dest::Node(t),
+        _ => Dest::Addr(choice.addr),
+    };
+    Some(v.policy.evaluate(&me, dest, proto, port).decision == Decision::Allow)
+}
+
 fn overlay_nets(v: &View, pool: &[ipnet::IpNet]) -> Vec<ipnet::IpNet> {
     let mut out = pool.to_vec();
     for info in v.nodes.values().filter(|x| x.valid) {
@@ -308,35 +322,7 @@ impl Proxy {
                 .and_then(|k| t.info(&k).map(|i| (k, i.rule.clone())))
         };
         if let Some((k, rule)) = known {
-            let mut q = p;
-            packet::rewrite(
-                &mut q,
-                Some((k.flow.src, k.flow.sport)),
-                Some((k.flow.dst, k.flow.dport)),
-            );
-            if !error && let Some(pp) = packet::parse(&q) {
-                self.table.lock().ct.classify(&k.peer, &pp, true, now);
-            }
-            if !error {
-                self.table.lock().add_frag(
-                    None,
-                    &parsed,
-                    FragRoute {
-                        peer: Some(k.peer),
-                        src: Some(k.flow.src),
-                        dst: Some(k.flow.dst),
-                        role: Role::Ingress,
-                        rule: rule.clone(),
-                        owner: n.me,
-                    },
-                    now,
-                );
-            }
-            self.count(Role::Ingress, &rule, n.me, |c| {
-                c.to_target_packets += 1;
-                c.to_target_bytes += q.len() as u64;
-            });
-            send(n, &k.peer, &q);
+            self.known_flow(n, p, &parsed, error, k, &rule, now);
             return;
         }
         if error {
@@ -359,59 +345,101 @@ impl Proxy {
             }
             return;
         }
-        let refuse = |why: &str| {
+        if let Err(why) = self.open_flow(n, dp, p, &parsed, client, &rule, now) {
             self.count(Role::Ingress, &rule.name, n.me, |c| c.refused += 1);
             tracing::debug!(rule = %rule.name, "reverse proxy: refused {}: {why}", client.src);
-        };
+        }
+    }
+
+    /// A client's packet on a flow this ingress already proxies: rewritten
+    /// to the flow's target addresses and sent on.
+    #[allow(clippy::too_many_arguments)]
+    fn known_flow(
+        &self,
+        n: &Arc<Node>,
+        mut q: Vec<u8>,
+        parsed: &Parsed,
+        error: bool,
+        k: Key,
+        rule: &str,
+        now: Instant,
+    ) {
+        packet::rewrite(
+            &mut q,
+            Some((k.flow.src, k.flow.sport)),
+            Some((k.flow.dst, k.flow.dport)),
+        );
+        if !error {
+            if let Some(pp) = packet::parse(&q) {
+                self.table.lock().ct.classify(&k.peer, &pp, true, now);
+            }
+            self.table.lock().add_frag(
+                None,
+                parsed,
+                FragRoute {
+                    peer: Some(k.peer),
+                    src: Some(k.flow.src),
+                    dst: Some(k.flow.dst),
+                    role: Role::Ingress,
+                    rule: rule.to_string(),
+                    owner: n.me,
+                },
+                now,
+            );
+        }
+        self.count(Role::Ingress, rule, n.me, |c| {
+            c.to_target_packets += 1;
+            c.to_target_bytes += q.len() as u64;
+        });
+        send(n, &k.peer, &q);
+    }
+
+    /// A client's first packet for `rule`: pick a target, rewrite, check the
+    /// policy, track the flow and send it. The error says why it was refused.
+    #[allow(clippy::too_many_arguments)]
+    fn open_flow(
+        &self,
+        n: &Arc<Node>,
+        dp: &Dataplane,
+        p: Vec<u8>,
+        parsed: &Parsed,
+        client: Flow,
+        rule: &Rule,
+        now: Instant,
+    ) -> Result<(), String> {
         let plausible = {
             let s = n.store.snapshot();
             px::plausible_client(&client.src, &overlay_nets(s.view(), &s.overlay_pool))
         };
         if !plausible {
-            return refuse("not a client address");
+            return Err("not a client address".into());
         }
-        let choice = match Self::choose(n, dp, &rule, &client.src) {
-            Ok(c) => c,
-            Err(e) => return refuse(&e),
-        };
+        let choice = Self::choose(n, dp, rule, &client.src)?;
         let src = if choice.real_ip {
             (client.src, client.sport)
         } else {
-            let Some(me) = dp.my_ip(client.src.is_ipv6()) else {
-                return refuse("this node has no overlay address of the client's family");
-            };
-            let Some(port) =
-                self.table
-                    .lock()
-                    .snat_port(client.proto, me, choice.addr, rule.target_port)
-            else {
-                return refuse("no free source port");
-            };
+            let me = dp
+                .my_ip(client.src.is_ipv6())
+                .ok_or("this node has no overlay address of the client's family")?;
+            let port = self
+                .table
+                .lock()
+                .snat_port(client.proto, me, choice.addr, rule.target_port)
+                .ok_or("no free source port")?;
             (me, port)
         };
         let mut q = p.clone();
         packet::rewrite(&mut q, Some(src), Some((choice.addr, rule.target_port)));
-        let Some(tp) = packet::parse(&q) else { return };
-        let allowed = {
-            let s = n.store.snapshot();
-            let v = s.view();
-            let Some(me) = v.nodes.get(&n.me).map(|x| v.subject(x)) else {
-                return;
-            };
-            let target = v.nodes.get(&choice.peer).map(|x| v.subject(x));
-            let dest = match (&target, choice.is_node) {
-                (Some(t), true) => Dest::Node(t),
-                _ => Dest::Addr(choice.addr),
-            };
-            v.policy
-                .evaluate(&me, dest, client.proto, rule.target_port)
-                .decision
-                == Decision::Allow
+        let Some(tp) = packet::parse(&q) else {
+            return Ok(());
         };
-        if !allowed {
-            refuse("the policy denies this node the target");
-            dp.icmp(&p, Unreach::Prohibited);
-            return;
+        match policy_allows(n, &choice, client.proto, rule.target_port) {
+            None => return Ok(()),
+            Some(false) => {
+                dp.icmp(&p, Unreach::Prohibited);
+                return Err("the policy denies this node the target".into());
+            }
+            Some(true) => {}
         }
         {
             let mut t = self.table.lock();
@@ -420,20 +448,17 @@ impl Proxy {
                 flow: tp.flow,
             };
             if t.info(&key).is_some() {
-                drop(t);
-                return refuse("the same flow is already proxied");
+                return Err("the same flow is already proxied".into());
             }
-            if let Err(e) = t.ct.insert(
+            t.ct.insert(
                 &choice.peer,
                 &tp,
                 true,
                 Some(rule.name.clone()),
                 !choice.real_ip,
                 now,
-            ) {
-                drop(t);
-                return refuse(&format!("{e:?}"));
-            }
+            )
+            .map_err(|e| format!("{e:?}"))?;
             t.add(
                 &choice.peer,
                 &tp,
@@ -446,7 +471,7 @@ impl Proxy {
             );
             t.add_frag(
                 None,
-                &parsed,
+                parsed,
                 FragRoute {
                     peer: Some(choice.peer),
                     src: Some(src.0),
@@ -464,6 +489,7 @@ impl Proxy {
             c.to_target_bytes += q.len() as u64;
         });
         send(n, &choice.peer, &q);
+        Ok(())
     }
 
     fn choose(

@@ -787,39 +787,7 @@ async fn connections(n: Arc<Node>) {
                 }
             }
         }
-        let (me_relay, me_ctl, relays, controllers) = {
-            let s = n.store.snapshot();
-            let v = s.view();
-            let relays: Vec<Bytes32> = v
-                .nodes
-                .values()
-                .filter(|x| x.valid && x.relay && x.id != n.me)
-                .map(|x| x.id)
-                .collect();
-            let ctl: Vec<Bytes32> = v
-                .controllers
-                .keys()
-                .copied()
-                .filter(|c| *c != n.me)
-                .collect();
-            (
-                v.nodes.get(&n.me).is_some_and(|x| x.relay),
-                n.is_controller(),
-                relays,
-                ctl,
-            )
-        };
-        let core = me_relay || me_ctl;
-        // Edge: relays; fall back to controllers when there are none.
-        let mut want: Vec<Bytes32> = if core {
-            relays.iter().chain(controllers.iter()).copied().collect()
-        } else if relays.is_empty() {
-            controllers.clone()
-        } else {
-            relays.clone()
-        };
-        want.sort();
-        want.dedup();
+        let (core, want) = wanted_peers(&n);
         let have: HashSet<Bytes32> = n.peers().into_iter().collect();
         let now = Instant::now();
         let dialable = |p: &Bytes32| {
@@ -871,44 +839,85 @@ async fn connections(n: Arc<Node>) {
         // Not enough hops: use the seeds (§10.7.1).
         let connected = n.peers().iter().filter(|p| want.contains(p)).count();
         if (connected == 0 || n.peers().is_empty()) && Instant::now() >= next_seed {
-            let mut ok = false;
-            for (addr, t, keys) in seed_addrs(&n).await {
-                if keys.is_empty() {
-                    continue;
-                }
-                match tokio::time::timeout(Duration::from_secs(12), n.dial(addr, t, keys)).await {
-                    Ok(Ok(h)) => {
-                        tracing::info!(peer = %n.name_of(&h.peer), %addr, "connected to seed");
-                        ok = true;
-                        break;
-                    }
-                    Ok(Err(e)) => tracing::debug!("seed {addr} ({}): {e}", t.name()),
-                    Err(_) => tracing::debug!("seed {addr}: timeout"),
-                }
-            }
-            seed_backoff = if ok {
+            seed_backoff = if dial_seeds(&n).await {
                 Duration::from_secs(1)
             } else {
                 (seed_backoff * 2).min(Duration::from_secs(120))
             };
             next_seed = Instant::now() + seed_backoff;
         }
-        // Cache relay endpoints for the next start.
-        let cache = {
-            let s = n.store.snapshot();
-            let v = s.view();
-            let recs = n.records.lock();
-            state::RelayCache {
-                endpoints: recs
-                    .endpoints
-                    .iter()
-                    .filter(|(id, _)| v.nodes.get(*id).is_some_and(|x| x.relay || x.control))
-                    .map(|(_, (_, raw))| raw.clone())
-                    .collect(),
-            }
-        };
-        let _ = state::save_json(&n.paths.relays(), &cache);
+        save_relay_cache(&n);
     }
+}
+
+/// Whether this node is part of the core (a relay or controller), and the
+/// peers it keeps hops to: the core connects to every relay and controller;
+/// an edge node to relays, or controllers when there are none.
+fn wanted_peers(n: &Node) -> (bool, Vec<Bytes32>) {
+    let (me_relay, relays, controllers) = {
+        let s = n.store.snapshot();
+        let v = s.view();
+        let relays: Vec<Bytes32> = v
+            .nodes
+            .values()
+            .filter(|x| x.valid && x.relay && x.id != n.me)
+            .map(|x| x.id)
+            .collect();
+        let ctl: Vec<Bytes32> = v
+            .controllers
+            .keys()
+            .copied()
+            .filter(|c| *c != n.me)
+            .collect();
+        (v.nodes.get(&n.me).is_some_and(|x| x.relay), relays, ctl)
+    };
+    let core = me_relay || n.is_controller();
+    let mut want: Vec<Bytes32> = if core {
+        relays.into_iter().chain(controllers).collect()
+    } else if relays.is_empty() {
+        controllers
+    } else {
+        relays
+    };
+    want.sort();
+    want.dedup();
+    (core, want)
+}
+
+/// Dial the seeds (§10.7.1) one by one until one answers.
+async fn dial_seeds(n: &Arc<Node>) -> bool {
+    for (addr, t, keys) in seed_addrs(n).await {
+        if keys.is_empty() {
+            continue;
+        }
+        match tokio::time::timeout(Duration::from_secs(12), n.dial(addr, t, keys)).await {
+            Ok(Ok(h)) => {
+                tracing::info!(peer = %n.name_of(&h.peer), %addr, "connected to seed");
+                return true;
+            }
+            Ok(Err(e)) => tracing::debug!("seed {addr} ({}): {e}", t.name()),
+            Err(_) => tracing::debug!("seed {addr}: timeout"),
+        }
+    }
+    false
+}
+
+/// Cache relay and controller endpoints for the next start.
+fn save_relay_cache(n: &Node) {
+    let cache = {
+        let s = n.store.snapshot();
+        let v = s.view();
+        let recs = n.records.lock();
+        state::RelayCache {
+            endpoints: recs
+                .endpoints
+                .iter()
+                .filter(|(id, _)| v.nodes.get(*id).is_some_and(|x| x.relay || x.control))
+                .map(|(_, (_, raw))| raw.clone())
+                .collect(),
+        }
+    };
+    let _ = state::save_json(&n.paths.relays(), &cache);
 }
 
 /// Fetch PSK epochs (and, on relays, the camouflage secret) from a

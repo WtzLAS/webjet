@@ -239,7 +239,7 @@ impl Dataplane {
     // ------------------------------------------------------------ from the tun interface
 
     /// A packet the local host sent into the overlay.
-    pub fn outbound(&self, mut p: Vec<u8>) {
+    pub fn outbound(&self, p: Vec<u8>) {
         let Some(n) = self.node() else { return };
         let Some(parsed) = packet::parse(&p) else {
             n.metrics.tun_in(p.len());
@@ -259,19 +259,7 @@ impl Dataplane {
         // The local resolver (§11.10.1).
         if self.resolver.read().contains(&dst) {
             n.metrics.tun_in(p.len());
-            // A bounded number at once; past it the query is dropped and
-            // the client asks again.
-            let Ok(slot) = n.dns_tasks.clone().try_acquire_owned() else {
-                return;
-            };
-            tokio::spawn(async move {
-                let _slot = slot;
-                if let Some(reply) = crate::dns::handle(&n, &p).await
-                    && let Some(dp) = n.dataplane.get()
-                {
-                    dp.write_tun(reply);
-                }
-            });
+            serve_dns_query(n, p);
             return;
         }
         // Broadcast and multicast are fanned out to peers (§9.5.1), or
@@ -290,39 +278,8 @@ impl Dataplane {
             self.loopback(p);
             return;
         }
-        // Gateway return traffic: LAN → overlay (§11.9.4).
         if !self.is_mine(&src) {
-            let grant = self
-                .serving
-                .read()
-                .iter()
-                .map(|(g, _)| *g)
-                .find(|g| g.lan.contains(&src));
-            let Some(g) = grant else { return };
-            let Some(peer) = n.store.snapshot().view().node_by_ip(&dst) else {
-                return;
-            };
-            if g.mapped() {
-                // Addresses only; for ICMP errors the quoted destination too.
-                if !packet::map_addrs(&mut p, true, |a| map_prefix(a, &g.lan, &g.published)) {
-                    return;
-                }
-            }
-            let Some(after) = packet::parse(&p) else {
-                return;
-            };
-            if self.proxy.from_local(&n, &p, &after) {
-                return;
-            }
-            n.metrics.tun_in(p.len());
-            let v = self
-                .conntrack
-                .lock()
-                .classify(&peer, &after, true, Instant::now());
-            if !matches!(v, Ct::Tracked | Ct::RelatedError) {
-                return; // replies only; LAN hosts can't start flows (§11.9.4)
-            }
-            crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p));
+            self.gateway_return(&n, p, &src, &dst);
             return;
         }
         n.metrics.tun_in(p.len());
@@ -339,57 +296,101 @@ impl Dataplane {
         }
         let now = Instant::now();
         let v = self.conntrack.lock().classify(&peer, &parsed, true, now);
-        match v {
-            Ct::Tracked | Ct::RelatedError => {}
-            Ct::New | Ct::Invalid => {
-                let verdict = {
-                    let s = n.store.snapshot();
-                    let vw = s.view();
-                    let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {
-                        return;
-                    };
-                    match (dest_is_node, vw.nodes.get(&peer)) {
-                        (true, Some(pn)) => {
-                            let ps = vw.subject(pn);
-                            vw.policy.evaluate(
-                                &me,
-                                Dest::Node(&ps),
-                                parsed.flow.proto,
-                                parsed.flow.dport,
-                            )
-                        }
-                        _ => vw.policy.evaluate(
-                            &me,
-                            Dest::Addr(dst),
-                            parsed.flow.proto,
-                            parsed.flow.dport,
-                        ),
-                    }
-                };
-                n.metrics
-                    .rule_hit(verdict.rule_id(), verdict.decision == Decision::Allow);
-                if verdict.decision == Decision::Deny {
-                    n.metrics.acl_denied.fetch_add(1, Ordering::Relaxed);
-                    self.icmp(&p, Unreach::Prohibited);
-                    return;
-                }
-                if v == Ct::New
-                    && self
-                        .conntrack
-                        .lock()
-                        .insert(&peer, &parsed, true, verdict.rule, false, now)
-                        .is_err()
-                {
-                    n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-            }
+        if matches!(v, Ct::New | Ct::Invalid)
+            && !self.admit_outbound(&n, &p, &parsed, (&peer, dest_is_node), v, now)
+        {
+            return;
         }
         if crate::e2e::send(&n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p))
             == crate::e2e::SendResult::NoRoute
         {
             self.unreachable(&p)
         }
+    }
+
+    /// Gateway return traffic: LAN → overlay (§11.9.4). Only replies to
+    /// flows the overlay started; LAN hosts can't start flows.
+    fn gateway_return(&self, n: &Arc<Node>, mut p: Vec<u8>, src: &IpAddr, dst: &IpAddr) {
+        let grant = self
+            .serving
+            .read()
+            .iter()
+            .map(|(g, _)| *g)
+            .find(|g| g.lan.contains(src));
+        let Some(g) = grant else { return };
+        let Some(peer) = n.store.snapshot().view().node_by_ip(dst) else {
+            return;
+        };
+        if g.mapped() {
+            // Addresses only; for ICMP errors the quoted destination too.
+            if !packet::map_addrs(&mut p, true, |a| map_prefix(a, &g.lan, &g.published)) {
+                return;
+            }
+        }
+        let Some(after) = packet::parse(&p) else {
+            return;
+        };
+        if self.proxy.from_local(n, &p, &after) {
+            return;
+        }
+        n.metrics.tun_in(p.len());
+        let v = self
+            .conntrack
+            .lock()
+            .classify(&peer, &after, true, Instant::now());
+        if !matches!(v, Ct::Tracked | Ct::RelatedError) {
+            return;
+        }
+        crate::e2e::send(n, &peer, ftype::DATA, &p, crate::e2e::inner_ecn(&p));
+    }
+
+    /// A packet that starts a flow (or doesn't fit one): checked against the
+    /// policy and, if new, tracked. False when it must not be sent (an ICMP
+    /// error is sent for a denied one).
+    fn admit_outbound(
+        &self,
+        n: &Node,
+        p: &[u8],
+        parsed: &packet::Parsed,
+        (peer, dest_is_node): (&Bytes32, bool),
+        v: Ct,
+        now: Instant,
+    ) -> bool {
+        let verdict = {
+            let s = n.store.snapshot();
+            let vw = s.view();
+            let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {
+                return false;
+            };
+            let (proto, dport) = (parsed.flow.proto, parsed.flow.dport);
+            match (dest_is_node, vw.nodes.get(peer)) {
+                (true, Some(pn)) => {
+                    vw.policy
+                        .evaluate(&me, Dest::Node(&vw.subject(pn)), proto, dport)
+                }
+                _ => vw
+                    .policy
+                    .evaluate(&me, Dest::Addr(parsed.flow.dst), proto, dport),
+            }
+        };
+        n.metrics
+            .rule_hit(verdict.rule_id(), verdict.decision == Decision::Allow);
+        if verdict.decision == Decision::Deny {
+            n.metrics.acl_denied.fetch_add(1, Ordering::Relaxed);
+            self.icmp(p, Unreach::Prohibited);
+            return false;
+        }
+        if v == Ct::New
+            && self
+                .conntrack
+                .lock()
+                .insert(peer, parsed, true, verdict.rule, false, now)
+                .is_err()
+        {
+            n.metrics.conntrack_limit.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        true
     }
 
     /// The node or serving gateway for a destination address.
@@ -685,51 +686,45 @@ impl Dataplane {
         // Limits may have changed with the tree.
         let apply = ct_limits(&n);
         apply(&mut self.conntrack.lock());
-        let (my_ips, grants, pool, resolver, suffix, zones) = {
-            let s = n.store.snapshot();
-            let v = s.view();
-            let me = v.nodes.get(&n.me);
-            let resolver: Vec<IpAddr> = v.resolver_ips(&s.overlay_pool);
-            // The zones this node's resolver answers: forwarded zones and the
-            // parents of admin records, the network's and its own (§6.19).
-            let mut zones: Vec<String> = v
-                .dns_forward_for(&n.me)
-                .iter()
-                .filter_map(|f| f.zone.clone())
-                .collect();
-            zones.extend(
-                v.dns_records_for(&n.me)
-                    .iter()
-                    .filter_map(|r| r.name.clone())
-                    .filter_map(|nm| nm.split_once('.').map(|x| x.1.to_string())),
-            );
-            zones.sort();
-            zones.dedup();
-            (
-                me.map(|m| m.ips.clone()).unwrap_or_default(),
-                me.map(|m| m.routes.clone()).unwrap_or_default(),
-                s.overlay_pool.clone(),
-                resolver,
-                v.suffix(),
-                zones,
-            )
-        };
-        *self.my_ips.write() = my_ips;
-        *self.resolver.write() = resolver.clone();
-        // Sticky gateway choices for prefixes no node publishes any more.
-        {
-            let s = n.store.snapshot();
-            let published: HashSet<IpNet> = s
-                .view()
-                .nodes
-                .values()
-                .filter(|x| x.valid)
-                .flat_map(|x| x.routes.iter().map(|g| g.published))
-                .collect();
-            drop(s);
-            self.gw_choice.lock().retain(|p, _| published.contains(p));
+        let local = Local::of(&n);
+        *self.my_ips.write() = local.my_ips;
+        *self.resolver.write() = local.resolver.clone();
+        self.prune_gateway_choices(&n);
+        self.serve_gateways(&n, &local.grants, &local.pool);
+        if self.tun_tx.is_some() {
+            self.sync_routes(&n, local.pool);
+            if n.cfg.dns.configure_system {
+                let mut domains = vec![local.suffix];
+                domains.extend(local.zones);
+                self.sync_dns(local.resolver, domains);
+            }
         }
-        // Gateway serving (§11.9.2): local config ∩ grants, LAN interface up.
+        // Re-evaluate tracked flows under the new policy (§14.4). Only when
+        // the tree changed, not on the periodic re-check: it walks every
+        // tracked flow while holding the conntrack lock packets need.
+        if self.policy_gen.swap(generation, Ordering::SeqCst) != generation {
+            self.reevaluate_flows(&n);
+        }
+        self.proxy.refresh(&n, self);
+    }
+
+    /// Sticky gateway choices for prefixes no node publishes any more.
+    fn prune_gateway_choices(&self, n: &Node) {
+        let published: HashSet<IpNet> = n
+            .store
+            .snapshot()
+            .view()
+            .nodes
+            .values()
+            .filter(|x| x.valid)
+            .flat_map(|x| x.routes.iter().map(|g| g.published))
+            .collect();
+        self.gw_choice.lock().retain(|p, _| published.contains(p));
+    }
+
+    /// Gateway serving (§11.9.2): local config ∩ grants, LAN interface up.
+    /// A change is published in the endpoint record.
+    fn serve_gateways(&self, n: &Arc<Node>, grants: &[Grant], pool: &[IpNet]) {
         let mut serving = Vec::new();
         for r in &n.cfg.gateway.route {
             let Ok(pubnet) = webjet_core::types::parse_net(&r.published) else {
@@ -741,7 +736,7 @@ impl Dataplane {
                 serving.push((*g, r.interface.clone()));
                 let mut done = self.nat_done.lock();
                 if !done.contains(&r.interface)
-                    && crate::platform::setup_gateway_nat(&pool, &self.dev_name, &r.interface)
+                    && crate::platform::setup_gateway_nat(pool, &self.dev_name, &r.interface)
                 {
                     done.push(r.interface.clone());
                 }
@@ -751,60 +746,60 @@ impl Dataplane {
             != serving.iter().map(|x| x.0).collect::<Vec<_>>();
         *self.serving.write() = serving;
         if changed {
-            crate::gossip::publish_endpoint(&n, true);
+            crate::gossip::publish_endpoint(n, true);
         }
-        // Routes: the overlay pool and every published prefix.
-        if self.tun_tx.is_some() {
-            let mut want: Vec<IpNet> = pool;
+    }
+
+    /// Routes into tun: the overlay pool and every prefix another node
+    /// publishes.
+    fn sync_routes(&self, n: &Node, pool: Vec<IpNet>) {
+        let mut want: Vec<IpNet> = pool;
+        {
             let s = n.store.snapshot();
             for info in s.view().nodes.values() {
                 if info.id != n.me && info.valid {
                     want.extend(info.routes.iter().map(|g| g.published));
                 }
             }
-            drop(s);
-            want.sort();
-            want.dedup();
-            // Run the OS commands without holding the routes lock (refresh
-            // and shutdown are serialized by `system`, so nothing else
-            // changes the installed set meanwhile).
-            let (gone, new) = self.routes.lock().diff(&want);
-            for r in &gone {
-                // Best effort: a route that can't be removed (already gone
-                // with an interface reset, say) is not retried.
-                crate::platform::del_route(r, &self.dev_name);
-            }
-            let added: Vec<(IpNet, bool)> = new
-                .iter()
-                .map(|r| (*r, crate::platform::add_route(r, &self.dev_name)))
-                .collect();
-            self.routes
-                .lock()
-                .applied(&gone, &added, &want, &self.dev_name);
-            if n.cfg.dns.configure_system {
-                let mut domains = vec![suffix];
-                domains.extend(zones);
-                domains.sort();
-                domains.dedup();
-                // Only when it changed (the 10 s tick also lands here), but
-                // now and then anyway, in case something else reset it.
-                let mut last = self.dns_applied.lock();
-                let stale = last.as_ref().is_none_or(|(r, d, at)| {
-                    *r != resolver || *d != domains || at.elapsed() >= DNS_REAPPLY
-                });
-                if stale {
-                    crate::platform::configure_dns(&self.dev_name, &resolver, &domains);
-                    *last = Some((resolver, domains, Instant::now()));
-                }
-            }
         }
-        // Re-evaluate tracked flows under the new policy (§14.4). Only when
-        // the tree changed, not on the periodic re-check: it walks every
-        // tracked flow while holding the conntrack lock packets need.
-        if self.policy_gen.swap(generation, Ordering::SeqCst) == generation {
-            self.proxy.refresh(&n, self);
-            return;
+        want.sort();
+        want.dedup();
+        // Run the OS commands without holding the routes lock (refresh
+        // and shutdown are serialized by `system`, so nothing else
+        // changes the installed set meanwhile).
+        let (gone, new) = self.routes.lock().diff(&want);
+        for r in &gone {
+            // Best effort: a route that can't be removed (already gone
+            // with an interface reset, say) is not retried.
+            crate::platform::del_route(r, &self.dev_name);
         }
+        let added: Vec<(IpNet, bool)> = new
+            .iter()
+            .map(|r| (*r, crate::platform::add_route(r, &self.dev_name)))
+            .collect();
+        self.routes
+            .lock()
+            .applied(&gone, &added, &want, &self.dev_name);
+    }
+
+    /// Point the system's resolver for the overlay's domains at ours.
+    fn sync_dns(&self, resolver: Vec<IpAddr>, mut domains: Vec<String>) {
+        domains.sort();
+        domains.dedup();
+        // Only when it changed (the 10 s tick also lands here), but
+        // now and then anyway, in case something else reset it.
+        let mut last = self.dns_applied.lock();
+        let stale = last.as_ref().is_none_or(|(r, d, at)| {
+            *r != resolver || *d != domains || at.elapsed() >= DNS_REAPPLY
+        });
+        if stale {
+            crate::platform::configure_dns(&self.dev_name, &resolver, &domains);
+            *last = Some((resolver, domains, Instant::now()));
+        }
+    }
+
+    /// Close tracked flows the current policy no longer allows.
+    fn reevaluate_flows(&self, n: &Node) {
         let dropped = {
             let s = n.store.snapshot();
             let vw = s.view();
@@ -838,7 +833,6 @@ impl Dataplane {
         if dropped > 0 {
             tracing::info!("policy change closed {dropped} tracked flows");
         }
-        self.proxy.refresh(&n, self);
     }
 }
 
@@ -887,6 +881,64 @@ impl Dataplane {
     /// Serve a grant as a gateway (tests skip the interface check).
     pub(crate) fn serve_for_test(&self, g: Grant) {
         self.serving.write().push((g, "lan0".into()));
+    }
+}
+
+/// Answer a query to the local resolver (§11.10.1) in its own task. A
+/// bounded number at once; past it the query is dropped and the client asks
+/// again.
+fn serve_dns_query(n: Arc<Node>, p: Vec<u8>) {
+    let Ok(slot) = n.dns_tasks.clone().try_acquire_owned() else {
+        return;
+    };
+    tokio::spawn(async move {
+        let _slot = slot;
+        if let Some(reply) = crate::dns::handle(&n, &p).await
+            && let Some(dp) = n.dataplane.get()
+        {
+            dp.write_tun(reply);
+        }
+    });
+}
+
+/// What `Dataplane::refresh` applies from this node's part of the tree.
+struct Local {
+    my_ips: Vec<IpNet>,
+    grants: Vec<Grant>,
+    pool: Vec<IpNet>,
+    resolver: Vec<IpAddr>,
+    suffix: String,
+    /// The zones this node's resolver answers: forwarded zones and the
+    /// parents of admin records, the network's and its own (§6.19).
+    zones: Vec<String>,
+}
+
+impl Local {
+    fn of(n: &Node) -> Local {
+        let s = n.store.snapshot();
+        let v = s.view();
+        let me = v.nodes.get(&n.me);
+        let mut zones: Vec<String> = v
+            .dns_forward_for(&n.me)
+            .iter()
+            .filter_map(|f| f.zone.clone())
+            .collect();
+        zones.extend(
+            v.dns_records_for(&n.me)
+                .iter()
+                .filter_map(|r| r.name.clone())
+                .filter_map(|nm| nm.split_once('.').map(|x| x.1.to_string())),
+        );
+        zones.sort();
+        zones.dedup();
+        Local {
+            my_ips: me.map(|m| m.ips.clone()).unwrap_or_default(),
+            grants: me.map(|m| m.routes.clone()).unwrap_or_default(),
+            pool: s.overlay_pool.clone(),
+            resolver: v.resolver_ips(&s.overlay_pool),
+            suffix: v.suffix(),
+            zones,
+        }
     }
 }
 

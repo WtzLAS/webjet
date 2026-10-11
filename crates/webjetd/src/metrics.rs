@@ -184,7 +184,43 @@ fn route_e2e(
 
 /// Build this node's signed metric report (§12.5).
 pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
-    let now = now_ms();
+    let m = &n.metrics;
+    let refused = n
+        .circuits
+        .lock()
+        .refused
+        .iter()
+        .map(|(k, v)| counter(k, *v))
+        .collect();
+    let rep = wp::MetricReport {
+        node_id: Some(crypto::k32(&n.me)),
+        boot_id: Some(wp::Id16::from_bytes(&n.boot_id)),
+        software: Some(format!("webjetd/{}", env!("CARGO_PKG_VERSION"))),
+        report_seq: m.report_seq.fetch_add(1, Ordering::Relaxed) + 1,
+        taken_at: now_ms(),
+        routes: Some(route_metrics(n)),
+        links: Some(link_metrics(n)),
+        policy_version: n.store.snapshot().view().policy_version,
+        rule_hits: Some(rule_hits(m)),
+        circuits_refused: Some(refused),
+        limit_hits: Some(limit_hits(m)),
+        alarms: Some(alarms(n)),
+        load: Some(Box::new(relay_load(n))),
+        proxy: Some(
+            n.dataplane
+                .get()
+                .map(|d| d.proxy.metrics())
+                .unwrap_or_default(),
+        ),
+        compression: Some(m.compression.report()),
+        tun: Some(Box::new(tun_metrics(m))),
+    };
+    n.kp.sign_obj(mt::METRIC_REPORT, &rep)
+}
+
+/// Every circuit through this node, with the end-to-end view of those it
+/// starts or ends.
+fn route_metrics(n: &Node) -> Vec<wp::RouteMetrics> {
     // Which circuit each session sends on, and its path switches; taken
     // before the circuit table (a session's lock is never taken inside it).
     let sessions: HashMap<Bytes32, (Option<u32>, u64)> = n
@@ -198,47 +234,49 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             )
         })
         .collect();
-    let routes: Vec<wp::RouteMetrics> = {
-        let t = n.circuits.lock();
-        let e2e = route_e2e(&t, &sessions);
-        t.routes
-            .iter()
-            .map(|(rid, r)| {
-                let role = if r.src == n.me {
-                    wp::RouteRole::Source
-                } else if r.dst == n.me {
-                    wp::RouteRole::Dest
-                } else {
-                    wp::RouteRole::Relay
-                };
-                wp::RouteMetrics {
-                    route_id: Some(crypto::k32(rid)),
-                    src: Some(crypto::k32(&r.src)),
-                    dst: Some(crypto::k32(&r.dst)),
-                    hops: Some(r.hops.iter().map(crypto::k32).collect()),
-                    role,
-                    fwd: Some(Box::new(wp::RouteDir {
-                        frames: r.fwd.frames.load(Ordering::Relaxed),
-                        bytes: r.fwd.bytes.load(Ordering::Relaxed),
-                    })),
-                    rev: Some(Box::new(wp::RouteDir {
-                        frames: r.rev.frames.load(Ordering::Relaxed),
-                        bytes: r.rev.bytes.load(Ordering::Relaxed),
-                    })),
-                    dropped: Some(vec![
-                        counter("queue", r.dropped_queue.load(Ordering::Relaxed)),
-                        counter("hop_limit", r.dropped_hop_limit.load(Ordering::Relaxed)),
-                    ]),
-                    ecn_marked: r.ecn_marked.load(Ordering::Relaxed),
-                    circuit_setups: r.setups.load(Ordering::Relaxed),
-                    active_since: r.active_since.load(Ordering::Relaxed),
-                    e2e: e2e.get(rid).cloned().map(Box::new),
-                }
-            })
-            .collect()
-    };
-    let links: Vec<wp::LinkMetrics> = n
-        .hops
+    let t = n.circuits.lock();
+    let e2e = route_e2e(&t, &sessions);
+    t.routes
+        .iter()
+        .map(|(rid, r)| {
+            let role = if r.src == n.me {
+                wp::RouteRole::Source
+            } else if r.dst == n.me {
+                wp::RouteRole::Dest
+            } else {
+                wp::RouteRole::Relay
+            };
+            wp::RouteMetrics {
+                route_id: Some(crypto::k32(rid)),
+                src: Some(crypto::k32(&r.src)),
+                dst: Some(crypto::k32(&r.dst)),
+                hops: Some(r.hops.iter().map(crypto::k32).collect()),
+                role,
+                fwd: Some(Box::new(wp::RouteDir {
+                    frames: r.fwd.frames.load(Ordering::Relaxed),
+                    bytes: r.fwd.bytes.load(Ordering::Relaxed),
+                })),
+                rev: Some(Box::new(wp::RouteDir {
+                    frames: r.rev.frames.load(Ordering::Relaxed),
+                    bytes: r.rev.bytes.load(Ordering::Relaxed),
+                })),
+                dropped: Some(vec![
+                    counter("queue", r.dropped_queue.load(Ordering::Relaxed)),
+                    counter("hop_limit", r.dropped_hop_limit.load(Ordering::Relaxed)),
+                ]),
+                ecn_marked: r.ecn_marked.load(Ordering::Relaxed),
+                circuit_setups: r.setups.load(Ordering::Relaxed),
+                active_since: r.active_since.load(Ordering::Relaxed),
+                e2e: e2e.get(rid).cloned().map(Box::new),
+            }
+        })
+        .collect()
+}
+
+/// Every hop of this node: wire and payload bytes, KCP/FEC counters, the
+/// measured round trip and loss.
+fn link_metrics(n: &Node) -> Vec<wp::LinkMetrics> {
+    n.hops
         .lock()
         .values()
         .map(|h| {
@@ -275,10 +313,12 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
                     .map(|k| k.lane_incomplete.load(Ordering::Relaxed)),
             }
         })
-        .collect();
-    let m = &n.metrics;
-    let rule_hits = m
-        .rule_hits
+        .collect()
+}
+
+/// Flows each policy rule allowed or denied.
+fn rule_hits(m: &Counters) -> Vec<wp::RuleHit> {
+    m.rule_hits
         .lock()
         .iter()
         .map(|((r, a), v)| wp::RuleHit {
@@ -290,16 +330,36 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             },
             flows: *v,
         })
-        .collect();
-    let refused = n
-        .circuits
-        .lock()
-        .refused
-        .iter()
-        .map(|(k, v)| counter(k, *v))
-        .collect();
-    let alarms = n
-        .alarms
+        .collect()
+}
+
+/// Packets dropped or marked by a limit, by reason.
+fn limit_hits(m: &Counters) -> Vec<wp::Counter> {
+    vec![
+        counter("acl_denied", m.acl_denied.load(Ordering::Relaxed)),
+        counter("conntrack_limit", m.conntrack_limit.load(Ordering::Relaxed)),
+        counter("snat_exhausted", m.snat_exhausted.load(Ordering::Relaxed)),
+        counter("no_route", m.no_route.load(Ordering::Relaxed)),
+        counter(
+            "cryptokey_dropped",
+            m.cryptokey_dropped.load(Ordering::Relaxed),
+        ),
+        counter("aqm_dropped", m.aqm_dropped.load(Ordering::Relaxed)),
+        counter("ecn_marked", m.ecn_marked.load(Ordering::Relaxed)),
+        counter(
+            "multicast_limited",
+            m.multicast_limited.load(Ordering::Relaxed),
+        ),
+        counter("multicast_echo", m.multicast_echo.load(Ordering::Relaxed)),
+        counter(
+            "multicast_duplicate",
+            m.multicast_duplicate.load(Ordering::Relaxed),
+        ),
+    ]
+}
+
+fn alarms(n: &Node) -> Vec<wp::Alarm> {
+    n.alarms
         .lock()
         .iter()
         .map(|(k, (sev, since))| wp::Alarm {
@@ -307,59 +367,19 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
             severity: Some(sev.clone()),
             since: *since,
         })
-        .collect();
-    let rep = wp::MetricReport {
-        node_id: Some(crypto::k32(&n.me)),
-        boot_id: Some(wp::Id16::from_bytes(&n.boot_id)),
-        software: Some(format!("webjetd/{}", env!("CARGO_PKG_VERSION"))),
-        report_seq: m.report_seq.fetch_add(1, Ordering::Relaxed) + 1,
-        taken_at: now,
-        routes: Some(routes),
-        links: Some(links),
-        policy_version: n.store.snapshot().view().policy_version,
-        rule_hits: Some(rule_hits),
-        circuits_refused: Some(refused),
-        limit_hits: Some(vec![
-            counter("acl_denied", m.acl_denied.load(Ordering::Relaxed)),
-            counter("conntrack_limit", m.conntrack_limit.load(Ordering::Relaxed)),
-            counter("snat_exhausted", m.snat_exhausted.load(Ordering::Relaxed)),
-            counter("no_route", m.no_route.load(Ordering::Relaxed)),
-            counter(
-                "cryptokey_dropped",
-                m.cryptokey_dropped.load(Ordering::Relaxed),
-            ),
-            counter("aqm_dropped", m.aqm_dropped.load(Ordering::Relaxed)),
-            counter("ecn_marked", m.ecn_marked.load(Ordering::Relaxed)),
-            counter(
-                "multicast_limited",
-                m.multicast_limited.load(Ordering::Relaxed),
-            ),
-            counter("multicast_echo", m.multicast_echo.load(Ordering::Relaxed)),
-            counter(
-                "multicast_duplicate",
-                m.multicast_duplicate.load(Ordering::Relaxed),
-            ),
-        ]),
-        alarms: Some(alarms),
-        load: Some(Box::new(relay_load(n))),
-        proxy: Some(
-            n.dataplane
-                .get()
-                .map(|d| d.proxy.metrics())
-                .unwrap_or_default(),
-        ),
-        compression: Some(m.compression.report()),
-        tun: Some(Box::new(wp::TunMetrics {
-            rx_packets: m.tun_rx.load(Ordering::Relaxed),
-            rx_bytes: m.tun_rx_bytes.load(Ordering::Relaxed),
-            tx_packets: m.tun_tx.load(Ordering::Relaxed),
-            tx_bytes: m.tun_tx_bytes.load(Ordering::Relaxed),
-            multicast_tx_packets: m.multicast_tx.load(Ordering::Relaxed),
-            multicast_rx_packets: m.multicast_rx.load(Ordering::Relaxed),
-            multicast_captured_packets: m.multicast_captured.load(Ordering::Relaxed),
-        })),
-    };
-    n.kp.sign_obj(mt::METRIC_REPORT, &rep)
+        .collect()
+}
+
+fn tun_metrics(m: &Counters) -> wp::TunMetrics {
+    wp::TunMetrics {
+        rx_packets: m.tun_rx.load(Ordering::Relaxed),
+        rx_bytes: m.tun_rx_bytes.load(Ordering::Relaxed),
+        tx_packets: m.tun_tx.load(Ordering::Relaxed),
+        tx_bytes: m.tun_tx_bytes.load(Ordering::Relaxed),
+        multicast_tx_packets: m.multicast_tx.load(Ordering::Relaxed),
+        multicast_rx_packets: m.multicast_rx.load(Ordering::Relaxed),
+        multicast_captured_packets: m.multicast_captured.load(Ordering::Relaxed),
+    }
 }
 
 /// Upload reports every 30 s to a controller; unsent ones go to a small
