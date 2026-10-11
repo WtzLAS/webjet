@@ -232,9 +232,17 @@ isn't available.
   second click. A refuse-mode camouflage section without a certificate gets
   a self-signed one, as with `webjetctl`. Keys: arrows (with Shift to
   select, ⌥ by word, ⌘ to the line or file ends), ⌘A, ⌘C/⌘X/⌘V, ⌘Z / ⇧⌘Z
-  undo and redo, Tab / ⇧Tab indent, ⌘/ comments lines out; double-click
-  selects a word, triple-click a line (Ctrl instead of ⌘ on Linux and
+  undo and redo, Tab / ⇧Tab indent, ⌘/ comments lines out; a click right
+  of a line's end goes to that end, one below the text to its end;
+  double-click selects a word, triple-click a line (Ctrl instead of ⌘ on Linux and
   Windows).
+
+The one-line fields (passphrase, filters, rename, tags, reason) edit the
+same way: click to place the cursor, drag or Shift-click to select,
+double-click selects a word and triple-click everything; arrows (with Shift
+to select, ⌥ by word, ⌘ to the ends), ⌥/⌘ Backspace delete a word / up to
+the cursor, ⌘A, ⌘C/⌘X/⌘V. The passphrase field never copies to the
+clipboard and selects it only as a whole, so word boundaries don't show.
 
 The separators between the panes of a tab can be moved: drag one to give
 either side more room, double-click it to put it back. On the Nodes tab

@@ -1,7 +1,10 @@
 //! A multi-line text buffer with a cursor, a selection and undo: the
-//! editing logic behind the configuration editor, free of GUI code.
+//! editing logic behind the configuration editor, free of GUI code. Plus
+//! [`Line`], the single-line equivalent behind the app's text fields.
 //!
 //! Positions are (line, byte offset) on character boundaries.
+
+use zeroize::Zeroizing;
 
 /// A place in the buffer: line index and byte offset in that line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -160,36 +163,10 @@ impl Buffer {
     /// Select the word (or run of other characters) around `p`.
     pub fn select_word(&mut self, p: Pos) {
         let p = self.clamp(p);
-        let line = self.line(p.line);
-        // Words (with - for names like ctl-01), spaces, anything else.
-        let class = |c: char| {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                0
-            } else if c.is_whitespace() {
-                1
-            } else {
-                2
-            }
-        };
-        let at = line[p.col..]
-            .chars()
-            .next()
-            .or(line[..p.col].chars().last());
-        let Some(at) = at else {
+        let Some((start, end)) = word_around(self.line(p.line), p.col) else {
             self.set_cursor(p, false);
             return;
         };
-        let same = |c: char| class(c) == class(at);
-        let start = line[..p.col]
-            .char_indices()
-            .rev()
-            .take_while(|&(_, c)| same(c))
-            .last()
-            .map_or(p.col, |(i, _)| i);
-        let end = line[p.col..]
-            .char_indices()
-            .find(|&(_, c)| !same(c))
-            .map_or(line.len(), |(i, _)| p.col + i);
         self.anchor = Some(Pos::new(p.line, start));
         self.cursor = Pos::new(p.line, end);
         self.goal = None;
@@ -298,42 +275,14 @@ impl Buffer {
         if p.col == 0 {
             return self.left_of(p);
         }
-        let t = &self.line(p.line)[..p.col];
-        let trimmed = t.trim_end();
-        let word = |c: char| c.is_alphanumeric() || c == '_';
-        let start = trimmed
-            .char_indices()
-            .rev()
-            .take_while(|&(_, c)| word(c))
-            .last()
-            .map(|(i, _)| i);
-        let col = match start {
-            Some(i) => i,
-            // Not a word: step over one other character.
-            None => trimmed.char_indices().last().map_or(0, |(i, _)| i),
-        };
-        Pos::new(p.line, col)
+        Pos::new(p.line, word_left_in(self.line(p.line), p.col))
     }
 
     fn word_right(&self, p: Pos) -> Pos {
-        let t = self.line(p.line);
-        if p.col == t.len() {
+        if p.col == self.line(p.line).len() {
             return self.right_of(p);
         }
-        let rest = &t[p.col..];
-        let skip = rest.len() - rest.trim_start().len();
-        let rest = &rest[skip..];
-        let word = |c: char| c.is_alphanumeric() || c == '_';
-        let len = rest
-            .char_indices()
-            .find(|&(_, c)| !word(c))
-            .map_or(rest.len(), |(i, _)| i);
-        let len = if len == 0 {
-            rest.chars().next().map_or(0, char::len_utf8)
-        } else {
-            len
-        };
-        Pos::new(p.line, p.col + skip + len)
+        Pos::new(p.line, word_right_in(self.line(p.line), p.col))
     }
 
     fn checkpoint(&mut self, typing: bool) {
@@ -589,6 +538,251 @@ impl Buffer {
 /// Spaces per indentation step.
 pub const INDENT: usize = 2;
 
+/// What a word move stops at.
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Where a move one word left from byte `col` of `t` lands: the start of
+/// the word before it (spaces skipped), or one other character back.
+fn word_left_in(t: &str, col: usize) -> usize {
+    let trimmed = t[..col].trim_end();
+    let start = trimmed
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| is_word(c))
+        .last()
+        .map(|(i, _)| i);
+    match start {
+        Some(i) => i,
+        // Not a word: step over one other character.
+        None => trimmed.char_indices().last().map_or(0, |(i, _)| i),
+    }
+}
+
+/// Where a move one word right from byte `col` of `t` lands: the end of the
+/// word after it (spaces skipped), or one other character on.
+fn word_right_in(t: &str, col: usize) -> usize {
+    let rest = &t[col..];
+    let skip = rest.len() - rest.trim_start().len();
+    let rest = &rest[skip..];
+    let len = rest
+        .char_indices()
+        .find(|&(_, c)| !is_word(c))
+        .map_or(rest.len(), |(i, _)| i);
+    let len = if len == 0 {
+        rest.chars().next().map_or(0, char::len_utf8)
+    } else {
+        len
+    };
+    col + skip + len
+}
+
+/// The word (with - for names like ctl-01), run of spaces or run of other
+/// characters around byte `col` of `t`, as a byte range; `None` in an
+/// empty text.
+fn word_around(t: &str, col: usize) -> Option<(usize, usize)> {
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' || c == '-' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let at = t[col..].chars().next().or(t[..col].chars().last())?;
+    let same = |c: char| class(c) == class(at);
+    let start = t[..col]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| same(c))
+        .last()
+        .map_or(col, |(i, _)| i);
+    let end = t[col..]
+        .char_indices()
+        .find(|&(_, c)| !same(c))
+        .map_or(t.len(), |(i, _)| col + i);
+    Some((start, end))
+}
+
+/// One line of text with a cursor and a selection: the editing logic behind
+/// the app's text fields. Offsets are bytes on character boundaries.
+///
+/// The text may be a passphrase, so it is wiped when replaced or dropped
+/// and no copies are kept (no undo). In an `opaque` line (a masked field)
+/// words aren't told apart: word moves and double clicks take the whole
+/// text, as they would otherwise reveal where the spaces are.
+pub struct Line {
+    text: Zeroizing<String>,
+    cursor: usize,
+    /// The other end of the selection, when there is one.
+    anchor: Option<usize>,
+    opaque: bool,
+}
+
+impl Line {
+    pub fn new(opaque: bool) -> Line {
+        Line {
+            // Room for any sane passphrase: growing would leave copies behind.
+            text: Zeroizing::new(String::with_capacity(if opaque { 256 } else { 0 })),
+            cursor: 0,
+            anchor: None,
+            opaque,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Replace the text; the cursor goes to its end.
+    pub fn set_text(&mut self, t: &str) {
+        self.text.clear();
+        self.text.push_str(t);
+        self.cursor = self.text.len();
+        self.anchor = None;
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// The selection, ordered, when it isn't empty.
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        let a = self.anchor?;
+        (a != self.cursor).then(|| (a.min(self.cursor), a.max(self.cursor)))
+    }
+
+    pub fn selected_text(&self) -> Option<&str> {
+        let (s, e) = self.selection()?;
+        Some(&self.text[s..e])
+    }
+
+    fn clamp(&self, at: usize) -> usize {
+        let mut at = at.min(self.text.len());
+        while !self.text.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    }
+
+    /// Put the cursor at `at` (clamped to the text); `extend` keeps or
+    /// starts a selection from the old cursor.
+    pub fn set_cursor(&mut self, at: usize, extend: bool) {
+        if extend {
+            self.anchor.get_or_insert(self.cursor);
+        } else {
+            self.anchor = None;
+        }
+        self.cursor = self.clamp(at);
+    }
+
+    pub fn select_all(&mut self) {
+        self.anchor = Some(0);
+        self.cursor = self.text.len();
+    }
+
+    /// Select the word (or run of other characters) around `at`.
+    pub fn select_word(&mut self, at: usize) {
+        let at = self.clamp(at);
+        let around = if self.opaque {
+            Some((0, self.text.len()))
+        } else {
+            word_around(&self.text, at)
+        };
+        match around {
+            Some((s, e)) => {
+                self.anchor = Some(s);
+                self.cursor = e;
+            }
+            None => self.set_cursor(at, false),
+        }
+    }
+
+    /// Move the cursor; `extend` selects. Up and down go to the start and
+    /// the end. Without `extend`, moving left or right off a selection
+    /// lands on its edge.
+    pub fn move_cursor(&mut self, m: Move, extend: bool) {
+        if !extend && let Some((s, e)) = self.selection() {
+            match m {
+                Move::Left => return self.set_cursor(s, false),
+                Move::Right => return self.set_cursor(e, false),
+                _ => {}
+            }
+        }
+        let (c, t, len) = (self.cursor, self.text.as_str(), self.text.len());
+        let to = match m {
+            Move::Left => t[..c].char_indices().last().map_or(0, |(i, _)| i),
+            Move::Right => t[c..].chars().next().map_or(c, |ch| c + ch.len_utf8()),
+            Move::Home | Move::Up | Move::PageUp(_) | Move::Top => 0,
+            Move::End | Move::Down | Move::PageDown(_) | Move::Bottom => len,
+            Move::WordLeft if self.opaque || c == 0 => 0,
+            Move::WordLeft => word_left_in(t, c),
+            Move::WordRight if self.opaque || c == len => len,
+            Move::WordRight => word_right_in(t, c),
+        };
+        self.set_cursor(to, extend);
+    }
+
+    /// Remove the selection, if any; returns whether there was one.
+    fn delete_selection(&mut self) -> bool {
+        let Some((s, e)) = self.selection() else {
+            self.anchor = None;
+            return false;
+        };
+        self.text.replace_range(s..e, "");
+        self.cursor = s;
+        self.anchor = None;
+        true
+    }
+
+    /// Type or paste `text` over the selection: only its first line, without
+    /// control characters.
+    pub fn insert(&mut self, text: &str) {
+        self.delete_selection();
+        let first = text.split(['\n', '\r']).next().unwrap_or("");
+        // Character by character: no temporary copy of a pasted passphrase.
+        for ch in first.chars().filter(|c| !c.is_control()) {
+            self.text.insert(self.cursor, ch);
+            self.cursor += ch.len_utf8();
+        }
+    }
+
+    /// Delete the selection, else from the cursor to where `m` moves it.
+    fn delete_to(&mut self, m: Move) {
+        if self.selection().is_none() {
+            self.move_cursor(m, true);
+        }
+        self.delete_selection();
+    }
+
+    /// Backspace: the selection, else the character before the cursor.
+    pub fn backspace(&mut self) {
+        self.delete_to(Move::Left);
+    }
+
+    /// Delete: the selection, else the character after the cursor.
+    pub fn delete(&mut self) {
+        self.delete_to(Move::Right);
+    }
+
+    /// The selection, else the word before the cursor.
+    pub fn delete_word_left(&mut self) {
+        self.delete_to(Move::WordLeft);
+    }
+
+    /// The selection, else the word after the cursor.
+    pub fn delete_word_right(&mut self) {
+        self.delete_to(Move::WordRight);
+    }
+
+    /// The selection, else everything before the cursor.
+    pub fn delete_to_start(&mut self) {
+        self.delete_to(Move::Home);
+    }
+}
+
 fn split(text: &str) -> Vec<String> {
     let text = text.replace("\r\n", "\n");
     let lines: Vec<String> = text.split('\n').map(String::from).collect();
@@ -792,5 +986,63 @@ mod tests {
         assert_eq!(line_kind("default = \"deny\""), LineKind::KeyValue(7));
         assert_eq!(line_kind("  kcp = 1"), LineKind::KeyValue(5));
         assert_eq!(line_kind("MIIBkTCB+wIJAKH/xyz=="), LineKind::Other);
+    }
+
+    #[test]
+    fn line_selection_and_editing() {
+        let mut l = Line::new(false);
+        l.insert("hello wörld\nignored");
+        assert_eq!(l.text(), "hello wörld", "only the first line is pasted");
+        assert_eq!(l.cursor(), l.text().len());
+        l.move_cursor(Move::WordLeft, true);
+        assert_eq!(l.selected_text(), Some("wörld"));
+        l.move_cursor(Move::Left, false);
+        assert_eq!(l.cursor(), 6, "left lands on the selection's start");
+        l.move_cursor(Move::Right, true);
+        l.move_cursor(Move::Right, true);
+        assert_eq!(l.selected_text(), Some("wö"));
+        l.insert("W");
+        assert_eq!(l.text(), "hello Wrld");
+        l.set_cursor(2, false);
+        l.set_cursor(4, true);
+        l.backspace();
+        assert_eq!(l.text(), "heo Wrld");
+        l.backspace();
+        assert_eq!(l.text(), "ho Wrld");
+        l.move_cursor(Move::End, false);
+        l.delete_word_left();
+        assert_eq!(l.text(), "ho ");
+        l.move_cursor(Move::Home, false);
+        l.delete_word_right();
+        assert_eq!(l.text(), " ");
+        l.set_text("a-b c");
+        l.select_word(1);
+        assert_eq!(l.selected_text(), Some("a-b"));
+        l.set_cursor(99, false);
+        assert_eq!(l.cursor(), 5, "clamped");
+        l.delete_to_start();
+        assert_eq!(l.text(), "");
+        l.select_word(0);
+        assert_eq!(l.selection(), None, "nothing to select");
+        l.insert("x\u{7}y");
+        assert_eq!(l.text(), "xy", "control characters are dropped");
+        l.select_all();
+        l.delete();
+        assert_eq!(l.text(), "");
+    }
+
+    #[test]
+    fn opaque_lines_hide_word_boundaries() {
+        let mut l = Line::new(true);
+        l.insert("two words");
+        l.move_cursor(Move::WordLeft, false);
+        assert_eq!(l.cursor(), 0);
+        l.move_cursor(Move::WordRight, true);
+        assert_eq!(l.selected_text(), Some("two words"));
+        l.select_word(1);
+        assert_eq!(l.selected_text(), Some("two words"));
+        l.set_cursor(9, false);
+        l.delete_word_left();
+        assert_eq!(l.text(), "");
     }
 }

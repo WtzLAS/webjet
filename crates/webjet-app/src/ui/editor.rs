@@ -32,6 +32,9 @@ const CHAR_W: f32 = 7.6;
 /// Lines a page up/down moves.
 const PAGE: usize = 20;
 
+/// Painted lines by index: their text bounds and shaping.
+type Layouts = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, ShapedLine)>>>;
+
 /// Sent when the text changed (not for cursor moves).
 pub struct Changed;
 
@@ -40,8 +43,8 @@ pub struct Editor {
     buf: Buffer,
     read_only: bool,
     scroll: UniformListScrollHandle,
-    /// Each painted line's text origin (x) and shaping, for the mouse.
-    layouts: Rc<RefCell<HashMap<usize, (Pixels, ShapedLine)>>>,
+    /// Each painted line's text bounds and shaping, for the mouse.
+    layouts: Layouts,
     /// A mouse selection in progress.
     selecting: bool,
 }
@@ -180,7 +183,7 @@ impl Editor {
             .layouts
             .borrow()
             .get(&line)
-            .map_or(0, |(left, l)| l.closest_index_for_x(x - *left));
+            .map_or(0, |(b, l)| l.closest_index_for_x(x - b.left()));
         Pos::new(line, col)
     }
 
@@ -240,6 +243,9 @@ impl Editor {
         let current = cursor.line == i && !self.read_only;
         div()
             .id(("line", i))
+            // At least as wide as the view, so a click right of a short
+            // line's end still lands on the line.
+            .min_w_full()
             .h(px(LINE_H))
             .flex()
             .when(current, |d| d.bg(rgba(0xffffff08)))
@@ -285,7 +291,7 @@ impl Editor {
                                 rgb(theme::ACCENT),
                             ));
                         }
-                        layouts.borrow_mut().insert(i, (b.left(), line));
+                        layouts.borrow_mut().insert(i, (b, line));
                     },
                 )
                 .flex_1()
@@ -295,7 +301,8 @@ impl Editor {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
-                    this.mouse_down(i, ev, window, cx)
+                    this.mouse_down(i, ev, window, cx);
+                    cx.stop_propagation();
                 }),
             )
             .on_mouse_move(
@@ -353,6 +360,8 @@ impl Focusable for Editor {
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
+        // Refilled as the visible lines paint: none of a deleted line stays.
+        self.layouts.borrow_mut().clear();
         let count = self.buf.lines().len();
         let gutter = 16.0 + 8.0 * count.to_string().len().max(2) as f32;
         // The widest line sets the width the list scrolls sideways over.
@@ -363,6 +372,23 @@ impl Render for Editor {
             .id("editor")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    // Not on a line: below the last one is the text's end.
+                    this.focus.focus(window);
+                    let last = this.buf.lines().len() - 1;
+                    let below = this
+                        .layouts
+                        .borrow()
+                        .get(&last)
+                        .is_some_and(|(b, _)| ev.position.y >= b.bottom());
+                    if below {
+                        this.buf.move_cursor(Move::Bottom, ev.modifiers.shift);
+                    }
+                    cx.notify();
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.selecting = false),
@@ -404,5 +430,64 @@ impl Render for Editor {
                 .flex_1()
                 .min_h(px(0.)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
+
+    /// The editor in a sized column, as on the Config tab.
+    struct Host(Entity<Editor>);
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .w(px(600.))
+                .h(px(400.))
+                .child(self.0.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn clicks_past_a_lines_end_or_below_the_text(cx: &mut TestAppContext) {
+        let (host, cx) = cx.add_window_view(|_, cx| Host(cx.new(|cx| Editor::new(cx, false))));
+        let editor = host.read_with(cx, |h, _| h.0.clone());
+        editor.update(cx, |e, cx| e.set_text("ab\n\nlonger line", cx));
+        cx.run_until_parked();
+        let row = |cx: &mut VisualTestContext, i: usize| {
+            editor.read_with(cx, |e, _| e.layouts.borrow().get(&i).expect("painted").0)
+        };
+        let click = |cx: &mut VisualTestContext, x: Pixels, y: Pixels, shift: bool| {
+            let m = Modifiers {
+                shift,
+                ..Default::default()
+            };
+            cx.simulate_mouse_down(point(x, y), MouseButton::Left, m);
+            cx.simulate_mouse_up(point(x, y), MouseButton::Left, m);
+            cx.run_until_parked();
+        };
+        let cursor = |cx: &mut VisualTestContext| editor.read_with(cx, |e, _| e.buf.cursor());
+        // Far right of the empty line and of the short one.
+        let (r0, r1, r2) = (row(cx, 0), row(cx, 1), row(cx, 2));
+        // Near the editor's right edge, well past the longest line's end.
+        let right = r2.right() - px(5.);
+        assert!(right > r2.left() + px(200.));
+        click(cx, right, r1.center().y, false);
+        assert_eq!(cursor(cx), Pos::new(1, 0));
+        click(cx, right, r0.center().y, true);
+        assert_eq!(cursor(cx), Pos::new(0, 2));
+        assert_eq!(
+            editor
+                .read_with(cx, |e, _| e.buf.selected_text())
+                .as_deref(),
+            Some("\n")
+        );
+        // Below the last line: the end of the text.
+        click(cx, px(40.), r2.bottom() + px(40.), false);
+        assert_eq!(cursor(cx), Pos::new(2, 11));
     }
 }
