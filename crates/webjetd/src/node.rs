@@ -169,11 +169,15 @@ impl Hop {
     }
 
     /// Queue a relay frame; returns false when the hop is congested/closed.
-    pub fn send_relay(&self, flow: u64, frame: Vec<u8>) -> bool {
-        let Some(frame) = hop::encode_record(rec::RELAY, &frame) else {
+    /// `record` is the frame after [`hop::RECORD_HEADER`] bytes of room for
+    /// the record header, which is written there: the frame isn't copied
+    /// again on its way to the socket.
+    pub fn send_relay(&self, flow: u64, record: Vec<u8>) -> bool {
+        let mut frame = record;
+        if !hop::seal_record(rec::RELAY, &mut frame) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return false;
-        };
+        }
         match self.tx.try_send(Out::Relay { flow, frame }) {
             Ok(()) => true,
             Err(_) => {
@@ -1215,12 +1219,14 @@ async fn writer(
 async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
     loop {
         let res = tokio::select! {
-            r = hop::read_record(&mut r) => r,
+            r = hop::read_record_buf(&mut r) => r,
             _ = tokio::time::sleep(HOP_DEAD) => {
                 if hop.last_rx.lock().elapsed() > HOP_DEAD { break } else { continue }
             }
         };
-        let (ty, payload) = match res {
+        // The whole record, header included: a relay frame passed on reuses
+        // the buffer (`circuit::on_relay_record`).
+        let (ty, record) = match res {
             Ok(x) => x,
             Err(_) => break,
         };
@@ -1229,31 +1235,34 @@ async fn reader(n: Arc<Node>, hop: Arc<Hop>, mut r: ReadHalf<BoxIo>) {
         }
         *hop.last_rx.lock() = Instant::now();
         hop.rx_bytes
-            .fetch_add(payload.len() as u64 + 4, Ordering::Relaxed);
-        let (ty, payload) = if ty == rec::CONTROL_ZSTD {
-            match crate::compression::control_payload(&n, &payload) {
-                Some(p) => (rec::CONTROL, p),
+            .fetch_add(record.len() as u64, Ordering::Relaxed);
+        let payload = &record[hop::RECORD_HEADER..];
+        let (ty, control) = if ty == rec::CONTROL_ZSTD {
+            match crate::compression::control_payload(&n, payload) {
+                Some(p) => (rec::CONTROL, Some(p)),
                 None => {
                     tracing::debug!(peer = %n.name_of(&hop.peer), "bad compressed control record");
                     continue;
                 }
             }
         } else {
-            (ty, payload)
+            (ty, None)
         };
         match ty {
-            rec::CONTROL => match wp::HopControl::decode_bytes(&payload) {
-                Ok(c) => {
-                    if let Some(m) = c.msg
-                        && let Err(e) = handle_control(&n, &hop, m).await
-                    {
-                        tracing::debug!(peer = %n.name_of(&hop.peer), "control message: {e}");
+            rec::CONTROL => {
+                match wp::HopControl::decode_bytes(control.as_deref().unwrap_or(payload)) {
+                    Ok(c) => {
+                        if let Some(m) = c.msg
+                            && let Err(e) = handle_control(&n, &hop, m).await
+                        {
+                            tracing::debug!(peer = %n.name_of(&hop.peer), "control message: {e}");
+                        }
                     }
+                    Err(e) => tracing::debug!("bad control message: {e}"),
                 }
-                Err(e) => tracing::debug!("bad control message: {e}"),
-            },
+            }
             rec::RELAY if !hop.restricted => {
-                crate::circuit::on_relay_frame(&n, &hop, payload);
+                crate::circuit::on_relay_record(&n, &hop, record);
             }
             _ => {}
         }

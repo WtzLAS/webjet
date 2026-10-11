@@ -17,6 +17,7 @@ use webjet_core::crypto::{self, Bytes32, opt_k32};
 use webjet_core::frames::{self, DEFAULT_HOP_LIMIT};
 use webjet_core::routing::LinkStats;
 use webjet_core::types::{SKEW_SHORT_RECORD, now_ms};
+use webjet_net::hop;
 use webjet_proto::{self as wp, HopMsg, msg_type as mt};
 
 const OPEN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -217,7 +218,9 @@ impl LocalCircuit {
         let Some(hop) = n.best_hop(&self.next) else {
             return false;
         };
-        let mut f = Vec::with_capacity(frames::RELAY_HEADER + frame.len());
+        // Room for the record header first: the hop writes it in place.
+        let mut f = Vec::with_capacity(hop::RECORD_HEADER + frames::RELAY_HEADER + frame.len());
+        f.extend_from_slice(&[0; hop::RECORD_HEADER]);
         f.extend_from_slice(&frames::relay_header(out, DEFAULT_HOP_LIMIT, ecn));
         f.extend_from_slice(frame);
         self.acct.fwd.add(frame.len());
@@ -1042,8 +1045,20 @@ pub fn close_with_neighbor(n: &Arc<Node>, neighbor: &Bytes32) {
 
 // ---------------------------------------------------------------- frames
 
-pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
-    let Some((label, hop_limit, ecn, body)) = frames::parse_relay(&payload) else {
+/// A relay frame on its own (from a hop's unreliable lane, or a test).
+pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, frame: Vec<u8>) {
+    on_relay(n, hop, frame, 0);
+}
+
+/// A RELAY record as read from a hop's stream: the frame comes after the
+/// record header, whose room a transit frame reuses on its way out.
+pub fn on_relay_record(n: &Arc<Node>, hop: &Arc<Hop>, record: Vec<u8>) {
+    on_relay(n, hop, record, hop::RECORD_HEADER);
+}
+
+/// The relay frame in `buf[at..]`.
+fn on_relay(n: &Arc<Node>, hop: &Arc<Hop>, buf: Vec<u8>, at: usize) {
+    let Some((label, hop_limit, ecn, body)) = buf.get(at..).and_then(frames::parse_relay) else {
         return;
     };
     let key = (hop.peer, label);
@@ -1075,7 +1090,7 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
             if ecn == frames::ecn::CE {
                 c.acct.ecn_marked.fetch_add(1, Ordering::Relaxed);
             }
-            crate::e2e::on_frame(n, &c, payload, frames::RELAY_HEADER, ecn);
+            crate::e2e::on_frame(n, &c, buf, at + frames::RELAY_HEADER, ecn);
         }
         Err((out_n, out_l, forward, route)) => {
             let Some(out_l) = out_l else { return };
@@ -1098,9 +1113,14 @@ pub fn on_relay_frame(n: &Arc<Node>, hop: &Arc<Hop>, payload: Vec<u8>) {
                 }
                 return;
             };
-            // Same size header: rewrite it in place and pass the frame on.
-            let mut f = payload;
-            f[..frames::RELAY_HEADER].copy_from_slice(&frames::relay_header(
+            // Same size header: rewrite it in place and pass the frame on,
+            // in the buffer it came in, with room for the record header in
+            // front (a stream record has it already).
+            let mut f = buf;
+            if at != hop::RECORD_HEADER {
+                f.splice(..at, [0; hop::RECORD_HEADER]);
+            }
+            f[hop::RECORD_HEADER..][..frames::RELAY_HEADER].copy_from_slice(&frames::relay_header(
                 out_l,
                 hop_limit - 1,
                 ecn,

@@ -82,9 +82,33 @@ fn start_lane(
     started.then_some(lane)
 }
 
+/// Bytes of the record header: `type[1] || len[3]`.
+pub const RECORD_HEADER: usize = 4;
+
 pub async fn read_record<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8, Vec<u8>)> {
-    let mut h = [0u8; 4];
+    let mut h = [0u8; RECORD_HEADER];
     r.read_exact(&mut h).await?;
+    let len = record_len(&h)?;
+    let mut b = vec![0u8; len];
+    r.read_exact(&mut b).await?;
+    Ok((h[0], b))
+}
+
+/// [`read_record`], but the buffer holds the whole record, header included:
+/// the payload is `buf[RECORD_HEADER..]`. A relay frame read this way can
+/// be passed on with its header rewritten in place ([`seal_record`]),
+/// without copying it into a new buffer.
+pub async fn read_record_buf<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8, Vec<u8>)> {
+    let mut h = [0u8; RECORD_HEADER];
+    r.read_exact(&mut h).await?;
+    let len = record_len(&h)?;
+    let mut b = vec![0u8; RECORD_HEADER + len];
+    b[..RECORD_HEADER].copy_from_slice(&h);
+    r.read_exact(&mut b[RECORD_HEADER..]).await?;
+    Ok((h[0], b))
+}
+
+fn record_len(h: &[u8; RECORD_HEADER]) -> std::io::Result<usize> {
     let len = u32::from_be_bytes([0, h[1], h[2], h[3]]) as usize;
     if len > MAX_RECORD {
         return Err(std::io::Error::new(
@@ -92,9 +116,7 @@ pub async fn read_record<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<(u8
             "record too large",
         ));
     }
-    let mut b = vec![0u8; len];
-    r.read_exact(&mut b).await?;
-    Ok((h[0], b))
+    Ok(len)
 }
 
 /// A record as it goes on the wire: `type[1] || len[3] || payload`.
@@ -104,12 +126,26 @@ pub fn encode_record(ty: u8, payload: &[u8]) -> Option<Vec<u8>> {
     if payload.len() > MAX_RECORD {
         return None;
     }
-    let len = payload.len() as u32;
-    let mut v = Vec::with_capacity(4 + payload.len());
-    v.push(ty);
-    v.extend_from_slice(&len.to_be_bytes()[1..]);
+    let mut v = Vec::with_capacity(RECORD_HEADER + payload.len());
+    v.extend_from_slice(&[0; RECORD_HEADER]);
     v.extend_from_slice(payload);
-    Some(v)
+    seal_record(ty, &mut v).then_some(v)
+}
+
+/// Write the record header into the first [`RECORD_HEADER`] bytes of `buf`,
+/// for the payload after them: a record built in place, without a copy.
+/// False (`buf` untouched) when `buf` is shorter than the header or the
+/// payload is over [`MAX_RECORD`].
+pub fn seal_record(ty: u8, buf: &mut [u8]) -> bool {
+    let Some(len) = buf.len().checked_sub(RECORD_HEADER) else {
+        return false;
+    };
+    if len > MAX_RECORD {
+        return false;
+    }
+    buf[0] = ty;
+    buf[1..RECORD_HEADER].copy_from_slice(&(len as u32).to_be_bytes()[1..]);
+    true
 }
 
 pub async fn write_record<W: AsyncWrite + Unpin>(
@@ -489,6 +525,43 @@ mod tests {
         assert!(encode_record(rec::CONTROL, &vec![1; MAX_RECORD + 1]).is_none());
         // Past 16 MiB the length wouldn't fit: never mis-framed.
         assert!(encode_record(rec::RELAY, &vec![0; 1 << 24]).is_none());
+    }
+
+    #[test]
+    fn records_built_in_place_match_encoded_ones() {
+        let mut buf = vec![0, 0, 0, 0, 9, 8, 7];
+        assert!(seal_record(rec::RELAY, &mut buf));
+        assert_eq!(buf, encode_record(rec::RELAY, &[9, 8, 7]).unwrap());
+        // An empty payload, too short a buffer, too long a payload.
+        let mut empty = vec![0; RECORD_HEADER];
+        assert!(seal_record(rec::PAD, &mut empty));
+        assert_eq!(empty, [rec::PAD, 0, 0, 0]);
+        let mut short = vec![1, 2, 3];
+        assert!(!seal_record(rec::RELAY, &mut short));
+        assert_eq!(short, [1, 2, 3]);
+        let mut big = vec![0; RECORD_HEADER + MAX_RECORD + 1];
+        assert!(!seal_record(rec::RELAY, &mut big));
+        assert_eq!(big[0], 0);
+    }
+
+    #[tokio::test]
+    async fn a_record_read_whole_keeps_its_header() {
+        let mut wire = encode_record(rec::RELAY, b"frame").unwrap();
+        wire.extend(encode_record(rec::CONTROL, b"").unwrap());
+        let mut r = &wire[..];
+        let (ty, rec1) = read_record_buf(&mut r).await.unwrap();
+        assert_eq!(
+            (ty, &rec1[..]),
+            (
+                rec::RELAY,
+                &encode_record(rec::RELAY, b"frame").unwrap()[..]
+            )
+        );
+        let (ty, rec2) = read_record_buf(&mut r).await.unwrap();
+        assert_eq!((ty, rec2.len()), (rec::CONTROL, RECORD_HEADER));
+        let mut over = vec![rec::RELAY, 0x10, 0, 1];
+        over.extend([0; 8]);
+        assert!(read_record_buf(&mut &over[..]).await.is_err());
     }
 
     #[tokio::test]
