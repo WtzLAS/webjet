@@ -31,7 +31,7 @@ pub fn check_floor_raw(floor: u64) -> Result<(), String> {
 /// Offsets against relays and controllers (§18.6).
 pub fn check_clock(n: &Arc<Node>) {
     let offsets: Vec<i64> = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         n.hops
             .lock()
@@ -194,7 +194,7 @@ impl Alone {
 async fn check_alone(n: &Arc<Node>, alone: &mut Alone) {
     let connected = !n.hops.lock().is_empty();
     let others = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         s.view()
             .nodes
             .iter()

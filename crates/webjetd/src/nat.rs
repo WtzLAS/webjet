@@ -229,7 +229,12 @@ pub fn dialable(n: &Node, addr: &SocketAddr) -> bool {
         return false;
     }
     // Never into the overlay itself.
-    if n.store.read().overlay_pool.iter().any(|p| p.contains(&ip)) {
+    if n.store
+        .snapshot()
+        .overlay_pool
+        .iter()
+        .any(|p| p.contains(&ip))
+    {
         return false;
     }
     !via_tunnel(cfg, ip)

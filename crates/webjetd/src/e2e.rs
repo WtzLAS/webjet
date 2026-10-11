@@ -125,7 +125,7 @@ impl Sessions {
 
     fn get_or_create(&self, n: &Node, peer: &Bytes32) -> Option<Arc<Session>> {
         let key = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             if !s.node_trusted(peer) {
                 return None;
             }
@@ -181,7 +181,7 @@ impl tls::PeerTrust for E2eTrust {
     fn trusted(&self, key: &Bytes32) -> bool {
         self.0
             .upgrade()
-            .is_some_and(|n| n.store.read().trusted_by_key(key).is_some())
+            .is_some_and(|n| n.store.snapshot().trusted_by_key(key).is_some())
     }
 }
 
@@ -893,8 +893,8 @@ pub async fn run(n: Arc<Node>) {
         let now = Instant::now();
         for s in n.e2e.all() {
             // Lifecycle: the peer's key changed or it was tombstoned (§9.4.6).
-            let cur_key = n.store.read().view().nodes.get(&s.peer).map(|x| x.key);
-            let trusted = n.store.read().node_trusted(&s.peer);
+            let cur_key = n.store.snapshot().view().nodes.get(&s.peer).map(|x| x.key);
+            let trusted = n.store.snapshot().node_trusted(&s.peer);
             if cur_key != Some(s.peer_key) || !trusted {
                 n.e2e.remove(&s.peer);
                 continue;

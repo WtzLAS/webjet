@@ -87,7 +87,7 @@ fn wanted(n: &Node, dp: &Dataplane) -> Option<Want> {
     if !crate::multicast::on(n, dp) || dp.my_ip(false).is_none() {
         return None;
     }
-    let specs = n.store.read().view().capture_ports(&n.me);
+    let specs = n.store.snapshot().view().capture_ports(&n.me);
     let ports = CapturePorts::parse(&specs).ok()?;
     if ports.is_empty() {
         return None;

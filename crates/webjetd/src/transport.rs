@@ -30,7 +30,7 @@ pub fn priority(n: &Node, node: &Bytes32, t: Transport) -> u8 {
             return p;
         }
     }
-    n.store.read().view().priority(node, t)
+    n.store.snapshot().view().priority(node, t)
 }
 
 /// This node's priorities for its EndpointRecord.
@@ -160,7 +160,7 @@ impl Drop for HandshakeSlot<'_> {
 /// a tree change): the KCP rate ceiling and handshake limit, and whether
 /// this node retransmits unreliable-class frames (§17.5).
 pub fn apply_limits(n: &Node) {
-    let rt = n.store.read().view().retransmit(&n.me);
+    let rt = n.store.snapshot().view().retransmit(&n.me);
     if n.retransmit.swap(rt, std::sync::atomic::Ordering::Relaxed) != rt {
         tracing::info!(
             "KCP hops {} inner traffic",
@@ -570,7 +570,7 @@ pub fn nat_type(n: &Node) -> wp::NatType {
         .map(|h| (h.peer, h.remote, *h.observed.lock()))
         .collect();
     let relays: Vec<Bytes32> = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         hops.iter()
             .filter(|(p, _, _)| v.nodes.get(p).is_some_and(|x| x.relay))

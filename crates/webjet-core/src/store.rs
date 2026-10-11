@@ -13,6 +13,7 @@ use anyhow::{Result, anyhow, bail};
 use ipnet::IpNet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::Arc;
 use webjet_proto::{self as wp, Decodable, msg_type as mt};
 
 #[derive(Clone, Debug)]
@@ -122,6 +123,23 @@ pub struct View {
 }
 
 impl View {
+    /// Records are trusted only until the validity horizon (§6.16).
+    pub fn horizon_passed(&self, now: u64) -> bool {
+        self.valid_until == 0 || self.valid_until.saturating_add(SKEW_HEAD) < now
+    }
+
+    /// The node is trusted right now: valid record, no tombstone, owner
+    /// valid, validity horizon not passed (§9.2).
+    pub fn node_trusted(&self, id: &Bytes32) -> bool {
+        !self.horizon_passed(now_ms()) && self.nodes.get(id).is_some_and(|n| n.valid)
+    }
+
+    /// Resolve an identity key to a trusted node id.
+    pub fn trusted_by_key(&self, key: &Bytes32) -> Option<Bytes32> {
+        let id = *self.by_key.get(key)?;
+        self.node_trusted(&id).then_some(id)
+    }
+
     pub fn node(&self, id: &Bytes32) -> Option<&NodeInfo> {
         self.nodes.get(id)
     }
@@ -427,7 +445,7 @@ pub struct Store {
     pub high_water: u64,
     pub equivocation: Option<(Vec<u8>, Vec<u8>)>,
     pub trusted_floor: u64,
-    view: View,
+    view: Arc<View>,
     /// Bumped whenever anything changes; consumers use it to recompute caches.
     pub generation: u64,
 }
@@ -478,7 +496,7 @@ impl Store {
             high_water: 0,
             equivocation: None,
             trusted_floor: 0,
-            view: View::default(),
+            view: Arc::default(),
             generation: 0,
         };
         s.rebuild();
@@ -487,6 +505,12 @@ impl Store {
 
     pub fn view(&self) -> &View {
         &self.view
+    }
+
+    /// The view, shared: a new `Arc` only when the view is rebuilt, so
+    /// readers can hold it without the store (webjetd's published snapshot).
+    pub fn shared_view(&self) -> Arc<View> {
+        Arc::clone(&self.view)
     }
 
     pub fn head(&self) -> Option<&HeadEntry> {
@@ -953,19 +977,17 @@ impl Store {
 
     /// Records are trusted only until the validity horizon (§6.16).
     pub fn horizon_passed(&self, now: u64) -> bool {
-        self.view.valid_until == 0 || self.view.valid_until.saturating_add(SKEW_HEAD) < now
+        self.view.horizon_passed(now)
     }
 
-    /// The node is trusted right now: valid record, no tombstone, owner
-    /// valid, validity horizon not passed (§9.2).
+    /// The node is trusted right now (`View::node_trusted`).
     pub fn node_trusted(&self, id: &Bytes32) -> bool {
-        !self.horizon_passed(now_ms()) && self.view.nodes.get(id).is_some_and(|n| n.valid)
+        self.view.node_trusted(id)
     }
 
     /// Resolve an identity key to a trusted node id.
     pub fn trusted_by_key(&self, key: &Bytes32) -> Option<Bytes32> {
-        let id = *self.view.by_key.get(key)?;
-        self.node_trusted(&id).then_some(id)
+        self.view.trusted_by_key(key)
     }
 
     // ------------------------------------------------------------ derived view
@@ -984,13 +1006,13 @@ impl Store {
     }
 
     fn rebuild(&mut self) {
-        self.view = build_view(
+        self.view = Arc::new(build_view(
             &self.tree,
             &self.root,
             &self.certs,
             &self.offline_node_tombs,
             &self.offline_acct_tombs,
-        );
+        ));
         self.generation += 1;
     }
 

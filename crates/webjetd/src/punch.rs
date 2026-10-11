@@ -488,7 +488,7 @@ fn reject(n: &Node, peer: &Bytes32, addr: SocketAddr) {
 
 /// Dial `addr` over the opened mappings; returns whether a hop came up.
 async fn dial(n: Arc<Node>, peer: Bytes32, addr: SocketAddr, how: &'static str) -> bool {
-    let key = n.store.read().view().nodes.get(&peer).map(|x| x.key);
+    let key = n.store.snapshot().view().nodes.get(&peer).map(|x| x.key);
     let Some(key) = key else { return false };
     match n.dial(addr, Transport::KcpFecTls, vec![key]).await {
         Ok(_) => {

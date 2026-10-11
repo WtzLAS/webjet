@@ -364,7 +364,7 @@ impl Proxy {
             tracing::debug!(rule = %rule.name, "reverse proxy: refused {}: {why}", client.src);
         };
         let plausible = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             px::plausible_client(&client.src, &overlay_nets(s.view(), &s.overlay_pool))
         };
         if !plausible {
@@ -393,7 +393,7 @@ impl Proxy {
         packet::rewrite(&mut q, Some(src), Some((choice.addr, rule.target_port)));
         let Some(tp) = packet::parse(&q) else { return };
         let allowed = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let v = s.view();
             let Some(me) = v.nodes.get(&n.me).map(|x| v.subject(x)) else {
                 return;
@@ -498,7 +498,7 @@ impl Proxy {
             }
             Target::Nodes(sels) => {
                 let (ranked, addrs) = {
-                    let s = n.store.read();
+                    let s = n.store.snapshot();
                     let v = s.view();
                     let c = candidates(n, v, sels, v6);
                     let ranked = px::rank(&c, client);
@@ -800,7 +800,7 @@ impl Proxy {
         mine: bool,
         gateway: bool,
     ) -> Result<(String, bool), (String, String)> {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         let Some(info) = v.nodes.get(peer).filter(|x| x.valid) else {
             return Err((String::new(), "unknown ingress".into()));
@@ -1023,7 +1023,7 @@ impl Proxy {
                     "[proxy] accept_real_ip needs Linux with the tun interface".into(),
                 );
             } else if !self.real_ip_ready.load(Ordering::Relaxed) {
-                let pool = n.store.read().overlay_pool.clone();
+                let pool = n.store.snapshot().overlay_pool.clone();
                 if crate::platform::proxy_real_ip(&dp.dev_name, &pool) {
                     self.real_ip_ready.store(true, Ordering::Relaxed);
                     n.clear_alarm("proxy_real_ip");
@@ -1051,7 +1051,7 @@ impl Proxy {
         let mut warnings = Vec::new();
         let mut families: Vec<bool> = Vec::new();
         {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let v = s.view();
             let real_ip_of = |id: &Bytes32| -> Option<bool> {
                 features(n, id).map(|f| f.iter().any(|x| x == FEATURE_REAL_IP))
@@ -1189,7 +1189,7 @@ impl Proxy {
                 (*id, real)
             })
             .collect();
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         let Some(me) = v.nodes.get(&n.me).map(|x| v.subject(x)) else {
             return;

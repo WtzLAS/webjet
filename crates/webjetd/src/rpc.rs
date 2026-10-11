@@ -151,7 +151,7 @@ pub fn on_frame(n: &Arc<Node>, from: &Bytes32, payload: &[u8]) {
 
 /// Controllers this node knows of, nearest first (by hop availability).
 pub fn controllers(n: &Node) -> Vec<Bytes32> {
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let mut v: Vec<Bytes32> = s
         .view()
         .controllers

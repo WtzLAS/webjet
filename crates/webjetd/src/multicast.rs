@@ -80,7 +80,7 @@ pub(crate) fn outbound(dp: &Dataplane, n: &Arc<Node>, mut p: Vec<u8>, parsed: &P
     if parsed.flow.proto != PROTO_UDP || !on(n, dp) {
         return;
     }
-    let pools = n.store.read().overlay_pool.clone();
+    let pools = n.store.snapshot().overlay_pool.clone();
     let Some(kind) = mc::kind(&parsed.flow.dst, &pools) else {
         return;
     };
@@ -105,7 +105,7 @@ pub(crate) fn captured(dp: &Dataplane, n: &Arc<Node>, p: Vec<u8>, parsed: &Parse
     if parsed.flow.proto != PROTO_UDP || !on(n, dp) || !dp.is_mine(&parsed.flow.src) {
         return;
     }
-    let pools = n.store.read().overlay_pool.clone();
+    let pools = n.store.snapshot().overlay_pool.clone();
     let Some(kind) = mc::kind(&parsed.flow.dst, &pools) else {
         return;
     };
@@ -225,7 +225,7 @@ fn recipients(
     let mut out = Vec::new();
     let mut unknown = Vec::new();
     {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let vw = s.view();
         let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {
             return out;
@@ -312,7 +312,7 @@ fn deliver(dp: &Dataplane, n: &Arc<Node>, peer: &Bytes32, p: &mut [u8], now: Ins
         return false;
     }
     let (pools, verdict, my_addr) = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let vw = s.view();
         let (Some(pi), Some(me)) = (vw.nodes.get(peer), vw.nodes.get(&n.me)) else {
             return false;

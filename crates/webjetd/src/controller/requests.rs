@@ -73,7 +73,7 @@ impl Controller {
             let r = self.raft.lock();
             r.voters().contains(&from) || r.learners().contains(&from)
         };
-        let trusted = member || n.store.read().node_trusted(&from);
+        let trusted = member || n.store.snapshot().node_trusted(&from);
         if !trusted {
             return ack(false, Some("untrusted caller".into()));
         }
@@ -83,7 +83,7 @@ impl Controller {
                 if src != from || to != n.me {
                     return None;
                 }
-                let is_ctl = member || n.store.read().view().is_controller(&from);
+                let is_ctl = member || n.store.snapshot().view().is_controller(&from);
                 if !is_ctl {
                     return None;
                 }

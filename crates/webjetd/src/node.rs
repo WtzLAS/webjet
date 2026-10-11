@@ -3,6 +3,8 @@
 use crate::config::Config;
 use crate::state::{self, Paths};
 use anyhow::{Result, anyhow, bail};
+use arc_swap::ArcSwap;
+use ipnet::IpNet;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -14,7 +16,7 @@ use tokio::sync::mpsc;
 use webjet_core::crypto::{self, Bytes32, KeyPair, opt_k32};
 use webjet_core::queue::{HopQueue, Item};
 use webjet_core::routing::LinkStats;
-use webjet_core::store::Store;
+use webjet_core::store::{Store, View};
 use webjet_core::types::now_ms;
 use webjet_net::gate::SharedEpochs;
 use webjet_net::hop::{self, BoxIo, Established, rec};
@@ -225,17 +227,100 @@ impl Drop for DialSlot<'_> {
 /// The trust store behind a lock whose read side is recursive: many helpers
 /// read the store while a caller already holds a read guard, and a plain
 /// fair RwLock would deadlock as soon as a writer queues between the two.
-pub struct StoreLock(RwLock<Store>);
+///
+/// Readers that need only the derived view, the overlay pool or the
+/// generation use [`StoreLock::snapshot`] instead, which takes no lock: every
+/// write guard that changed the store republishes it when dropped (still
+/// under the lock, so snapshots appear in write order).
+pub struct StoreLock {
+    store: RwLock<Store>,
+    snapshot: ArcSwap<StoreSnapshot>,
+}
+
+/// What lock-free readers see of the store (`StoreLock::snapshot`).
+pub struct StoreSnapshot {
+    pub view: Arc<View>,
+    pub overlay_pool: Vec<IpNet>,
+    /// `Store::generation` this was taken at.
+    pub generation: u64,
+}
+
+impl StoreSnapshot {
+    fn of(s: &Store) -> Self {
+        StoreSnapshot {
+            view: s.shared_view(),
+            overlay_pool: s.overlay_pool.clone(),
+            generation: s.generation,
+        }
+    }
+
+    pub fn view(&self) -> &View {
+        &self.view
+    }
+
+    pub fn node_trusted(&self, id: &Bytes32) -> bool {
+        self.view.node_trusted(id)
+    }
+
+    pub fn trusted_by_key(&self, key: &Bytes32) -> Option<Bytes32> {
+        self.view.trusted_by_key(key)
+    }
+}
+
+/// A write guard on the store that republishes the snapshot on drop when
+/// the store's generation moved.
+pub struct StoreWrite<'a> {
+    guard: parking_lot::RwLockWriteGuard<'a, Store>,
+    snapshot: &'a ArcSwap<StoreSnapshot>,
+}
+
+impl std::ops::Deref for StoreWrite<'_> {
+    type Target = Store;
+    fn deref(&self) -> &Store {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for StoreWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Store {
+        &mut self.guard
+    }
+}
+
+impl Drop for StoreWrite<'_> {
+    fn drop(&mut self) {
+        // `Store::generation` moves on every change, view rebuilds included.
+        if self.snapshot.load().generation != self.guard.generation {
+            self.snapshot
+                .store(Arc::new(StoreSnapshot::of(&self.guard)));
+        }
+    }
+}
 
 impl StoreLock {
     pub fn new(s: Store) -> Self {
-        StoreLock(RwLock::new(s))
+        StoreLock {
+            snapshot: ArcSwap::from_pointee(StoreSnapshot::of(&s)),
+            store: RwLock::new(s),
+        }
     }
     pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, Store> {
-        self.0.read_recursive()
+        self.store.read_recursive()
     }
-    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Store> {
-        self.0.write()
+    pub fn write(&self) -> StoreWrite<'_> {
+        StoreWrite {
+            guard: self.store.write(),
+            snapshot: &self.snapshot,
+        }
+    }
+    /// The view, overlay pool and generation as of the last write, without
+    /// taking the lock (for the data path and other view-only readers).
+    /// Keep the guard short-lived; use `snapshot_arc` to hold it longer.
+    pub fn snapshot(&self) -> arc_swap::Guard<Arc<StoreSnapshot>> {
+        self.snapshot.load()
+    }
+    pub fn snapshot_arc(&self) -> Arc<StoreSnapshot> {
+        self.snapshot.load_full()
     }
 }
 
@@ -344,7 +429,7 @@ impl PeerTrust for HopTrust {
         let Some(n) = self.0.upgrade() else {
             return false;
         };
-        let s = n.store.read();
+        let s = n.store.snapshot();
         if s.trusted_by_key(key).is_some() {
             return true;
         }
@@ -553,7 +638,7 @@ impl Node {
         outbound: bool,
     ) -> Result<Arc<Hop>> {
         let peer = {
-            let s = self.store.read();
+            let s = self.store.snapshot();
             let v = s.view();
             let id = *v
                 .by_key
@@ -718,7 +803,7 @@ impl Node {
     /// hops to relays and controllers are kept.
     pub fn enforce_revocations(self: &Arc<Self>) {
         let dead: Vec<Arc<Hop>> = {
-            let s = self.store.read();
+            let s = self.store.snapshot();
             let v = s.view();
             self.hops
                 .lock()
@@ -1508,6 +1593,33 @@ mod hop_tests {
         });
         w.join().unwrap();
         drop(saving);
+    }
+
+    /// The lock-free snapshot follows every write that changed the store,
+    /// and a reader's snapshot stays as it was while the store moves on.
+    #[test]
+    fn snapshot_follows_store_writes() {
+        use crate::testnode::{self, Cluster};
+        let mut c = Cluster::new();
+        let (me, kp) = c.data_node("me", "10.7.0.2", &[]);
+        let (n, _d) = testnode::node(&mut c, me, kp);
+        let held = n.store.snapshot_arc();
+        assert_eq!(held.generation, n.store.read().generation);
+        assert!(held.node_trusted(&me));
+        assert!(held.view().by_name.contains_key("me"));
+        assert_eq!(held.overlay_pool, n.store.read().overlay_pool);
+
+        // A write that changes nothing publishes nothing new.
+        drop(n.store.write());
+        assert!(Arc::ptr_eq(&held, &n.store.snapshot_arc()));
+
+        let (later, _) = c.data_node("later", "10.7.0.3", &[]);
+        testnode::sync(&mut c, &n);
+        let now = n.store.snapshot();
+        assert_eq!(now.generation, n.store.read().generation);
+        assert!(std::ptr::eq(now.view(), n.store.read().view()));
+        assert!(now.node_trusted(&later));
+        assert!(!held.view().by_name.contains_key("later"));
     }
 
     #[tokio::test]

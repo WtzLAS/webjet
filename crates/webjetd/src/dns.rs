@@ -65,7 +65,7 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
     // This node's own records and zones come first, then the network's
     // (§6.19).
     let (suffix, records, forwards) = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         (
             v.suffix(),
@@ -88,7 +88,7 @@ pub async fn answer(n: &Arc<Node>, q: &Message) -> Message {
     if qtype == RecordType::PTR
         && let Some(ip) = ptr_to_ip(&name)
     {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         if let Some(id) = s.view().node_by_ip(&ip)
             && let Some(info) = s.view().nodes.get(&id)
             && let Ok(target) = Name::from_ascii(format!("{}.{suffix}.", info.name))
@@ -131,7 +131,7 @@ fn name_exists(n: &Node, name: &str, suffix: &str, records: &[wp::DnsRecord]) ->
 fn node_by_magic(n: &Node, name: &str, suffix: &str) -> Option<Vec<IpAddr>> {
     let lname = lower(name);
     let host = lname.strip_suffix(&format!(".{}", lower(suffix)))?;
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let id = s.view().by_name.get(host)?;
     let info = s.view().nodes.get(id)?;
     if !info.valid {
@@ -142,7 +142,7 @@ fn node_by_magic(n: &Node, name: &str, suffix: &str) -> Option<Vec<IpAddr>> {
 
 fn node_ref_ips(n: &Node, value: &str) -> Option<(String, Vec<IpAddr>)> {
     let r = value.strip_prefix("node:")?;
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     let id = match webjet_core::crypto::parse_key_b64(r) {
         Some(k) => *v.by_key.get(&k)?,

@@ -280,7 +280,7 @@ impl Dataplane {
         // never enter the overlay. The pool's directed broadcast looks like
         // unicast but isn't.
         if !packet::is_unicast(&dst)
-            || webjet_core::multicast::is_pool_broadcast(&dst, &n.store.read().overlay_pool)
+            || webjet_core::multicast::is_pool_broadcast(&dst, &n.store.snapshot().overlay_pool)
         {
             n.metrics.tun_in(p.len());
             crate::multicast::outbound(self, &n, p, &parsed);
@@ -299,7 +299,7 @@ impl Dataplane {
                 .map(|(g, _)| *g)
                 .find(|g| g.lan.contains(&src));
             let Some(g) = grant else { return };
-            let Some(peer) = n.store.read().view().node_by_ip(&dst) else {
+            let Some(peer) = n.store.snapshot().view().node_by_ip(&dst) else {
                 return;
             };
             if g.mapped() {
@@ -343,7 +343,7 @@ impl Dataplane {
             Ct::Tracked | Ct::RelatedError => {}
             Ct::New | Ct::Invalid => {
                 let verdict = {
-                    let s = n.store.read();
+                    let s = n.store.snapshot();
                     let vw = s.view();
                     let Some(me) = vw.nodes.get(&n.me).map(|x| vw.subject(x)) else {
                         return;
@@ -394,7 +394,7 @@ impl Dataplane {
 
     /// The node or serving gateway for a destination address.
     pub(crate) fn route(&self, n: &Arc<Node>, dst: &IpAddr) -> Option<(Bytes32, bool)> {
-        let view_node = n.store.read().view().node_by_ip(dst);
+        let view_node = n.store.snapshot().view().node_by_ip(dst);
         if let Some(id) = view_node {
             return Some((id, true));
         }
@@ -447,7 +447,7 @@ impl Dataplane {
         let mut best: Option<(u8, IpNet, Vec<Bytes32>)> = None;
         let mut unknown: Vec<Bytes32> = Vec::new();
         {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let v = s.view();
             let recs = n.records.lock();
             for (id, info) in &v.nodes {
@@ -536,7 +536,7 @@ impl Dataplane {
         // Cryptokey routing (§9.5). The peer's policy subject is built only
         // for a new flow (below): it copies names and tags.
         let src_ok = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let Some(info) = s.view().nodes.get(peer) else {
                 return;
             };
@@ -591,7 +591,7 @@ impl Dataplane {
             Ct::Invalid => return,
             Ct::New => {
                 let verdict = {
-                    let s = n.store.read();
+                    let s = n.store.snapshot();
                     let vw = s.view();
                     let Some(peer_subject) = vw.nodes.get(peer).map(|x| vw.subject(x)) else {
                         return;
@@ -678,7 +678,7 @@ impl Dataplane {
             return;
         }
         let Some(n) = self.node() else { return };
-        let generation = n.store.read().generation;
+        let generation = n.store.snapshot().generation;
         if self.applied_gen.swap(generation, Ordering::SeqCst) == generation {
             return;
         }
@@ -686,7 +686,7 @@ impl Dataplane {
         let apply = ct_limits(&n);
         apply(&mut self.conntrack.lock());
         let (my_ips, grants, pool, resolver, suffix, zones) = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let v = s.view();
             let me = v.nodes.get(&n.me);
             let resolver: Vec<IpAddr> = v.resolver_ips(&s.overlay_pool);
@@ -718,7 +718,7 @@ impl Dataplane {
         *self.resolver.write() = resolver.clone();
         // Sticky gateway choices for prefixes no node publishes any more.
         {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let published: HashSet<IpNet> = s
                 .view()
                 .nodes
@@ -756,7 +756,7 @@ impl Dataplane {
         // Routes: the overlay pool and every published prefix.
         if self.tun_tx.is_some() {
             let mut want: Vec<IpNet> = pool;
-            let s = n.store.read();
+            let s = n.store.snapshot();
             for info in s.view().nodes.values() {
                 if info.id != n.me && info.valid {
                     want.extend(info.routes.iter().map(|g| g.published));
@@ -806,7 +806,7 @@ impl Dataplane {
             return;
         }
         let dropped = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let vw = s.view();
             let me = vw.nodes.get(&n.me).map(|x| vw.subject(x));
             let mut ct = self.conntrack.lock();

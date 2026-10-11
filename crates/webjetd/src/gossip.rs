@@ -81,7 +81,7 @@ fn head_msg(n: &Node) -> Option<HopMsg> {
 /// The core: relays and controllers, which keep full state and a mesh of
 /// hops (§10.6). Without any relay every node is core.
 pub fn is_core(n: &Node, id: &Bytes32) -> bool {
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     !v.any_relay
         || v.nodes.get(id).is_some_and(|x| x.relay || x.control)
@@ -95,7 +95,7 @@ pub fn share_infra(n: &Arc<Node>) {
         return;
     }
     let items: Vec<Vec<u8>> = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         let recs = n.records.lock();
         recs.endpoints
@@ -132,7 +132,7 @@ pub fn on_hop_up(n: &Arc<Node>, hop: &Arc<Hop>) {
     let peer_core = is_core(n, &hop.peer);
     if !hop.restricted && (n.is_relay() || is_core(n, &n.me)) {
         let recs = n.records.lock();
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         for (id, (_, raw)) in &recs.lsas {
             if *id != n.me {
@@ -646,7 +646,7 @@ pub fn accept_record(n: &Arc<Node>, from: Option<&Arc<Hop>>, raw: &[u8]) -> Resu
         bail!("expired record");
     }
     {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let vw = s.view();
         let info = vw
             .nodes
@@ -989,7 +989,7 @@ fn renew_watch(n: &Arc<Node>) {
         return;
     }
     let (ids, relays): (Vec<Bytes32>, Vec<Arc<Hop>>) = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let v = s.view();
         let ids = v
             .nodes
@@ -1106,7 +1106,7 @@ pub fn publish_endpoint(n: &Arc<Node>, force: bool) {
 /// transport's quantized cost (§11.2).
 fn my_links(n: &Arc<Node>, relays_only: bool) -> Vec<(Bytes32, Transport, u16, u8)> {
     let peers = n.peers();
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     let mut out = Vec::new();
     for p in peers {
@@ -1239,7 +1239,7 @@ pub fn publish_attachment(n: &Arc<Node>) {
 /// Drop expired records and records of nodes that are no longer valid.
 pub fn expire_records(n: &Arc<Node>) {
     let now = now_ms();
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     let ok = |id: &Bytes32, exp: u64| {
         exp.saturating_add(SKEW_SHORT_RECORD) >= now && v.nodes.get(id).is_some_and(|x| x.valid)
@@ -1262,7 +1262,7 @@ pub fn graph(n: &Node) -> webjet_core::routing::Graph {
     use webjet_core::routing::{Graph, RelayInfo, link_cost};
     let now = now_ms();
     let recs = n.records.lock();
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     let mut g = Graph::default();
     for (id, (l, _)) in &recs.lsas {
@@ -1349,7 +1349,7 @@ pub async fn run(n: Arc<Node>) {
                 if let Ok(Event::HeadChanged) = e {
                     // Roles may have changed: republish and re-share.
                     let infra: Vec<Bytes32> = {
-                        let s = n.store.read();
+                        let s = n.store.snapshot();
                         let mut v: Vec<Bytes32> = s.view().nodes.values().filter(|x| x.valid && (x.relay || x.control)).map(|x| x.id).collect();
                         v.sort();
                         v
@@ -1508,7 +1508,7 @@ pub fn topology(n: &Node) -> serde_json::Value {
         ),
     );
     let mapping = *n.port_mapping.lock();
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     let nodes: Vec<serde_json::Value> = v
         .nodes

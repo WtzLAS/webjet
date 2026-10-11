@@ -329,7 +329,7 @@ pub async fn run(cfg: Config) -> Result<()> {
 /// `control` role, or a valid certificate makes it a controller (records
 /// from before `control` was a role).
 fn control_granted(n: &Node) -> bool {
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     v.nodes
         .get(&n.me)
@@ -427,7 +427,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
         }
     }
     {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let enrolled = s.view().nodes.contains_key(&me);
         if !enrolled && !bootstrap {
             bail!(
@@ -560,7 +560,7 @@ async fn start_dataplane_when_ready(n: Arc<Node>) {
 /// Whether this node is a seed: named in the network's seed list or in any
 /// node's own seeds (§10.7.3, §6.19).
 fn is_seed(n: &Node) -> bool {
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     let my_name = v
         .nodes
@@ -584,7 +584,7 @@ fn is_seed(n: &Node) -> bool {
 /// Keys of all valid relays and controllers: acceptable when dialing an
 /// address whose owner isn't known in advance.
 fn infra_keys(n: &Node) -> Vec<Bytes32> {
-    let s = n.store.read();
+    let s = n.store.snapshot();
     s.view()
         .nodes
         .values()
@@ -599,7 +599,7 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
     let mut out = Vec::new();
     let mut hints: Vec<SeedHint> = Vec::new();
     {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         // This node's own seeds first, then the network's (§6.19).
         for e in s.view().seeds_for(&n.me) {
             for a in e.addrs.iter().flatten() {
@@ -626,7 +626,7 @@ async fn seed_addrs(n: &Node) -> Vec<(SocketAddr, Transport, Vec<Bytes32>)> {
         };
         let keys = match &h.node {
             Some(r) => {
-                let s = n.store.read();
+                let s = n.store.snapshot();
                 let v = s.view();
                 let r = r.strip_prefix("node:").unwrap_or(r);
                 let id = crypto::parse_key_b64(r)
@@ -788,7 +788,7 @@ async fn connections(n: Arc<Node>) {
             }
         }
         let (me_relay, me_ctl, relays, controllers) = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let v = s.view();
             let relays: Vec<Bytes32> = v
                 .nodes
@@ -895,7 +895,7 @@ async fn connections(n: Arc<Node>) {
         }
         // Cache relay endpoints for the next start.
         let cache = {
-            let s = n.store.read();
+            let s = n.store.snapshot();
             let v = s.view();
             let recs = n.records.lock();
             state::RelayCache {

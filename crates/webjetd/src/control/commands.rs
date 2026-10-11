@@ -68,14 +68,14 @@ pub async fn run(n: &Arc<Node>, req: Request) -> Result<Value> {
 /// The state admins see: a controller's own state machine (which is ahead
 /// of signed heads, and the only state before the first certificate), or
 /// the node's verified tree.
-fn admin_view(n: &Node) -> webjet_core::store::View {
+fn admin_view(n: &Node) -> std::sync::Arc<webjet_core::store::View> {
     if let Some(c) = n.controller.get() {
         let m = c.machine.lock();
         if m.genesis.is_some() {
-            return n.store.read().view_of(&m.tree);
+            return std::sync::Arc::new(n.store.read().view_of(&m.tree));
         }
     }
-    n.store.read().view().clone()
+    n.store.snapshot().view.clone()
 }
 
 /// An account's leaf: its signed AccountRecord.
@@ -264,7 +264,7 @@ fn accounts(n: &Node) -> Value {
 /// Current singleton configs, for `webjetctl network config show`.
 fn tree(n: &Node) -> Value {
     let v = &admin_view(n);
-    let s = n.store.read();
+    let s = n.store.snapshot();
     json!({
         "network_version": v.network_version,
         "policy_version": v.policy_version,
@@ -286,7 +286,7 @@ fn tree(n: &Node) -> Value {
 fn node_config(n: &Node, id: Bytes32) -> Result<Value> {
     let view = admin_view(n);
     let info = view.nodes.get(&id).ok_or_else(|| anyhow!("unknown node"))?;
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let priorities: serde_json::Map<String, Value> = wp::Transport::ALL
         .iter()
         .map(|t| (t.name().to_string(), json!(view.priority(&id, *t))))

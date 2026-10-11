@@ -316,7 +316,7 @@ pub fn build_report(n: &Arc<Node>) -> Vec<u8> {
         taken_at: now,
         routes: Some(routes),
         links: Some(links),
-        policy_version: n.store.read().view().policy_version,
+        policy_version: n.store.snapshot().view().policy_version,
         rule_hits: Some(rule_hits),
         circuits_refused: Some(refused),
         limit_hits: Some(vec![
@@ -415,7 +415,7 @@ pub fn local_openmetrics(n: &Arc<Node>) -> String {
     let Ok(rep) = v.decode::<wp::MetricReport>() else {
         return "# EOF\n".into();
     };
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let mut e = crate::exposition::Exposition::default();
     e.report(&rep, &crate::exposition::ViewNames(s.view()), !n.is_relay());
     e.render()
@@ -426,7 +426,7 @@ pub fn local_openmetrics(n: &Arc<Node>) -> String {
 /// for a limit that is unset by default (relay capacity, rate ceiling) and
 /// set nowhere.
 pub fn limit_opt(n: &Node, name: &str) -> Option<u64> {
-    n.store.read().view().limit(&n.me, name)
+    n.store.snapshot().view().limit(&n.me, name)
 }
 
 /// A limit with a built-in default; never below 1.

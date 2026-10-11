@@ -26,7 +26,7 @@ pub fn mine(n: &Node) -> Settings {
 
 /// Re-read the settings from the tree; true when they changed.
 pub fn refresh(n: &Node) -> bool {
-    let s = n.store.read().view().compression(&n.me);
+    let s = n.store.snapshot().view().compression(&n.me);
     let c = &n.metrics.compression;
     let old_control = c.control_algo.swap(s.control, Ordering::Relaxed);
     let old_data = c.data_algo.swap(s.data, Ordering::Relaxed);

@@ -124,8 +124,14 @@ impl Controller {
         };
         // Certificates aren't replicated state: the leader's own view
         // decides who is a valid controller.
-        let controllers: BTreeSet<Bytes32> =
-            n.store.read().view().controllers.keys().copied().collect();
+        let controllers: BTreeSet<Bytes32> = n
+            .store
+            .snapshot()
+            .view()
+            .controllers
+            .keys()
+            .copied()
+            .collect();
         let peers: BTreeMap<Bytes32, Peer> = {
             let r = self.raft.lock();
             if r.role != Role::Leader || r.conf_change_pending() {

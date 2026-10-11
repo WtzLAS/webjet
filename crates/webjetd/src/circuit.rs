@@ -471,7 +471,7 @@ impl Table {
 
 /// Pair reachability with the infrastructure exception (§14.4).
 pub fn may_talk(n: &Node, a: &Bytes32, b: &Bytes32) -> bool {
-    let s = n.store.read();
+    let s = n.store.snapshot();
     let v = s.view();
     if v.is_controller(a) || v.is_controller(b) {
         return true;
@@ -629,7 +629,7 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
     let nonce = s.nonce.map(|x| x.to_bytes()).unwrap_or_default();
     // Signature by the source's current key; source and destination trusted.
     let check = || -> std::result::Result<(), &'static str> {
-        let st = n.store.read();
+        let st = n.store.snapshot();
         let vw = st.view();
         if !st.node_trusted(&src) || vw.nodes.get(&src).map(|x| x.key) != Some(v.signer) {
             return Err("source");
@@ -696,7 +696,7 @@ pub async fn on_open(n: &Arc<Node>, hop: &Arc<Hop>, o: wp::CircuitOpen) -> Resul
         return fail("not_relay");
     }
     {
-        let st = n.store.read();
+        let st = n.store.snapshot();
         let vw = st.view();
         let next_ok = if next == dst {
             st.node_trusted(&next)
@@ -1161,7 +1161,7 @@ pub fn sweep(n: &Arc<Node>) {
     }
     // Revoked sources or destinations lose their circuits (§10.5).
     let untrusted: HashSet<Bytes32> = {
-        let st = n.store.read();
+        let st = n.store.snapshot();
         let t = n.circuits.lock();
         t.routes
             .values()

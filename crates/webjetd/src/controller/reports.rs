@@ -25,7 +25,7 @@ impl Controller {
             return;
         };
         let origin = opt_k32(&rep.node_id);
-        if n.store.read().view().nodes.get(&origin).map(|x| x.key) != Some(v.signer) {
+        if n.store.snapshot().view().nodes.get(&origin).map(|x| x.key) != Some(v.signer) {
             return;
         }
         let from_controller = from != origin;
@@ -92,7 +92,7 @@ impl Controller {
             v.sort_by_key(|a| a.0);
             v
         };
-        let s = n.store.read();
+        let s = n.store.snapshot();
         let names = crate::exposition::ViewNames(s.view());
         let mut e = crate::exposition::Exposition::default();
         for (_, report) in &recent {

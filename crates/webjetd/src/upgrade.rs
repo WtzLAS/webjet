@@ -196,7 +196,7 @@ pub async fn on_rpc(n: &Arc<Node>, from: Bytes32, body: RpcBody) -> Option<RpcBo
         RpcBody::UpgradeNode(u) => {
             let raw = u.request.as_deref().unwrap_or_default();
             let checked = {
-                let s = n.store.read();
+                let s = n.store.snapshot();
                 check_signed(s.view(), raw, now_ms())
             };
             match checked {
@@ -210,7 +210,7 @@ pub async fn on_rpc(n: &Arc<Node>, from: Bytes32, body: RpcBody) -> Option<RpcBo
     // Only nodes of the network ask (the request's signature is what
     // authorizes it; this keeps strangers from probing).
     let trusted = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         s.node_trusted(&from) || s.view().is_controller(&from)
     };
     if !trusted {
@@ -224,7 +224,7 @@ pub async fn on_rpc(n: &Arc<Node>, from: Bytes32, body: RpcBody) -> Option<RpcBo
     }
     // Only controllers pass requests on, and only from the node that asked
     // to the one named: never further.
-    if !n.is_controller() || n.store.read().view().is_controller(&from) {
+    if !n.is_controller() || n.store.snapshot().view().is_controller(&from) {
         return Some(reply(Err(anyhow!(
             "{} is not the node this is for",
             n.name_of(&n.me)
@@ -275,7 +275,7 @@ async fn route(n: &Arc<Node>, target: Bytes32, body: RpcBody) -> Result<Value> {
 /// The control command `upgrade`: an admin's signed request for any node.
 pub async fn request(n: &Arc<Node>, raw: Vec<u8>) -> Result<Value> {
     let req = {
-        let s = n.store.read();
+        let s = n.store.snapshot();
         check_signed(s.view(), &raw, now_ms())?
     };
     let target = crypto::opt_k32(&req.node_id);
