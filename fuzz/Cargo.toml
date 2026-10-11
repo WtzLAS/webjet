@@ -108,3 +108,27 @@ required-features = ["libfuzzer"]
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sntp"
+path = "fuzz_targets/sntp.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "multicast_report"
+path = "fuzz_targets/multicast_report.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "padding"
+path = "fuzz_targets/padding.rs"
+required-features = ["libfuzzer"]
+test = false
+doc = false
+bench = false

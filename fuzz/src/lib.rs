@@ -10,7 +10,7 @@
 pub mod seeds;
 
 use std::collections::BTreeMap;
-use webjet_core::{compress, crypto, frames, leaf, packet};
+use webjet_core::{compress, crypto, frames, leaf, multicast, packet, padding, sntp};
 use webjet_net::{fec, gate, hop, kcp};
 use webjet_proto::{self as wp, Decodable, Encodable};
 
@@ -314,7 +314,10 @@ pub fn hop_record(data: &[u8]) {
         let (ty, payload) = split(data);
         let ty = ty.first().copied().unwrap_or(hop::rec::CONTROL);
         let Some(enc) = hop::encode_record(ty, payload) else {
-            assert!(payload.len() > hop::MAX_RECORD, "a record within the limit encodes");
+            assert!(
+                payload.len() > hop::MAX_RECORD,
+                "a record within the limit encodes"
+            );
             return;
         };
         let mut r = enc.as_slice();
@@ -344,6 +347,90 @@ pub fn control_request(data: &[u8]) {
     assert_eq!(back, req, "request round trip");
 }
 
+/// SNTP answers (§21.2): UDP datagrams from any server we ask, or anyone
+/// spoofing one. Parsing never panics, and a well-formed answer from a
+/// server whose clock is `d` ms ahead, with no network delay, gives an
+/// offset of exactly `-d`.
+pub fn sntp(data: &[u8]) {
+    // Times the clock can hold (until 2106, where NTP's era 1 ends).
+    const SPAN: u64 = 4_000_000_000_000;
+    let (head, resp) = split(data);
+    let num = |i: usize| {
+        let mut b = [0u8; 8];
+        for (j, x) in head.iter().skip(i).take(6).enumerate() {
+            b[2 + j] = *x;
+        }
+        u64::from_be_bytes(b) % SPAN
+    };
+    let (t1, server, t4) = (num(0), num(6), num(12));
+    let _ = sntp::parse(resp, t1, t4);
+    let mut answer = [0u8; 48];
+    answer[0] = 0x24; // version 4, mode 4 (server)
+    answer[1] = 2;
+    answer[24..32].copy_from_slice(&sntp::request(t1)[40..48]);
+    let stamp = sntp::request(server);
+    answer[32..40].copy_from_slice(&stamp[40..48]);
+    answer[40..48].copy_from_slice(&stamp[40..48]);
+    let got = sntp::parse(&answer, t1, t1);
+    // Both below SPAN, so no overflow.
+    let ahead = server as i64 - t1 as i64;
+    assert_eq!(got, Some(-ahead), "offset of a well-formed answer");
+    // A reply to another request is not taken.
+    if t4 != t1 {
+        assert_eq!(
+            sntp::parse(&answer, t4, t4),
+            None,
+            "answer to another request"
+        );
+    }
+}
+
+/// Multicast membership reports (§9.5.1), from any peer. What decodes
+/// encodes back to a report that decodes the same.
+pub fn multicast_report(data: &[u8]) {
+    let Some(r) = multicast::decode_report(data) else {
+        return;
+    };
+    let again = multicast::decode_report(&multicast::encode_report(&r));
+    assert_eq!(again.as_ref(), Some(&r), "report round trip");
+}
+
+/// Padding schemes (§9.7.4) from the TransportConfig: parsed by every
+/// node. A plan always carries the whole payload.
+pub fn padding(data: &[u8]) {
+    let (head, text) = split(data);
+    let text = String::from_utf8_lossy(text);
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    for l in &lines {
+        if let Ok((_, segs)) = padding::parse_line(l) {
+            for s in segs {
+                if let padding::Seg::Range(a, b) = s {
+                    assert!(a <= b && b <= 16384, "range out of bounds");
+                }
+            }
+        }
+    }
+    let stop = u32::from(head.first().copied().unwrap_or(8));
+    let wire = wp::PaddingScheme {
+        stop,
+        lines: Some(lines),
+    };
+    let Ok(scheme) = padding::Scheme::from_wire(&wire) else {
+        return;
+    };
+    let len = usize::from(webjet_core::bytes::be_u16(head, 1).unwrap_or(1200));
+    for pkt in 0..stop.min(16) {
+        if let Some(plan) = scheme.plan(pkt, len) {
+            assert_eq!(
+                plan.iter().map(|x| x.0).sum::<usize>(),
+                len,
+                "plan loses data"
+            );
+        }
+    }
+    assert!(scheme.plan(stop, len).is_none(), "plan past stop");
+}
+
 /// A fuzz target: panics on a bug.
 pub type Target = fn(&[u8]);
 
@@ -358,4 +445,7 @@ pub const TARGETS: &[(&str, Target)] = &[
     ("hop_record", hop_record),
     ("dns", dns),
     ("control_request", control_request),
+    ("sntp", sntp),
+    ("multicast_report", multicast_report),
+    ("padding", padding),
 ];

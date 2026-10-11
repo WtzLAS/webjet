@@ -201,6 +201,42 @@ pub fn for_target(name: &str) -> Vec<Vec<u8>> {
         .iter()
         .map(|s| s.as_bytes().to_vec())
         .collect(),
+        "sntp" => {
+            // Times (6 bytes each: t1, the server's clock, t4), then an answer.
+            let t1: u64 = 1_750_000_000_000;
+            let mut head = Vec::new();
+            for t in [t1, t1 + 1500, t1 + 40] {
+                head.extend_from_slice(&t.to_be_bytes()[2..]);
+            }
+            let mut answer = webjet_core::sntp::request(t1 + 1500);
+            answer[0] = 0x24;
+            answer[1] = 2;
+            answer[24..32].copy_from_slice(&webjet_core::sntp::request(t1)[40..48]);
+            let stamp = answer[40..48].to_vec();
+            answer[32..40].copy_from_slice(&stamp);
+            let mut kiss = answer;
+            kiss[1] = 0;
+            vec![pair(&head, &answer), pair(&head, &kiss), pair(&head, &answer[..47])]
+        }
+        "multicast_report" => {
+            use webjet_core::multicast::{Report, encode_report};
+            vec![
+                encode_report(&Report::Any),
+                encode_report(&Report::Nothing),
+                encode_report(&Report::Groups(vec![
+                    std::net::IpAddr::from([239, 255, 255, 250]),
+                    std::net::IpAddr::from([0xff02, 0, 0, 0, 0, 0, 0, 0xfb]),
+                ])),
+            ]
+        }
+        "padding" => {
+            let lines = webjet_core::padding::DEFAULT_LINES.join("\n");
+            vec![
+                pair(&[8, 0x04, 0xb0], lines.as_bytes()),
+                pair(&[3, 0, 10], b"0=30-30\n1=100-400,c,500-1000\n2=0-0"),
+                pair(&[2, 0xff, 0xff], b"0=9-3\n1=c,c,1-16385"),
+            ]
+        }
         _ => Vec::new(),
     }
 }

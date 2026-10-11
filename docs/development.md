@@ -123,6 +123,9 @@ fuzz workspace on its own (newest versions).
 | `hop_record` | Hop record framing (TLS/AnyTLS/KCP hops), `CONTROL_ZSTD` payloads, HopControl |
 | `dns` | The local resolver: client queries and forwarded zones' answers (`dns::fuzzing`) |
 | `control_request` | Control-channel request lines (`control::Request`): parse, and parsed requests round-trip |
+| `sntp` | SNTP answers from time servers (`sntp::parse`); a well-formed answer gives the exact offset |
+| `multicast_report` | Multicast membership reports from peers (`multicast::decode_report`): decoded reports round-trip |
+| `padding` | Padding schemes from the TransportConfig (`padding::parse_line`, `Scheme::from_wire`): plans carry the whole payload |
 
 Two ways to run them:
 
