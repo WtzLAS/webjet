@@ -1,6 +1,6 @@
 #!/bin/sh
-# Check whether crates.io has a newer gpui, gpui_media or gpui_http_client
-# than the patched copies in vendor/ (vendor/README.md).
+# Check whether crates.io has a newer gpui, gpui_media, gpui_http_client or
+# reed-solomon-erasure than the patched copies in vendor/ (vendor/README.md).
 #
 #   scripts/gpui-vendor-check.sh           # exit 1 if a newer version exists
 #   scripts/gpui-vendor-check.sh --hook    # warn only, at most one lookup a day
@@ -11,7 +11,7 @@
 # without network. WEBJET_SKIP_GPUI_CHECK=1 skips it.
 set -eu
 
-CRATES="gpui gpui_media gpui_http_client"
+CRATES="gpui gpui_media gpui_http_client reed-solomon-erasure"
 INDEX=https://index.crates.io
 CACHE_SECS=86400
 
@@ -96,7 +96,7 @@ for c in $CRATES; do
 done
 
 [ -n "$report" ] || exit 0
-printf 'gpui-vendor-check: newer gpui on crates.io than the patched copies in vendor/:\n%s' "$report" >&2
+printf 'gpui-vendor-check: newer releases on crates.io than the patched copies in vendor/:\n%s' "$report" >&2
 echo "Update them as vendor/README.md describes (copy, redo the Webjet: changes, cargo update -p <crate>)." >&2
 [ $hook = 1 ] && exit 0
 exit 1

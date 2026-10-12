@@ -96,3 +96,50 @@ files don't matter to Webjet.
 To update it, copy the new version's `Cargo.toml`, `src/` and
 `LICENSE-APACHE` over this copy, set `default-features = false` again (it
 has a `Webjet:` comment) and `cargo update -p gpui_http_client`.
+
+## reed-solomon-erasure 6.0.0
+
+Upstream: <https://github.com/darrenldl/reed-solomon-erasure>, MIT, as
+published on crates.io (git a1ca49de5384445b68ade7d72f31f0379c199943).
+Copied: `build.rs`, `Cargo.toml`, `src/`, `simd_c/`, `LICENSE`,
+`README.md`, `CHANGELOG.md`.
+
+Change: with `simd-accel` (webjet-net turns it on) upstream compiles
+`simd_c/reedsolomon.c` once, for one CPU level picked at build time: on
+x86_64 `-march=haswell`, so a release build died with SIGILL at the first
+FEC group on CPUs without AVX2 (Celeron J1900/J4125/N5105, Pentium Silver:
+common in fanless OPNsense boxes); built for plain x86-64 instead, the C
+code (SSE2 only) is five times slower than the Rust fallback. It also left
+out every `target_env = "msvc"` target. The copy chooses at run time:
+
+- `build.rs` `compile_simd_c`: decides by `CARGO_CFG_TARGET_ARCH`/`_OS`
+  (the target, not the build machine). x86_64: compiles the C file twice,
+  with `-mssse3` and `-mavx2`, renaming its two exported functions with
+  `-D` to `reedsolomon_gal_mul{,_xor}_ssse3` / `_avx2`. aarch64: once
+  (NEON is always there; `RUST_REED_SOLOMON_ERASURE_ARCH` still adds a
+  `-march`). MSVC targets build it too when the compiler is clang-cl (cargo
+  xwin); MSVC's own `cl.exe` doesn't know the GCC vector extensions and
+  gets the Rust code. Sets `cfg(rse_simd)` plus `rse_simd_x86` or
+  `rse_simd_neon` when the C code was built.
+- `src/galois_8.rs`: `kernels()` picks AVX2, else SSSE3 (by
+  `std::is_x86_feature_detected!`, cached by std), else the Rust code;
+  `mul_slice`/`mul_slice_xor` call it and finish the tail in Rust as
+  before. `pub fn simd_level()` names the choice (webjetd logs it at start
+  and shows it as `fec_simd` in `webjetctl local status`). Test
+  `simd_kernels_match_the_rust_code` compares every kernel the CPU can run
+  with the Rust code for all 256 constants.
+- `src/lib.rs`: `extern crate std` on x86_64 with the C code, for the
+  feature detection (the crate is `no_std` without its `std` feature, which
+  Webjet leaves off).
+- `Cargo.toml`: the `[[bench]]` entry is removed (`benches/` isn't copied).
+
+Measured with 1280-byte shards, k = 10 data + 3 parity, encode /
+reconstruct: Xeon Platinum 8372HC Rust 0.98 / 0.91 GB/s, SSSE3 build
+(`x86-64-v2`) 4.3 / 3.1, AVX2 10.4 / 5.2; Apple M-series Rust 0.87 / 0.91,
+NEON 2.95 / 3.60. Checked under `qemu-x86_64 -cpu Nehalem|core2duo|qemu64`:
+SSSE3, SSSE3 and the Rust code are picked, and the crate's tests pass.
+
+To update: copy the files above from the new release over the vendored
+copy, redo the changes (every place has a `Webjet:` comment), then
+`cargo update -p reed-solomon-erasure`.
+

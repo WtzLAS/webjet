@@ -496,7 +496,11 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
         });
     }
     crate::transport::refresh_anytls(&n);
-    tracing::info!(node = %crypto::short(&me), "webjetd running");
+    tracing::info!(
+        node = %crypto::short(&me),
+        fec_simd = webjet_net::fec::simd().unwrap_or("none"),
+        "webjetd running"
+    );
     // Exit on a stop request, a fatal clock error (§18.6) or when a task the
     // agent can't run without ends (`tasks`); the service manager restarts
     // it in the last two cases.

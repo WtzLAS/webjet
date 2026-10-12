@@ -36,6 +36,11 @@ rand = "0.10"
 [workspace]
 members = ["."]
 
+# The main workspace's patched copies (vendor/README.md), so the fuzz
+# targets run the same FEC code as the programs.
+[patch.crates-io]
+reed-solomon-erasure = { path = "../vendor/reed-solomon-erasure" }
+
 [profile.release]
 debug = 1
 

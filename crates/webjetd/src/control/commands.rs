@@ -131,6 +131,7 @@ pub fn status(n: &Arc<Node>) -> Value {
         "controller": n.controller.get().map(|c| c.status()),
         "compression": compression_status(n),
         "retransmit": n.retransmit.load(Relaxed),
+        "fec_simd": webjet_net::fec::simd(),
         "uptime_s": n.started.elapsed().as_secs(),
         "version": env!("CARGO_PKG_VERSION"),
     })

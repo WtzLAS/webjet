@@ -47,8 +47,10 @@ ipnet = "2"
 clap = { version = "4", features = ["derive", "env"] }
 # No `std`: it only adds `std::error::Error` impls and swaps the decode
 # cache's spin mutex for parking_lot 0.11 (a second copy). Each codec is used
-# by one task, so the mutex never contends.
-reed-solomon-erasure = { version = "6", default-features = false }
+# by one task, so the mutex never contends. `simd-accel`: SIMD Galois-field
+# kernels (C), chosen at run time by the patched copy in vendor/ (AVX2, SSSE3
+# or the Rust code on x86_64; NEON on aarch64).
+reed-solomon-erasure = { version = "6", default-features = false, features = ["simd-accel"] }
 tun-rs = { version = "2.8", features = ["async_tokio"] }
 hickory-proto = "0.26"
 proptest = "1"
@@ -77,3 +79,4 @@ opt-level = 3
 gpui = { path = "vendor/gpui" }
 gpui_media = { path = "vendor/gpui_media" }
 gpui_http_client = { path = "vendor/gpui_http_client" }
+reed-solomon-erasure = { path = "vendor/reed-solomon-erasure" }

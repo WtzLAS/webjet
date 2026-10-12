@@ -82,16 +82,19 @@ It fails on:
 - a crate from anywhere but crates.io.
 
 An unmaintained crate that can't be replaced yet goes into `[advisories]
-ignore` with the reason (today: `instant` via reed-solomon-erasure, and
-crates pinned by gpui 0.2.2 in webjet-app). For a vulnerability, update the
+ignore` with the reason (today: crates pinned by gpui 0.2.2 in
+webjet-app). For a vulnerability, update the
 crate (`cargo update -p <crate>`) instead; ignore it only if the vulnerable
 code is unreachable, and say why. Duplicate versions are reported as
 warnings (`scripts/deny.sh bans` lists them). The workspace crates are
 `publish = false`, so path dependencies without a version are fine.
 
-gpui, gpui_media and gpui_http_client come from patched copies in `vendor/`
-(`[patch.crates-io]`; `vendor/README.md` says what changed and how to
-update them), so `cargo update` never moves them to a new release.
+gpui, gpui_media, gpui_http_client and reed-solomon-erasure come from
+patched copies in `vendor/` (`[patch.crates-io]`; `vendor/README.md` says
+what changed and how to update them), so `cargo update` never moves them to
+a new release. reed-solomon-erasure is patched to pick its SIMD kernels at
+run time (AVX2, SSSE3 or the portable code on x86_64), so one release build
+runs fast on new CPUs and still runs on old ones.
 gpui_http_client is patched only so that it no longer pulls in `xattr` 0.2,
 which needs the Linux constant `libc::ENOATTR` that libc 0.2.190 removed;
 `libc` can be updated freely.

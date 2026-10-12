@@ -22,10 +22,6 @@ all-features = true
 unmaintained = "all"
 yanked = "deny"
 ignore = [
-    # instant 0.1: reed-solomon-erasure 6.0.0 (the newest release, used by
-    # webjet-net's FEC) depends on parking_lot 0.11, which pulls it in. No
-    # code of ours calls it.
-    { id = "RUSTSEC-2024-0384", reason = "via reed-solomon-erasure 6 (latest) -> parking_lot 0.11" },
     # The rest come only from gpui 0.2.2 (webjet-app); gpui pins them and
     # there is no newer gpui on crates.io.
     { id = "RUSTSEC-2025-0052", reason = "async-std, via gpui 0.2.2 (webjet-app only)" },

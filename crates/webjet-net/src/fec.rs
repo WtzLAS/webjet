@@ -9,6 +9,13 @@
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use std::collections::{BTreeMap, HashMap};
 
+/// The SIMD instruction set the Reed–Solomon kernels use on this CPU
+/// (`"avx2"`, `"ssse3"`, `"neon"`), `None` for the portable code. Picked
+/// at run time (vendor/reed-solomon-erasure).
+pub fn simd() -> Option<&'static str> {
+    reed_solomon_erasure::galois_8::simd_level()
+}
+
 pub const HDR: usize = 9;
 pub const GROUP_DATA: usize = 8;
 /// Largest shard payload the decoder accepts: a KCP packet (`KCP_MTU`,
