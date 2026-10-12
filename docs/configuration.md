@@ -21,7 +21,7 @@ the step-by-step procedures.
 
 | | `webjetd.toml` | Network configuration, network scope | Network configuration, node scope |
 | --- | --- | --- | --- |
-| **Holds** | How this machine runs its agent: listen and public addresses, interface, key storage, gateway routes, metrics, logging | How the whole network behaves: policy, DNS, seeds, transports, limits, controller cluster | One node's departures from the network: transport priorities, compression, limits, extra seeds and DNS entries, reverse proxy ports |
+| **Holds** | How this machine runs its agent: listen and public addresses, interface, key storage, gateway routes, metrics, logging | How the whole network behaves: policy, DNS, seeds, transports, NAT traversal, limits, controller cluster | One node's departures from the network: transport priorities, compression, NAT traversal, limits, extra seeds and DNS entries, reverse proxy ports |
 | **Stored** | A file on the machine | The signed network tree | The signed network tree |
 | **Changed with** | An editor on the machine | `webjetctl network config` | `webjetctl local config [--node NAME]` |
 | **Who** | Root (Administrator) on the machine | Admins | The node's owner, or an admin |
@@ -43,6 +43,7 @@ in the desktop app's Config tab ([app.md](app.md)).
 | Make a LAN reachable from the overlay | A route grant on the node, plus `webjetd.toml` [`[[gateway.route]]`](#gatewayroute) ([recipe](#serve-a-lan-as-a-gateway)) |
 | Publish a service to clients outside the overlay | Node scope [`[[proxy]]`](#proxy-reverse-proxy-ports) on the ingress, plus `webjetd.toml` [`[proxy]`](#proxy) on the targets ([recipe](#publish-a-service-with-a-reverse-proxy)) |
 | Exclude addresses or interfaces from direct paths | `webjetd.toml` [`[nat]`](#nat) |
+| Turn off hole punching, port prediction, router port mapping or LAN candidates for some nodes | [`[nat]`](#nat-traversal-nat) at network or node scope, or in a `[[nat.override]]` |
 | Choose where the identity key is stored | `webjetd.toml` [`[key]`](#key) |
 | Expose Prometheus metrics | `webjetd.toml` [`[metrics]`](#metrics) |
 | Keep the signing key in a separate process, or stop a node acting as controller | `webjetd.toml` [`[controller]`](#controller) |
@@ -236,6 +237,11 @@ the result of each peer's last attempt under `punch`.
 exclude_cidrs = ["10.1.1.0/24"]
 allow_interfaces = ["wg-office"]
 ```
+
+To turn hole punching, port prediction, port mapping or LAN candidates off
+for nodes from a central place, use the network configuration's
+[`[nat]`](#nat-traversal-nat). `port_mapping = false` here turns mapping off
+on this machine whatever the network configuration says.
 
 ### `[key]`
 
@@ -790,6 +796,51 @@ replies come back through the overlay; LAN players keep seeing the game.
 Older controllers don't know the setting: upgrade every controller before
 the first change. `show` doesn't write the section out when it is unset.
 
+#### NAT traversal (`[nat]`)
+
+How nodes find direct UDP paths through NATs (architecture §11.7). Everything
+is on by default. This is not the `[nat]` section of
+[`webjetd.toml`](#nat), which picks the interfaces and addresses one
+machine uses. This one is in the tree: it is set at network or node scope,
+and `[[nat.override]]` sets it for the nodes some selectors pick.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `punch` | `true` | Hole punching. `false`: the node doesn't start hole punching and doesn't answer it. A pair of nodes is punched only when both have it on. Direct hops to public and port-mapped addresses still come up. |
+| `predict` | `true` | Port prediction toward a peer behind a symmetric NAT: bursts to about a hundred ports next to the peer's observed ones. Prediction runs between two nodes only when both have it on. Turn it off where those bursts trip an intrusion detection system or a rate limiter. |
+| `port_mapping` | `true` | Ask the router for a UDP port mapping (PCP / NAT-PMP, then UPnP IGD). `false` gives a held mapping back at once. `port_mapping = false` in the machine's `webjetd.toml` also turns it off, whatever this says. |
+| `host_candidates` | `true` | Publish the node's interface (LAN) addresses and offer them when punching. `false` keeps them private. Nodes on the same LAN then meet through their outside addresses, if the router allows that (hairpinning), or through relays. |
+
+```toml
+[nat]
+predict = false                      # nowhere in the network
+
+[[nat.override]]
+select = ["tag:office"]              # behind a strict corporate firewall
+punch = false
+host_candidates = false
+
+[[nat.override]]
+select = ["node:nas"]
+port_mapping = false
+```
+
+An override needs `select` ([selectors](#selectors), no `cidr:`) and at
+least one key. For each key, the first override that selects the node and
+sets that key wins; keys it leaves out keep the next level's value. At node
+scope, `nat.<key>` beats every override (`webjetctl local config set
+nat.punch false`). Overrides are network scope only.
+
+Every node reads the setting for itself and for its peers, so turning
+`punch` or `predict` off on one node is enough for every pair it is in.
+Older nodes don't know the setting and keep punching, but a node that has
+it turned off doesn't answer them. Older controllers don't know it either:
+upgrade every controller before the first change. `show` doesn't write
+the section out when it is unset; a comment names the built-in values. A
+change takes effect without a restart. `webjetctl local status` shows
+what is in force as `nat_policy`, and `webjetctl local sessions` shows it
+under `punch.policy`.
+
 #### `[controllers]`
 
 How the Raft leader manages the controller cluster (§7.5; operations guide
@@ -836,10 +887,11 @@ only. It holds a subset of the keys:
 | `[[seeds]]` | Tried before the network's seeds. |
 | `[[dns.record]]`, `[[dns.forward]]` | Answered or forwarded by this node's resolver only, before the network's. Checked like the network's (inside the suffix or a forwarded zone, no shadowing of magic DNS names). |
 | `multicast.capture` | Replaces the network's list; `[]` turns capture off for this node. |
+| `nat.punch`, `.predict`, `.port_mapping`, `.host_candidates` | Replaces the network's value and any override, key by key. |
 | `[[proxy]]` | [Reverse proxy ports](#proxy-reverse-proxy-ports) this node listens on. Node scope only. |
 
 Policy, the DNS suffix and resolver, transport overrides, camouflage,
-padding, limit overrides and `[controllers]` are network scope only;
+padding, limit overrides, NAT overrides and `[controllers]` are network scope only;
 `apply` refuses them at node scope.
 
 ```sh
@@ -849,6 +901,7 @@ webjetctl local config set transport.priority.kcp 0       # never UDP from this 
 webjetctl local config set limits.value.relay_capacity_mbps 900
 webjetctl local config set transport.compression.data lz4 # compress packets to and from this node
 webjetctl local config set transport.retransmit true      # KCP hops retransmit this node's packets
+webjetctl local config set nat.punch false                # no hole punching to or from this node
 webjetctl local config unset transport.priority.kcp       # back to the network's value
 webjetctl local config --node relay-fra edit              # another node
 ```
@@ -940,7 +993,8 @@ For each value, the first one that is set wins:
 
 1. the node's own configuration (node scope)
 2. a matching network override: for priorities, the first override that
-   names the transport; for `retransmit`, the first override that sets it;
+   names the transport; for `retransmit` and each `[nat]` key, the first
+   override that sets it;
    for limits, the highest value of all matching overrides
 3. the network's value
 4. the built-in default

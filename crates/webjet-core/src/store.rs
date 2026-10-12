@@ -339,6 +339,38 @@ impl View {
         tc.retransmit.unwrap_or(false)
     }
 
+    /// NAT traversal settings in force for a node (§11.7), per field, first
+    /// found: the node's own configuration, the first of the network's
+    /// matching `[[nat.override]]`s that sets the field, the network's
+    /// `[nat]`, built-in (everything on).
+    pub fn nat(&self, node: &Bytes32) -> NatPolicy {
+        let mut layers: Vec<&wp::NatSettings> = Vec::new();
+        if let Some(s) = self.node_configs.get(node).and_then(|c| c.nat.as_deref()) {
+            layers.push(s);
+        }
+        if let Some(tc) = &self.transport {
+            for o in tc.nat_overrides.as_deref().unwrap_or_default() {
+                if let Some(s) = o.settings.as_deref()
+                    && self.selected(&o.select, node)
+                {
+                    layers.push(s);
+                }
+            }
+            if let Some(s) = tc.nat.as_deref() {
+                layers.push(s);
+            }
+        }
+        let pick = |f: fn(&wp::NatSettings) -> Option<bool>| {
+            layers.iter().find_map(|s| f(s)).unwrap_or(true)
+        };
+        NatPolicy {
+            punch: pick(|s| s.punch),
+            predict: pick(|s| s.predict),
+            port_mapping: pick(|s| s.port_mapping),
+            host_candidates: pick(|s| s.host_candidates),
+        }
+    }
+
     /// The UDP ports whose broadcasts and multicasts a node captures from
     /// its other interfaces (§9.5.2): the node's own `capture`, else the
     /// network's, else none.
@@ -398,6 +430,30 @@ impl View {
             out.extend(d.forward.clone().unwrap_or_default());
         }
         out
+    }
+}
+
+/// NAT traversal in force for a node (§11.7, `View::nat`). Built-in: all on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct NatPolicy {
+    /// Hole punching to and from the node.
+    pub punch: bool,
+    /// Port prediction toward a peer behind a symmetric NAT.
+    pub predict: bool,
+    /// Ask the router for a UDP port mapping.
+    pub port_mapping: bool,
+    /// Publish and offer interface (LAN) addresses.
+    pub host_candidates: bool,
+}
+
+impl Default for NatPolicy {
+    fn default() -> Self {
+        NatPolicy {
+            punch: true,
+            predict: true,
+            port_mapping: true,
+            host_candidates: true,
+        }
     }
 }
 

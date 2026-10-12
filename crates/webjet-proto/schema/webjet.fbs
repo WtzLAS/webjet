@@ -211,6 +211,29 @@ table MulticastConfig {
     capture: [string];
 }
 
+// NAT traversal (§11.7), TOML [nat]. Each field unset: the next level
+// decides (node → first matching override that sets it → network →
+// built-in, which is true for all four).
+// - punch: hole punching to and from the node; off on either side of a
+//   pair means that pair isn't punched.
+// - predict: port prediction toward a symmetric NAT; off on either side
+//   means none between the pair.
+// - port_mapping: ask the router for a UDP port mapping (PCP / NAT-PMP,
+//   UPnP); webjetd.toml [nat] port_mapping must allow it too.
+// - host_candidates: publish and offer the node's interface (LAN)
+//   addresses.
+table NatSettings {
+    punch: bool = null;
+    predict: bool = null;
+    port_mapping: bool = null;
+    host_candidates: bool = null;
+}
+
+table NatOverride {
+    select: [string];
+    settings: NatSettings;
+}
+
 table TransportConfig {
     version: uint64;
     defaults: [TransportPriority];
@@ -220,6 +243,8 @@ table TransportConfig {
     compression: CompressionConfig;
     multicast: MulticastConfig;        // TOML [multicast]
     retransmit: bool = null;           // KCP hops retransmit unreliable-class frames (§17.5); built-in false
+    nat: NatSettings;                  // TOML [nat]
+    nat_overrides: [NatOverride];      // TOML [[nat.override]]; the first that selects the node and sets a field wins
 }
 
 // How the leader manages the controller cluster's membership (§7.5).
@@ -262,6 +287,7 @@ table NodeConfig {
     compression: CompressionConfig;    // replaces the network's, per plane
     multicast: MulticastConfig;        // capture replaces the network's
     retransmit: bool = null;           // replaces the network's and its overrides (§17.5)
+    nat: NatSettings;                  // per field, replaces the network's and its overrides (§11.7)
 }
 
 // A reverse proxy rule (§11.11): a Linux data node listens on `listen_port`

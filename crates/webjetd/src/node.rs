@@ -405,6 +405,9 @@ pub struct Node {
     /// This node retransmits unreliable-class frames on its KCP hops
     /// (§17.5): from the tree, `View::retransmit`.
     pub retransmit: AtomicBool,
+    /// NAT traversal in force for this node (§11.7), as last read from the
+    /// tree by `nat::refresh` (`View::nat`).
+    pub nat_policy: tokio::sync::watch::Sender<webjet_core::store::NatPolicy>,
     /// `persist_store` bookkeeping: a number per copy taken of the store
     /// (counted under the store lock), and the newest one on disk. A save
     /// that finishes after a newer one is dropped.
@@ -487,6 +490,7 @@ impl Node {
             rpc_tasks: Arc::new(tokio::sync::Semaphore::new(crate::rpc::MAX_INBOUND)),
             dns_tasks: Arc::new(tokio::sync::Semaphore::new(crate::dns::MAX_INFLIGHT)),
             retransmit: AtomicBool::new(false),
+            nat_policy: tokio::sync::watch::Sender::new(Default::default()),
             store_copies: AtomicU64::new(0),
             store_saved: Mutex::new(0),
             #[cfg(feature = "anytls")]

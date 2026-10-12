@@ -438,7 +438,7 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
         for o in observed(n) {
             push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
         }
-        for ip in crate::nat::candidate_ips(&n.cfg.nat) {
+        for ip in host_ips(n) {
             push(
                 std::net::SocketAddr::new(ip, port),
                 Transport::KcpFecTls,
@@ -448,6 +448,16 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
     }
     v.retain(|a| a.priority > 0);
     v
+}
+
+/// The interface addresses this node offers as HOST candidates (§11.7):
+/// none when the NAT settings (`nat.host_candidates`) keep them private.
+pub fn host_ips(n: &Node) -> Vec<std::net::IpAddr> {
+    if n.nat_policy.borrow().host_candidates {
+        crate::nat::candidate_ips(&n.cfg.nat)
+    } else {
+        Vec::new()
+    }
 }
 
 /// Keep the addresses of the DNS names in webjetd.toml `[[public]]` (a

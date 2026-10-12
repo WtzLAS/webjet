@@ -962,6 +962,8 @@ mod tests {
             compression: None,
             multicast: None,
             retransmit: None,
+            nat: None,
+            nat_overrides: None,
         };
         webjet_core::validate::transport(&t).unwrap();
     }

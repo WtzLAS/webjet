@@ -226,7 +226,25 @@ pub fn transport(t: &wp::TransportConfig) -> Result<()> {
     if let Some(m) = &t.multicast {
         multicast(m)?;
     }
+    let overrides = t.nat_overrides.as_deref().unwrap_or_default();
+    if overrides.len() > 64 {
+        bail!("nat: at most 64 overrides");
+    }
+    for o in overrides {
+        for s in o.select.iter().flatten() {
+            crate::policy::Selector::parse(s)?;
+        }
+    }
     Ok(())
+}
+
+/// A `[nat]` table that sets nothing (a node configuration with only that
+/// is empty).
+pub fn nat_unset(s: &wp::NatSettings) -> bool {
+    s.punch.is_none()
+        && s.predict.is_none()
+        && s.port_mapping.is_none()
+        && s.host_candidates.is_none()
 }
 
 /// `[controllers]` (§7.5): an odd voter target of at most 7, and a dead

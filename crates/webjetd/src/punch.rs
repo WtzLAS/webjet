@@ -132,20 +132,27 @@ fn nat_of(n: &Node, peer: &Bytes32) -> wp::NatType {
         .map_or(wp::NatType::Unknown, |(r, _)| r.nat)
 }
 
-/// Punch unless a direct UDP hop exists or either side turned UDP off. The
-/// NAT types don't matter: two nodes behind one NAT (on one LAN) look
-/// symmetric to relays yet reach each other's HOST candidates, and port
-/// prediction may still meet across two symmetric NATs.
+/// Punch unless a direct UDP hop exists, either side turned UDP off, or the
+/// NAT settings (`[nat] punch`) turn punching off for either side; both
+/// sides read the same tree, so neither starts or answers. The NAT types
+/// don't matter: two nodes behind one NAT (on one LAN) look symmetric to
+/// relays yet reach each other's HOST candidates, and port prediction may
+/// still meet across two symmetric NATs.
 fn should_try(n: &Node, peer: &Bytes32) -> bool {
     !has_direct_udp(n, peer)
         && crate::transport::priority(n, &n.me, Transport::KcpFecTls) != 0
         && crate::transport::priority(n, peer, Transport::KcpFecTls) != 0
+        && n.nat_policy.borrow().punch
+        && n.store.snapshot().view().nat(peer).punch
 }
 
 /// Port prediction applies when the peer's NAT is symmetric (whatever ours
-/// is: two symmetric NATs that hand out ports in sequence can still meet).
+/// is: two symmetric NATs that hand out ports in sequence can still meet),
+/// unless the NAT settings (`[nat] predict`) turn it off for either side.
 fn should_predict(n: &Node, peer: &Bytes32) -> bool {
     matches!(nat_of(n, peer), wp::NatType::Symmetric)
+        && n.nat_policy.borrow().predict
+        && n.store.snapshot().view().nat(peer).predict
 }
 
 /// Start punching toward `peer` once a session exists, unless we already
@@ -584,7 +591,7 @@ pub fn status(n: &Node) -> serde_json::Value {
             }),
         );
     }
-    serde_json::json!({"mine": my_candidates(n).iter().map(|c| c.to_string()).collect::<Vec<_>>(), "nat": format!("{:?}", crate::transport::nat_type(n)), "peers": out})
+    serde_json::json!({"mine": my_candidates(n).iter().map(|c| c.to_string()).collect::<Vec<_>>(), "policy": *n.nat_policy.borrow(), "nat": format!("{:?}", crate::transport::nat_type(n)), "peers": out})
 }
 
 /// Retry punching for active sessions on the backoff schedule, and
@@ -850,6 +857,80 @@ mod tests {
         );
         let t = table(&lo).lock();
         assert!(t[&hi.me].attempt.as_ref().is_some_and(|a| a.predict));
+    }
+
+    /// `[nat] punch = false` for one node stops punching from both sides
+    /// of each of its pairs; `predict = false` on either side stops port
+    /// prediction; `host_candidates = false` keeps LAN addresses out.
+    #[tokio::test]
+    async fn nat_settings_stop_punching_from_both_sides() {
+        let mut c = Cluster::new();
+        let a = c.data_node("a", "10.7.0.2", &[]);
+        let b = c.data_node("b", "10.7.0.3", &[]);
+        c.set_policy(wp::Policy {
+            default_action: wp::Action::Allow,
+            ..Default::default()
+        })
+        .expect("policy");
+        let (an, _d1) = testnode::node(&mut c, a.0, a.1);
+        let (bn, _d2) = testnode::node(&mut c, b.0, b.1);
+        let rec = |id: &Bytes32| wp::EndpointRecord {
+            node_id: Some(webjet_core::crypto::k32(id)),
+            nat: wp::NatType::Symmetric,
+            ..Default::default()
+        };
+        an.records
+            .lock()
+            .endpoints
+            .insert(bn.me, (rec(&bn.me), Vec::new()));
+        bn.records
+            .lock()
+            .endpoints
+            .insert(an.me, (rec(&an.me), Vec::new()));
+        assert!(should_try(&an, &bn.me) && should_try(&bn, &an.me));
+        assert!(should_predict(&an, &bn.me) && should_predict(&bn, &an.me));
+        // b turns punching and prediction off for itself.
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(webjet_core::crypto::k32(&bn.me)),
+            nat: Some(Box::new(wp::NatSettings {
+                punch: Some(false),
+                predict: Some(false),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .expect("node config");
+        testnode::sync(&mut c, &an);
+        testnode::sync(&mut c, &bn);
+        assert!(crate::nat::refresh(&bn));
+        assert!(!crate::nat::refresh(&an), "a's own settings didn't change");
+        assert!(!should_try(&an, &bn.me), "a doesn't punch toward b");
+        assert!(!should_try(&bn, &an.me), "b doesn't punch at all");
+        assert!(!should_predict(&an, &bn.me) && !should_predict(&bn, &an.me));
+        // An offer from a isn't answered by b.
+        on_message(
+            &bn,
+            &an.me,
+            ftype::PUNCH_OFFER,
+            &offer([5; 16], &["203.0.113.20:4000"]),
+        );
+        assert!(attempt(&bn, &an.me).is_none());
+        // Host candidates: on by default (whatever interfaces this machine
+        // has), none with the setting off.
+        assert!(an.nat_policy.borrow().host_candidates);
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(webjet_core::crypto::k32(&an.me)),
+            nat: Some(Box::new(wp::NatSettings {
+                host_candidates: Some(false),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .expect("node config");
+        testnode::sync(&mut c, &an);
+        assert!(crate::nat::refresh(&an));
+        assert!(!an.nat_policy.borrow().host_candidates);
+        assert!(crate::transport::host_ips(&an).is_empty());
     }
 
     /// A validated address whose dial failed (someone else answered) is

@@ -3,13 +3,14 @@
 //!
 //! One schema, two scopes:
 //! - **network scope** (`network.toml`, admins): `[policy]`, `[dns]`,
-//!   `[[seeds]]`, `[transport]`, `[limits]`, `[controllers]` — the same on
-//!   every node.
+//!   `[[seeds]]`, `[transport]`, `[limits]`, `[multicast]`, `[nat]`,
+//!   `[controllers]` — the same on every node.
 //! - **node scope** (one node, its owner or an admin): a subset that
 //!   overrides or extends the network's for that node only:
 //!   `[transport.priority]`, `[limits.value]`, `[[seeds]]` (tried first),
 //!   `[[dns.record]]` and `[[dns.forward]]` (answered by that node only),
-//!   `[multicast] capture` (replaces the network's).
+//!   `[multicast] capture` (replaces the network's), `[nat]` keys (replace
+//!   the network's and its overrides).
 //!
 //! `version` is the version the file was made from (`show` prints it).
 //! `apply` refuses a file whose version is no longer the one in force, so a
@@ -68,6 +69,10 @@ pub struct ConfigFile {
     /// other interfaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multicast: Option<MulticastSection>,
+    /// NAT traversal (§11.7): `[nat]`, and `[[nat.override]]` at network
+    /// scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nat: Option<NatSection>,
 }
 
 /// `[multicast]` (§9.5.2). `capture`: UDP port specs (`udp:19132`,
@@ -97,6 +102,114 @@ impl MulticastSection {
         Some(MulticastSection {
             capture: Some(capture),
         })
+    }
+}
+
+/// `[nat]` (§11.7): NAT traversal for the network, `[[nat.override]]`
+/// (`select` + the same keys) for the nodes it selects, and the keys alone
+/// at node scope. A key left out takes the next level's value (node →
+/// first matching override that sets it → network → built-in on).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatSection {
+    /// Hole punching to and from the node; off on either side of a pair
+    /// means the pair isn't punched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub punch: Option<bool>,
+    /// Port prediction toward a peer behind a symmetric NAT; off on either
+    /// side means none between the pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predict: Option<bool>,
+    /// Ask the router for a UDP port mapping (webjetd.toml `[nat]
+    /// port_mapping` must allow it too).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_mapping: Option<bool>,
+    /// Publish and offer the node's interface (LAN) addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_candidates: Option<bool>,
+    #[serde(default, rename = "override", skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<NatOverrideFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatOverrideFile {
+    pub select: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub punch: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predict: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_mapping: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_candidates: Option<bool>,
+}
+
+impl NatSection {
+    /// The section's own keys on the wire; `None` when it sets none.
+    fn settings(&self) -> Option<wp::NatSettings> {
+        let s = wp::NatSettings {
+            punch: self.punch,
+            predict: self.predict,
+            port_mapping: self.port_mapping,
+            host_candidates: self.host_candidates,
+        };
+        (!webjet_core::validate::nat_unset(&s)).then_some(s)
+    }
+
+    /// The overrides on the wire; `None` when there are none (so a network
+    /// without them writes nothing older controllers don't know).
+    fn overrides_wire(&self) -> Result<Option<Vec<wp::NatOverride>>> {
+        if self.overrides.is_empty() {
+            return Ok(None);
+        }
+        self.overrides
+            .iter()
+            .map(|o| {
+                let s = wp::NatSettings {
+                    punch: o.punch,
+                    predict: o.predict,
+                    port_mapping: o.port_mapping,
+                    host_candidates: o.host_candidates,
+                };
+                if webjet_core::validate::nat_unset(&s) {
+                    bail!(
+                        "a [[nat.override]] for {:?} sets nothing: give it punch, predict, port_mapping or host_candidates",
+                        o.select
+                    );
+                }
+                Ok(wp::NatOverride {
+                    select: Some(o.select.clone()),
+                    settings: Some(Box::new(s)),
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some)
+    }
+
+    fn from_wire(s: Option<&wp::NatSettings>, o: Option<&[wp::NatOverride]>) -> Option<NatSection> {
+        let mut f = NatSection::default();
+        if let Some(s) = s {
+            f.punch = s.punch;
+            f.predict = s.predict;
+            f.port_mapping = s.port_mapping;
+            f.host_candidates = s.host_candidates;
+        }
+        f.overrides = o
+            .unwrap_or_default()
+            .iter()
+            .map(|o| {
+                let s = o.settings.as_deref().cloned().unwrap_or_default();
+                NatOverrideFile {
+                    select: o.select.clone().unwrap_or_default(),
+                    punch: s.punch,
+                    predict: s.predict,
+                    port_mapping: s.port_mapping,
+                    host_candidates: s.host_candidates,
+                }
+            })
+            .collect();
+        (f != NatSection::default()).then_some(f)
     }
 }
 
@@ -398,11 +511,14 @@ impl ConfigFile {
         {
             bad.push("limits.override");
         }
+        if self.nat.as_ref().is_some_and(|n| !n.overrides.is_empty()) {
+            bad.push("nat.override");
+        }
         if bad.is_empty() {
             return Ok(());
         }
         bail!(
-            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, transport.retransmit, limits.value, seeds, dns.record, dns.forward, multicast.capture and proxy",
+            "{} can only be set for the whole network (`webjetctl network config`); a node's configuration holds transport.priority, transport.compression, transport.retransmit, limits.value, seeds, dns.record, dns.forward, multicast.capture, nat and proxy",
             bad.join(", ")
         )
     }
@@ -459,6 +575,17 @@ impl ConfigFile {
                 .map(|m| m.to_wire().map(Box::new))
                 .transpose()?,
             retransmit: t.retransmit,
+            nat: self
+                .nat
+                .as_ref()
+                .and_then(NatSection::settings)
+                .map(Box::new),
+            nat_overrides: self
+                .nat
+                .as_ref()
+                .map(NatSection::overrides_wire)
+                .transpose()?
+                .flatten(),
         };
         webjet_core::validate::transport(&transport)?;
         let limits = wp::Limits {
@@ -552,6 +679,11 @@ impl ConfigFile {
                 .map(|m| m.to_wire().map(Box::new))
                 .transpose()?,
             retransmit: self.transport.as_ref().and_then(|t| t.retransmit),
+            nat: self
+                .nat
+                .as_ref()
+                .and_then(NatSection::settings)
+                .map(Box::new),
         })
     }
 
@@ -571,6 +703,7 @@ impl ConfigFile {
                 .clone()
                 .or_else(|| current.controllers.clone()),
             multicast: self.multicast.clone().or_else(|| current.multicast.clone()),
+            nat: self.nat.clone().or_else(|| current.nat.clone()),
         }
     }
 
@@ -585,6 +718,7 @@ impl ConfigFile {
             ("proxy", self.proxy.is_some()),
             ("controllers", self.controllers.is_some()),
             ("multicast", self.multicast.is_some()),
+            ("nat", self.nat.is_some()),
         ]
         .into_iter()
         .filter_map(|(k, set)| set.then_some(k))
@@ -1092,6 +1226,10 @@ pub fn network_from_tree(tree: &Value, fill: bool) -> Result<ConfigFile> {
         // force): a file with `[multicast]` writes a field controllers before
         // it don't know.
         multicast: MulticastSection::from_wire(tr.multicast.as_deref()),
+        // Not spelled out with `fill` (render_network names the built-in
+        // values): a file with `[nat]` writes fields older controllers
+        // don't know.
+        nat: NatSection::from_wire(tr.nat.as_deref(), tr.nat_overrides.as_deref()),
     })
 }
 
@@ -1167,6 +1305,7 @@ pub fn node_from_wire(c: Option<&wp::NodeConfig>) -> ConfigFile {
         }),
         controllers: None,
         multicast,
+        nat: NatSection::from_wire(c.nat.as_deref(), None),
     }
 }
 
@@ -1244,6 +1383,23 @@ pub fn render_network(tree: &Value) -> Result<String> {
             "# 255.255.255.255 send out the LAN instead; e.g. capture = [\"udp:19132\"]).\n",
         );
     }
+    let nat = f.nat.clone().unwrap_or_default();
+    let unset: Vec<&str> = [
+        ("punch", nat.punch),
+        ("predict", nat.predict),
+        ("port_mapping", nat.port_mapping),
+        ("host_candidates", nat.host_candidates),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.is_none().then_some(k))
+    .collect();
+    if !unset.is_empty() {
+        let _ = writeln!(
+            s,
+            "# [nat] built-in values in force: {} = true (hole punching, port\n# prediction, router port mapping, LAN addresses as candidates).",
+            unset.join(" = true, ")
+        );
+    }
     let d = webjet_core::membership::Settings::of(None);
     let c = f.controllers.clone().unwrap_or_default();
     let mut builtin = Vec::new();
@@ -1278,7 +1434,7 @@ pub fn render_node(name: &str, c: Option<&wp::NodeConfig>) -> Result<String> {
     );
     s.push_str("# Overrides the network configuration for this node: transport.priority,\n");
     s.push_str("# transport.compression, transport.retransmit, limits.value,\n");
-    s.push_str("# multicast.capture; adds seeds\n");
+    s.push_str("# multicast.capture, nat; adds seeds\n");
     s.push_str("# (tried first),\n");
     s.push_str("# dns.record and dns.forward;\n");
     s.push_str("# [[proxy]] makes the node a reverse proxy (Linux data nodes; see\n");
@@ -1356,6 +1512,16 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
                     })
                     .unwrap_or_default(),
             ),
+        }),
+        nat: e["nat"].as_object().map(|m| {
+            let b = |k: &str| m.get(k).and_then(Value::as_bool);
+            NatSection {
+                punch: b("punch"),
+                predict: b("predict"),
+                port_mapping: b("port_mapping"),
+                host_candidates: b("host_candidates"),
+                overrides: Vec::new(),
+            }
         }),
     })
 }
@@ -1523,6 +1689,7 @@ pub fn edit_network(
     keep(&mut f.proxy, &cur.proxy);
     keep(&mut f.controllers, &cur.controllers);
     keep(&mut f.multicast, &cur.multicast);
+    keep(&mut f.nat, &cur.nat);
     Ok(f)
 }
 
@@ -1601,7 +1768,7 @@ pub fn network_apply(f: &ConfigFile, tree: &Value, base: &Path) -> Result<Networ
     let sections = f.sections();
     if sections.is_empty() {
         bail!(
-            "the file sets nothing: no [policy], [dns], seeds, [transport], [limits], [multicast] or [controllers]"
+            "the file sets nothing: no [policy], [dns], seeds, [transport], [limits], [multicast], [nat] or [controllers]"
         );
     }
     let now = tree["network_version"].as_u64().unwrap_or(0);
@@ -1919,6 +2086,68 @@ value = { circuits_global = 9000 }
     }
 
     #[test]
+    fn nat_section() {
+        // Not spelled out by show; a comment names the built-in values.
+        let shown = render_network(&empty_tree()).unwrap();
+        assert!(shown.contains("[nat] built-in values in force"), "{shown}");
+        let f = ConfigFile::parse(&shown).unwrap();
+        assert!(f.nat.is_none());
+        let w = f.to_network(1, Path::new("/x")).unwrap();
+        let t = w.transport.unwrap();
+        assert!(t.nat.is_none() && t.nat_overrides.is_none());
+        // Network scope with overrides, round trip through the tree.
+        let f = ConfigFile::parse(
+            "version = 0\n[nat]\npredict = false\n\n[[nat.override]]\nselect = [\"tag:office\"]\npunch = false\nhost_candidates = false\n",
+        )
+        .unwrap();
+        assert_eq!(f.sections(), ["nat"]);
+        let w = f.to_network(1, Path::new("/x")).unwrap();
+        let tr = w.transport.as_ref().unwrap();
+        assert_eq!(tr.nat.as_ref().unwrap().predict, Some(false));
+        let o = &tr.nat_overrides.as_ref().unwrap()[0];
+        assert_eq!(o.select.as_deref().unwrap(), ["tag:office"]);
+        assert_eq!(o.settings.as_ref().unwrap().punch, Some(false));
+        assert_eq!(o.settings.as_ref().unwrap().port_mapping, None);
+        let mut t = empty_tree();
+        t["transport"] = serde_json::to_value(&**tr).unwrap();
+        assert_eq!(network_from_tree(&t, true).unwrap().nat, f.nat);
+        let shown = render_network(&t).unwrap();
+        assert!(
+            shown.contains("punch = true, port_mapping = true, host_candidates = true"),
+            "{shown}"
+        );
+        // Left out of a later file: stays.
+        let later = ConfigFile::parse("version = 1\n[limits]\n").unwrap();
+        assert_eq!(later.over(&f).nat, f.nat);
+        // An override that sets nothing, a bad selector, an unknown key.
+        let empty =
+            ConfigFile::parse("version = 0\n[[nat.override]]\nselect = [\"tag:x\"]\n").unwrap();
+        assert!(empty.to_network(1, Path::new("/x")).is_err());
+        let bad = ConfigFile::parse(
+            "version = 0\n[[nat.override]]\nselect = [\"bogus\"]\npunch = false\n",
+        )
+        .unwrap();
+        assert!(bad.to_network(1, Path::new("/x")).is_err());
+        assert!(ConfigFile::parse("[nat]\nupnp = false\n").is_err());
+        // Node scope: the keys, no overrides.
+        let node = ConfigFile::parse("version = 0\n[nat]\npunch = false\n").unwrap();
+        let c = node.to_node(&[7; 32], 1).unwrap();
+        assert_eq!(c.nat.as_deref().unwrap().punch, Some(false));
+        assert_eq!(node_from_wire(Some(&c)).nat, node.nat);
+        assert!(!node_from_wire(Some(&c)).is_empty());
+        assert!(
+            ConfigFile::parse("version = 0\n[nat]\n")
+                .unwrap()
+                .to_node(&[7; 32], 1)
+                .unwrap()
+                .nat
+                .is_none()
+        );
+        let e = f.check_scope(Scope::Node).unwrap_err().to_string();
+        assert!(e.contains("nat.override"), "{e}");
+    }
+
+    #[test]
     fn left_out_sections_stay() {
         let current = ConfigFile::parse(NETWORK).unwrap();
         let file = ConfigFile::parse("version = 3\n[limits]\n").unwrap();
@@ -2103,6 +2332,8 @@ value = { circuits_global = 9000 }
             compression: None,
             multicast: None,
             retransmit: None,
+            nat: None,
+            nat_overrides: None,
         };
         let mut tree = empty_tree();
         tree["network_version"] = json!(5);

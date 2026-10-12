@@ -1216,6 +1216,7 @@ impl Machine {
                 .as_ref()
                 .is_none_or(|c| c.control == 0 && c.data == 0)
             && cfg.multicast.as_ref().is_none_or(|m| m.capture.is_none())
+            && cfg.nat.as_deref().is_none_or(crate::validate::nat_unset)
             && cfg.retransmit.is_none();
         if empty {
             if current == 0 {
@@ -3291,6 +3292,8 @@ mod tests {
                     capture: Some(vec!["udp:19132".into()]),
                 })),
                 retransmit: None,
+                nat: None,
+                nat_overrides: None,
             })),
             controllers: None,
         }
@@ -3428,6 +3431,7 @@ mod tests {
             compression: None,
             multicast: None,
             retransmit: None,
+            nat: None,
         }
     }
 
@@ -3598,6 +3602,106 @@ mod tests {
         .unwrap();
         assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_none());
         assert!(!h.m.view().retransmit(&a));
+    }
+
+    #[test]
+    fn nat_settings_network_overrides_and_node() {
+        use crate::store::NatPolicy;
+        let mut h = H::new();
+        let a = enroll(&mut h, "a", "10.7.0.5", &KeyPair::generate());
+        let b = enroll(&mut h, "b", "10.7.0.6", &KeyPair::generate());
+        // Built-in: everything on.
+        assert_eq!(h.m.view().nat(&a), NatPolicy::default());
+        // The network turns prediction off; an override for node a turns
+        // punching off (a later one that also names a doesn't count for
+        // punch, but does for port_mapping, which the first leaves unset).
+        let mut c = net_config(1);
+        if let Some(t) = c.transport.as_mut() {
+            t.nat = Some(Box::new(wp::NatSettings {
+                predict: Some(false),
+                ..Default::default()
+            }));
+            t.nat_overrides = Some(vec![
+                wp::NatOverride {
+                    select: Some(vec!["node:a".into()]),
+                    settings: Some(Box::new(wp::NatSettings {
+                        punch: Some(false),
+                        ..Default::default()
+                    })),
+                },
+                wp::NatOverride {
+                    select: Some(vec!["node:a".into()]),
+                    settings: Some(Box::new(wp::NatSettings {
+                        punch: Some(true),
+                        port_mapping: Some(false),
+                        ..Default::default()
+                    })),
+                },
+            ]);
+        }
+        set_network(&mut h, c).unwrap();
+        let v = h.m.view();
+        let off = NatPolicy {
+            punch: false,
+            predict: false,
+            port_mapping: false,
+            host_candidates: true,
+        };
+        assert_eq!(v.nat(&a), off);
+        assert_eq!(
+            v.nat(&b),
+            NatPolicy {
+                predict: false,
+                ..NatPolicy::default()
+            }
+        );
+        // Node a's own setting beats overrides and network, per field; on
+        // its own it is a node configuration, and unsetting it clears the
+        // leaf.
+        let only = |version, s: Option<wp::NatSettings>| wp::NodeConfig {
+            node_id: Some(crypto::k32(&a)),
+            version,
+            nat: s.map(Box::new),
+            ..Default::default()
+        };
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(only(
+                1,
+                Some(wp::NatSettings {
+                    punch: Some(true),
+                    host_candidates: Some(false),
+                    ..Default::default()
+                }),
+            ))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_some());
+        assert_eq!(
+            h.m.view().nat(&a),
+            NatPolicy {
+                punch: true,
+                host_candidates: false,
+                ..off
+            }
+        );
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(only(2, Some(wp::NatSettings::default())))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_none());
+        assert_eq!(h.m.view().nat(&a), off);
+        // A bad selector in an override is refused.
+        let mut c = net_config(h.m.view().network_version + 1);
+        if let Some(t) = c.transport.as_mut() {
+            t.nat_overrides = Some(vec![wp::NatOverride {
+                select: Some(vec!["bogus".into()]),
+                settings: Some(Box::new(wp::NatSettings {
+                    punch: Some(false),
+                    ..Default::default()
+                })),
+            }]);
+        }
+        assert!(set_network(&mut h, c).is_err());
     }
 
     #[test]

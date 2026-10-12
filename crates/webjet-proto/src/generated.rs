@@ -41725,10 +41725,784 @@ mod root {
             }
         }
 
+        /// The table `NatSettings` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `NatSettings` in the file `schema/webjet.fbs:225`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct NatSettings {
+            /// The field `punch` in the table `NatSettings`
+            pub punch: ::core::option::Option<bool>,
+            /// The field `predict` in the table `NatSettings`
+            pub predict: ::core::option::Option<bool>,
+            /// The field `port_mapping` in the table `NatSettings`
+            pub port_mapping: ::core::option::Option<bool>,
+            /// The field `host_candidates` in the table `NatSettings`
+            pub host_candidates: ::core::option::Option<bool>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for NatSettings {
+            fn default() -> Self {
+                Self {
+                    punch: ::core::default::Default::default(),
+                    predict: ::core::default::Default::default(),
+                    port_mapping: ::core::default::Default::default(),
+                    host_candidates: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl NatSettings {
+            /// Creates a [NatSettingsBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> NatSettingsBuilder<()> {
+                NatSettingsBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_punch: impl ::planus::WriteAsOptional<bool>,
+                field_predict: impl ::planus::WriteAsOptional<bool>,
+                field_port_mapping: impl ::planus::WriteAsOptional<bool>,
+                field_host_candidates: impl ::planus::WriteAsOptional<bool>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_punch = field_punch.prepare(builder);
+                let prepared_predict = field_predict.prepare(builder);
+                let prepared_port_mapping = field_port_mapping.prepare(builder);
+                let prepared_host_candidates = field_host_candidates.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                    ::core::default::Default::default();
+                if prepared_punch.is_some() {
+                    table_writer.write_entry::<bool>(0);
+                }
+                if prepared_predict.is_some() {
+                    table_writer.write_entry::<bool>(1);
+                }
+                if prepared_port_mapping.is_some() {
+                    table_writer.write_entry::<bool>(2);
+                }
+                if prepared_host_candidates.is_some() {
+                    table_writer.write_entry::<bool>(3);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_punch) = prepared_punch {
+                            object_writer.write::<_, _, 1>(&prepared_punch);
+                        }
+                        if let ::core::option::Option::Some(prepared_predict) = prepared_predict {
+                            object_writer.write::<_, _, 1>(&prepared_predict);
+                        }
+                        if let ::core::option::Option::Some(prepared_port_mapping) =
+                            prepared_port_mapping
+                        {
+                            object_writer.write::<_, _, 1>(&prepared_port_mapping);
+                        }
+                        if let ::core::option::Option::Some(prepared_host_candidates) =
+                            prepared_host_candidates
+                        {
+                            object_writer.write::<_, _, 1>(&prepared_host_candidates);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<NatSettings>> for NatSettings {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<NatSettings>> for NatSettings {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NatSettings>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<NatSettings> for NatSettings {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings> {
+                NatSettings::create(
+                    builder,
+                    self.punch,
+                    self.predict,
+                    self.port_mapping,
+                    self.host_candidates,
+                )
+            }
+        }
+
+        /// Builder for serializing an instance of the [NatSettings] type.
+        ///
+        /// Can be created using the [NatSettings::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct NatSettingsBuilder<State>(State);
+
+        impl NatSettingsBuilder<()> {
+            /// Setter for the [`punch` field](NatSettings#structfield.punch).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn punch<T0>(self, value: T0) -> NatSettingsBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<bool>,
+            {
+                NatSettingsBuilder((value,))
+            }
+
+            /// Sets the [`punch` field](NatSettings#structfield.punch) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn punch_as_null(self) -> NatSettingsBuilder<((),)> {
+                self.punch(())
+            }
+        }
+
+        impl<T0> NatSettingsBuilder<(T0,)> {
+            /// Setter for the [`predict` field](NatSettings#structfield.predict).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn predict<T1>(self, value: T1) -> NatSettingsBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<bool>,
+            {
+                let (v0,) = self.0;
+                NatSettingsBuilder((v0, value))
+            }
+
+            /// Sets the [`predict` field](NatSettings#structfield.predict) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn predict_as_null(self) -> NatSettingsBuilder<(T0, ())> {
+                self.predict(())
+            }
+        }
+
+        impl<T0, T1> NatSettingsBuilder<(T0, T1)> {
+            /// Setter for the [`port_mapping` field](NatSettings#structfield.port_mapping).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn port_mapping<T2>(self, value: T2) -> NatSettingsBuilder<(T0, T1, T2)>
+            where
+                T2: ::planus::WriteAsOptional<bool>,
+            {
+                let (v0, v1) = self.0;
+                NatSettingsBuilder((v0, v1, value))
+            }
+
+            /// Sets the [`port_mapping` field](NatSettings#structfield.port_mapping) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn port_mapping_as_null(self) -> NatSettingsBuilder<(T0, T1, ())> {
+                self.port_mapping(())
+            }
+        }
+
+        impl<T0, T1, T2> NatSettingsBuilder<(T0, T1, T2)> {
+            /// Setter for the [`host_candidates` field](NatSettings#structfield.host_candidates).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn host_candidates<T3>(self, value: T3) -> NatSettingsBuilder<(T0, T1, T2, T3)>
+            where
+                T3: ::planus::WriteAsOptional<bool>,
+            {
+                let (v0, v1, v2) = self.0;
+                NatSettingsBuilder((v0, v1, v2, value))
+            }
+
+            /// Sets the [`host_candidates` field](NatSettings#structfield.host_candidates) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn host_candidates_as_null(self) -> NatSettingsBuilder<(T0, T1, T2, ())> {
+                self.host_candidates(())
+            }
+        }
+
+        impl<T0, T1, T2, T3> NatSettingsBuilder<(T0, T1, T2, T3)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NatSettings].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings>
+            where
+                Self: ::planus::WriteAsOffset<NatSettings>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<bool>,
+                T1: ::planus::WriteAsOptional<bool>,
+                T2: ::planus::WriteAsOptional<bool>,
+                T3: ::planus::WriteAsOptional<bool>,
+            > ::planus::WriteAs<::planus::Offset<NatSettings>>
+            for NatSettingsBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<NatSettings>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<bool>,
+                T1: ::planus::WriteAsOptional<bool>,
+                T2: ::planus::WriteAsOptional<bool>,
+                T3: ::planus::WriteAsOptional<bool>,
+            > ::planus::WriteAsOptional<::planus::Offset<NatSettings>>
+            for NatSettingsBuilder<(T0, T1, T2, T3)>
+        {
+            type Prepared = ::planus::Offset<NatSettings>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NatSettings>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<bool>,
+                T1: ::planus::WriteAsOptional<bool>,
+                T2: ::planus::WriteAsOptional<bool>,
+                T3: ::planus::WriteAsOptional<bool>,
+            > ::planus::WriteAsOffset<NatSettings> for NatSettingsBuilder<(T0, T1, T2, T3)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings> {
+                let (v0, v1, v2, v3) = &self.0;
+                NatSettings::create(builder, v0, v1, v2, v3)
+            }
+        }
+
+        /// Reference to a deserialized [NatSettings].
+        #[derive(Copy, Clone)]
+        pub struct NatSettingsRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> NatSettingsRef<'a> {
+            /// Getter for the [`punch` field](NatSettings#structfield.punch).
+            #[inline]
+            pub fn punch(&self) -> ::planus::Result<::core::option::Option<bool>> {
+                self.0.access(0, "NatSettings", "punch")
+            }
+
+            /// Getter for the [`predict` field](NatSettings#structfield.predict).
+            #[inline]
+            pub fn predict(&self) -> ::planus::Result<::core::option::Option<bool>> {
+                self.0.access(1, "NatSettings", "predict")
+            }
+
+            /// Getter for the [`port_mapping` field](NatSettings#structfield.port_mapping).
+            #[inline]
+            pub fn port_mapping(&self) -> ::planus::Result<::core::option::Option<bool>> {
+                self.0.access(2, "NatSettings", "port_mapping")
+            }
+
+            /// Getter for the [`host_candidates` field](NatSettings#structfield.host_candidates).
+            #[inline]
+            pub fn host_candidates(&self) -> ::planus::Result<::core::option::Option<bool>> {
+                self.0.access(3, "NatSettings", "host_candidates")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for NatSettingsRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("NatSettingsRef");
+                if let ::core::option::Option::Some(field_punch) = self.punch().transpose() {
+                    f.field("punch", &field_punch);
+                }
+                if let ::core::option::Option::Some(field_predict) = self.predict().transpose() {
+                    f.field("predict", &field_predict);
+                }
+                if let ::core::option::Option::Some(field_port_mapping) =
+                    self.port_mapping().transpose()
+                {
+                    f.field("port_mapping", &field_port_mapping);
+                }
+                if let ::core::option::Option::Some(field_host_candidates) =
+                    self.host_candidates().transpose()
+                {
+                    f.field("host_candidates", &field_host_candidates);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<NatSettingsRef<'a>> for NatSettings {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: NatSettingsRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    punch: if let ::core::option::Option::Some(punch) = value.punch()? {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(punch)?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    predict: if let ::core::option::Option::Some(predict) = value.predict()? {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(predict)?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    port_mapping: if let ::core::option::Option::Some(port_mapping) =
+                        value.port_mapping()?
+                    {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(
+                            port_mapping,
+                        )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    host_candidates: if let ::core::option::Option::Some(host_candidates) =
+                        value.host_candidates()?
+                    {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(
+                            host_candidates,
+                        )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for NatSettingsRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for NatSettingsRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[NatSettingsRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<NatSettings>> for NatSettings {
+            type Value = ::planus::Offset<NatSettings>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<NatSettings>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for NatSettingsRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[NatSettingsRef]", "read_as_root", 0)
+                })
+            }
+        }
+
+        /// The table `NatOverride` in the namespace `webjet`
+        ///
+        /// Generated from these locations:
+        /// * Table `NatOverride` in the file `schema/webjet.fbs:232`
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            PartialOrd,
+            Eq,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
+        pub struct NatOverride {
+            /// The field `select` in the table `NatOverride`
+            pub select:
+                ::core::option::Option<::planus::alloc::vec::Vec<::planus::alloc::string::String>>,
+            /// The field `settings` in the table `NatOverride`
+            pub settings: ::core::option::Option<::planus::alloc::boxed::Box<self::NatSettings>>,
+        }
+
+        #[allow(clippy::derivable_impls)]
+        impl ::core::default::Default for NatOverride {
+            fn default() -> Self {
+                Self {
+                    select: ::core::default::Default::default(),
+                    settings: ::core::default::Default::default(),
+                }
+            }
+        }
+
+        impl NatOverride {
+            /// Creates a [NatOverrideBuilder] for serializing an instance of this table.
+            #[inline]
+            pub fn builder() -> NatOverrideBuilder<()> {
+                NatOverrideBuilder(())
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            pub fn create(
+                builder: &mut ::planus::Builder,
+                field_select: impl ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                field_settings: impl ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            ) -> ::planus::Offset<Self> {
+                let prepared_select = field_select.prepare(builder);
+                let prepared_settings = field_settings.prepare(builder);
+
+                let mut table_writer: ::planus::table_writer::TableWriter<8> =
+                    ::core::default::Default::default();
+                if prepared_select.is_some() {
+                    table_writer.write_entry::<::planus::Offset<[::planus::Offset<str>]>>(0);
+                }
+                if prepared_settings.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::NatSettings>>(1);
+                }
+
+                unsafe {
+                    table_writer.finish(builder, |object_writer| {
+                        if let ::core::option::Option::Some(prepared_select) = prepared_select {
+                            object_writer.write::<_, _, 4>(&prepared_select);
+                        }
+                        if let ::core::option::Option::Some(prepared_settings) = prepared_settings {
+                            object_writer.write::<_, _, 4>(&prepared_settings);
+                        }
+                    });
+                }
+                builder.current_offset()
+            }
+        }
+
+        impl ::planus::WriteAs<::planus::Offset<NatOverride>> for NatOverride {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatOverride> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl ::planus::WriteAsOptional<::planus::Offset<NatOverride>> for NatOverride {
+            type Prepared = ::planus::Offset<Self>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NatOverride>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl ::planus::WriteAsOffset<NatOverride> for NatOverride {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatOverride> {
+                NatOverride::create(builder, &self.select, &self.settings)
+            }
+        }
+
+        /// Builder for serializing an instance of the [NatOverride] type.
+        ///
+        /// Can be created using the [NatOverride::builder] method.
+        #[derive(Debug)]
+        #[must_use]
+        pub struct NatOverrideBuilder<State>(State);
+
+        impl NatOverrideBuilder<()> {
+            /// Setter for the [`select` field](NatOverride#structfield.select).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn select<T0>(self, value: T0) -> NatOverrideBuilder<(T0,)>
+            where
+                T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+            {
+                NatOverrideBuilder((value,))
+            }
+
+            /// Sets the [`select` field](NatOverride#structfield.select) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn select_as_null(self) -> NatOverrideBuilder<((),)> {
+                self.select(())
+            }
+        }
+
+        impl<T0> NatOverrideBuilder<(T0,)> {
+            /// Setter for the [`settings` field](NatOverride#structfield.settings).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn settings<T1>(self, value: T1) -> NatOverrideBuilder<(T0, T1)>
+            where
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            {
+                let (v0,) = self.0;
+                NatOverrideBuilder((v0, value))
+            }
+
+            /// Sets the [`settings` field](NatOverride#structfield.settings) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn settings_as_null(self) -> NatOverrideBuilder<(T0, ())> {
+                self.settings(())
+            }
+        }
+
+        impl<T0, T1> NatOverrideBuilder<(T0, T1)> {
+            /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NatOverride].
+            #[inline]
+            pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatOverride>
+            where
+                Self: ::planus::WriteAsOffset<NatOverride>,
+            {
+                ::planus::WriteAsOffset::prepare(&self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            > ::planus::WriteAs<::planus::Offset<NatOverride>> for NatOverrideBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<NatOverride>;
+
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatOverride> {
+                ::planus::WriteAsOffset::prepare(self, builder)
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            > ::planus::WriteAsOptional<::planus::Offset<NatOverride>>
+            for NatOverrideBuilder<(T0, T1)>
+        {
+            type Prepared = ::planus::Offset<NatOverride>;
+
+            #[inline]
+            fn prepare(
+                &self,
+                builder: &mut ::planus::Builder,
+            ) -> ::core::option::Option<::planus::Offset<NatOverride>> {
+                ::core::option::Option::Some(::planus::WriteAsOffset::prepare(self, builder))
+            }
+        }
+
+        impl<
+                T0: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<str>]>>,
+                T1: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            > ::planus::WriteAsOffset<NatOverride> for NatOverrideBuilder<(T0, T1)>
+        {
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatOverride> {
+                let (v0, v1) = &self.0;
+                NatOverride::create(builder, v0, v1)
+            }
+        }
+
+        /// Reference to a deserialized [NatOverride].
+        #[derive(Copy, Clone)]
+        pub struct NatOverrideRef<'a>(#[allow(dead_code)] ::planus::table_reader::Table<'a>);
+
+        impl<'a> NatOverrideRef<'a> {
+            /// Getter for the [`select` field](NatOverride#structfield.select).
+            #[inline]
+            pub fn select(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<&'a ::core::primitive::str>>,
+                >,
+            > {
+                self.0.access(0, "NatOverride", "select")
+            }
+
+            /// Getter for the [`settings` field](NatOverride#structfield.settings).
+            #[inline]
+            pub fn settings(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::NatSettingsRef<'a>>> {
+                self.0.access(1, "NatOverride", "settings")
+            }
+        }
+
+        impl<'a> ::core::fmt::Debug for NatOverrideRef<'a> {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut f = f.debug_struct("NatOverrideRef");
+                if let ::core::option::Option::Some(field_select) = self.select().transpose() {
+                    f.field("select", &field_select);
+                }
+                if let ::core::option::Option::Some(field_settings) = self.settings().transpose() {
+                    f.field("settings", &field_settings);
+                }
+                f.finish()
+            }
+        }
+
+        impl<'a> ::core::convert::TryFrom<NatOverrideRef<'a>> for NatOverride {
+            type Error = ::planus::Error;
+
+            #[allow(unreachable_code)]
+            fn try_from(value: NatOverrideRef<'a>) -> ::planus::Result<Self> {
+                ::core::result::Result::Ok(Self {
+                    select: if let ::core::option::Option::Some(select) = value.select()? {
+                        ::core::option::Option::Some(select.to_vec_result()?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    settings: if let ::core::option::Option::Some(settings) = value.settings()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(settings)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                })
+            }
+        }
+
+        impl<'a> ::planus::TableRead<'a> for NatOverrideRef<'a> {
+            #[inline]
+            fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::core::result::Result<Self, ::planus::errors::ErrorKind> {
+                ::core::result::Result::Ok(Self(::planus::table_reader::Table::from_buffer(
+                    buffer, offset,
+                )?))
+            }
+        }
+
+        impl<'a> ::planus::VectorReadInner<'a> for NatOverrideRef<'a> {
+            type Error = ::planus::Error;
+            const STRIDE: usize = 4;
+
+            unsafe fn from_buffer(
+                buffer: ::planus::SliceWithStartOffset<'a>,
+                offset: usize,
+            ) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(buffer, offset).map_err(|error_kind| {
+                    error_kind.with_error_location(
+                        "[NatOverrideRef]",
+                        "get",
+                        buffer.offset_from_start,
+                    )
+                })
+            }
+        }
+
+        /// # Safety
+        /// The planus compiler generates implementations that initialize
+        /// the bytes in `write_values`.
+        unsafe impl ::planus::VectorWrite<::planus::Offset<NatOverride>> for NatOverride {
+            type Value = ::planus::Offset<NatOverride>;
+            const STRIDE: usize = 4;
+            #[inline]
+            fn prepare(&self, builder: &mut ::planus::Builder) -> Self::Value {
+                ::planus::WriteAs::prepare(self, builder)
+            }
+
+            #[inline]
+            unsafe fn write_values(
+                values: &[::planus::Offset<NatOverride>],
+                bytes: *mut ::core::mem::MaybeUninit<u8>,
+                buffer_position: u32,
+            ) {
+                let bytes = bytes as *mut [::core::mem::MaybeUninit<u8>; 4];
+                for (i, v) in ::core::iter::Iterator::enumerate(values.iter()) {
+                    ::planus::WriteAsPrimitive::write(
+                        v,
+                        ::planus::Cursor::new(unsafe { &mut *bytes.add(i) }),
+                        buffer_position - (Self::STRIDE * i) as u32,
+                    );
+                }
+            }
+        }
+
+        impl<'a> ::planus::ReadAsRoot<'a> for NatOverrideRef<'a> {
+            fn read_as_root(slice: &'a [u8]) -> ::planus::Result<Self> {
+                ::planus::TableRead::from_buffer(
+                    ::planus::SliceWithStartOffset {
+                        buffer: slice,
+                        offset_from_start: 0,
+                    },
+                    0,
+                )
+                .map_err(|error_kind| {
+                    error_kind.with_error_location("[NatOverrideRef]", "read_as_root", 0)
+                })
+            }
+        }
+
         /// The table `TransportConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TransportConfig` in the file `schema/webjet.fbs:214`
+        /// * Table `TransportConfig` in the file `schema/webjet.fbs:237`
         #[derive(
             Clone,
             Debug,
@@ -41761,6 +42535,10 @@ mod root {
                 ::core::option::Option<::planus::alloc::boxed::Box<self::MulticastConfig>>,
             /// The field `retransmit` in the table `TransportConfig`
             pub retransmit: ::core::option::Option<bool>,
+            /// The field `nat` in the table `TransportConfig`
+            pub nat: ::core::option::Option<::planus::alloc::boxed::Box<self::NatSettings>>,
+            /// The field `nat_overrides` in the table `TransportConfig`
+            pub nat_overrides: ::core::option::Option<::planus::alloc::vec::Vec<self::NatOverride>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -41775,6 +42553,8 @@ mod root {
                     compression: ::core::default::Default::default(),
                     multicast: ::core::default::Default::default(),
                     retransmit: ::core::default::Default::default(),
+                    nat: ::core::default::Default::default(),
+                    nat_overrides: ::core::default::Default::default(),
                 }
             }
         }
@@ -41803,6 +42583,10 @@ mod root {
                 >,
                 field_multicast: impl ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 field_retransmit: impl ::planus::WriteAsOptional<bool>,
+                field_nat: impl ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+                field_nat_overrides: impl ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::NatOverride>]>,
+                >,
             ) -> ::planus::Offset<Self> {
                 let prepared_version = field_version.prepare(builder, &0);
                 let prepared_defaults = field_defaults.prepare(builder);
@@ -41812,8 +42596,10 @@ mod root {
                 let prepared_compression = field_compression.prepare(builder);
                 let prepared_multicast = field_multicast.prepare(builder);
                 let prepared_retransmit = field_retransmit.prepare(builder);
+                let prepared_nat = field_nat.prepare(builder);
+                let prepared_nat_overrides = field_nat_overrides.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<20> =
+                let mut table_writer: ::planus::table_writer::TableWriter<24> =
                     ::core::default::Default::default();
                 if prepared_version.is_some() {
                     table_writer.write_entry::<u64>(0);
@@ -41835,6 +42621,13 @@ mod root {
                 }
                 if prepared_multicast.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::MulticastConfig>>(6);
+                }
+                if prepared_nat.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::NatSettings>>(8);
+                }
+                if prepared_nat_overrides.is_some() {
+                    table_writer
+                        .write_entry::<::planus::Offset<[::planus::Offset<self::NatOverride>]>>(9);
                 }
                 if prepared_retransmit.is_some() {
                     table_writer.write_entry::<bool>(7);
@@ -41868,6 +42661,14 @@ mod root {
                         if let ::core::option::Option::Some(prepared_multicast) = prepared_multicast
                         {
                             object_writer.write::<_, _, 4>(&prepared_multicast);
+                        }
+                        if let ::core::option::Option::Some(prepared_nat) = prepared_nat {
+                            object_writer.write::<_, _, 4>(&prepared_nat);
+                        }
+                        if let ::core::option::Option::Some(prepared_nat_overrides) =
+                            prepared_nat_overrides
+                        {
+                            object_writer.write::<_, _, 4>(&prepared_nat_overrides);
                         }
                         if let ::core::option::Option::Some(prepared_retransmit) =
                             prepared_retransmit
@@ -41920,6 +42721,8 @@ mod root {
                     &self.compression,
                     &self.multicast,
                     self.retransmit,
+                    &self.nat,
+                    &self.nat_overrides,
                 )
             }
         }
@@ -42106,6 +42909,62 @@ mod root {
         }
 
         impl<T0, T1, T2, T3, T4, T5, T6, T7> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)> {
+            /// Setter for the [`nat` field](TransportConfig#structfield.nat).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nat<T8>(
+                self,
+                value: T8,
+            ) -> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+            where
+                T8: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7) = self.0;
+                TransportConfigBuilder((v0, v1, v2, v3, v4, v5, v6, v7, value))
+            }
+
+            /// Sets the [`nat` field](TransportConfig#structfield.nat) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nat_as_null(
+                self,
+            ) -> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, ())> {
+                self.nat(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8>
+            TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8)>
+        {
+            /// Setter for the [`nat_overrides` field](TransportConfig#structfield.nat_overrides).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nat_overrides<T9>(
+                self,
+                value: T9,
+            ) -> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+            where
+                T9: ::planus::WriteAsOptional<
+                    ::planus::Offset<[::planus::Offset<self::NatOverride>]>,
+                >,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self.0;
+                TransportConfigBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, value))
+            }
+
+            /// Sets the [`nat_overrides` field](TransportConfig#structfield.nat_overrides) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nat_overrides_as_null(
+                self,
+            ) -> TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, ())> {
+                self.nat_overrides(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>
+            TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [TransportConfig].
             #[inline]
             pub fn finish(
@@ -42132,8 +42991,10 @@ mod root {
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
                 T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 T7: ::planus::WriteAsOptional<bool>,
+                T8: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::NatOverride>]>>,
             > ::planus::WriteAs<::planus::Offset<TransportConfig>>
-            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
+            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
         {
             type Prepared = ::planus::Offset<TransportConfig>;
 
@@ -42159,8 +43020,10 @@ mod root {
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
                 T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 T7: ::planus::WriteAsOptional<bool>,
+                T8: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::NatOverride>]>>,
             > ::planus::WriteAsOptional<::planus::Offset<TransportConfig>>
-            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
+            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
         {
             type Prepared = ::planus::Offset<TransportConfig>;
 
@@ -42186,16 +43049,18 @@ mod root {
                 T5: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
                 T6: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 T7: ::planus::WriteAsOptional<bool>,
+                T8: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+                T9: ::planus::WriteAsOptional<::planus::Offset<[::planus::Offset<self::NatOverride>]>>,
             > ::planus::WriteAsOffset<TransportConfig>
-            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7)>
+            for TransportConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)>
         {
             #[inline]
             fn prepare(
                 &self,
                 builder: &mut ::planus::Builder,
             ) -> ::planus::Offset<TransportConfig> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7) = &self.0;
-                TransportConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7)
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = &self.0;
+                TransportConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
             }
         }
 
@@ -42275,6 +43140,26 @@ mod root {
             pub fn retransmit(&self) -> ::planus::Result<::core::option::Option<bool>> {
                 self.0.access(7, "TransportConfig", "retransmit")
             }
+
+            /// Getter for the [`nat` field](TransportConfig#structfield.nat).
+            #[inline]
+            pub fn nat(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::NatSettingsRef<'a>>> {
+                self.0.access(8, "TransportConfig", "nat")
+            }
+
+            /// Getter for the [`nat_overrides` field](TransportConfig#structfield.nat_overrides).
+            #[inline]
+            pub fn nat_overrides(
+                &self,
+            ) -> ::planus::Result<
+                ::core::option::Option<
+                    ::planus::Vector<'a, ::planus::Result<self::NatOverrideRef<'a>>>,
+                >,
+            > {
+                self.0.access(9, "TransportConfig", "nat_overrides")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for TransportConfigRef<'a> {
@@ -42309,6 +43194,14 @@ mod root {
                     self.retransmit().transpose()
                 {
                     f.field("retransmit", &field_retransmit);
+                }
+                if let ::core::option::Option::Some(field_nat) = self.nat().transpose() {
+                    f.field("nat", &field_nat);
+                }
+                if let ::core::option::Option::Some(field_nat_overrides) =
+                    self.nat_overrides().transpose()
+                {
+                    f.field("nat_overrides", &field_nat_overrides);
                 }
                 f.finish()
             }
@@ -42369,6 +43262,20 @@ mod root {
                         ::core::option::Option::Some(::core::convert::TryInto::try_into(
                             retransmit,
                         )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    nat: if let ::core::option::Option::Some(nat) = value.nat()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(nat)?,
+                        ))
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    nat_overrides: if let ::core::option::Option::Some(nat_overrides) =
+                        value.nat_overrides()?
+                    {
+                        ::core::option::Option::Some(nat_overrides.to_vec_result()?)
                     } else {
                         ::core::option::Option::None
                     },
@@ -42452,7 +43359,7 @@ mod root {
         /// The table `ControllerSettings` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:229`
+        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:254`
         #[derive(
             Clone,
             Debug,
@@ -42912,7 +43819,7 @@ mod root {
         /// The table `NetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:240`
+        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:265`
         #[derive(
             Clone,
             Debug,
@@ -43514,7 +44421,7 @@ mod root {
         /// The table `NodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NodeConfig` in the file `schema/webjet.fbs:253`
+        /// * Table `NodeConfig` in the file `schema/webjet.fbs:278`
         #[derive(
             Clone,
             Debug,
@@ -43552,6 +44459,8 @@ mod root {
                 ::core::option::Option<::planus::alloc::boxed::Box<self::MulticastConfig>>,
             /// The field `retransmit` in the table `NodeConfig`
             pub retransmit: ::core::option::Option<bool>,
+            /// The field `nat` in the table `NodeConfig`
+            pub nat: ::core::option::Option<::planus::alloc::boxed::Box<self::NatSettings>>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -43569,6 +44478,7 @@ mod root {
                     compression: ::core::default::Default::default(),
                     multicast: ::core::default::Default::default(),
                     retransmit: ::core::default::Default::default(),
+                    nat: ::core::default::Default::default(),
                 }
             }
         }
@@ -43608,6 +44518,7 @@ mod root {
                 >,
                 field_multicast: impl ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 field_retransmit: impl ::planus::WriteAsOptional<bool>,
+                field_nat: impl ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
             ) -> ::planus::Offset<Self> {
                 let prepared_node_id = field_node_id.prepare(builder);
                 let prepared_version = field_version.prepare(builder, &0);
@@ -43620,8 +44531,9 @@ mod root {
                 let prepared_compression = field_compression.prepare(builder);
                 let prepared_multicast = field_multicast.prepare(builder);
                 let prepared_retransmit = field_retransmit.prepare(builder);
+                let prepared_nat = field_nat.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<26> =
+                let mut table_writer: ::planus::table_writer::TableWriter<28> =
                     ::core::default::Default::default();
                 if prepared_node_id.is_some() {
                     table_writer.write_entry::<self::Key32>(0);
@@ -43657,6 +44569,9 @@ mod root {
                 }
                 if prepared_multicast.is_some() {
                     table_writer.write_entry::<::planus::Offset<self::MulticastConfig>>(9);
+                }
+                if prepared_nat.is_some() {
+                    table_writer.write_entry::<::planus::Offset<self::NatSettings>>(11);
                 }
                 if prepared_retransmit.is_some() {
                     table_writer.write_entry::<bool>(10);
@@ -43702,6 +44617,9 @@ mod root {
                         if let ::core::option::Option::Some(prepared_multicast) = prepared_multicast
                         {
                             object_writer.write::<_, _, 4>(&prepared_multicast);
+                        }
+                        if let ::core::option::Option::Some(prepared_nat) = prepared_nat {
+                            object_writer.write::<_, _, 4>(&prepared_nat);
                         }
                         if let ::core::option::Option::Some(prepared_retransmit) =
                             prepared_retransmit
@@ -43751,6 +44669,7 @@ mod root {
                     &self.compression,
                     &self.multicast,
                     self.retransmit,
+                    &self.nat,
                 )
             }
         }
@@ -44016,6 +44935,33 @@ mod root {
         impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>
             NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
         {
+            /// Setter for the [`nat` field](NodeConfig#structfield.nat).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nat<T11>(
+                self,
+                value: T11,
+            ) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
+            where
+                T11: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
+            {
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = self.0;
+                NodeConfigBuilder((v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, value))
+            }
+
+            /// Sets the [`nat` field](NodeConfig#structfield.nat) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn nat_as_null(
+                self,
+            ) -> NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, ())> {
+                self.nat(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>
+            NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
+        {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NodeConfig].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig>
@@ -44040,8 +44986,9 @@ mod root {
                 T8: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
                 T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 T10: ::planus::WriteAsOptional<bool>,
+                T11: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
             > ::planus::WriteAs<::planus::Offset<NodeConfig>>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
         {
             type Prepared = ::planus::Offset<NodeConfig>;
 
@@ -44065,8 +45012,9 @@ mod root {
                 T8: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
                 T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 T10: ::planus::WriteAsOptional<bool>,
+                T11: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
             > ::planus::WriteAsOptional<::planus::Offset<NodeConfig>>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
         {
             type Prepared = ::planus::Offset<NodeConfig>;
 
@@ -44093,13 +45041,14 @@ mod root {
                 T8: ::planus::WriteAsOptional<::planus::Offset<self::CompressionConfig>>,
                 T9: ::planus::WriteAsOptional<::planus::Offset<self::MulticastConfig>>,
                 T10: ::planus::WriteAsOptional<bool>,
+                T11: ::planus::WriteAsOptional<::planus::Offset<self::NatSettings>>,
             > ::planus::WriteAsOffset<NodeConfig>
-            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)>
+            for NodeConfigBuilder<(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NodeConfig> {
-                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = &self.0;
-                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
+                let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = &self.0;
+                NodeConfig::create(builder, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
             }
         }
 
@@ -44215,6 +45164,14 @@ mod root {
             pub fn retransmit(&self) -> ::planus::Result<::core::option::Option<bool>> {
                 self.0.access(10, "NodeConfig", "retransmit")
             }
+
+            /// Getter for the [`nat` field](NodeConfig#structfield.nat).
+            #[inline]
+            pub fn nat(
+                &self,
+            ) -> ::planus::Result<::core::option::Option<self::NatSettingsRef<'a>>> {
+                self.0.access(11, "NodeConfig", "nat")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for NodeConfigRef<'a> {
@@ -44261,6 +45218,9 @@ mod root {
                     self.retransmit().transpose()
                 {
                     f.field("retransmit", &field_retransmit);
+                }
+                if let ::core::option::Option::Some(field_nat) = self.nat().transpose() {
+                    f.field("nat", &field_nat);
                 }
                 f.finish()
             }
@@ -44332,6 +45292,13 @@ mod root {
                         ::core::option::Option::Some(::core::convert::TryInto::try_into(
                             retransmit,
                         )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    nat: if let ::core::option::Option::Some(nat) = value.nat()? {
+                        ::core::option::Option::Some(::planus::alloc::boxed::Box::new(
+                            ::core::convert::TryInto::try_into(nat)?,
+                        ))
                     } else {
                         ::core::option::Option::None
                     },
@@ -44415,7 +45382,7 @@ mod root {
         /// The table `ProxyRule` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyRule` in the file `schema/webjet.fbs:271`
+        /// * Table `ProxyRule` in the file `schema/webjet.fbs:297`
         #[derive(
             Clone,
             Debug,
@@ -44935,7 +45902,7 @@ mod root {
         /// The table `SignedTreeHead` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:282`
+        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:308`
         #[derive(
             Clone,
             Debug,
@@ -45461,7 +46428,7 @@ mod root {
         /// The table `SigningKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:291`
+        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:317`
         #[derive(
             Clone,
             Debug,
@@ -45940,7 +46907,7 @@ mod root {
         /// The table `SigningKeyTombstone` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:299`
+        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:325`
         #[derive(
             Clone,
             Debug,
@@ -46338,7 +47305,7 @@ mod root {
         /// The table `EmergencyKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:306`
+        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:332`
         #[derive(
             Clone,
             Debug,
@@ -46621,7 +47588,7 @@ mod root {
         /// The table `TypeSchema` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchema` in the file `schema/webjet.fbs:310`
+        /// * Table `TypeSchema` in the file `schema/webjet.fbs:336`
         #[derive(
             Clone,
             Debug,
@@ -46925,7 +47892,7 @@ mod root {
         /// The table `TypeSchemas` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:311`
+        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:337`
         #[derive(
             Clone,
             Debug,
@@ -47243,7 +48210,7 @@ mod root {
         /// The table `StateVersion` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `StateVersion` in the file `schema/webjet.fbs:313`
+        /// * Table `StateVersion` in the file `schema/webjet.fbs:339`
         #[derive(
             Clone,
             Debug,
@@ -47803,7 +48770,7 @@ mod root {
         /// The table `Genesis` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Genesis` in the file `schema/webjet.fbs:323`
+        /// * Table `Genesis` in the file `schema/webjet.fbs:349`
         #[derive(
             Clone,
             Debug,
@@ -48276,7 +49243,7 @@ mod root {
         /// The table `LogRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRequest` in the file `schema/webjet.fbs:335`
+        /// * Table `LogRequest` in the file `schema/webjet.fbs:361`
         #[derive(
             Clone,
             Debug,
@@ -48690,7 +49657,7 @@ mod root {
         /// The table `SnapshotRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:343`
+        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:369`
         #[derive(
             Clone,
             Debug,
@@ -49031,7 +49998,7 @@ mod root {
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:350`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:376`
         #[derive(
             Clone,
             Debug,
@@ -49441,7 +50408,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:357`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:383`
         #[derive(
             Clone,
             Debug,
@@ -50350,7 +51317,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:374`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:400`
         #[derive(
             Clone,
             Debug,
@@ -50805,7 +51772,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:382`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:408`
         #[derive(
             Clone,
             Debug,
@@ -51264,7 +52231,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:390`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:416`
         #[derive(
             Clone,
             Debug,
@@ -51865,7 +52832,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:400`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:426`
         #[derive(
             Clone,
             Debug,
@@ -52301,7 +53268,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:407`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:433`
         #[derive(
             Clone,
             Debug,
@@ -52857,7 +53824,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:416`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:442`
         #[derive(
             Clone,
             Debug,
@@ -53367,7 +54334,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:427`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:453`
         #[derive(
             Clone,
             Debug,
@@ -53729,7 +54696,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:435`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:461`
         #[derive(
             Copy,
             Clone,
@@ -53902,7 +54869,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:437`
+        /// * Table `Counter` in the file `schema/webjet.fbs:463`
         #[derive(
             Clone,
             Debug,
@@ -54211,7 +55178,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:439`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:465`
         #[derive(
             Clone,
             Debug,
@@ -54510,7 +55477,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:441`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:467`
         #[derive(
             Clone,
             Debug,
@@ -54908,7 +55875,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:448`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:474`
         #[derive(
             Clone,
             Debug,
@@ -55774,7 +56741,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:463`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:489`
         #[derive(
             Clone,
             Debug,
@@ -57190,7 +58157,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:485`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:511`
         #[derive(
             Clone,
             Debug,
@@ -57546,7 +58513,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:487`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:513`
         #[derive(
             Clone,
             Debug,
@@ -57901,7 +58868,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:489`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:515`
         #[derive(
             Clone,
             Debug,
@@ -59233,7 +60200,7 @@ mod root {
         /// The table `TunMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TunMetrics` in the file `schema/webjet.fbs:512`
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:538`
         #[derive(
             Clone,
             Debug,
@@ -59819,7 +60786,7 @@ mod root {
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:531`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:557`
         #[derive(
             Clone,
             Debug,
@@ -60539,7 +61506,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:545`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:571`
         #[derive(
             Clone,
             Debug,
@@ -61273,7 +62240,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:560`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:586`
         #[derive(
             Clone,
             Debug,
@@ -62122,7 +63089,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:574`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:600`
         #[derive(
             Clone,
             Debug,
@@ -62438,7 +63405,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:576`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:602`
         #[derive(
             Clone,
             Debug,
@@ -63249,7 +64216,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:590`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:616`
         #[derive(
             Clone,
             Debug,
@@ -63566,7 +64533,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:592`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:618`
         #[derive(
             Clone,
             Debug,
@@ -63991,7 +64958,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:599`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:625`
         #[derive(
             Clone,
             Debug,
@@ -64257,7 +65224,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:600`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:626`
         #[derive(
             Clone,
             Debug,
@@ -64542,7 +65509,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:603`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:629`
         #[derive(
             Clone,
             Debug,
@@ -64814,7 +65781,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:604`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:630`
         #[derive(
             Clone,
             Debug,
@@ -65084,7 +66051,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:605`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:631`
         #[derive(
             Clone,
             Debug,
@@ -65352,7 +66319,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:606`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:632`
         #[derive(
             Clone,
             Debug,
@@ -65624,7 +66591,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:607`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:633`
         #[derive(
             Clone,
             Debug,
@@ -65900,7 +66867,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:608`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:634`
         #[derive(
             Clone,
             Debug,
@@ -66237,7 +67204,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:609`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:635`
         #[derive(
             Clone,
             Debug,
@@ -66528,7 +67495,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:610`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:636`
         #[derive(
             Clone,
             Debug,
@@ -66803,7 +67770,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:612`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:638`
         #[derive(
             Copy,
             Clone,
@@ -66981,7 +67948,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:613`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:639`
         #[derive(
             Clone,
             Debug,
@@ -67317,7 +68284,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:615`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:641`
         #[derive(
             Clone,
             Debug,
@@ -67579,7 +68546,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:617`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:643`
         #[derive(
             Clone,
             Debug,
@@ -68603,7 +69570,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:637`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:663`
         #[derive(
             Clone,
             Debug,
@@ -69008,7 +69975,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:646`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:672`
         #[derive(
             Clone,
             Debug,
@@ -69272,7 +70239,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:647`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:673`
         #[derive(
             Clone,
             Debug,
@@ -69555,7 +70522,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:648`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:674`
         #[derive(
             Clone,
             Debug,
@@ -69844,7 +70811,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:649`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:675`
         #[derive(
             Clone,
             Debug,
@@ -70240,7 +71207,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:650`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:676`
         #[derive(
             Clone,
             Debug,
@@ -70523,7 +71490,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:651`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:677`
         #[derive(
             Clone,
             Debug,
@@ -70812,7 +71779,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:652`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:678`
         #[derive(
             Clone,
             Debug,
@@ -71103,7 +72070,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:653`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:679`
         #[derive(
             Clone,
             Debug,
@@ -71365,7 +72332,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:654`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:680`
         #[derive(
             Clone,
             Debug,
@@ -71632,7 +72599,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:655`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:681`
         #[derive(
             Clone,
             Debug,
@@ -71976,7 +72943,7 @@ mod root {
         /// The table `AutoMembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:657`
+        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:683`
         #[derive(
             Clone,
             Debug,
@@ -72317,7 +73284,7 @@ mod root {
         /// The table `ForceNewClusterEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:661`
+        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:687`
         #[derive(
             Clone,
             Debug,
@@ -72759,7 +73726,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:668`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:694`
         #[derive(
             Clone,
             Debug,
@@ -73589,7 +74556,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:684`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:710`
         #[derive(
             Clone,
             Debug,
@@ -73903,7 +74870,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:689`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:715`
         #[derive(
             Clone,
             Debug,
@@ -74259,7 +75226,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:695`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:721`
         #[derive(
             Clone,
             Debug,
@@ -74784,7 +75751,7 @@ mod root {
         /// The table `UpgradeFile` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:709`
+        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:735`
         #[derive(
             Clone,
             Debug,
@@ -75100,7 +76067,7 @@ mod root {
         /// The table `UpgradeRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:713`
+        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:739`
         #[derive(
             Clone,
             Debug,

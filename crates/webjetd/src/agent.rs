@@ -442,6 +442,7 @@ pub async fn run_until(cfg: Config, shutdown: crate::service::Shutdown) -> Resul
         n.epochs.write().accept_all = true;
     }
     crate::compression::refresh(&n);
+    crate::nat::refresh(&n);
     crate::transport::start_listeners(&n).await?;
     {
         // Not fatal: the overlay keeps working without the control channel
@@ -778,11 +779,13 @@ async fn connections(n: Arc<Node>) {
                     Ok(Event::HeadChanged) => {
                         n.enforce_revocations();
                         crate::transport::apply_limits(&n);
-                        // New compression settings, or broadcast and
-                        // multicast turned on or off: tell peers (§9.8,
-                        // §9.5.1).
+                        // New compression settings, broadcast and
+                        // multicast turned on or off, or new NAT settings
+                        // (host candidates): tell peers (§9.8, §9.5.1,
+                        // §11.7).
                         let mcast = crate::multicast::refresh(&n);
-                        if crate::compression::refresh(&n) || mcast {
+                        let nat = crate::nat::refresh(&n);
+                        if crate::compression::refresh(&n) || mcast || nat {
                             crate::gossip::publish_endpoint(&n, true);
                         }
                     }

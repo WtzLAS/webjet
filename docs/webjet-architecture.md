@@ -1381,6 +1381,13 @@ These messages are encrypted and authenticated end to end, so relays can't read 
 - **Retry** while the session is in use: after 15 s, doubling to 5 min; immediately when either side's EndpointRecord changes or the direct hop goes down. Success resets the backoff.
 - A direct route between two DATA nodes is not relaying, so it doesn't need `RELAY`. Its `route_id` has an empty relay list (§11.5), and accounting treats it like any other route.
 
+**Turning parts of it off** (from 0.13.0). `NatSettings { punch, predict, port_mapping, host_candidates }` lives in the TransportConfig (`nat`, plus `nat_overrides` with selectors) and in the NodeConfig (`nat`), and is resolved like `retransmit` (§17.5.1), key by key: the node's own value, then the first matching override that sets the key, then the network's, then the built-in value, which is on for every key (`View::nat`). TOML `[nat]` / `[[nat.override]]` (configuration.md).
+- `punch = false`: the node starts no attempts and ignores `PUNCH_OFFER`s. Both sides read the tree, so each skips a peer whose setting is off too: one node's setting is enough for every pair it is in. Older nodes still send offers, and those go unanswered.
+- `predict = false`: no port prediction between the node and any peer, whichever side would probe.
+- `port_mapping = false`: no router mapping, and a held one is released at once. webjetd.toml `[nat] port_mapping = false` still turns it off for the machine.
+- `host_candidates = false`: the node's interface addresses are neither published in its EndpointRecord nor offered. That keeps the LAN layout private, at the cost of LAN-local direct paths unless the router hairpins.
+A change applies on HeadChanged and republishes the EndpointRecord. No StateVersion gate: upgrade every controller before the first change.
+
 ### 11.8 Load-aware routing
 
 Without a load signal, every source picks the same best relay until it saturates, its loss rises, and then everyone moves to the next relay together. Relays therefore advertise their load, path cost accounts for it, and several dampers keep traffic from swinging back and forth.

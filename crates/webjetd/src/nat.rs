@@ -378,11 +378,40 @@ fn lease_slot() -> &'static tokio::sync::Mutex<Option<Lease>> {
     L.get_or_init(|| tokio::sync::Mutex::new(None))
 }
 
+/// Re-read this node's NAT traversal settings from the tree (§11.7, at
+/// start and after a tree change); true when they changed. Port mapping
+/// follows at once (`run_port_mapping` watches `Node::nat_policy`); the
+/// caller republishes the endpoint record, since host candidates may have
+/// come or gone.
+pub fn refresh(n: &Node) -> bool {
+    let p = n.store.snapshot().view().nat(&n.me);
+    let changed = n.nat_policy.send_if_modified(|cur| {
+        if *cur == p {
+            return false;
+        }
+        *cur = p;
+        true
+    });
+    if changed {
+        tracing::info!(
+            punch = p.punch,
+            predict = p.predict,
+            port_mapping = p.port_mapping,
+            host_candidates = p.host_candidates,
+            "NAT traversal settings"
+        );
+    }
+    changed
+}
+
 /// Keep a port mapping for the UDP socket while the agent runs (when the
 /// router offers one and gives a public address): PCP / NAT-PMP first,
 /// then UPnP. Retried every 10 minutes when none is available; the
 /// mapping is published as a PUBLIC address (`transport::my_addrs`; the
 /// endpoint record is republished within seconds when addresses change).
+/// webjetd.toml `[nat] port_mapping = false` turns it off for good; the
+/// tree's `nat.port_mapping` (`Node::nat_policy`) turns it off and on
+/// while the agent runs, giving the mapping back when it goes off.
 pub async fn run_port_mapping(n: Arc<Node>) {
     if !n.cfg.nat.port_mapping {
         return;
@@ -395,6 +424,29 @@ pub async fn run_port_mapping(n: Arc<Node>) {
     else {
         return;
     };
+    let mut policy = n.nat_policy.subscribe();
+    loop {
+        if policy.wait_for(|p| p.port_mapping).await.is_err() {
+            return;
+        }
+        tokio::select! {
+            () = keep_mapping(&n, port) => {}
+            ok = async { policy.wait_for(|p| !p.port_mapping).await.is_ok() } => {
+                if !ok {
+                    return;
+                }
+                tracing::info!("router port mapping turned off by the network configuration");
+            }
+        }
+        // A mapping being requested at that moment isn't in the slot yet;
+        // the router drops it when its lease ends.
+        *n.port_mapping.lock() = None;
+        release_mapping().await;
+    }
+}
+
+/// Get a mapping and keep renewing it; never returns.
+async fn keep_mapping(n: &Node, port: u16) {
     loop {
         let found = match gateway() {
             Some((gw, local)) => match map_pcp(gw, local, port).await {
