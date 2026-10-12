@@ -41728,7 +41728,7 @@ mod root {
         /// The table `NatSettings` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NatSettings` in the file `schema/webjet.fbs:225`
+        /// * Table `NatSettings` in the file `schema/webjet.fbs:229`
         #[derive(
             Clone,
             Debug,
@@ -41749,6 +41749,8 @@ mod root {
             pub port_mapping: ::core::option::Option<bool>,
             /// The field `host_candidates` in the table `NatSettings`
             pub host_candidates: ::core::option::Option<bool>,
+            /// The field `punch_lan` in the table `NatSettings`
+            pub punch_lan: ::core::option::Option<bool>,
         }
 
         #[allow(clippy::derivable_impls)]
@@ -41759,6 +41761,7 @@ mod root {
                     predict: ::core::default::Default::default(),
                     port_mapping: ::core::default::Default::default(),
                     host_candidates: ::core::default::Default::default(),
+                    punch_lan: ::core::default::Default::default(),
                 }
             }
         }
@@ -41777,13 +41780,15 @@ mod root {
                 field_predict: impl ::planus::WriteAsOptional<bool>,
                 field_port_mapping: impl ::planus::WriteAsOptional<bool>,
                 field_host_candidates: impl ::planus::WriteAsOptional<bool>,
+                field_punch_lan: impl ::planus::WriteAsOptional<bool>,
             ) -> ::planus::Offset<Self> {
                 let prepared_punch = field_punch.prepare(builder);
                 let prepared_predict = field_predict.prepare(builder);
                 let prepared_port_mapping = field_port_mapping.prepare(builder);
                 let prepared_host_candidates = field_host_candidates.prepare(builder);
+                let prepared_punch_lan = field_punch_lan.prepare(builder);
 
-                let mut table_writer: ::planus::table_writer::TableWriter<12> =
+                let mut table_writer: ::planus::table_writer::TableWriter<14> =
                     ::core::default::Default::default();
                 if prepared_punch.is_some() {
                     table_writer.write_entry::<bool>(0);
@@ -41796,6 +41801,9 @@ mod root {
                 }
                 if prepared_host_candidates.is_some() {
                     table_writer.write_entry::<bool>(3);
+                }
+                if prepared_punch_lan.is_some() {
+                    table_writer.write_entry::<bool>(4);
                 }
 
                 unsafe {
@@ -41815,6 +41823,10 @@ mod root {
                             prepared_host_candidates
                         {
                             object_writer.write::<_, _, 1>(&prepared_host_candidates);
+                        }
+                        if let ::core::option::Option::Some(prepared_punch_lan) = prepared_punch_lan
+                        {
+                            object_writer.write::<_, _, 1>(&prepared_punch_lan);
                         }
                     });
                 }
@@ -41852,6 +41864,7 @@ mod root {
                     self.predict,
                     self.port_mapping,
                     self.host_candidates,
+                    self.punch_lan,
                 )
             }
         }
@@ -41943,6 +41956,26 @@ mod root {
         }
 
         impl<T0, T1, T2, T3> NatSettingsBuilder<(T0, T1, T2, T3)> {
+            /// Setter for the [`punch_lan` field](NatSettings#structfield.punch_lan).
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn punch_lan<T4>(self, value: T4) -> NatSettingsBuilder<(T0, T1, T2, T3, T4)>
+            where
+                T4: ::planus::WriteAsOptional<bool>,
+            {
+                let (v0, v1, v2, v3) = self.0;
+                NatSettingsBuilder((v0, v1, v2, v3, value))
+            }
+
+            /// Sets the [`punch_lan` field](NatSettings#structfield.punch_lan) to null.
+            #[inline]
+            #[allow(clippy::type_complexity)]
+            pub fn punch_lan_as_null(self) -> NatSettingsBuilder<(T0, T1, T2, T3, ())> {
+                self.punch_lan(())
+            }
+        }
+
+        impl<T0, T1, T2, T3, T4> NatSettingsBuilder<(T0, T1, T2, T3, T4)> {
             /// Finish writing the builder to get an [Offset](::planus::Offset) to a serialized [NatSettings].
             #[inline]
             pub fn finish(self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings>
@@ -41958,8 +41991,9 @@ mod root {
                 T1: ::planus::WriteAsOptional<bool>,
                 T2: ::planus::WriteAsOptional<bool>,
                 T3: ::planus::WriteAsOptional<bool>,
+                T4: ::planus::WriteAsOptional<bool>,
             > ::planus::WriteAs<::planus::Offset<NatSettings>>
-            for NatSettingsBuilder<(T0, T1, T2, T3)>
+            for NatSettingsBuilder<(T0, T1, T2, T3, T4)>
         {
             type Prepared = ::planus::Offset<NatSettings>;
 
@@ -41974,8 +42008,9 @@ mod root {
                 T1: ::planus::WriteAsOptional<bool>,
                 T2: ::planus::WriteAsOptional<bool>,
                 T3: ::planus::WriteAsOptional<bool>,
+                T4: ::planus::WriteAsOptional<bool>,
             > ::planus::WriteAsOptional<::planus::Offset<NatSettings>>
-            for NatSettingsBuilder<(T0, T1, T2, T3)>
+            for NatSettingsBuilder<(T0, T1, T2, T3, T4)>
         {
             type Prepared = ::planus::Offset<NatSettings>;
 
@@ -41993,12 +42028,13 @@ mod root {
                 T1: ::planus::WriteAsOptional<bool>,
                 T2: ::planus::WriteAsOptional<bool>,
                 T3: ::planus::WriteAsOptional<bool>,
-            > ::planus::WriteAsOffset<NatSettings> for NatSettingsBuilder<(T0, T1, T2, T3)>
+                T4: ::planus::WriteAsOptional<bool>,
+            > ::planus::WriteAsOffset<NatSettings> for NatSettingsBuilder<(T0, T1, T2, T3, T4)>
         {
             #[inline]
             fn prepare(&self, builder: &mut ::planus::Builder) -> ::planus::Offset<NatSettings> {
-                let (v0, v1, v2, v3) = &self.0;
-                NatSettings::create(builder, v0, v1, v2, v3)
+                let (v0, v1, v2, v3, v4) = &self.0;
+                NatSettings::create(builder, v0, v1, v2, v3, v4)
             }
         }
 
@@ -42030,6 +42066,12 @@ mod root {
             pub fn host_candidates(&self) -> ::planus::Result<::core::option::Option<bool>> {
                 self.0.access(3, "NatSettings", "host_candidates")
             }
+
+            /// Getter for the [`punch_lan` field](NatSettings#structfield.punch_lan).
+            #[inline]
+            pub fn punch_lan(&self) -> ::planus::Result<::core::option::Option<bool>> {
+                self.0.access(4, "NatSettings", "punch_lan")
+            }
         }
 
         impl<'a> ::core::fmt::Debug for NatSettingsRef<'a> {
@@ -42050,6 +42092,10 @@ mod root {
                     self.host_candidates().transpose()
                 {
                     f.field("host_candidates", &field_host_candidates);
+                }
+                if let ::core::option::Option::Some(field_punch_lan) = self.punch_lan().transpose()
+                {
+                    f.field("punch_lan", &field_punch_lan);
                 }
                 f.finish()
             }
@@ -42086,6 +42132,11 @@ mod root {
                         ::core::option::Option::Some(::core::convert::TryInto::try_into(
                             host_candidates,
                         )?)
+                    } else {
+                        ::core::option::Option::None
+                    },
+                    punch_lan: if let ::core::option::Option::Some(punch_lan) = value.punch_lan()? {
+                        ::core::option::Option::Some(::core::convert::TryInto::try_into(punch_lan)?)
                     } else {
                         ::core::option::Option::None
                     },
@@ -42169,7 +42220,7 @@ mod root {
         /// The table `NatOverride` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NatOverride` in the file `schema/webjet.fbs:232`
+        /// * Table `NatOverride` in the file `schema/webjet.fbs:237`
         #[derive(
             Clone,
             Debug,
@@ -42502,7 +42553,7 @@ mod root {
         /// The table `TransportConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TransportConfig` in the file `schema/webjet.fbs:237`
+        /// * Table `TransportConfig` in the file `schema/webjet.fbs:242`
         #[derive(
             Clone,
             Debug,
@@ -43359,7 +43410,7 @@ mod root {
         /// The table `ControllerSettings` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:254`
+        /// * Table `ControllerSettings` in the file `schema/webjet.fbs:259`
         #[derive(
             Clone,
             Debug,
@@ -43819,7 +43870,7 @@ mod root {
         /// The table `NetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:265`
+        /// * Table `NetworkConfig` in the file `schema/webjet.fbs:270`
         #[derive(
             Clone,
             Debug,
@@ -44421,7 +44472,7 @@ mod root {
         /// The table `NodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NodeConfig` in the file `schema/webjet.fbs:278`
+        /// * Table `NodeConfig` in the file `schema/webjet.fbs:283`
         #[derive(
             Clone,
             Debug,
@@ -45382,7 +45433,7 @@ mod root {
         /// The table `ProxyRule` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyRule` in the file `schema/webjet.fbs:297`
+        /// * Table `ProxyRule` in the file `schema/webjet.fbs:302`
         #[derive(
             Clone,
             Debug,
@@ -45902,7 +45953,7 @@ mod root {
         /// The table `SignedTreeHead` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:308`
+        /// * Table `SignedTreeHead` in the file `schema/webjet.fbs:313`
         #[derive(
             Clone,
             Debug,
@@ -46428,7 +46479,7 @@ mod root {
         /// The table `SigningKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:317`
+        /// * Table `SigningKeyCert` in the file `schema/webjet.fbs:322`
         #[derive(
             Clone,
             Debug,
@@ -46907,7 +46958,7 @@ mod root {
         /// The table `SigningKeyTombstone` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:325`
+        /// * Table `SigningKeyTombstone` in the file `schema/webjet.fbs:330`
         #[derive(
             Clone,
             Debug,
@@ -47305,7 +47356,7 @@ mod root {
         /// The table `EmergencyKeyCert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:332`
+        /// * Table `EmergencyKeyCert` in the file `schema/webjet.fbs:337`
         #[derive(
             Clone,
             Debug,
@@ -47588,7 +47639,7 @@ mod root {
         /// The table `TypeSchema` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchema` in the file `schema/webjet.fbs:336`
+        /// * Table `TypeSchema` in the file `schema/webjet.fbs:341`
         #[derive(
             Clone,
             Debug,
@@ -47892,7 +47943,7 @@ mod root {
         /// The table `TypeSchemas` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:337`
+        /// * Table `TypeSchemas` in the file `schema/webjet.fbs:342`
         #[derive(
             Clone,
             Debug,
@@ -48210,7 +48261,7 @@ mod root {
         /// The table `StateVersion` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `StateVersion` in the file `schema/webjet.fbs:339`
+        /// * Table `StateVersion` in the file `schema/webjet.fbs:344`
         #[derive(
             Clone,
             Debug,
@@ -48770,7 +48821,7 @@ mod root {
         /// The table `Genesis` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Genesis` in the file `schema/webjet.fbs:349`
+        /// * Table `Genesis` in the file `schema/webjet.fbs:354`
         #[derive(
             Clone,
             Debug,
@@ -49243,7 +49294,7 @@ mod root {
         /// The table `LogRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogRequest` in the file `schema/webjet.fbs:361`
+        /// * Table `LogRequest` in the file `schema/webjet.fbs:366`
         #[derive(
             Clone,
             Debug,
@@ -49657,7 +49708,7 @@ mod root {
         /// The table `SnapshotRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:369`
+        /// * Table `SnapshotRequest` in the file `schema/webjet.fbs:374`
         #[derive(
             Clone,
             Debug,
@@ -49998,7 +50049,7 @@ mod root {
         /// The table `EndpointAddr` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:376`
+        /// * Table `EndpointAddr` in the file `schema/webjet.fbs:381`
         #[derive(
             Clone,
             Debug,
@@ -50408,7 +50459,7 @@ mod root {
         /// The table `EndpointRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:383`
+        /// * Table `EndpointRecord` in the file `schema/webjet.fbs:388`
         #[derive(
             Clone,
             Debug,
@@ -51317,7 +51368,7 @@ mod root {
         /// The table `LinkEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkEntry` in the file `schema/webjet.fbs:400`
+        /// * Table `LinkEntry` in the file `schema/webjet.fbs:405`
         #[derive(
             Clone,
             Debug,
@@ -51772,7 +51823,7 @@ mod root {
         /// The table `RelayLoad` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RelayLoad` in the file `schema/webjet.fbs:408`
+        /// * Table `RelayLoad` in the file `schema/webjet.fbs:413`
         #[derive(
             Clone,
             Debug,
@@ -52231,7 +52282,7 @@ mod root {
         /// The table `LinkStateAdvert` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:416`
+        /// * Table `LinkStateAdvert` in the file `schema/webjet.fbs:421`
         #[derive(
             Clone,
             Debug,
@@ -52832,7 +52883,7 @@ mod root {
         /// The table `AttachmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:426`
+        /// * Table `AttachmentEntry` in the file `schema/webjet.fbs:431`
         #[derive(
             Clone,
             Debug,
@@ -53268,7 +53319,7 @@ mod root {
         /// The table `AttachmentRecord` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:433`
+        /// * Table `AttachmentRecord` in the file `schema/webjet.fbs:438`
         #[derive(
             Clone,
             Debug,
@@ -53824,7 +53875,7 @@ mod root {
         /// The table `CircuitSetup` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:442`
+        /// * Table `CircuitSetup` in the file `schema/webjet.fbs:447`
         #[derive(
             Clone,
             Debug,
@@ -54334,7 +54385,7 @@ mod root {
         /// The table `RotateNodeKey` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:453`
+        /// * Table `RotateNodeKey` in the file `schema/webjet.fbs:458`
         #[derive(
             Clone,
             Debug,
@@ -54696,7 +54747,7 @@ mod root {
         /// The enum `RouteRole` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `RouteRole` in the file `schema/webjet.fbs:461`
+        /// * Enum `RouteRole` in the file `schema/webjet.fbs:466`
         #[derive(
             Copy,
             Clone,
@@ -54869,7 +54920,7 @@ mod root {
         /// The table `Counter` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Counter` in the file `schema/webjet.fbs:463`
+        /// * Table `Counter` in the file `schema/webjet.fbs:468`
         #[derive(
             Clone,
             Debug,
@@ -55178,7 +55229,7 @@ mod root {
         /// The table `RouteDir` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteDir` in the file `schema/webjet.fbs:465`
+        /// * Table `RouteDir` in the file `schema/webjet.fbs:470`
         #[derive(
             Clone,
             Debug,
@@ -55477,7 +55528,7 @@ mod root {
         /// The table `RouteE2e` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteE2e` in the file `schema/webjet.fbs:467`
+        /// * Table `RouteE2e` in the file `schema/webjet.fbs:472`
         #[derive(
             Clone,
             Debug,
@@ -55875,7 +55926,7 @@ mod root {
         /// The table `RouteMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:474`
+        /// * Table `RouteMetrics` in the file `schema/webjet.fbs:479`
         #[derive(
             Clone,
             Debug,
@@ -56741,7 +56792,7 @@ mod root {
         /// The table `LinkMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:489`
+        /// * Table `LinkMetrics` in the file `schema/webjet.fbs:494`
         #[derive(
             Clone,
             Debug,
@@ -58157,7 +58208,7 @@ mod root {
         /// The table `RuleHit` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RuleHit` in the file `schema/webjet.fbs:511`
+        /// * Table `RuleHit` in the file `schema/webjet.fbs:516`
         #[derive(
             Clone,
             Debug,
@@ -58513,7 +58564,7 @@ mod root {
         /// The table `Alarm` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `Alarm` in the file `schema/webjet.fbs:513`
+        /// * Table `Alarm` in the file `schema/webjet.fbs:518`
         #[derive(
             Clone,
             Debug,
@@ -58868,7 +58919,7 @@ mod root {
         /// The table `MetricReport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MetricReport` in the file `schema/webjet.fbs:515`
+        /// * Table `MetricReport` in the file `schema/webjet.fbs:520`
         #[derive(
             Clone,
             Debug,
@@ -60200,7 +60251,7 @@ mod root {
         /// The table `TunMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TunMetrics` in the file `schema/webjet.fbs:538`
+        /// * Table `TunMetrics` in the file `schema/webjet.fbs:543`
         #[derive(
             Clone,
             Debug,
@@ -60786,7 +60837,7 @@ mod root {
         /// The table `CompressionMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:557`
+        /// * Table `CompressionMetrics` in the file `schema/webjet.fbs:562`
         #[derive(
             Clone,
             Debug,
@@ -61506,7 +61557,7 @@ mod root {
         /// The table `ProxyMetrics` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:571`
+        /// * Table `ProxyMetrics` in the file `schema/webjet.fbs:576`
         #[derive(
             Clone,
             Debug,
@@ -62240,7 +62291,7 @@ mod root {
         /// The table `CreateEnrollment` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:586`
+        /// * Table `CreateEnrollment` in the file `schema/webjet.fbs:591`
         #[derive(
             Clone,
             Debug,
@@ -63089,7 +63140,7 @@ mod root {
         /// The table `RenameNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RenameNode` in the file `schema/webjet.fbs:600`
+        /// * Table `RenameNode` in the file `schema/webjet.fbs:605`
         #[derive(
             Clone,
             Debug,
@@ -63405,7 +63456,7 @@ mod root {
         /// The table `UpdateNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpdateNode` in the file `schema/webjet.fbs:602`
+        /// * Table `UpdateNode` in the file `schema/webjet.fbs:607`
         #[derive(
             Clone,
             Debug,
@@ -64216,7 +64267,7 @@ mod root {
         /// The table `TombstoneNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:616`
+        /// * Table `TombstoneNode` in the file `schema/webjet.fbs:621`
         #[derive(
             Clone,
             Debug,
@@ -64533,7 +64584,7 @@ mod root {
         /// The table `RekeyNode` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RekeyNode` in the file `schema/webjet.fbs:618`
+        /// * Table `RekeyNode` in the file `schema/webjet.fbs:623`
         #[derive(
             Clone,
             Debug,
@@ -64958,7 +65009,7 @@ mod root {
         /// The table `PutAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `PutAccount` in the file `schema/webjet.fbs:625`
+        /// * Table `PutAccount` in the file `schema/webjet.fbs:630`
         #[derive(
             Clone,
             Debug,
@@ -65224,7 +65275,7 @@ mod root {
         /// The table `TombstoneAccount` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:626`
+        /// * Table `TombstoneAccount` in the file `schema/webjet.fbs:631`
         #[derive(
             Clone,
             Debug,
@@ -65509,7 +65560,7 @@ mod root {
         /// The table `SetPolicy` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetPolicy` in the file `schema/webjet.fbs:629`
+        /// * Table `SetPolicy` in the file `schema/webjet.fbs:634`
         #[derive(
             Clone,
             Debug,
@@ -65781,7 +65832,7 @@ mod root {
         /// The table `SetDns` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetDns` in the file `schema/webjet.fbs:630`
+        /// * Table `SetDns` in the file `schema/webjet.fbs:635`
         #[derive(
             Clone,
             Debug,
@@ -66051,7 +66102,7 @@ mod root {
         /// The table `SetSeeds` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetSeeds` in the file `schema/webjet.fbs:631`
+        /// * Table `SetSeeds` in the file `schema/webjet.fbs:636`
         #[derive(
             Clone,
             Debug,
@@ -66319,7 +66370,7 @@ mod root {
         /// The table `SetLimits` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetLimits` in the file `schema/webjet.fbs:632`
+        /// * Table `SetLimits` in the file `schema/webjet.fbs:637`
         #[derive(
             Clone,
             Debug,
@@ -66591,7 +66642,7 @@ mod root {
         /// The table `SetTransport` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetTransport` in the file `schema/webjet.fbs:633`
+        /// * Table `SetTransport` in the file `schema/webjet.fbs:638`
         #[derive(
             Clone,
             Debug,
@@ -66867,7 +66918,7 @@ mod root {
         /// The table `SetCamouflageSecret` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:634`
+        /// * Table `SetCamouflageSecret` in the file `schema/webjet.fbs:639`
         #[derive(
             Clone,
             Debug,
@@ -67204,7 +67255,7 @@ mod root {
         /// The table `SetNetworkConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:635`
+        /// * Table `SetNetworkConfig` in the file `schema/webjet.fbs:640`
         #[derive(
             Clone,
             Debug,
@@ -67495,7 +67546,7 @@ mod root {
         /// The table `SetNodeConfig` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:636`
+        /// * Table `SetNodeConfig` in the file `schema/webjet.fbs:641`
         #[derive(
             Clone,
             Debug,
@@ -67770,7 +67821,7 @@ mod root {
         /// The enum `MembershipChange` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:638`
+        /// * Enum `MembershipChange` in the file `schema/webjet.fbs:643`
         #[derive(
             Copy,
             Clone,
@@ -67948,7 +67999,7 @@ mod root {
         /// The table `ChangeMembership` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:639`
+        /// * Table `ChangeMembership` in the file `schema/webjet.fbs:644`
         #[derive(
             Clone,
             Debug,
@@ -68284,7 +68335,7 @@ mod root {
         /// The table `RotatePsk` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotatePsk` in the file `schema/webjet.fbs:641`
+        /// * Table `RotatePsk` in the file `schema/webjet.fbs:646`
         #[derive(
             Clone,
             Debug,
@@ -68546,7 +68597,7 @@ mod root {
         /// The union `AccountOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `AccountOp` in the file `schema/webjet.fbs:643`
+        /// * Union `AccountOp` in the file `schema/webjet.fbs:648`
         #[derive(
             Clone,
             Debug,
@@ -69570,7 +69621,7 @@ mod root {
         /// The table `SignedOp` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SignedOp` in the file `schema/webjet.fbs:663`
+        /// * Table `SignedOp` in the file `schema/webjet.fbs:668`
         #[derive(
             Clone,
             Debug,
@@ -69975,7 +70026,7 @@ mod root {
         /// The table `OpEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `OpEntry` in the file `schema/webjet.fbs:672`
+        /// * Table `OpEntry` in the file `schema/webjet.fbs:677`
         #[derive(
             Clone,
             Debug,
@@ -70239,7 +70290,7 @@ mod root {
         /// The table `RootAccountEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:673`
+        /// * Table `RootAccountEntry` in the file `schema/webjet.fbs:678`
         #[derive(
             Clone,
             Debug,
@@ -70522,7 +70573,7 @@ mod root {
         /// The table `SetStateVersionEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:674`
+        /// * Table `SetStateVersionEntry` in the file `schema/webjet.fbs:679`
         #[derive(
             Clone,
             Debug,
@@ -70811,7 +70862,7 @@ mod root {
         /// The table `RedeemEnrollmentEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:675`
+        /// * Table `RedeemEnrollmentEntry` in the file `schema/webjet.fbs:680`
         #[derive(
             Clone,
             Debug,
@@ -71207,7 +71258,7 @@ mod root {
         /// The table `RotateNodeKeyEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:676`
+        /// * Table `RotateNodeKeyEntry` in the file `schema/webjet.fbs:681`
         #[derive(
             Clone,
             Debug,
@@ -71490,7 +71541,7 @@ mod root {
         /// The table `ExtendValidityEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:677`
+        /// * Table `ExtendValidityEntry` in the file `schema/webjet.fbs:682`
         #[derive(
             Clone,
             Debug,
@@ -71779,7 +71830,7 @@ mod root {
         /// The table `ExpireEnrollmentsEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:678`
+        /// * Table `ExpireEnrollmentsEntry` in the file `schema/webjet.fbs:683`
         #[derive(
             Clone,
             Debug,
@@ -72070,7 +72121,7 @@ mod root {
         /// The table `NoopEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `NoopEntry` in the file `schema/webjet.fbs:679`
+        /// * Table `NoopEntry` in the file `schema/webjet.fbs:684`
         #[derive(
             Clone,
             Debug,
@@ -72332,7 +72383,7 @@ mod root {
         /// The table `GenesisEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:680`
+        /// * Table `GenesisEntry` in the file `schema/webjet.fbs:685`
         #[derive(
             Clone,
             Debug,
@@ -72599,7 +72650,7 @@ mod root {
         /// The table `MembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:681`
+        /// * Table `MembershipEntry` in the file `schema/webjet.fbs:686`
         #[derive(
             Clone,
             Debug,
@@ -72943,7 +72994,7 @@ mod root {
         /// The table `AutoMembershipEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:683`
+        /// * Table `AutoMembershipEntry` in the file `schema/webjet.fbs:688`
         #[derive(
             Clone,
             Debug,
@@ -73284,7 +73335,7 @@ mod root {
         /// The table `ForceNewClusterEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:687`
+        /// * Table `ForceNewClusterEntry` in the file `schema/webjet.fbs:692`
         #[derive(
             Clone,
             Debug,
@@ -73726,7 +73777,7 @@ mod root {
         /// The union `EntryPayload` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Union `EntryPayload` in the file `schema/webjet.fbs:694`
+        /// * Union `EntryPayload` in the file `schema/webjet.fbs:699`
         #[derive(
             Clone,
             Debug,
@@ -74556,7 +74607,7 @@ mod root {
         /// The table `EntryRandom` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `EntryRandom` in the file `schema/webjet.fbs:710`
+        /// * Table `EntryRandom` in the file `schema/webjet.fbs:715`
         #[derive(
             Clone,
             Debug,
@@ -74870,7 +74921,7 @@ mod root {
         /// The table `LeafUpdate` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:715`
+        /// * Table `LeafUpdate` in the file `schema/webjet.fbs:720`
         #[derive(
             Clone,
             Debug,
@@ -75226,7 +75277,7 @@ mod root {
         /// The table `LogEntry` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `LogEntry` in the file `schema/webjet.fbs:721`
+        /// * Table `LogEntry` in the file `schema/webjet.fbs:726`
         #[derive(
             Clone,
             Debug,
@@ -75751,7 +75802,7 @@ mod root {
         /// The table `UpgradeFile` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:735`
+        /// * Table `UpgradeFile` in the file `schema/webjet.fbs:740`
         #[derive(
             Clone,
             Debug,
@@ -76067,7 +76118,7 @@ mod root {
         /// The table `UpgradeRequest` in the namespace `webjet`
         ///
         /// Generated from these locations:
-        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:739`
+        /// * Table `UpgradeRequest` in the file `schema/webjet.fbs:744`
         #[derive(
             Clone,
             Debug,

@@ -435,8 +435,12 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
         .and_then(|u| u.local_addr().ok())
         .map(|a| a.port())
     {
-        for o in observed(n) {
-            push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
+        // Not with `[nat] punch = "lan"` (§11.7): outside peers would dial
+        // them through the NAT.
+        if n.nat_policy.borrow().publishes_reflexive() {
+            for o in observed(n) {
+                push(o, Transport::KcpFecTls, wp::AddrKind::Reflexive);
+            }
         }
         for ip in host_ips(n) {
             push(
@@ -452,12 +456,18 @@ pub fn my_addrs(n: &Node) -> Vec<wp::EndpointAddr> {
 
 /// The interface addresses this node offers as HOST candidates (§11.7):
 /// none when the NAT settings (`nat.host_candidates`) keep them private.
+/// With `punch = "lan"`, private ones only: a public interface address
+/// (an IPv6 one, say) would give outside peers a direct path.
 pub fn host_ips(n: &Node) -> Vec<std::net::IpAddr> {
-    if n.nat_policy.borrow().host_candidates {
-        crate::nat::candidate_ips(&n.cfg.nat)
-    } else {
-        Vec::new()
+    let p = *n.nat_policy.borrow();
+    if !p.host_candidates {
+        return Vec::new();
     }
+    let mut v = crate::nat::candidate_ips(&n.cfg.nat);
+    if p.punch == webjet_core::store::Punch::Lan {
+        v.retain(crate::nat::is_private);
+    }
+    v
 }
 
 /// Keep the addresses of the DNS names in webjetd.toml `[[public]]` (a

@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use webjet_core::crypto::{self, Bytes32};
 use webjet_core::frames::ftype;
+use webjet_core::store::Punch;
 use webjet_net::kcp::PunchEvent;
 use webjet_proto::{self as wp, Decodable, Encodable, Transport};
 
@@ -76,6 +77,8 @@ struct Attempt {
     probing: bool,
     dialing: bool,
     predict: bool,
+    /// `[nat] punch = "lan"` on either side: LAN addresses only.
+    lan: bool,
 }
 
 #[derive(Debug, Default)]
@@ -101,15 +104,27 @@ fn has_direct_udp(n: &Node, peer: &Bytes32) -> bool {
         .any(|h| h.transport == Transport::KcpFecTls)
 }
 
-/// Our candidates, best first (§11.7 rules, plus the router's mapping).
-fn my_candidates(n: &Node) -> Vec<SocketAddr> {
+/// Our candidates, best first (§11.7 rules, plus the router's mapping);
+/// with `lan`, private addresses only (no mapping, public listen,
+/// reflexive or public interface addresses).
+fn my_candidates(n: &Node, lan: bool) -> Vec<SocketAddr> {
     let mut out: Vec<SocketAddr> = Vec::new();
     let mapping = *n.port_mapping.lock();
-    if let Some(m) = mapping {
+    if let Some(m) = mapping
+        && !lan
+    {
         out.push(m.external);
     }
     let mut addrs = crate::transport::my_addrs(n);
     addrs.retain(|a| a.transport == Transport::KcpFecTls);
+    if lan {
+        addrs.retain(|a| {
+            a.addr
+                .as_ref()
+                .and_then(|x| x.to_sock())
+                .is_some_and(|x| crate::nat::is_private(&x.ip()))
+        });
+    }
     addrs.sort_by_key(|a| match a.kind {
         wp::AddrKind::Public => 0,
         wp::AddrKind::Reflexive => 1,
@@ -132,25 +147,33 @@ fn nat_of(n: &Node, peer: &Bytes32) -> wp::NatType {
         .map_or(wp::NatType::Unknown, |(r, _)| r.nat)
 }
 
+/// The pair's punching (`[nat] punch`): the narrower of both sides'
+/// settings. Both read the same tree, so they agree.
+fn pair_punch(n: &Node, peer: &Bytes32) -> Punch {
+    let mine = n.nat_policy.borrow().punch;
+    mine.pair(n.store.snapshot().view().nat(peer).punch)
+}
+
 /// Punch unless a direct UDP hop exists, either side turned UDP off, or the
-/// NAT settings (`[nat] punch`) turn punching off for either side; both
-/// sides read the same tree, so neither starts or answers. The NAT types
-/// don't matter: two nodes behind one NAT (on one LAN) look symmetric to
-/// relays yet reach each other's HOST candidates, and port prediction may
-/// still meet across two symmetric NATs.
+/// NAT settings (`[nat] punch`) turn punching off for either side; neither
+/// side then starts or answers. The NAT types don't matter: two nodes
+/// behind one NAT (on one LAN) look symmetric to relays yet reach each
+/// other's HOST candidates, and port prediction may still meet across two
+/// symmetric NATs.
 fn should_try(n: &Node, peer: &Bytes32) -> bool {
     !has_direct_udp(n, peer)
         && crate::transport::priority(n, &n.me, Transport::KcpFecTls) != 0
         && crate::transport::priority(n, peer, Transport::KcpFecTls) != 0
-        && n.nat_policy.borrow().punch
-        && n.store.snapshot().view().nat(peer).punch
+        && pair_punch(n, peer) != Punch::Off
 }
 
 /// Port prediction applies when the peer's NAT is symmetric (whatever ours
 /// is: two symmetric NATs that hand out ports in sequence can still meet),
-/// unless the NAT settings (`[nat] predict`) turn it off for either side.
+/// unless the NAT settings (`[nat] predict`, or `punch = "lan"`) turn it
+/// off for either side.
 fn should_predict(n: &Node, peer: &Bytes32) -> bool {
     matches!(nat_of(n, peer), wp::NatType::Symmetric)
+        && pair_punch(n, peer) == Punch::On
         && n.nat_policy.borrow().predict
         && n.store.snapshot().view().nat(peer).predict
 }
@@ -187,6 +210,7 @@ pub fn maybe_start(n: &Arc<Node>, peer: &Bytes32) {
     };
     st.next_try = Some(now + st.backoff);
     let nonce = crypto::random16();
+    let lan = pair_punch(n, peer) == Punch::Lan;
     st.attempt = Some(Attempt {
         nonce,
         initiator: true,
@@ -198,15 +222,16 @@ pub fn maybe_start(n: &Arc<Node>, peer: &Bytes32) {
         probing: false,
         dialing: false,
         predict: false,
+        lan,
     });
     drop(t);
-    send_offer(n, peer, nonce);
+    send_offer(n, peer, nonce, lan);
 }
 
-fn send_offer(n: &Arc<Node>, peer: &Bytes32, nonce: [u8; 16]) {
+fn send_offer(n: &Arc<Node>, peer: &Bytes32, nonce: [u8; 16], lan: bool) {
     let offer = wp::PunchOffer {
         candidates: Some(
-            my_candidates(n)
+            my_candidates(n, lan)
                 .into_iter()
                 .map(wp::SockAddr::from_sock)
                 .collect(),
@@ -242,13 +267,15 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
             let nonce = o.nonce.map(|x| x.to_bytes()).unwrap_or_default();
             // Our own addresses: a peer on another LAN with the same subnet
             // may offer an address that is ours here.
-            let mine = my_candidates(n);
+            let mine = my_candidates(n, false);
+            let lan = pair_punch(n, peer) == Punch::Lan;
             let cands: Vec<SocketAddr> = o
                 .candidates
                 .unwrap_or_default()
                 .iter()
                 .filter_map(|c| c.to_sock())
                 .filter(|a| crate::nat::dialable(n, a) && !mine.contains(a))
+                .filter(|a| !lan || crate::nat::is_lan(&n.cfg.nat, &a.ip()))
                 .take(MAX_CANDIDATES)
                 .collect();
             let predict = should_predict(n, peer);
@@ -265,6 +292,7 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
                     }
                     a.theirs = cands;
                     a.predict = predict;
+                    a.lan = lan;
                     a.probing = true;
                     drop(t);
                     let go = wp::PunchGo {
@@ -292,9 +320,10 @@ pub fn on_message(n: &Arc<Node>, peer: &Bytes32, ty: u8, payload: &[u8]) {
                         probing: false,
                         dialing: false,
                         predict,
+                        lan,
                     });
                     drop(t);
-                    send_offer(n, peer, nonce);
+                    send_offer(n, peer, nonce, lan);
                 }
             }
         }
@@ -532,6 +561,11 @@ fn on_check(n: &Arc<Node>, ev: PunchEvent) {
     }) else {
         return;
     };
+    // `punch = "lan"`: nothing from outside the LAN, not even a
+    // peer-reflexive address.
+    if a.lan && !crate::nat::is_lan(&n.cfg.nat, &ev.from.ip()) {
+        return;
+    }
     if !ev.pong {
         // A PING from an address the peer didn't offer: its NAT mapped a
         // new port for us. Check it too (it gets our PONG already).
@@ -591,7 +625,7 @@ pub fn status(n: &Node) -> serde_json::Value {
             }),
         );
     }
-    serde_json::json!({"mine": my_candidates(n).iter().map(|c| c.to_string()).collect::<Vec<_>>(), "policy": *n.nat_policy.borrow(), "nat": format!("{:?}", crate::transport::nat_type(n)), "peers": out})
+    serde_json::json!({"mine": my_candidates(n, false).iter().map(|c| c.to_string()).collect::<Vec<_>>(), "policy": *n.nat_policy.borrow(), "nat": format!("{:?}", crate::transport::nat_type(n)), "peers": out})
 }
 
 /// Retry punching for active sessions on the backoff schedule, and
@@ -740,6 +774,7 @@ mod tests {
                 probing: false,
                 dialing: false,
                 predict: false,
+                lan: false,
             });
         };
         let (mine_lo, mine_hi) = ([1; 16], [2; 16]);
@@ -931,6 +966,88 @@ mod tests {
         assert!(crate::nat::refresh(&an));
         assert!(!an.nat_policy.borrow().host_candidates);
         assert!(crate::transport::host_ips(&an).is_empty());
+    }
+
+    /// `[nat] punch = "lan"` for one node: the pair punches between LAN
+    /// addresses only (both sides offer and take private ones), with no
+    /// port prediction, no reflexive candidates and no router mapping.
+    #[tokio::test]
+    async fn lan_only_punching_keeps_outside_addresses_out() {
+        let mut c = Cluster::new();
+        let a = c.data_node("a", "10.7.0.2", &[]);
+        let b = c.data_node("b", "10.7.0.3", &[]);
+        c.set_policy(wp::Policy {
+            default_action: wp::Action::Allow,
+            ..Default::default()
+        })
+        .expect("policy");
+        let (an, _d1) = testnode::node(&mut c, a.0, a.1);
+        let (bn, _d2) = testnode::node(&mut c, b.0, b.1);
+        let rec = |id: &Bytes32| wp::EndpointRecord {
+            node_id: Some(webjet_core::crypto::k32(id)),
+            nat: wp::NatType::Symmetric,
+            ..Default::default()
+        };
+        an.records
+            .lock()
+            .endpoints
+            .insert(bn.me, (rec(&bn.me), Vec::new()));
+        bn.records
+            .lock()
+            .endpoints
+            .insert(an.me, (rec(&an.me), Vec::new()));
+        c.set_node_config(wp::NodeConfig {
+            node_id: Some(webjet_core::crypto::k32(&bn.me)),
+            nat: Some(Box::new(wp::NatSettings {
+                punch: Some(false),
+                punch_lan: Some(true),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .expect("node config");
+        testnode::sync(&mut c, &an);
+        testnode::sync(&mut c, &bn);
+        assert!(crate::nat::refresh(&bn));
+        let p = *bn.nat_policy.borrow();
+        assert_eq!(p.punch, Punch::Lan);
+        assert!(!p.maps_ports() && !p.publishes_reflexive());
+        // Still punched from both sides, without prediction.
+        assert_eq!(pair_punch(&an, &bn.me), Punch::Lan);
+        assert!(should_try(&an, &bn.me) && should_try(&bn, &an.me));
+        assert!(!should_predict(&an, &bn.me) && !should_predict(&bn, &an.me));
+        // b's own candidates: private addresses only.
+        assert!(
+            my_candidates(&bn, true)
+                .iter()
+                .all(|a| crate::nat::is_private(&a.ip()))
+        );
+        assert!(
+            crate::transport::host_ips(&bn)
+                .iter()
+                .all(crate::nat::is_private)
+        );
+        // a offers an outside and a LAN address; b keeps the LAN one.
+        let nonce = [9; 16];
+        on_message(
+            &bn,
+            &an.me,
+            ftype::PUNCH_OFFER,
+            &offer(nonce, &["203.0.113.20:4000", "10.200.30.4:4000"]),
+        );
+        let (_, _, _, theirs) = attempt(&bn, &an.me).expect("answered");
+        assert_eq!(theirs, ["10.200.30.4:4000".parse::<SocketAddr>().unwrap()]);
+        // A check from outside isn't learned as a peer-reflexive address.
+        on_check(
+            &bn,
+            PunchEvent {
+                from: "198.51.100.7:5000".parse().unwrap(),
+                token: nonce,
+                pong: false,
+            },
+        );
+        let (_, _, _, theirs) = attempt(&bn, &an.me).expect("still there");
+        assert_eq!(theirs.len(), 1);
     }
 
     /// A validated address whose dial failed (someone else answered) is

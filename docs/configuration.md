@@ -43,7 +43,7 @@ in the desktop app's Config tab ([app.md](app.md)).
 | Make a LAN reachable from the overlay | A route grant on the node, plus `webjetd.toml` [`[[gateway.route]]`](#gatewayroute) ([recipe](#serve-a-lan-as-a-gateway)) |
 | Publish a service to clients outside the overlay | Node scope [`[[proxy]]`](#proxy-reverse-proxy-ports) on the ingress, plus `webjetd.toml` [`[proxy]`](#proxy) on the targets ([recipe](#publish-a-service-with-a-reverse-proxy)) |
 | Exclude addresses or interfaces from direct paths | `webjetd.toml` [`[nat]`](#nat) |
-| Turn off hole punching, port prediction, router port mapping or LAN candidates for some nodes | [`[nat]`](#nat-traversal-nat) at network or node scope, or in a `[[nat.override]]` |
+| Turn off hole punching (or keep it to the LAN), port prediction, router port mapping or LAN candidates for some nodes | [`[nat]`](#nat-traversal-nat) at network or node scope, or in a `[[nat.override]]` |
 | Choose where the identity key is stored | `webjetd.toml` [`[key]`](#key) |
 | Expose Prometheus metrics | `webjetd.toml` [`[metrics]`](#metrics) |
 | Keep the signing key in a separate process, or stop a node acting as controller | `webjetd.toml` [`[controller]`](#controller) |
@@ -806,7 +806,7 @@ and `[[nat.override]]` sets it for the nodes some selectors pick.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `punch` | `true` | Hole punching. `false`: the node doesn't start hole punching and doesn't answer it. A pair of nodes is punched only when both have it on. Direct hops to public and port-mapped addresses still come up. |
+| `punch` | `true` | Hole punching. `false`: the node doesn't start hole punching and doesn't answer it. `"lan"` (from 0.13.1): only between LAN addresses, so peers on the node's own networks still get direct paths but nobody outside does (details below). A pair of nodes is punched only when both allow it, as narrowly as the narrower side says. Direct hops to public listen addresses still come up. |
 | `predict` | `true` | Port prediction toward a peer behind a symmetric NAT: bursts to about a hundred ports next to the peer's observed ones. Prediction runs between two nodes only when both have it on. Turn it off where those bursts trip an intrusion detection system or a rate limiter. |
 | `port_mapping` | `true` | Ask the router for a UDP port mapping (PCP / NAT-PMP, then UPnP IGD). `false` gives a held mapping back at once. `port_mapping = false` in the machine's `webjetd.toml` also turns it off, whatever this says. |
 | `host_candidates` | `true` | Publish the node's interface (LAN) addresses and offer them when punching. `false` keeps them private. Nodes on the same LAN then meet through their outside addresses, if the router allows that (hairpinning), or through relays. |
@@ -823,7 +823,22 @@ host_candidates = false
 [[nat.override]]
 select = ["node:nas"]
 port_mapping = false
+
+[[nat.override]]
+select = ["tag:edge"]                # direct paths on the LAN, none from outside
+punch = "lan"
 ```
+
+**`punch = "lan"`.** The node offers only its private addresses (RFC 1918,
+IPv6 unique local, link-local) and takes from a peer only addresses that
+are private or on the subnet of one of its own interfaces. It publishes
+no reflexive address, holds no router port mapping, and no port
+prediction runs between it and any peer, so its NAT never opens toward
+the internet for webjet. Public IPv6 interface addresses are left out
+too. Two nodes on one LAN still meet directly; everyone else goes through
+relays (or the node's public `[listen]` addresses, if it has any).
+Nodes before 0.13.1 read `"lan"` as `false`: they don't punch toward the
+node at all, even on its LAN.
 
 An override needs `select` ([selectors](#selectors), no `cidr:`) and at
 least one key. For each key, the first override that selects the node and
@@ -902,6 +917,7 @@ webjetctl local config set limits.value.relay_capacity_mbps 900
 webjetctl local config set transport.compression.data lz4 # compress packets to and from this node
 webjetctl local config set transport.retransmit true      # KCP hops retransmit this node's packets
 webjetctl local config set nat.punch false                # no hole punching to or from this node
+webjetctl local config set nat.punch lan                  # hole punching on the LAN only
 webjetctl local config unset transport.priority.kcp       # back to the network's value
 webjetctl local config --node relay-fra edit              # another node
 ```

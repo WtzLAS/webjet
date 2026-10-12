@@ -363,8 +363,20 @@ impl View {
         let pick = |f: fn(&wp::NatSettings) -> Option<bool>| {
             layers.iter().find_map(|s| f(s)).unwrap_or(true)
         };
+        // `punch_lan` refines `punch = false` in the same table (TOML
+        // `punch = "lan"`), so the first table that sets `punch` decides.
+        let punch = layers
+            .iter()
+            .find_map(|s| {
+                s.punch.map(|on| match (on, s.punch_lan) {
+                    (true, _) => Punch::On,
+                    (false, Some(true)) => Punch::Lan,
+                    (false, _) => Punch::Off,
+                })
+            })
+            .unwrap_or(Punch::On);
         NatPolicy {
-            punch: pick(|s| s.punch),
+            punch,
             predict: pick(|s| s.predict),
             port_mapping: pick(|s| s.port_mapping),
             host_candidates: pick(|s| s.host_candidates),
@@ -433,11 +445,41 @@ impl View {
     }
 }
 
+/// Hole punching for a node (§11.7, `[nat] punch`), narrowest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Punch {
+    /// Not punched at all.
+    Off,
+    /// Only between LAN addresses: no reflexive or mapped candidates and
+    /// no port prediction, so nobody outside the node's networks gets a
+    /// direct path through its NAT.
+    Lan,
+    On,
+}
+
+impl Punch {
+    /// The pair's punching: the narrower of both sides' settings.
+    pub fn pair(self, other: Punch) -> Punch {
+        self.min(other)
+    }
+}
+
+/// `true`, `false` or `"lan"`, as in the TOML.
+impl serde::Serialize for Punch {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Punch::Off => s.serialize_bool(false),
+            Punch::Lan => s.serialize_str("lan"),
+            Punch::On => s.serialize_bool(true),
+        }
+    }
+}
+
 /// NAT traversal in force for a node (§11.7, `View::nat`). Built-in: all on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NatPolicy {
     /// Hole punching to and from the node.
-    pub punch: bool,
+    pub punch: Punch,
     /// Port prediction toward a peer behind a symmetric NAT.
     pub predict: bool,
     /// Ask the router for a UDP port mapping.
@@ -446,10 +488,25 @@ pub struct NatPolicy {
     pub host_candidates: bool,
 }
 
+impl NatPolicy {
+    /// Ask the router for a port mapping: `port_mapping`, unless punching
+    /// is LAN only (a mapping makes the node reachable from anywhere).
+    pub fn maps_ports(&self) -> bool {
+        self.port_mapping && self.punch != Punch::Lan
+    }
+
+    /// Publish addresses seen from outside (reflexive ones): not when
+    /// punching is LAN only, since a peer outside may dial them directly
+    /// through a NAT that lets anyone in once a mapping exists.
+    pub fn publishes_reflexive(&self) -> bool {
+        self.punch != Punch::Lan
+    }
+}
+
 impl Default for NatPolicy {
     fn default() -> Self {
         NatPolicy {
-            punch: true,
+            punch: Punch::On,
             predict: true,
             port_mapping: true,
             host_candidates: true,

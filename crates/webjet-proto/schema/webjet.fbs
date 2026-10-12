@@ -216,6 +216,10 @@ table MulticastConfig {
 // built-in, which is true for all four).
 // - punch: hole punching to and from the node; off on either side of a
 //   pair means that pair isn't punched.
+// - punch_lan: with punch = false in the same table, TOML punch = "lan":
+//   punching only between LAN addresses (no reflexive or mapped ones,
+//   no port prediction); "lan" on either side restricts the pair. Nodes
+//   that don't know the field read punch = false. Ignored without it.
 // - predict: port prediction toward a symmetric NAT; off on either side
 //   means none between the pair.
 // - port_mapping: ask the router for a UDP port mapping (PCP / NAT-PMP,
@@ -227,6 +231,7 @@ table NatSettings {
     predict: bool = null;
     port_mapping: bool = null;
     host_candidates: bool = null;
+    punch_lan: bool = null;
 }
 
 table NatOverride {

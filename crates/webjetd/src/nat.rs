@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+use webjet_core::store::NatPolicy;
 
 /// Interface name prefixes of VPN software and tunnels.
 const TUNNEL_PREFIXES: &[&str] = &[
@@ -120,6 +121,8 @@ pub fn excluded(cfg: &NatCfg, ip: &IpAddr) -> bool {
 pub struct Iface {
     pub name: String,
     pub ip: IpAddr,
+    /// Prefix length of the interface's subnet.
+    pub prefix: u8,
     pub p2p: bool,
     pub loopback: bool,
 }
@@ -130,6 +133,10 @@ pub fn interfaces() -> Vec<Iface> {
         .into_iter()
         .map(|i| Iface {
             ip: i.ip(),
+            prefix: match &i.addr {
+                if_addrs::IfAddr::V4(a) => a.prefixlen,
+                if_addrs::IfAddr::V6(a) => a.prefixlen,
+            },
             p2p: i.is_p2p(),
             loopback: i.is_loopback(),
             name: i.name,
@@ -154,6 +161,33 @@ fn candidates_from(cfg: &NatCfg, ifs: &[Iface]) -> Vec<IpAddr> {
     v.dedup();
     v.truncate(8);
     v
+}
+
+/// A private address: RFC 1918, IPv6 unique local, or link-local. With
+/// `[nat] punch = "lan"` a node offers and publishes only these.
+pub fn is_private(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(a) => a.is_private() || a.is_link_local(),
+        IpAddr::V6(a) => (a.segments()[0] & 0xfe00) == 0xfc00 || link_local(ip),
+    }
+}
+
+/// A LAN address of a peer (`[nat] punch = "lan"`, §11.7): private IPv4 (RFC 1918),
+/// IPv6 unique local, link-local, or inside the subnet of one of this
+/// machine's interfaces (tunnels and excluded addresses don't count).
+/// Carrier-grade NAT space (100.64.0.0/10) is not a LAN.
+pub fn is_lan(cfg: &NatCfg, ip: &IpAddr) -> bool {
+    is_lan_with(cfg, ip, &interfaces())
+}
+
+fn is_lan_with(cfg: &NatCfg, ip: &IpAddr, ifs: &[Iface]) -> bool {
+    is_private(ip)
+        || ifs.iter().any(|i| {
+            !i.loopback
+                && !is_tunnel(cfg, &i.name, i.p2p)
+                && !excluded(cfg, &i.ip)
+                && ipnet::IpNet::new(i.ip, i.prefix).is_ok_and(|n| n.trunc().contains(ip))
+        })
 }
 
 /// Addresses of local tunnel interfaces (an address a relay saw us at
@@ -394,7 +428,7 @@ pub fn refresh(n: &Node) -> bool {
     });
     if changed {
         tracing::info!(
-            punch = p.punch,
+            punch = %serde_json::json!(p.punch),
             predict = p.predict,
             port_mapping = p.port_mapping,
             host_candidates = p.host_candidates,
@@ -410,8 +444,9 @@ pub fn refresh(n: &Node) -> bool {
 /// mapping is published as a PUBLIC address (`transport::my_addrs`; the
 /// endpoint record is republished within seconds when addresses change).
 /// webjetd.toml `[nat] port_mapping = false` turns it off for good; the
-/// tree's `nat.port_mapping` (`Node::nat_policy`) turns it off and on
-/// while the agent runs, giving the mapping back when it goes off.
+/// tree's `nat.port_mapping` and `nat.punch = "lan"` (`Node::nat_policy`,
+/// `NatPolicy::maps_ports`) turn it off and on while the agent runs,
+/// giving the mapping back when it goes off.
 pub async fn run_port_mapping(n: Arc<Node>) {
     if !n.cfg.nat.port_mapping {
         return;
@@ -426,12 +461,12 @@ pub async fn run_port_mapping(n: Arc<Node>) {
     };
     let mut policy = n.nat_policy.subscribe();
     loop {
-        if policy.wait_for(|p| p.port_mapping).await.is_err() {
+        if policy.wait_for(NatPolicy::maps_ports).await.is_err() {
             return;
         }
         tokio::select! {
             () = keep_mapping(&n, port) => {}
-            ok = async { policy.wait_for(|p| !p.port_mapping).await.is_ok() } => {
+            ok = async { policy.wait_for(|p| !p.maps_ports()).await.is_ok() } => {
                 if !ok {
                     return;
                 }
@@ -503,9 +538,28 @@ mod tests {
         Iface {
             name: name.into(),
             ip: ip.parse().unwrap(),
+            prefix: 24,
             p2p,
             loopback: name == "lo",
         }
+    }
+
+    #[test]
+    fn lan_addresses() {
+        let cfg = NatCfg::default();
+        let ifs = vec![
+            iface("eth0", "203.0.113.7", false),
+            iface("utun3", "198.51.100.1", true),
+            iface("lo", "127.0.0.1", false),
+        ];
+        let lan = |a: &str| is_lan_with(&cfg, &a.parse().unwrap(), &ifs);
+        assert!(lan("192.168.1.20") && lan("10.1.2.3") && lan("172.16.0.1"));
+        assert!(lan("169.254.3.4") && lan("fd00::1") && lan("fe80::1"));
+        // On the subnet of a (public) interface: a LAN too.
+        assert!(lan("203.0.113.99"));
+        // Not through a tunnel interface's subnet, nor elsewhere.
+        assert!(!lan("198.51.100.9"));
+        assert!(!lan("8.8.8.8") && !lan("100.64.1.1") && !lan("2001:db8::1"));
     }
 
     #[test]

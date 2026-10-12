@@ -3642,7 +3642,7 @@ mod tests {
         set_network(&mut h, c).unwrap();
         let v = h.m.view();
         let off = NatPolicy {
-            punch: false,
+            punch: crate::store::Punch::Off,
             predict: false,
             port_mapping: false,
             host_candidates: true,
@@ -3679,7 +3679,7 @@ mod tests {
         assert_eq!(
             h.m.view().nat(&a),
             NatPolicy {
-                punch: true,
+                punch: crate::store::Punch::On,
                 host_candidates: false,
                 ..off
             }
@@ -3690,6 +3690,46 @@ mod tests {
         .unwrap();
         assert!(h.m.tree.get(kind::NODE_CONFIG, &a).is_none());
         assert_eq!(h.m.view().nat(&a), off);
+        // `punch = "lan"` (punch false + punch_lan) for node b; punch_lan
+        // without punch sets nothing.
+        let lan = |version, s: wp::NatSettings| wp::NodeConfig {
+            node_id: Some(crypto::k32(&b)),
+            version,
+            nat: Some(Box::new(s)),
+            ..Default::default()
+        };
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(lan(
+                1,
+                wp::NatSettings {
+                    punch: Some(false),
+                    punch_lan: Some(true),
+                    ..Default::default()
+                },
+            ))),
+        })))
+        .unwrap();
+        assert_eq!(h.m.view().nat(&b).punch, crate::store::Punch::Lan);
+        assert_eq!(
+            crate::store::Punch::Lan.pair(crate::store::Punch::On),
+            crate::store::Punch::Lan
+        );
+        assert_eq!(
+            crate::store::Punch::Lan.pair(crate::store::Punch::Off),
+            crate::store::Punch::Off
+        );
+        h.admin_op(AccountOp::SetNodeConfig(Box::new(wp::SetNodeConfig {
+            config: Some(Box::new(lan(
+                2,
+                wp::NatSettings {
+                    punch_lan: Some(true),
+                    ..Default::default()
+                },
+            ))),
+        })))
+        .unwrap();
+        assert!(h.m.tree.get(kind::NODE_CONFIG, &b).is_none());
+        assert_eq!(h.m.view().nat(&b).punch, crate::store::Punch::On);
         // A bad selector in an override is refused.
         let mut c = net_config(h.m.view().network_version + 1);
         if let Some(t) = c.transport.as_mut() {

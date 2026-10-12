@@ -112,10 +112,10 @@ impl MulticastSection {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NatSection {
-    /// Hole punching to and from the node; off on either side of a pair
-    /// means the pair isn't punched.
+    /// Hole punching to and from the node: `true`, `false`, or `"lan"`
+    /// (only between LAN addresses). The narrower side of a pair decides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub punch: Option<bool>,
+    pub punch: Option<PunchFile>,
     /// Port prediction toward a peer behind a symmetric NAT; off on either
     /// side means none between the pair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,7 +136,7 @@ pub struct NatSection {
 pub struct NatOverrideFile {
     pub select: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub punch: Option<bool>,
+    pub punch: Option<PunchFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predict: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,15 +145,104 @@ pub struct NatOverrideFile {
     pub host_candidates: Option<bool>,
 }
 
+/// `[nat] punch`: `true`, `false` or `"lan"`. On the wire `"lan"` is
+/// `punch = false` with `punch_lan = true`, so nodes that don't know
+/// `"lan"` don't punch at all rather than toward everyone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PunchFile {
+    On,
+    Off,
+    Lan,
+}
+
+impl PunchFile {
+    /// (`punch`, `punch_lan`) on the wire.
+    fn wire(p: Option<PunchFile>) -> (Option<bool>, Option<bool>) {
+        match p {
+            None => (None, None),
+            Some(PunchFile::On) => (Some(true), None),
+            Some(PunchFile::Off) => (Some(false), None),
+            Some(PunchFile::Lan) => (Some(false), Some(true)),
+        }
+    }
+
+    fn from_wire(punch: Option<bool>, lan: Option<bool>) -> Option<PunchFile> {
+        punch.map(|on| match (on, lan) {
+            (true, _) => PunchFile::On,
+            (false, Some(true)) => PunchFile::Lan,
+            (false, _) => PunchFile::Off,
+        })
+    }
+
+    /// From the JSON the agent reports (`true`, `false`, `"lan"`).
+    fn from_json(v: &Value) -> Option<PunchFile> {
+        match v {
+            Value::Bool(true) => Some(PunchFile::On),
+            Value::Bool(false) => Some(PunchFile::Off),
+            Value::String(s) if s == "lan" => Some(PunchFile::Lan),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for PunchFile {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            PunchFile::On => s.serialize_bool(true),
+            PunchFile::Off => s.serialize_bool(false),
+            PunchFile::Lan => s.serialize_str("lan"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PunchFile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = PunchFile;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("true, false or \"lan\"")
+            }
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> std::result::Result<PunchFile, E> {
+                Ok(if v { PunchFile::On } else { PunchFile::Off })
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<PunchFile, E> {
+                match v {
+                    "lan" => Ok(PunchFile::Lan),
+                    _ => Err(E::invalid_value(serde::de::Unexpected::Str(v), &self)),
+                }
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// The wire table for one level's keys.
+fn nat_wire(
+    punch: Option<PunchFile>,
+    predict: Option<bool>,
+    port_mapping: Option<bool>,
+    host_candidates: Option<bool>,
+) -> wp::NatSettings {
+    let (punch, punch_lan) = PunchFile::wire(punch);
+    wp::NatSettings {
+        punch,
+        predict,
+        port_mapping,
+        host_candidates,
+        punch_lan,
+    }
+}
+
 impl NatSection {
     /// The section's own keys on the wire; `None` when it sets none.
     fn settings(&self) -> Option<wp::NatSettings> {
-        let s = wp::NatSettings {
-            punch: self.punch,
-            predict: self.predict,
-            port_mapping: self.port_mapping,
-            host_candidates: self.host_candidates,
-        };
+        let s = nat_wire(
+            self.punch,
+            self.predict,
+            self.port_mapping,
+            self.host_candidates,
+        );
         (!webjet_core::validate::nat_unset(&s)).then_some(s)
     }
 
@@ -166,12 +255,7 @@ impl NatSection {
         self.overrides
             .iter()
             .map(|o| {
-                let s = wp::NatSettings {
-                    punch: o.punch,
-                    predict: o.predict,
-                    port_mapping: o.port_mapping,
-                    host_candidates: o.host_candidates,
-                };
+                let s = nat_wire(o.punch, o.predict, o.port_mapping, o.host_candidates);
                 if webjet_core::validate::nat_unset(&s) {
                     bail!(
                         "a [[nat.override]] for {:?} sets nothing: give it punch, predict, port_mapping or host_candidates",
@@ -190,7 +274,7 @@ impl NatSection {
     fn from_wire(s: Option<&wp::NatSettings>, o: Option<&[wp::NatOverride]>) -> Option<NatSection> {
         let mut f = NatSection::default();
         if let Some(s) = s {
-            f.punch = s.punch;
+            f.punch = PunchFile::from_wire(s.punch, s.punch_lan);
             f.predict = s.predict;
             f.port_mapping = s.port_mapping;
             f.host_candidates = s.host_candidates;
@@ -202,7 +286,7 @@ impl NatSection {
                 let s = o.settings.as_deref().cloned().unwrap_or_default();
                 NatOverrideFile {
                     select: o.select.clone().unwrap_or_default(),
-                    punch: s.punch,
+                    punch: PunchFile::from_wire(s.punch, s.punch_lan),
                     predict: s.predict,
                     port_mapping: s.port_mapping,
                     host_candidates: s.host_candidates,
@@ -1385,10 +1469,10 @@ pub fn render_network(tree: &Value) -> Result<String> {
     }
     let nat = f.nat.clone().unwrap_or_default();
     let unset: Vec<&str> = [
-        ("punch", nat.punch),
-        ("predict", nat.predict),
-        ("port_mapping", nat.port_mapping),
-        ("host_candidates", nat.host_candidates),
+        ("punch", nat.punch.map(|_| ())),
+        ("predict", nat.predict.map(|_| ())),
+        ("port_mapping", nat.port_mapping.map(|_| ())),
+        ("host_candidates", nat.host_candidates.map(|_| ())),
     ]
     .into_iter()
     .filter_map(|(k, v)| v.is_none().then_some(k))
@@ -1516,7 +1600,7 @@ pub fn effective_from_json(e: &Value) -> Result<ConfigFile> {
         nat: e["nat"].as_object().map(|m| {
             let b = |k: &str| m.get(k).and_then(Value::as_bool);
             NatSection {
-                punch: b("punch"),
+                punch: m.get("punch").and_then(PunchFile::from_json),
                 predict: b("predict"),
                 port_mapping: b("port_mapping"),
                 host_candidates: b("host_candidates"),
@@ -2107,6 +2191,7 @@ value = { circuits_global = 9000 }
         let o = &tr.nat_overrides.as_ref().unwrap()[0];
         assert_eq!(o.select.as_deref().unwrap(), ["tag:office"]);
         assert_eq!(o.settings.as_ref().unwrap().punch, Some(false));
+        assert_eq!(o.settings.as_ref().unwrap().punch_lan, None);
         assert_eq!(o.settings.as_ref().unwrap().port_mapping, None);
         let mut t = empty_tree();
         t["transport"] = serde_json::to_value(&**tr).unwrap();
@@ -2145,6 +2230,23 @@ value = { circuits_global = 9000 }
         );
         let e = f.check_scope(Scope::Node).unwrap_err().to_string();
         assert!(e.contains("nat.override"), "{e}");
+        // punch = "lan": false + punch_lan on the wire, and back; other
+        // strings are refused; `local config set nat.punch lan` works.
+        let lan = ConfigFile::parse("version = 0\n[nat]\npunch = \"lan\"\n").unwrap();
+        let c = lan.to_node(&[7; 32], 1).unwrap();
+        let w = c.nat.as_deref().unwrap();
+        assert_eq!((w.punch, w.punch_lan), (Some(false), Some(true)));
+        assert_eq!(node_from_wire(Some(&c)).nat, lan.nat);
+        assert!(toml::to_string(&lan).unwrap().contains("punch = \"lan\""));
+        assert!(ConfigFile::parse("[nat]\npunch = \"wan\"\n").is_err());
+        let mut doc = toml::Value::Table(Default::default());
+        set(&mut doc, "nat.punch", parse_value("lan")).unwrap();
+        let f: ConfigFile = doc.try_into().unwrap();
+        assert_eq!(f.nat.unwrap().punch, Some(PunchFile::Lan));
+        assert_eq!(
+            PunchFile::from_json(&serde_json::json!("lan")),
+            Some(PunchFile::Lan)
+        );
     }
 
     #[test]
